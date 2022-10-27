@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 
 using namespace mlir;
@@ -23,6 +25,24 @@ void populateONNXToTOSAConversionPattern(ConversionTarget &target,
     MLIRContext *ctx) {
   // Math
   populateLoweringONNXElementwiseOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXGemmOpToTOSAPattern(target, patterns, typeConverter, ctx);
+  populateLoweringONNXSoftmaxOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXConvOpToTOSAPattern(target, patterns, typeConverter, ctx);
+  populateLoweringONNXReduceMeanOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  // Tensor
+  populateLoweringONNXReshapeOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXConstOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXPadOpToTOSAPattern(target, patterns, typeConverter, ctx);
+  populateLoweringONNXFlattenOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXPadOpToTOSAPattern(target, patterns, typeConverter, ctx);
+  // NN
+  populateLoweringONNXMaxPoolSingleOutOpToTOSAPattern(
       target, patterns, typeConverter, ctx);
 }
 
@@ -54,7 +74,8 @@ void FrontendToTosaLoweringPass::runOnOperation() {
   // conversion failures. Quantized types are not supported right now.
   TypeConverter typeConverter;
   typeConverter.addConversion([](Type type) -> Optional<Type> {
-    if (isTOSASignedInt(type) || isTOSAFloat(type))
+    if (isTOSASignedInt(type) || isTOSAFloat(type) ||
+        type.isa<mlir::NoneType>())
       return type;
     return llvm::None;
   });

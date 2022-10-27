@@ -29,6 +29,16 @@
 //===----------------------------------------------------------------------===//
 // Functions to add lowering patterns for frontend operations.
 //===----------------------------------------------------------------------===//
+namespace mlir {
+namespace tosa {
+// Lowers ReduceMean to a sequence of TOSA ops.
+// Originates from the TorchToTosa conversion
+llvm::Optional<mlir::Value> convertReduceMeanOp(PatternRewriter &rewriter,
+    Operation *op, RankedTensorType output_type, Value input_value,
+    ElementsAttr axes_elems, bool keep_dims);
+
+} // namespace tosa
+} // namespace mlir
 
 namespace onnx_mlir {
 
@@ -39,7 +49,7 @@ namespace onnx_mlir {
 inline bool isTOSASignedInt(mlir::Type type) {
   mlir::IntegerType intType = type.dyn_cast<mlir::IntegerType>();
   std::set<unsigned> intWidth{8, 16, 32, 48, 64};
-  return intType && intType.isSigned() &&
+  return intType && intType.isSignless() &&
          (intWidth.find(intType.getWidth()) != intWidth.end());
 }
 
@@ -60,5 +70,26 @@ using TOSAOp = typename TOSADialectOp<Op>::Op;
 
 // `Math` directory methods:
 void populateLoweringONNXElementwiseOpToTOSAPattern(mlir::ConversionTarget &,
+    mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
+void populateLoweringONNXSoftmaxOpToTOSAPattern(mlir::ConversionTarget &,
+    mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
+void populateLoweringONNXGemmOpToTOSAPattern(mlir::ConversionTarget &,
+    mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
+void populateLoweringONNXConvOpToTOSAPattern(mlir::ConversionTarget &,
+    mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
+void populateLoweringONNXReduceMeanOpToTOSAPattern(mlir::ConversionTarget &,
+    mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
+// `NN` directory methods:
+void populateLoweringONNXMaxPoolSingleOutOpToTOSAPattern(
+    mlir::ConversionTarget &, mlir::RewritePatternSet &, mlir::TypeConverter &,
+    mlir::MLIRContext *);
+// `Tensor` directory methods:
+void populateLoweringONNXReshapeOpToTOSAPattern(mlir::ConversionTarget &,
+    mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
+void populateLoweringONNXConstOpToTOSAPattern(mlir::ConversionTarget &,
+    mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
+void populateLoweringONNXPadOpToTOSAPattern(mlir::ConversionTarget &,
+    mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
+void populateLoweringONNXFlattenOpToTOSAPattern(mlir::ConversionTarget &,
     mlir::RewritePatternSet &, mlir::TypeConverter &, mlir::MLIRContext *);
 } // namespace onnx_mlir
