@@ -15,6 +15,10 @@
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/Shape/IR/Shape.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -36,7 +40,6 @@
 #include "src/Dialect/ONNX/ONNXDialect.hpp"
 #include "src/Version/Version.hpp"
 
-#include <charconv>
 #include <regex>
 
 #define DEBUG_TYPE "compiler_utils"
