@@ -117,19 +117,19 @@ struct CppTypeTrait : public detail::BTypeTraitBase<BType::UNDEFINED, CPPTY> {};
   template <>                                                                  \
   struct CppTypeTrait<CPPTY> : public BTypeTrait<BTYPE> {};
 
-DEFINE_BTypeCppTypeTraits(BType::BOOL, bool);
-DEFINE_BTypeCppTypeTraits(BType::INT8, int8_t);
-DEFINE_BTypeCppTypeTraits(BType::UINT8, uint8_t);
-DEFINE_BTypeCppTypeTraits(BType::INT16, int16_t);
-DEFINE_BTypeCppTypeTraits(BType::UINT16, uint16_t);
-DEFINE_BTypeCppTypeTraits(BType::INT32, int32_t);
-DEFINE_BTypeCppTypeTraits(BType::UINT32, uint32_t);
-DEFINE_BTypeCppTypeTraits(BType::INT64, int64_t);
-DEFINE_BTypeCppTypeTraits(BType::UINT64, uint64_t);
-DEFINE_BTypeCppTypeTraits(BType::DOUBLE, double);
-DEFINE_BTypeCppTypeTraits(BType::FLOAT, float);
-DEFINE_BTypeCppTypeTraits(BType::FLOAT16, float_16);
-DEFINE_BTypeCppTypeTraits(BType::BFLOAT16, bfloat_16);
+DEFINE_BTypeCppTypeTraits(BType::BOOL, bool)
+DEFINE_BTypeCppTypeTraits(BType::INT8, int8_t)
+DEFINE_BTypeCppTypeTraits(BType::UINT8, uint8_t)
+DEFINE_BTypeCppTypeTraits(BType::INT16, int16_t)
+DEFINE_BTypeCppTypeTraits(BType::UINT16, uint16_t)
+DEFINE_BTypeCppTypeTraits(BType::INT32, int32_t)
+DEFINE_BTypeCppTypeTraits(BType::UINT32, uint32_t)
+DEFINE_BTypeCppTypeTraits(BType::INT64, int64_t)
+DEFINE_BTypeCppTypeTraits(BType::UINT64, uint64_t)
+DEFINE_BTypeCppTypeTraits(BType::DOUBLE, double)
+DEFINE_BTypeCppTypeTraits(BType::FLOAT, float)
+DEFINE_BTypeCppTypeTraits(BType::FLOAT16, float_16)
+DEFINE_BTypeCppTypeTraits(BType::BFLOAT16, bfloat_16)
 
 #undef DEFINE_BTypeCppTypeTraits
 
