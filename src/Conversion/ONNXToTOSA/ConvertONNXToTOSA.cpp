@@ -12,7 +12,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Dialect/Tosa/IR/TosaOps.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
+#include <mlir/Dialect/Arith/IR/Arith.h>
 
 using namespace mlir;
 
@@ -24,7 +28,30 @@ void populateONNXToTOSAConversionPattern(ConversionTarget &target,
   // Math
   populateLoweringONNXElementwiseOpToTOSAPattern(
       target, patterns, typeConverter, ctx);
+  populateLoweringONNXGemmOpToTOSAPattern(target, patterns, typeConverter, ctx);
   populateLoweringONNXSoftmaxOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXConvOpToTOSAPattern(target, patterns, typeConverter, ctx);
+  populateLoweringONNXReduceMeanOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  // Tensor
+  populateLoweringONNXConcatOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXReshapeOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXResizeOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXConstOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXPadOpToTOSAPattern(target, patterns, typeConverter, ctx);
+  populateLoweringONNXFlattenOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXPadOpToTOSAPattern(target, patterns, typeConverter, ctx);
+  // NN
+  populateLoweringONNXMaxPoolSingleOutOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  // Flow
+  populateLoweringONNXEntryPointOpToTOSAPattern(
       target, patterns, typeConverter, ctx);
 }
 
@@ -41,6 +68,9 @@ struct FrontendToTosaLoweringPass
   FrontendToTosaLoweringPass(const FrontendToTosaLoweringPass &pass)
       : PassWrapper<FrontendToTosaLoweringPass, OperationPass<ModuleOp>>() {}
 
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<mlir::tosa::TosaDialect>();
+  }
   void runOnOperation() final;
 };
 
@@ -56,7 +86,8 @@ void FrontendToTosaLoweringPass::runOnOperation() {
   // conversion failures. Quantized types are not supported right now.
   TypeConverter typeConverter;
   typeConverter.addConversion([](Type type) -> Optional<Type> {
-    if (isTOSASignedInt(type) || isTOSAFloat(type))
+    if (isTOSASignedInt(type) || isTOSAFloat(type) ||
+        type.isa<mlir::NoneType>())
       return type;
     return llvm::None;
   });
@@ -67,7 +98,8 @@ void FrontendToTosaLoweringPass::runOnOperation() {
   });
 
   // Define legal dialects and operations
-  target.addLegalDialect<tosa::TosaDialect, func::FuncDialect>();
+  target.addLegalDialect<mlir::tosa::TosaDialect, mlir::func::FuncDialect,
+      mlir::arith::ArithDialect>();
 
   // Define patterns
   populateONNXToTOSAConversionPattern(target, patterns, typeConverter, context);
