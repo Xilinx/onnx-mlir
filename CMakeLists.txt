@@ -206,7 +206,10 @@ include_directories(
    ${CMAKE_CURRENT_BINARY_DIR}/../torch-mlir/include/torch-mlir/RefBackend
 )
 
-LINK_DIRECTORIES(${CMAKE_CURRENT_BINARY_DIR}/../torch-mlir/lib/)
+if(NOT TORCH_MLIR_LIB_DIR)
+  message(FATAL_ERROR "Define TORCH_MLIR_LIB_DIR before")
+endif()
+LINK_DIRECTORIES(${TORCH_MLIR_LIB_DIR})
 
 
 #find_library(DIA_LIB TorchMLIRTorchDialect)
