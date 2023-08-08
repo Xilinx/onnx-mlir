@@ -126,7 +126,7 @@ mlir::Value buildOnnxToTosaPaddingConstOp(mlir::PatternRewriter &rewriter,
 
   // TOSA format groups dimensions by 2.
   const unsigned int numberOfDims = tosaPads.size() / 2;
-  TosaBuilder tosaBuilder(rewriter, loc);
+  TosaBuilder tosaBuilder(loc, rewriter);
   return tosaBuilder.getConst(tosaPads, {numberOfDims, 2});
 }
 

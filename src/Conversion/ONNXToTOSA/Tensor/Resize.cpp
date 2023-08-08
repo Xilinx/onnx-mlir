@@ -75,7 +75,7 @@ public:
     Location loc = op->getLoc();
     OpAdaptor adaptor(operands, op->getAttrDictionary());
 
-    TosaBuilder tosaBuilder(rewriter, loc);
+    TosaBuilder tosaBuilder(op);
 
     Value input = adaptor.getX();
     auto inputType = input.getType().dyn_cast<RankedTensorType>();

@@ -23,18 +23,20 @@
 #include "src/Dialect/Mlir/DialectBuilder.hpp"
 #include "src/Dialect/Mlir/IndexExpr.hpp"
 #include "src/Dialect/Mlir/IndexExprBuilder.hpp"
+#include <src/Dialect/ONNX/DialectBuilder.hpp>
 
 namespace onnx_mlir {
 
 // =============================================================================
 // TOSA Builder
 // =============================================================================
+struct TosaBuilder : WithLoc<mlir::ConversionPatternRewriter> {
+  using WithLoc<mlir::ConversionPatternRewriter>::WithLoc;
 
-struct TosaBuilder : DialectBuilder {
-  TosaBuilder(mlir::Location loc) : DialectBuilder(loc) {}
-  TosaBuilder(mlir::PatternRewriter &b, mlir::Location loc)
-      : DialectBuilder(b, loc), patternRewriter(&b) {}
-  TosaBuilder(const DialectBuilder &db) : DialectBuilder(db) {}
+  // TosaBuilder(mlir::Location loc) : DialectBuilder(loc) {}
+  // TosaBuilder(mlir::PatternRewriter &b, mlir::Location loc)
+  //     : DialectBuilder(b, loc), patternRewriter(&b) {}
+  // TosaBuilder(const DialectBuilder &db) : DialectBuilder(db) {}
   virtual ~TosaBuilder() {}
 
   std::optional<mlir::Value> gather(mlir::Value resultValue,
@@ -90,15 +92,6 @@ protected:
 
   mlir::Value expandRank(mlir::Value input, int64_t rank);
   bool needsRankBroadcast(mlir::ValueRange valueRange);
-
-  // Private getters of builder (concise version).
-  mlir::PatternRewriter &rewriter() const {
-    assert(patternRewriter && "rewriter is null");
-    return *patternRewriter;
-  }
-
-private:
-  mlir::PatternRewriter *patternRewriter;
 };
 
 // =============================================================================

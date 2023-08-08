@@ -31,7 +31,7 @@ public:
       return rewriter.notifyMatchFailure(
           op, "lowering with `allowzero = 1` attribute not supported");
 
-    TosaBuilder tosaBuilder(rewriter, op.getLoc());
+    TosaBuilder tosaBuilder(op);
 
     Type outputTy = op.getType();
     if (!hasStaticShape(outputTy))

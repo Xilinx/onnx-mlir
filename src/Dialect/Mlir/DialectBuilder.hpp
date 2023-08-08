@@ -61,21 +61,56 @@ private:
   mlir::Location location;
 };
 
+template <typename GenericBuilder>
+struct WithLoc : public GenericBuilder {
+  using GenericBuilder::create;
+  template <typename OldBuilder>
+  WithLoc(mlir::Location loc, OldBuilder &b)
+      : GenericBuilder(b.getContext()), loc(loc) {
+    this->setInsertionPoint(b.getBlock(), b.getInsertionPoint());
+  };
+  /// Initialize the builder.
+  template <typename... Args>
+  explicit WithLoc(mlir::Location loc, Args... args)
+      : loc(loc), GenericBuilder(args...){};
+  explicit WithLoc(mlir::Location loc) : loc(loc){};
+  explicit WithLoc(mlir::Operation *op)
+      : GenericBuilder(op->getContext()), loc(op->getLoc()) {
+    this->setInsertionPoint(op);
+  }
+
+  template <typename OpTy, typename... Args>
+  OpTy create(Args &&...args) {
+    return this->create<OpTy>(getLoc(), std::forward<Args>(args)...);
+  }
+
+  ~WithLoc() = default;
+
+  void operator=(const WithLoc &) = delete;
+  WithLoc(const WithLoc &) = delete;
+
+protected:
+  mlir::Location getLoc() { return this->loc; }
+
+private:
+  mlir::Location loc;
+};
+
 //===----------------------------------------------------------------------===//
 // Math Builder
 //===----------------------------------------------------------------------===//
 
 /// Helper struct to build simple arithmetic quantities with minimal type
-/// inference support. Code is adapted to support the DialectBuilder super-class
-/// that facilitate the building of other dialect builders using another dialect
-/// builder.
+/// inference support. Code is adapted to support the DialectBuilder
+/// super-class that facilitate the building of other dialect builders using
+/// another dialect builder.
 
 //===----------------------------------------------------------------------===//
 // Original code for MathBuilder is copied from LLVM MLIR Utils.cpp
 // Modified here to add operations, add super class.
 // License added here for this class for completeness.
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM
+// Exceptions. See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //===----------------------------------------------------------------------===//
 
@@ -86,16 +121,16 @@ struct MathBuilder final : DialectBuilder {
   MathBuilder(const DialectBuilder &db) : DialectBuilder(db) {}
   virtual ~MathBuilder() {}
 
-  // Support for vectors: we provide queries that work regardless of if we have
-  // (1) a scalar or (2) a vector of a basic element type.
+  // Support for vectors: we provide queries that work regardless of if we
+  // have (1) a scalar or (2) a vector of a basic element type.
 
-  // The method belows ignore the vectors part of the type to provide answer on
-  // the basic element types alone.
+  // The method belows ignore the vectors part of the type to provide answer
+  // on the basic element types alone.
   static bool isIntegerWithVector(mlir::Type elementOrVectorType);
   static bool isUnsignedIntegerWithVector(mlir::Type elementOrVectorType);
   static bool isFloatWithVector(mlir::Type elementOrVectorType);
-  // Return the basic element type regardless of if we are given (1) a scalar or
-  // (2) a vector of a basic element type.
+  // Return the basic element type regardless of if we are given (1) a scalar
+  // or (2) a vector of a basic element type.
   static mlir::Type elementTypeWithVector(mlir::Type elementOrVectorType);
   // Return a type of the same vector shape as vectorType with a basic element
   // type of elementType. When vectorType is null, then the returned type is
@@ -169,8 +204,8 @@ struct MathBuilder final : DialectBuilder {
   mlir::Value cast(mlir::Type destType, mlir::Value val) const;
   mlir::Value castToIndex(mlir::Value val) const;
 
-  // Add indexOffsets to the least significant indices. So if indices are (i, j,
-  // k, l) and offsets are (K, L), the results will be (i, j, k+K, l+L).
+  // Add indexOffsets to the least significant indices. So if indices are (i,
+  // j, k, l) and offsets are (K, L), the results will be (i, j, k+K, l+L).
   void addOffsetToLeastSignificant(mlir::ValueRange indices,
       mlir::ValueRange offsets,
       llvm::SmallVectorImpl<mlir::Value> &computedIndices) const;
@@ -191,24 +226,25 @@ private:
 // Shape Builder
 //===----------------------------------------------------------------------===//
 
-struct ShapeBuilder final : DialectBuilder {
-  ShapeBuilder(mlir::Location loc) : DialectBuilder(loc) {}
-  ShapeBuilder(mlir::OpBuilder &b, mlir::Location loc)
-      : DialectBuilder(b, loc) {}
-  ShapeBuilder(const DialectBuilder &db) : DialectBuilder(db) {}
+struct ShapeBuilder final : WithLoc<mlir::OpBuilder> {
+  using WithLoc<mlir::OpBuilder>::WithLoc;
+  //   ShapeBuilder(mlir::Location loc) : DialectBuilder(loc) {}
+  //   ShapeBuilder(mlir::OpBuilder &b, mlir::Location loc)
+  //       : DialectBuilder(b, loc) {}
+  //   ShapeBuilder(const DialectBuilder &db) : DialectBuilder(db) {}
   virtual ~ShapeBuilder() {}
 
-  mlir::Value dim(mlir::Value val, int64_t index) const;
-  mlir::Value shapeOf(mlir::Value val) const;
-  mlir::Value getExtent(mlir::Value val, int64_t index) const;
+  mlir::Value dim(mlir::Value val, int64_t index);
+  mlir::Value shapeOf(mlir::Value val);
+  mlir::Value getExtent(mlir::Value val, int64_t index);
 };
 
 //===----------------------------------------------------------------------===//
 // MemRef Builder with added support for aligned memory
 //===----------------------------------------------------------------------===//
 
-// Default alignment attribute for all allocation of memory. On most system, it
-// numElems is 16 bytes.
+// Default alignment attribute for all allocation of memory. On most system,
+// it numElems is 16 bytes.
 static constexpr int64_t gDefaultAllocAlign = 16;
 
 struct MemRefBuilder final : DialectBuilder {
@@ -252,11 +288,11 @@ struct MemRefBuilder final : DialectBuilder {
       llvm::SmallVectorImpl<IndexExpr> &dims,
       int64_t align = defaultAlign) const;
 
-  // Alloc for shapes with alignment and padding for safe full SIMD operations.
-  // Padding may be added so that every values in the shape may safely be
-  // computed by a SIMD operation (or possibly multiple ones when simdUnroll>1).
-  // Minimum alignment is gDefaultAllocAlign.
-  // Operation does not support layouts at this time.
+  // Alloc for shapes with alignment and padding for safe full SIMD
+  // operations. Padding may be added so that every values in the shape may
+  // safely be computed by a SIMD operation (or possibly multiple ones when
+  // simdUnroll>1). Minimum alignment is gDefaultAllocAlign. Operation does
+  // not support layouts at this time.
   //
   // Alloc for static shapes with alignment and SIMD padding.
   mlir::Value alignedAllocWithSimdPadding(mlir::MemRefType type,
@@ -272,10 +308,10 @@ struct MemRefBuilder final : DialectBuilder {
       llvm::SmallVectorImpl<IndexExpr> &dims, int64_t simdUnroll = 1,
       int64_t align = defaultAlign) const;
 
-  // The alloca instruction allocates memory on the stack frame of the currently
-  // executing function, to be automatically released when this function returns
-  // to its caller. It is strongly suggested to place alloca instructions
-  // outside of a loop.
+  // The alloca instruction allocates memory on the stack frame of the
+  // currently executing function, to be automatically released when this
+  // function returns to its caller. It is strongly suggested to place alloca
+  // instructions outside of a loop.
   mlir::memref::AllocaOp alloca(mlir::MemRefType type) const;
   mlir::memref::AllocaOp alignedAlloca(
       mlir::MemRefType type, int64_t align = defaultAlign) const;
@@ -343,8 +379,8 @@ struct SCFBuilder final : DialectBuilder {
   SCFBuilder(const DialectBuilder &db) : DialectBuilder(db) {}
   virtual ~SCFBuilder() {}
 
-  /// Create an if then with optional else. Construct does not generate a result
-  /// (unlike some scf::if) and introduces the yields automatically.
+  /// Create an if then with optional else. Construct does not generate a
+  /// result (unlike some scf::if) and introduces the yields automatically.
   void ifThenElse(mlir::Value cond,
       mlir::function_ref<void(SCFBuilder &createSCF)> thenFn,
       mlir::function_ref<void(SCFBuilder &createSCF)> elseFn = nullptr) const;
@@ -471,8 +507,8 @@ private:
 
 // Affine builder uses affine load and store for memory operations. A later
 // definition of AffineBuilderKrnlMem will use Krnl load and store for memory
-// operations. We recommend to use AffineBuilderKrnlMem when converting the Krnl
-// dialect into the affine dialect.
+// operations. We recommend to use AffineBuilderKrnlMem when converting the
+// Krnl dialect into the affine dialect.
 using AffineBuilder = GenericAffineBuilder<mlir::affine::AffineLoadOp,
     mlir::affine::AffineStoreOp>;
 
@@ -665,9 +701,9 @@ struct MultiDialectBuilder<MathBuilder, Ts...> : MultiDialectBuilder<Ts...> {
 template <class... Ts>
 struct MultiDialectBuilder<ShapeBuilder, Ts...> : MultiDialectBuilder<Ts...> {
   MultiDialectBuilder(mlir::OpBuilder &b, mlir::Location loc)
-      : MultiDialectBuilder<Ts...>(b, loc), shape(b, loc) {}
-  MultiDialectBuilder(const DialectBuilder &db)
-      : MultiDialectBuilder<Ts...>(db), shape(db) {}
+      : MultiDialectBuilder<Ts...>(b, loc), shape(loc, b) {}
+  //   MultiDialectBuilder(const DialectBuilder &db)
+  //       : MultiDialectBuilder<Ts...>(db), shape(db) {}
   ShapeBuilder shape;
 };
 

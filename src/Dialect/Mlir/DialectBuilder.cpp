@@ -811,17 +811,17 @@ void MathBuilder::addOffsetToLeastSignificant(mlir::ArrayRef<IndexExpr> indices,
 // Shape support.
 //===----------------------------------------------------------------------===//
 
-Value ShapeBuilder::dim(Value val, int64_t index) const {
+Value ShapeBuilder::dim(Value val, int64_t index) {
   Value inputShape = shapeOf(val);
   return getExtent(inputShape, index);
 }
 
-Value ShapeBuilder::shapeOf(Value val) const {
-  return b().create<shape::ShapeOfOp>(loc(), val);
+Value ShapeBuilder::shapeOf(Value val) {
+  return this->create<shape::ShapeOfOp>(getLoc(), val);
 }
 
-Value ShapeBuilder::getExtent(Value val, int64_t index) const {
-  return b().create<shape::GetExtentOp>(loc(), val, index);
+Value ShapeBuilder::getExtent(Value val, int64_t index) {
+  return this->create<shape::GetExtentOp>(getLoc(), val, index);
 }
 
 //===----------------------------------------------------------------------===//

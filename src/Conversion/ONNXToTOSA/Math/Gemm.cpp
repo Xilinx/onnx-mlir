@@ -30,7 +30,7 @@ public:
 
   LogicalResult matchAndRewrite(ONNXGemmOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
+    TosaBuilder tosaBuilder(op);
     // If legal, create a FullyConnected operator instead
     if (rewriteToTosaFC(op, adaptor, rewriter, tosaBuilder))
       return success();

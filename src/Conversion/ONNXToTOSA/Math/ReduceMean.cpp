@@ -34,7 +34,7 @@ public:
       ConversionPatternRewriter &rewriter) const override {
 
     auto loc = op->getLoc();
-    TosaBuilder tosaBuilder(rewriter, loc);
+    TosaBuilder tosaBuilder(op);
 
     Value input = adaptor.getData();
     Value axesValue = adaptor.getAxes();
@@ -113,7 +113,7 @@ public:
       ConversionPatternRewriter &rewriter) const override {
 
     auto loc = op->getLoc();
-    TosaBuilder tosaBuilder(rewriter, loc);
+    TosaBuilder tosaBuilder(op);
     Value input = adaptor.getData();
     auto axes = adaptor.getAxes();
     auto keepDims = adaptor.getKeepdims();

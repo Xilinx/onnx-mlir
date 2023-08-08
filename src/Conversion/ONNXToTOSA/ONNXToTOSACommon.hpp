@@ -39,9 +39,10 @@ namespace onnx_mlir {
 namespace tosa {
 
 // Lowers Gather operators to a sequence of TOSA ops.
-std::optional<mlir::Value> convertGatherOp(mlir::PatternRewriter &rewriter,
-    mlir::Location loc, mlir::Value resultValue, mlir::Value inputValue,
-    mlir::Value indicesValue, int32_t batchDims, int32_t axis);
+std::optional<mlir::Value> convertGatherOp(
+    mlir::ConversionPatternRewriter &rewriter, mlir::Location loc,
+    mlir::Value resultValue, mlir::Value inputValue, mlir::Value indicesValue,
+    int32_t batchDims, int32_t axis);
 
 // Lowers ReduceMean to a sequence of TOSA ops.
 // Originates from the TorchToTosa conversion
@@ -146,7 +147,7 @@ std::optional<mlir::Value> convertPoolOp(
   ONNXGenericPoolOpShapeHelper<ONNXPoolOp> shapeHelper(op, {}, &createTosaIE);
   shapeHelper.computeShapeAndAssertOnFailure();
 
-  TosaBuilder tosaBuilder(rewriter, loc);
+  TosaBuilder tosaBuilder(op);
 
   mlir::Value input = adaptor.getX();
   auto inputType = input.getType().cast<mlir::TensorType>();
@@ -234,7 +235,7 @@ std::optional<mlir::Value> convertReduceOpCommon(
     mlir::PatternRewriter &rewriter, mlir::Operation *op,
     mlir::RankedTensorType outputType, mlir::Value inputValue,
     mlir::ElementsAttr axesElems, bool keepDims, mlir::Type reduceElementType) {
-  TosaBuilder tosaBuilder(rewriter, op->getLoc());
+  TosaBuilder tosaBuilder(op);
   mlir::RankedTensorType inputType =
       inputValue.getType().dyn_cast<mlir::RankedTensorType>();
   if (!inputType)

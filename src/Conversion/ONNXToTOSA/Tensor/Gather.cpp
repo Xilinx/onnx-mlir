@@ -34,7 +34,7 @@ public:
 
     auto loc = op.getLoc();
 
-    TosaBuilder tosaBuilder(rewriter, loc);
+    TosaBuilder tosaBuilder(op);
 
     Value input = adaptor.getData();
     Value indices = adaptor.getIndices();

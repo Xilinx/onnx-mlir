@@ -33,8 +33,7 @@ public:
   LogicalResult matchAndRewrite(ONNXFlattenOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
 
-    auto loc = op->getLoc();
-    TosaBuilder tosaBuilder(rewriter, loc);
+    TosaBuilder tosaBuilder(op);
 
     Value input = adaptor.getInput();
     int64_t axis = adaptor.getAxis();
