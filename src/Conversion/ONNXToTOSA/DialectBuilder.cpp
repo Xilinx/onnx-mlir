@@ -241,7 +241,7 @@ ElementsAttr IndexExprBuilderForTosa::getConst(Value value) {
 }
 
 Value IndexExprBuilderForTosa::getVal(Value intArrayVal, uint64_t i) {
-  MultiDialectBuilder<AffineBuilder, MathBuilder> create(*this);
+  MultiDialectBuilder<AffineBuilder, MathBuilder> create(this->getBuilder(), getLoc());
   // Need to add some acceptable dialects to MHLO conversion.
   llvm_unreachable(
       "unimplemented (see IndexExprBuilderForKrnl for functionality).");

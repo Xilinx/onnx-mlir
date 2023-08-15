@@ -28,13 +28,13 @@ using namespace mlir;
 namespace onnx_mlir {
 
 Value OnnxToKrnlBuilder::reshape(
-    const Value input, const ArrayRef<DimIndexExpr> shapeDims) const {
+    const Value input, const ArrayRef<DimIndexExpr> shapeDims) {
   assert(!shapeDims.empty() && "Shape dimensions should not be empty");
 
   ShapedType inputType = input.getType().cast<ShapedType>();
   Type elementType = inputType.getElementType();
   MultiDialectBuilder<OnnxBuilder, MemRefBuilder, KrnlBuilder, MathBuilder>
-      create(b(), loc());
+      create(*this, getLoc());
 
   // If the output dimensions are all literals the 'onnx/Reshape' operation
   // can take the new shape via an 'onnx.Constant'.
@@ -55,7 +55,7 @@ Value OnnxToKrnlBuilder::reshape(
   // When the output dimensions aren't all literals we need to generate code
   // to compute the shape. Allocate a buffer and store the output dimension
   // into it.
-  IndexType indexTy = b().getIndexType();
+  IndexType indexTy = this->getIndexType();
   int64_t length = shapeDims.size();
   memref::AllocOp alloc =
       create.mem.alignedAlloc(MemRefType::get({length}, indexTy), 16);
@@ -86,12 +86,11 @@ Value OnnxToKrnlBuilder::reshape(
 }
 
 Value OnnxToKrnlBuilder::transpose(const Value input,
-    const ArrayRef<int64_t> perm,
-    const ArrayRef<DimIndexExpr> outputDims) const {
+    const ArrayRef<int64_t> perm, const ArrayRef<DimIndexExpr> outputDims) {
   assert(!outputDims.empty() && "Output dimensions should not be empty");
   assert(!perm.empty() && perm.size() == outputDims.size() &&
          "Expecting valid permutation array");
-  MultiDialectBuilder<OnnxBuilder> create(b(), loc());
+  MultiDialectBuilder<OnnxBuilder> create(*this, getLoc());
 
   // Compute the shape of the 'onnx.Transpose' result.
   SmallVector<int64_t, 6> shape;
@@ -102,7 +101,7 @@ Value OnnxToKrnlBuilder::transpose(const Value input,
   ShapedType inputType = input.getType().cast<ShapedType>();
   Value transposeRes =
       create.onnx.transpose(MemRefType::get(shape, inputType.getElementType()),
-          input, b().getI64ArrayAttr(perm));
+          input, this->getI64ArrayAttr(perm));
 
   return transposeRes;
 }

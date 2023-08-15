@@ -15,8 +15,8 @@
 #include "mlir/IR/Region.h"
 
 template <typename OnnxOpType, typename... Args>
-OnnxOpType OnnxBuilder::createOpAndInferShapes(Args &&... args) const {
-  OnnxOpType op = b().create<OnnxOpType>(loc(), args...);
+OnnxOpType OnnxBuilder::createOpAndInferShapes(Args &&... args) {
+  OnnxOpType op = create<OnnxOpType>(args...);
   if (!op)
     llvm_unreachable("unexpected failure to create op");
   if (failed(op.inferShapes([](mlir::Region &region) {})))
@@ -30,6 +30,6 @@ OnnxOpType OnnxBuilder::createOpAndInferShapes(Args &&... args) const {
 // above.
 template <typename OnnxOpType, typename... Args>
 OnnxOpType OnnxBuilder::createTypedOpAndInferShapes(
-    mlir::Type result_ty, Args &&... args) const {
+    mlir::Type result_ty, Args &&... args) {
   return createOpAndInferShapes<OnnxOpType>(result_ty, args...);
 }

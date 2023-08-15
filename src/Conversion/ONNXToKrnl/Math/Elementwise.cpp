@@ -1404,7 +1404,7 @@ static LogicalResult getPartiallyFlattenedSimdCode(
                           << collapsedInnermostLoops << " inner dims\n");
 
   // generate SIMD code of VL elements per vector.
-  IndexExprScope allocScope(create.vec, shapeHelper->getScope());
+  IndexExprScope allocScope(&create.vec, shapeHelper->getScope());
   int64_t VL =
       create.vec.getMachineVectorLength(outputElementType) * simdUnroll;
   // Alloc memory with padding for SIMD.
@@ -1457,7 +1457,7 @@ static LogicalResult getPartiallyFlattenedSimdCode(
   // Iterate only over the blocks.
   create.krnl.iterateIE(loopDef, optimizedLoopDef, lbs, ubs,
       [&](KrnlBuilder &ck, ValueRange loopInd) {
-        MultiDialectBuilder<KrnlBuilder, VectorBuilder> create(ck);
+        MultiDialectBuilder<KrnlBuilder, VectorBuilder> create(ck, ck.getLoc());
         SmallVector<IndexExpr, 4> outputAccessExprs;
         getIndexExprList<DimIndexExpr>(loopInd, outputAccessExprs);
 
@@ -2127,7 +2127,7 @@ struct ONNXElementwiseBinaryOpLowering
       create.krnlIE.getShapeAsDims(alloc, ubs);
       create.krnl.iterateIE(loopDef, loopDef, lbs, ubs,
           [&](KrnlBuilder &createKrnl, ValueRange loopInd) {
-            IndexExprScope innerScope(createKrnl, shapeHelper.getScope());
+            IndexExprScope innerScope(&createKrnl, shapeHelper.getScope());
             SmallVector<IndexExpr, 4> outputAccessExprs;
             getIndexExprList<DimIndexExpr>(loopInd, outputAccessExprs);
 
@@ -2269,7 +2269,7 @@ struct ONNXElementwiseVariadicOpLowering
 
       create.krnl.iterateIE(loopDef, loopDef, lbs, ubs,
           [&](KrnlBuilder &createKrnl, ValueRange loopInd) {
-            IndexExprScope innerScope(createKrnl, shapeHelper.getScope());
+            IndexExprScope innerScope(&createKrnl, shapeHelper.getScope());
             SmallVector<IndexExpr, 4> outputAccessExprs;
             getIndexExprList<DimIndexExpr>(loopInd, outputAccessExprs);
 

@@ -271,6 +271,7 @@ void genSignatureFunction(ModuleOp &module,
   MLIRContext *context = module.getContext();
   Location loc = module.getLoc();
   OpBuilder b(context);
+  b.setInsertionPointToEnd(module.getBody());
   MultiDialectBuilder<LLVMBuilder> create(b, loc);
 
   // Common information.
@@ -286,7 +287,6 @@ void genSignatureFunction(ModuleOp &module,
   // Emit a global constant to store an array of pointers pointing to each entry
   // point constants. The array ends with NULL.
   OpBuilder::InsertionGuard guard(b);
-  b.setInsertionPointToEnd(module.getBody());
   auto arrayType = LLVM::LLVMArrayType::get(i8PtrTy, entryGlobalOps.size() + 1);
   LLVM::GlobalOp entryArrayOp = create.llvm.globalOp(arrayType,
       /*isConstant=*/true, LLVM::Linkage::Internal, "_entry_point_arrays",

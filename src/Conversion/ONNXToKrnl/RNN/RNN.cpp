@@ -348,8 +348,7 @@ void calculateState<RnnState, RnnActivationPack, RnnWeightPack, RnnBiasPack>(
           nextHt = createMath.add(nextHt, WbiVal);
           nextHt = createMath.add(nextHt, RbiVal);
         }
-        nextHt = applyActivation(
-            createKrnl.getBuilder(), loc, activationPack.f, nextHt);
+        nextHt = applyActivation(createKrnl, loc, activationPack.f, nextHt);
 
         // Store the intermediate Ht.
         createKrnl.store(nextHt, Ht, indices);

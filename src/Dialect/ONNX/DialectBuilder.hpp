@@ -25,148 +25,145 @@ namespace onnx_mlir {
 
 //====-------------------------- ONNX Builder ---------------------------===//
 
-struct OnnxBuilder : DialectBuilder {
-  OnnxBuilder(mlir::Location loc) : DialectBuilder(loc) {}
-  OnnxBuilder(mlir::OpBuilder &b, mlir::Location loc)
-      : DialectBuilder(b, loc) {}
-  OnnxBuilder(const DialectBuilder &db) : DialectBuilder(db) {}
+struct OnnxBuilder : WithLoc<mlir::OpBuilder> {
+  using WithLoc<mlir::OpBuilder>::WithLoc;
+  OnnxBuilder(WithLoc<mlir::OpBuilder> &b) : WithLoc<mlir::OpBuilder>(b){};
   virtual ~OnnxBuilder(){};
 
   // Create operation and infer shape.
   template <typename OnnxOpType, typename... Args>
-  OnnxOpType createOpAndInferShapes(Args &&...args) const;
+  OnnxOpType createOpAndInferShapes(Args &&...args);
 
   template <typename OnnxOpType, typename... Args>
-  OnnxOpType createTypedOpAndInferShapes(
-      mlir::Type result_ty, Args &&...args) const;
+  OnnxOpType createTypedOpAndInferShapes(mlir::Type result_ty, Args &&...args);
 
   // ONNXAddOp
-  mlir::Value add(mlir::Value A, mlir::Value B) const;
+  mlir::Value add(mlir::Value A, mlir::Value B);
 
   // ONNXCastOp
-  mlir::Value cast(mlir::Value input, mlir::TypeAttr to) const;
-  mlir::Value cast(mlir::Value input, mlir::Type to) const;
+  mlir::Value cast(mlir::Value input, mlir::TypeAttr to);
+  mlir::Value cast(mlir::Value input, mlir::Type to);
 
   // ONNXCeilOp
-  mlir::Value ceil(mlir::Value input) const;
+  mlir::Value ceil(mlir::Value input);
 
   // ONNXClipOp
   mlir::Value clip(mlir::Value input, mlir::Value min, mlir::Value max,
-      bool scalarType = false) const;
+      bool scalarType = false);
 
   // ONNXConcatOp
   mlir::Value concat(
-      mlir::Type outputType, mlir::ValueRange inputs, int64_t axis) const;
+      mlir::Type outputType, mlir::ValueRange inputs, int64_t axis);
 
   // ONNXConstantOp
-  mlir::Value constant(mlir::Attribute denseAttr) const;
-  mlir::Value constantInt64(const mlir::ArrayRef<int64_t> intVals) const;
+  mlir::Value constant(mlir::Attribute denseAttr);
+  mlir::Value constantInt64(const mlir::ArrayRef<int64_t> intVals);
 
   // ONNXDivOp
-  mlir::Value div(mlir::Value A, mlir::Value B) const;
+  mlir::Value div(mlir::Value A, mlir::Value B);
 
   // ONNXDimOp
-  mlir::Value dim(mlir::Value input, int axis) const;
+  mlir::Value dim(mlir::Value input, int axis);
 
   // ONNXDimGroupOp
-  void dimGroup(mlir::Value input, int axis, int groupID) const;
+  void dimGroup(mlir::Value input, int axis, int groupID);
 
   // ONNXMatMulOp or ONNXGemmOp
   mlir::Value matmul(
-      mlir::Type Y, mlir::Value A, mlir::Value B, bool useGemm = false) const;
+      mlir::Type Y, mlir::Value A, mlir::Value B, bool useGemm = false);
 
   // ONNXMinOp
-  mlir::Value min(mlir::ValueRange inputs) const;
+  mlir::Value min(mlir::ValueRange inputs);
 
   // ONNXMulOp
-  mlir::Value mul(mlir::Value A, mlir::Value B) const;
-  mlir::Value mul(mlir::Type resultType, mlir::Value A, mlir::Value B) const;
+  mlir::Value mul(mlir::Value A, mlir::Value B);
+  mlir::Value mul(mlir::Type resultType, mlir::Value A, mlir::Value B);
 
   // ONNXNoneOp
-  mlir::Value none() const;
+  mlir::Value none();
 
   // ONNXPadOp
   mlir::Value pad(mlir::Value input, mlir::Value pads,
-      mlir::Value constantValue, std::string mode = "constant") const;
+      mlir::Value constantValue, std::string mode = "constant");
   // Zero padding
-  mlir::Value padZero(mlir::Value input, mlir::Value pads) const;
+  mlir::Value padZero(mlir::Value input, mlir::Value pads);
 
   // ONNXReduceMaxOp
   mlir::Value reduceMax(mlir::Type outputType, mlir::Value data,
       mlir::Value axes, bool keepDims = true,
-      bool noop_with_empty_axes = false) const;
+      bool noop_with_empty_axes = false);
 
   // ONNXReduceMinOp
   mlir::Value reduceMin(mlir::Type outputType, mlir::Value data,
       mlir::Value axes, bool keepDims = true,
-      bool noop_with_empty_axes = false) const;
+      bool noop_with_empty_axes = false);
 
   // ONNXReduceSumOp
   mlir::Value reduceSum(mlir::Type outputType, mlir::Value data,
       mlir::Value axes, bool keepDims = true,
-      bool noop_with_empty_axes = false) const;
+      bool noop_with_empty_axes = false);
 
   // ONNXReshapeOp
   mlir::Value reshape(
-      mlir::Type outputType, mlir::Value input, mlir::Value shape) const;
+      mlir::Type outputType, mlir::Value input, mlir::Value shape);
   // Reshape input val to a N-dimensional shape; when collapseMostSignificant is
   // true, we collapse the most significant dimensions (and preserve the N-1
   // least significant dims); otherwise we collapse the least significant
   // dimensions (and preserve the N-1 most significant dims).
   mlir::Value reshapeToNDim(
-      mlir::Value val, int64_t N, bool collapseMostSignificant) const;
+      mlir::Value val, int64_t N, bool collapseMostSignificant);
 
   // ONNXReverseSequenceOp
   mlir::Value reverseSequence(mlir::Type outputType, mlir::Value input,
-      mlir::Value sequenceLens, int64_t batchAxis, int64_t timeAxis) const;
+      mlir::Value sequenceLens, int64_t batchAxis, int64_t timeAxis);
 
   // ONNXRoundOp
-  mlir::Value round(mlir::Value input, bool scalarType = false) const;
+  mlir::Value round(mlir::Value input, bool scalarType = false);
 
   // ONNXShapeOp
-  mlir::Value shape(mlir::Type outputType, mlir::Value input) const;
+  mlir::Value shape(mlir::Type outputType, mlir::Value input);
 
   // ONNXSliceOp
   mlir::Value slice(mlir::Type outputType, mlir::Value input,
       mlir::Value starts, mlir::Value ends, mlir::Value axes,
-      mlir::Value steps) const;
+      mlir::Value steps);
   mlir::Value slice(mlir::Type outputType, mlir::Value input, int64_t start,
-      int64_t end, int64_t step = 1) const; // 1D slice
+      int64_t end, int64_t step = 1); // 1D slice
 
   // ONNXSplitOp
   mlir::ValueRange split(mlir::TypeRange outputTypes, mlir::Value input,
-      mlir::Value split, int64_t axis) const;
+      mlir::Value split, int64_t axis);
 
   // ONNXSqueezeOp
   mlir::Value squeeze(
-      mlir::Type outputType, mlir::Value data, mlir::Value axes) const;
+      mlir::Type outputType, mlir::Value data, mlir::Value axes);
 
   // ONNXSubOp
-  mlir::Value sub(mlir::Value A, mlir::Value B) const;
+  mlir::Value sub(mlir::Value A, mlir::Value B);
 
   // UnrealizedConversionCastOp
   // Convert a Value to TensorType if it is of MemRefType.
-  mlir::Value toTensor(mlir::Value input) const;
+  mlir::Value toTensor(mlir::Value input);
   // Convert a Type to TensorType if it is of MemRefType.
-  mlir::TensorType toTensor(mlir::Type input) const;
+  mlir::TensorType toTensor(mlir::Type input);
   // Convert Type to TypeRange of TensorType if it is of MemRefType.
-  mlir::TypeRange toTensors(mlir::TypeRange inputs) const;
+  mlir::TypeRange toTensors(mlir::TypeRange inputs);
   // Convert a Value to MemrefType if it is of TensorType.
-  mlir::Value toMemref(mlir::Value input) const;
+  mlir::Value toMemref(mlir::Value input);
 
   // ONNXTransposeOp
   mlir::Value transpose(
-      mlir::Type outputType, mlir::Value input, mlir::ArrayAttr perm) const;
+      mlir::Type outputType, mlir::Value input, mlir::ArrayAttr perm);
   mlir::Value transposeInt64(
-      mlir::Value input, mlir::ArrayRef<int64_t> intPerm) const;
+      mlir::Value input, mlir::ArrayRef<int64_t> intPerm);
 
   // ONNXUnsqueezeOp
   mlir::Value unsqueeze(
-      mlir::Type outputType, mlir::Value data, mlir::Value axes) const;
+      mlir::Type outputType, mlir::Value data, mlir::Value axes);
 
   // ONNXWhereOp
   mlir::Value where(mlir::Type outputType, mlir::Value condition, mlir::Value X,
-      mlir::Value Y) const;
+      mlir::Value Y);
 };
 
 // Recursive class specialized for OnnxBuilder refereed to as onnx.
@@ -176,6 +173,9 @@ struct MultiDialectBuilder<OnnxBuilder, Ts...> : MultiDialectBuilder<Ts...> {
       : MultiDialectBuilder<Ts...>(b, loc), onnx(b, loc) {}
   MultiDialectBuilder(const DialectBuilder &db)
       : MultiDialectBuilder<Ts...>(db), onnx(db) {}
+  template <typename Builder>
+  MultiDialectBuilder(WithLoc<Builder> &b)
+      : MultiDialectBuilder<Ts...>(b), onnx(b){};
   OnnxBuilder onnx;
 };
 

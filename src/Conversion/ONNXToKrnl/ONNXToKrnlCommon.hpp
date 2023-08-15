@@ -51,23 +51,22 @@
 
 namespace onnx_mlir {
 
-struct OnnxToKrnlBuilder : public OnnxBuilder {
-  OnnxToKrnlBuilder(mlir::Location loc) : OnnxBuilder(loc) {}
-  OnnxToKrnlBuilder(mlir::OpBuilder &b, mlir::Location loc)
-      : OnnxBuilder(b, loc) {}
-  OnnxToKrnlBuilder(const DialectBuilder &db) : OnnxBuilder(db) {}
+struct OnnxToKrnlBuilder : WithLoc<mlir::OpBuilder> {
+  using WithLoc<mlir::OpBuilder>::WithLoc;
+  OnnxToKrnlBuilder(WithLoc<mlir::OpBuilder> &b)
+      : WithLoc<mlir::OpBuilder>(b){};
   virtual ~OnnxToKrnlBuilder() {}
 
   // Generate an 'onnx.reshape' operation on the 'input' tensor, the new shape
   // is provided by 'shapeDims'.
-  mlir::Value reshape(const mlir::Value input,
-      const llvm::ArrayRef<DimIndexExpr> shapeDims) const;
+  mlir::Value reshape(
+      const mlir::Value input, const llvm::ArrayRef<DimIndexExpr> shapeDims);
 
   // Generate a 'onnx.Transpose' operation on the 'input' tensor given the
   // permutation array 'perm' and the operator output dimensions 'outputDims'.
   mlir::Value transpose(const mlir::Value input,
       const llvm::ArrayRef<int64_t> perm,
-      const llvm::ArrayRef<DimIndexExpr> outputDims) const;
+      const llvm::ArrayRef<DimIndexExpr> outputDims);
 };
 
 // Recursive class specialized for ONNXtoKrnlBuilder refereed to as krnlOnnx.

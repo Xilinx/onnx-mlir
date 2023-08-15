@@ -517,7 +517,7 @@ void calculateState<LstmState, LstmActivationPack, LstmWeightPack,
           it = createMath.add(it, PiCt);
         }
         it =
-            applyActivation(createKrnl.getBuilder(), loc, activationPack.f, it);
+            applyActivation(createKrnl, loc, activationPack.f, it);
 
         // ft = f(Xt*(Wf^T) + Ht-1*(Rf^T) + Pf (.) Ct-1 + Wbf + Rbf)
         Value XtWTfVal = createKrnl.loadIE(XtWT, {bsie, hsie + 2 * hsieLit});
@@ -535,7 +535,7 @@ void calculateState<LstmState, LstmActivationPack, LstmWeightPack,
           ft = createMath.add(ft, PfCt);
         }
         ft =
-            applyActivation(createKrnl.getBuilder(), loc, activationPack.f, ft);
+            applyActivation(createKrnl, loc, activationPack.f, ft);
 
         // ct = g(Xt*(Wc^T) + Ht-1*(Rc^T) + Wbc + Rbc)
         Value XtWTcVal = createKrnl.loadIE(XtWT, {bsie, hsie + 3 * hsieLit});
@@ -548,7 +548,7 @@ void calculateState<LstmState, LstmActivationPack, LstmWeightPack,
           ct = createMath.add(ct, RbcVal);
         }
         ct =
-            applyActivation(createKrnl.getBuilder(), loc, activationPack.g, ct);
+            applyActivation(createKrnl, loc, activationPack.g, ct);
 
         // Ct = ft (.) Ct-1 + it (.) ct
         Value ftCt = createMath.mul(ft, CtVal);
@@ -571,11 +571,11 @@ void calculateState<LstmState, LstmActivationPack, LstmWeightPack,
           ot = createMath.add(ot, PoCt);
         }
         ot =
-            applyActivation(createKrnl.getBuilder(), loc, activationPack.f, ot);
+            applyActivation(createKrnl, loc, activationPack.f, ot);
 
         // Ht = ot (.) h(Ct)
         Value nextHt = applyActivation(
-            createKrnl.getBuilder(), loc, activationPack.h, nextCt);
+            createKrnl, loc, activationPack.h, nextCt);
         nextHt = createMath.mul(ot, nextHt);
 
         // Store the intermediate Ht, Ct.

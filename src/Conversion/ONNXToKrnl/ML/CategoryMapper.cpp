@@ -192,8 +192,8 @@ private:
   PerfectHashTable createPerfectHashTable(DenseElementsAttr cats_int64s,
       DenseElementsAttr cats_strings, ArrayAttr cats_int64s_ArrayAttr,
       ArrayAttr cats_strings_ArrayAttr, Type elementType,
-      const LocalDialectBuilder &create) const {
-    OpBuilder builder = create.krnl.getBuilder();
+      LocalDialectBuilder &create) const {
+    OpBuilder builder = create.krnl;
     PerfectHashTable res;
 
     // Create constants to hold the arrays 'G' and 'V'.
@@ -257,8 +257,7 @@ private:
             [&](IntegerType) { inputElem = createKrnl.load(memref, loopInd); })
         .Case<krnl::StringType>([&](krnl::StringType stringType) {
           MathBuilder createMath(createKrnl);
-          Value zero = createMath.constant(
-              createMath.getBuilder().getIntegerType(64), 0);
+          Value zero = createMath.constant(createMath.getIntegerType(64), 0);
           ArrayRef<int64_t> shape =
               memref.getType().cast<ShapedType>().getShape();
           SmallVector<int64_t, 4> newShape;
@@ -283,8 +282,7 @@ private:
   // valid or not.
   std::tuple<Value, Value> emitFindIndex(Value inputElem, Type elementType,
       const PerfectHashTable &pHash, Value constantForCatsInt64s,
-      Value constantForCatsStrings, const LocalDialectBuilder &create) const {
-    OpBuilder builder = create.krnl.getBuilder();
+      Value constantForCatsStrings, LocalDialectBuilder &create) const {
     Value index = create.krnl.findIndex(inputElem, pHash.G, pHash.V, pHash.len);
 
     std::tuple<Value, Value> res;
@@ -305,7 +303,8 @@ private:
           Value strlenRes = create.krnl.strlen(compareVal);
           Value strncmpRes =
               create.krnl.strncmp(inputElem, compareVal, strlenRes);
-          Value zeroVal = create.math.constant(builder.getIntegerType(32), 0);
+          Value zeroVal =
+              create.math.constant(create.krnl.getIntegerType(32), 0);
           Value isIndexValid = create.math.eq(strncmpRes, zeroVal);
           res = std::make_tuple(index, isIndexValid);
         })
@@ -326,7 +325,7 @@ private:
   void storeResult(Value index, Type elementType, scf::IfOp ifOp,
       Value constantForCatsInt64s, Value constantForCatsStrings,
       Value defaultInt64, Value defaultString, Value alloc, ValueRange loopInd,
-      const KrnlBuilder &createKrnl,
+      KrnlBuilder &createKrnl,
       ConversionPatternRewriter &rewriter) const {
     TypeSwitch<Type>(elementType)
         .Case<IntegerType>([&](IntegerType type) {
