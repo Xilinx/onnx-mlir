@@ -193,17 +193,18 @@ getActivationPack<ONNXLSTMOp, LstmActivationPack>(ONNXLSTMOp *op) {
 
 template <>
 std::tuple<LstmWeightPack, LstmWeightPack>
-getWeightPack<ONNXLSTMOp, LstmWeightPack>(
-    ConversionPatternRewriter &rewriter, Location loc, ONNXLSTMOp *op) {
+getWeightPack<ONNXLSTMOp, LstmWeightPack>(ConversionPatternRewriter &rewriter,
+    Location loc, ONNXLSTMOp *op,
+    typename ONNXLSTMOp::Adaptor &operandAdaptor) {
   // Return values.
   LstmWeightPack weightForward, weightReverse;
 
   // parameter weight: [direction, 4*hiddenSize, inputSize]
-  Value W = op->getW();
+  Value W = operandAdaptor.getW();
   // recurrence weight: [direction, 4*hiddenSize, hiddenSize]
-  Value R = op->getR();
+  Value R = operandAdaptor.getR();
   // direction
-  StringRef direction = op->getDirection();
+  StringRef direction = operandAdaptor.getDirection();
 
   ArrayRef<int64_t> wShape = W.getType().cast<ShapedType>().getShape();
   Type elementType = W.getType().cast<ShapedType>().getElementType();
@@ -268,17 +269,18 @@ getWeightPack<ONNXLSTMOp, LstmWeightPack>(
 
 template <>
 std::tuple<LstmBiasPack, LstmBiasPack> getBiasPack<ONNXLSTMOp, LstmBiasPack>(
-    ConversionPatternRewriter &rewriter, Location loc, ONNXLSTMOp *op) {
+    ConversionPatternRewriter &rewriter, Location loc, ONNXLSTMOp *op,
+    typename ONNXLSTMOp::Adaptor &operandAdaptor) {
   // Return values.
   LstmBiasPack biasForward, biasReverse;
 
   // bias: [direction, 8*hiddenSize] for both parameter and recurrence weights.
-  Value B = op->getB();
+  Value B = operandAdaptor.getB();
   // peephold: [direction, 3*hiddenSize] for input, output and forget gates.
-  Value P = op->getP();
+  Value P = operandAdaptor.getP();
 
   // direction
-  StringRef direction = op->getDirection();
+  StringRef direction = operandAdaptor.getDirection();
 
   // Split B.
   if (!isNoneValue(B)) {
@@ -516,8 +518,7 @@ void calculateState<LstmState, LstmActivationPack, LstmWeightPack,
           Value PiCt = createMath.mul(PiVal, CtVal);
           it = createMath.add(it, PiCt);
         }
-        it =
-            applyActivation(createKrnl, loc, activationPack.f, it);
+        it = applyActivation(createKrnl, loc, activationPack.f, it);
 
         // ft = f(Xt*(Wf^T) + Ht-1*(Rf^T) + Pf (.) Ct-1 + Wbf + Rbf)
         Value XtWTfVal = createKrnl.loadIE(XtWT, {bsie, hsie + 2 * hsieLit});
@@ -534,8 +535,7 @@ void calculateState<LstmState, LstmActivationPack, LstmWeightPack,
           Value PfCt = createMath.mul(PfVal, CtVal);
           ft = createMath.add(ft, PfCt);
         }
-        ft =
-            applyActivation(createKrnl, loc, activationPack.f, ft);
+        ft = applyActivation(createKrnl, loc, activationPack.f, ft);
 
         // ct = g(Xt*(Wc^T) + Ht-1*(Rc^T) + Wbc + Rbc)
         Value XtWTcVal = createKrnl.loadIE(XtWT, {bsie, hsie + 3 * hsieLit});
@@ -547,8 +547,7 @@ void calculateState<LstmState, LstmActivationPack, LstmWeightPack,
           ct = createMath.add(ct, WbcVal);
           ct = createMath.add(ct, RbcVal);
         }
-        ct =
-            applyActivation(createKrnl, loc, activationPack.g, ct);
+        ct = applyActivation(createKrnl, loc, activationPack.g, ct);
 
         // Ct = ft (.) Ct-1 + it (.) ct
         Value ftCt = createMath.mul(ft, CtVal);
@@ -570,12 +569,11 @@ void calculateState<LstmState, LstmActivationPack, LstmWeightPack,
           Value PoCt = createMath.mul(PoVal, nextCt);
           ot = createMath.add(ot, PoCt);
         }
-        ot =
-            applyActivation(createKrnl, loc, activationPack.f, ot);
+        ot = applyActivation(createKrnl, loc, activationPack.f, ot);
 
         // Ht = ot (.) h(Ct)
-        Value nextHt = applyActivation(
-            createKrnl, loc, activationPack.h, nextCt);
+        Value nextHt =
+            applyActivation(createKrnl, loc, activationPack.h, nextCt);
         nextHt = createMath.mul(ot, nextHt);
 
         // Store the intermediate Ht, Ct.

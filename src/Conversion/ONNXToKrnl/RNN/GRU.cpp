@@ -161,8 +161,8 @@ getActivationPack<ONNXGRUOp, GruActivationPack>(ONNXGRUOp *op) {
 
 template <>
 std::tuple<GruWeightPack, GruWeightPack>
-getWeightPack<ONNXGRUOp, GruWeightPack>(
-    ConversionPatternRewriter &rewriter, Location loc, ONNXGRUOp *op) {
+getWeightPack<ONNXGRUOp, GruWeightPack>(ConversionPatternRewriter &rewriter,
+    Location loc, ONNXGRUOp *op, typename ONNXGRUOp::Adaptor &operandAdaptor) {
   MultiDialectBuilder<KrnlBuilder, MathBuilder, MemRefBuilder, OnnxBuilder>
       create(rewriter, loc);
   // Return values.
@@ -269,15 +269,16 @@ getWeightPack<ONNXGRUOp, GruWeightPack>(
 
 template <>
 std::tuple<GruBiasPack, GruBiasPack> getBiasPack<ONNXGRUOp, GruBiasPack>(
-    ConversionPatternRewriter &rewriter, Location loc, ONNXGRUOp *op) {
+    ConversionPatternRewriter &rewriter, Location loc, ONNXGRUOp *op,
+    typename ONNXGRUOp::Adaptor &operandAdaptor) {
   // Return values.
   GruBiasPack biasForward, biasReverse;
 
   // bias: [direction, 6*hiddenSize] for both parameter and recurrence weights.
-  Value B = op->getB();
+  Value B = operandAdaptor.getB();
 
   // direction
-  StringRef direction = op->getDirection();
+  StringRef direction = operandAdaptor.getDirection();
 
   MultiDialectBuilder<KrnlBuilder, MathBuilder, MemRefBuilder, OnnxBuilder>
       create(rewriter, loc);

@@ -127,18 +127,18 @@ getActivationPack<ONNXRNNOp, RnnActivationPack>(ONNXRNNOp *op) {
 
 template <>
 std::tuple<RnnWeightPack, RnnWeightPack>
-getWeightPack<ONNXRNNOp, RnnWeightPack>(
-    ConversionPatternRewriter &rewriter, Location loc, ONNXRNNOp *op) {
+getWeightPack<ONNXRNNOp, RnnWeightPack>(ConversionPatternRewriter &rewriter,
+    Location loc, ONNXRNNOp *op, typename ONNXRNNOp::Adaptor &operandAdaptor) {
 
   // Return values.
   RnnWeightPack weightForward, weightReverse;
 
   // parameter weight: [direction, hiddenSize, inputSize]
-  Value W = op->getW();
+  Value W = operandAdaptor.getW();
   // recurrence weight: [direction, hiddenSize, hiddenSize]
-  Value R = op->getR();
+  Value R = operandAdaptor.getR();
   // direction
-  StringRef direction = op->getDirection();
+  StringRef direction = operandAdaptor.getDirection();
 
   ArrayRef<int64_t> wShape = W.getType().cast<ShapedType>().getShape();
   Type elementType = W.getType().cast<ShapedType>().getElementType();
@@ -198,15 +198,16 @@ getWeightPack<ONNXRNNOp, RnnWeightPack>(
 
 template <>
 std::tuple<RnnBiasPack, RnnBiasPack> getBiasPack<ONNXRNNOp, RnnBiasPack>(
-    ConversionPatternRewriter &rewriter, Location loc, ONNXRNNOp *op) {
+    ConversionPatternRewriter &rewriter, Location loc, ONNXRNNOp *op,
+    typename ONNXRNNOp::Adaptor &operandAdaptor) {
   // Return values.
   RnnBiasPack biasForward, biasReverse;
 
   // bias: [direction, 2*hiddenSize] for both parameter and recurrence weights.
-  Value B = op->getB();
+  Value B = operandAdaptor.getB();
 
   // direction
-  StringRef direction = op->getDirection();
+  StringRef direction = operandAdaptor.getDirection();
 
   // Split B.
   if (!isNoneValue(B)) {

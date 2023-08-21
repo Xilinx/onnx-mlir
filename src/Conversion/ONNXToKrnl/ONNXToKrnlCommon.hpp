@@ -220,6 +220,7 @@ mlir::Value emitScalarOpFor(mlir::ConversionPatternRewriter &rewriter,
   // than its input(s), e.g. isNan where inputs are float and output is boolean
   // int. Thus we look at the type the first input argument, and not the output
   // elementType.
+  rewriter.setInsertionPointAfterValue(scalarOperands[0]);
   mlir::Type actualElementType =
       MathBuilder::elementTypeWithVector(scalarOperands[0].getType());
   // Perform int or float operation depending on the actual elementary type.

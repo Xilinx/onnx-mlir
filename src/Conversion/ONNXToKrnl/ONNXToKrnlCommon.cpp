@@ -264,8 +264,8 @@ Value foldOrEmitONNXSqueezeV11Op(ConversionPatternRewriter &rewriter,
     return create.onnx.toMemref(constVal);
   } else {
     return create.onnx.toMemref(
-        rewriter
-            .create<ONNXSqueezeV11Op>(loc, tensorType,
+        create.onnx
+            .create<ONNXSqueezeV11Op>(tensorType,
                 create.onnx.toTensor(input), rewriter.getI64ArrayAttr(axis))
             .getResult());
   }
