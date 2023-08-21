@@ -48,6 +48,9 @@ IndexExprScope::IndexExprScope(OpBuilder *rewriter, Location loc)
 IndexExprScope::IndexExprScope(DialectBuilder &db)
     : IndexExprScope(&db.getBuilder(), db.getLoc()) {}
 
+IndexExprScope::IndexExprScope(WithLoc<OpBuilder> &b)
+    : IndexExprScope(&b, b.getLoc()){};
+
 // Nested scopes.
 IndexExprScope::IndexExprScope(
     OpBuilder *innerRewriter, IndexExprScope *enclosingScope)
@@ -71,6 +74,10 @@ IndexExprScope::IndexExprScope(
 IndexExprScope::IndexExprScope(
     DialectBuilder &innerDb, IndexExprScope *enclosingScope)
     : IndexExprScope(&innerDb.getBuilder(), enclosingScope) {}
+
+IndexExprScope::IndexExprScope(
+    WithLoc<OpBuilder> &innerDb, IndexExprScope *enclosingScope)
+    : IndexExprScope(&innerDb, enclosingScope) {}
 
 IndexExprScope::~IndexExprScope() {
   // Free the memory of each IndexExprImpl in scope's container.

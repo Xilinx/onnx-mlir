@@ -96,15 +96,15 @@ std::tuple<A, A> getActivationPack(RNNOp *op);
 /// In ONNX, weights for gates and directions are combined in a single tensor.
 /// This function splits them into 2D tensors.
 template <typename RNNOp, typename W>
-std::tuple<W, W> getWeightPack(
-    mlir::ConversionPatternRewriter &rewriter, mlir::Location loc, RNNOp *op);
+std::tuple<W, W> getWeightPack(mlir::ConversionPatternRewriter &rewriter,
+    mlir::Location loc, RNNOp *op, typename RNNOp::Adaptor &operandAdaptor);
 
 /// Obtain biases in 1D for each gate.
 /// In ONNX, biases for gates and directions are combined in a single tensor.
 /// This function splits them into 1D tensors.
 template <typename RNNOp, typename B>
-std::tuple<B, B> getBiasPack(
-    mlir::ConversionPatternRewriter &rewriter, mlir::Location loc, RNNOp *op);
+std::tuple<B, B> getBiasPack(mlir::ConversionPatternRewriter &rewriter,
+    mlir::Location loc, RNNOp *op, typename RNNOp::Adaptor &operandAdaptor);
 
 // Allocate memory for RNN states and initialize them.
 template <typename RNNOp, typename S>
@@ -154,12 +154,12 @@ struct ONNXRNNOpLowering : public mlir::OpConversionPattern<RNNOp> {
     // Prepare weights.
     W weightForward, weightReverse;
     std::tie(weightForward, weightReverse) =
-        getWeightPack<RNNOp, W>(rewriter, loc, &rnnOp);
+        getWeightPack<RNNOp, W>(rewriter, loc, &rnnOp, adaptor);
 
     // Prepare biases.
     B biasForward, biasReverse;
     std::tie(biasForward, biasReverse) =
-        getBiasPack<RNNOp, B>(rewriter, loc, &rnnOp);
+        getBiasPack<RNNOp, B>(rewriter, loc, &rnnOp, adaptor);
 
     int64_t sequenceDimSize = dimAt(rnnOp.getX(), 0);
     auto direction = rnnOp.getDirection();

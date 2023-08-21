@@ -35,7 +35,7 @@ public:
   LogicalResult matchAndRewrite(ONNXDequantizeLinearOp op, OpAdaptor,
       ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
+    TosaBuilder tosaBuilder(op);
     Value x = op.getX();
     ArrayRef<int64_t> inputShape = cast<TensorType>(x.getType()).getShape();
     Value x_scale = op.getXScale();

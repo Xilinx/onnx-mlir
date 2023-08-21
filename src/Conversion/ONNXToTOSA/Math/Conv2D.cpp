@@ -90,7 +90,7 @@ public:
     auto loc = op->getLoc();
     auto convOp = llvm::cast<ONNXConvOp>(op);
 
-    TosaBuilder tosaBuilder(rewriter, loc);
+    TosaBuilder tosaBuilder(op);
 
     auto input = adaptor.getX();
     auto weights = adaptor.getW();

@@ -90,7 +90,7 @@ void getDimsInt64(Value val, SmallVectorImpl<int64_t> &result) {
 }
 
 /// Create a ConcatOp to concat the list of tensors.
-Value emitConcatOpForDims(MultiDialectBuilder<OnnxBuilder> create,
+Value emitConcatOpForDims(MultiDialectBuilder<OnnxBuilder> &create,
     ValueRange inputs, Type outputType) {
   int64_t rank = inputs.size();
   if (rank == 1) {

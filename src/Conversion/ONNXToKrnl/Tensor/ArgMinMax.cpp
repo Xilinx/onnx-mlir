@@ -21,17 +21,17 @@ using namespace mlir;
 namespace onnx_mlir {
 
 template <typename ARG_OP>
-inline Value getCondition(MathBuilder createMath, Value next, Value dstVal);
+inline Value getCondition(MathBuilder &createMath, Value next, Value dstVal);
 
 template <>
 inline Value getCondition<ONNXArgMinOp>(
-    MathBuilder createMath, Value next, Value dstVal) {
+    MathBuilder &createMath, Value next, Value dstVal) {
   return createMath.slt(next, dstVal);
 }
 
 template <>
 inline Value getCondition<ONNXArgMaxOp>(
-    MathBuilder createMath, Value next, Value dstVal) {
+    MathBuilder &createMath, Value next, Value dstVal) {
   return createMath.sgt(next, dstVal);
 }
 

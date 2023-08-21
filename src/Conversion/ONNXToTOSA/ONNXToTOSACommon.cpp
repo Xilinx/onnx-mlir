@@ -51,9 +51,9 @@ static int64_t countDynamicDims(llvm::ArrayRef<int64_t> dims) {
 
 // Lowers Gather operators to a sequence of TOSA ops.
 // This Code is mostly the same as TF to TOSA.
-std::optional<Value> convertGatherOp(PatternRewriter &rewriter, Location loc,
-    Value resultValue, Value inputValue, Value indicesValue, int32_t batchDims,
-    int32_t axis) {
+std::optional<Value> convertGatherOp(ConversionPatternRewriter &rewriter,
+    Location loc, Value resultValue, Value inputValue, Value indicesValue,
+    int32_t batchDims, int32_t axis) {
 
   TosaBuilder tosaBuilder(rewriter, loc);
 

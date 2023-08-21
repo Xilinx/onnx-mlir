@@ -24,8 +24,8 @@ static Value getLoopIndexByAxisAndOffset(MathBuilder &createMath,
     SmallVectorImpl<Value> &resLoopIndex, ValueRange &baseLoopIndex,
     SmallVectorImpl<IndexExpr> &upperBounds, Value axis, Value offset,
     bool reverse) {
-  Type boolTy = createMath.getBuilder().getI1Type();
-  Type indexTy = createMath.getBuilder().getIndexType();
+  Type boolTy = createMath.getI1Type();
+  Type indexTy = createMath.getIndexType();
   Value notSameAsBaseIndex = createMath.constant(boolTy, 0);
   for (uint64_t r = 0; r < upperBounds.size(); ++r) {
     Value iVal = baseLoopIndex[r];

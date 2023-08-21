@@ -68,7 +68,7 @@ public:
       ConversionPatternRewriter &rewriter) const override {
 
     Location loc = op->getLoc();
-    TosaBuilder tosaBuilder(rewriter, loc);
+    TosaBuilder tosaBuilder(op);
 
     Value input = adaptor.getInput();
     // softmax = exp(logits) / reduce_sum(exp(logits), -1)

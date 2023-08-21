@@ -184,7 +184,7 @@ IndexExpr IndexExprBuilder::getValFromArray(
   // If our scalar array is not a constant; we have a runtime value.
   if (Value val = getVal(array, i)) {
     // Assume that we can write code.
-    MathBuilder createMath(*this);
+    MathBuilder createMath(this->getBuilder(), getLoc());
     if (isFloat) {
       Value castedVal = createMath.cast(b().getF32Type(), val);
       return NonAffineIndexExpr(castedVal);

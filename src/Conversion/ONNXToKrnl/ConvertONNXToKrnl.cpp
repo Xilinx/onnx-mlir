@@ -336,6 +336,7 @@ void FrontendToKrnlLoweringPass::runOnOperation() {
   // final target for this lowering.
   ConversionTarget target(getContext());
 
+  target.addIllegalDialect<ONNXDialect>();
   // We define the specific operations, or dialects, that are legal targets for
   // this lowering.
   target.addLegalDialect<KrnlDialect, affine::AffineDialect,

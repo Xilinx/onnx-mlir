@@ -22,45 +22,41 @@ namespace onnx_mlir {
 
 //====-------------------- Support for Krnl Builder ----------------------===//
 
-struct KrnlBuilder : public DialectBuilder {
-  KrnlBuilder(mlir::Location loc) : DialectBuilder(loc) {}
-  KrnlBuilder(mlir::OpBuilder &b, mlir::Location loc)
-      : DialectBuilder(b, loc) {}
-  KrnlBuilder(const DialectBuilder &db) : DialectBuilder(db) {}
+struct KrnlBuilder : WithLoc<mlir::OpBuilder> {
+  using WithLoc<mlir::OpBuilder>::WithLoc;
+  KrnlBuilder(WithLoc<mlir::OpBuilder> &b) : WithLoc<mlir::OpBuilder>(b){};
   virtual ~KrnlBuilder() {}
 
-  mlir::Value load(mlir::Value memref, mlir::ValueRange indices = {}) const;
+  mlir::Value load(mlir::Value memref, mlir::ValueRange indices = {});
   // When ranks of offsets<indices, add offsets to the least significant dims.
-  mlir::Value load(mlir::Value memref, mlir::ValueRange indices,
-      mlir::ValueRange offsets) const;
-  mlir::Value loadIE(
-      mlir::Value memref, mlir::ArrayRef<IndexExpr> indices) const;
+  mlir::Value load(
+      mlir::Value memref, mlir::ValueRange indices, mlir::ValueRange offsets);
+  mlir::Value loadIE(mlir::Value memref, mlir::ArrayRef<IndexExpr> indices);
   void store(
-      mlir::Value val, mlir::Value memref, mlir::ValueRange indices = {}) const;
+      mlir::Value val, mlir::Value memref, mlir::ValueRange indices = {});
   // When ranks of offsets<indices, add offsets to the least significant dims.
   void store(mlir::Value val, mlir::Value memref, mlir::ValueRange indices,
-      mlir::ValueRange offsets) const;
-  void storeIE(mlir::Value val, mlir::Value memref,
-      mlir::ArrayRef<IndexExpr> indices) const;
+      mlir::ValueRange offsets);
+  void storeIE(
+      mlir::Value val, mlir::Value memref, mlir::ArrayRef<IndexExpr> indices);
 
-  void seqstore(mlir::Value element, mlir::Value seq, mlir::Value index) const;
-  void seqstore(mlir::Value element, mlir::Value seq, IndexExpr index) const;
+  void seqstore(mlir::Value element, mlir::Value seq, mlir::Value index);
+  void seqstore(mlir::Value element, mlir::Value seq, IndexExpr index);
 
-  mlir::Value vectorTypeCast(mlir::Value sourceMemref, int64_t vectorLen) const;
+  mlir::Value vectorTypeCast(mlir::Value sourceMemref, int64_t vectorLen);
 
-  mlir::ValueRange defineLoops(int64_t originalLoopNum) const;
-  mlir::ValueRange block(mlir::Value loop, int64_t blockSize) const;
-  void permute(mlir::ValueRange loops, mlir::ArrayRef<int64_t> map) const;
-  mlir::ValueRange getInductionVarValue(mlir::ValueRange loops) const;
+  mlir::ValueRange defineLoops(int64_t originalLoopNum);
+  mlir::ValueRange block(mlir::Value loop, int64_t blockSize);
+  void permute(mlir::ValueRange loops, mlir::ArrayRef<int64_t> map);
+  mlir::ValueRange getInductionVarValue(mlir::ValueRange loops);
 
   // Lambda passes loop indices as 2nd parameter.
   void iterate(mlir::ValueRange originalLoops, mlir::ValueRange optimizedLoops,
       mlir::ValueRange lbs, mlir::ValueRange ubs,
       mlir::function_ref<void(
           KrnlBuilder &createKrnl, mlir::ValueRange indices)>
-          bodyBuilderFn) const;
-  mlir::KrnlIterateOp iterate(
-      const krnl::KrnlIterateOperandPack &operands) const;
+          bodyBuilderFn);
+  mlir::KrnlIterateOp iterate(const krnl::KrnlIterateOperandPack &operands);
 
   // Lambda passes loop indices as 2nd parameter.
   void iterateIE(mlir::ValueRange originalLoops,
@@ -68,7 +64,7 @@ struct KrnlBuilder : public DialectBuilder {
       mlir::ArrayRef<IndexExpr> ubs,
       mlir::function_ref<void(
           KrnlBuilder &createKrnl, mlir::ValueRange indices)>
-          bodyBuilderFn) const;
+          bodyBuilderFn);
 
   void copyToBuffer(
       // Buffer and source memory. Source memref may have a higher rank than
@@ -83,15 +79,14 @@ struct KrnlBuilder : public DialectBuilder {
       // in the buffer, if the user want to pad the data to a higher size.
       // TileSize enables the user to
       mlir::ArrayRef<int64_t> tileSize, mlir::ArrayRef<int64_t> padToNext,
-      bool transpose = false) const;
+      bool transpose = false);
   void copyToBuffer(mlir::Value bufferMemref, mlir::Value sourceMemref,
-      mlir::ValueRange starts, mlir::Value padValue,
-      bool transpose = false) const;
+      mlir::ValueRange starts, mlir::Value padValue, bool transpose = false);
 
   void copyFromBuffer(mlir::Value bufferMemref, mlir::Value memref,
-      mlir::ValueRange starts, mlir::ArrayRef<int64_t> tileSize) const;
-  void copyFromBuffer(mlir::Value bufferMemref, mlir::Value memref,
-      mlir::ValueRange starts) const;
+      mlir::ValueRange starts, mlir::ArrayRef<int64_t> tileSize);
+  void copyFromBuffer(
+      mlir::Value bufferMemref, mlir::Value memref, mlir::ValueRange starts);
 
   void matmul(
       // The a/b/cStart are the indices at the beginning of the buffer/mem
@@ -120,44 +115,42 @@ struct KrnlBuilder : public DialectBuilder {
       mlir::ArrayRef<int64_t> aTileSize, mlir::ArrayRef<int64_t> bTileSize,
       mlir::ArrayRef<int64_t> cTileSize,
       // Optimizations for code gen.
-      bool simdize, bool unroll, bool overCompute) const;
+      bool simdize, bool unroll, bool overCompute);
   void matmul(mlir::Value A, mlir::ValueRange aStart, mlir::Value B,
       mlir::ValueRange bStart, mlir::Value C, mlir::ValueRange cStart,
       mlir::ValueRange loops, mlir::ValueRange computeStarts,
-      mlir::ValueRange globalUBs, bool simdize, bool unroll,
-      bool overCompute) const;
+      mlir::ValueRange globalUBs, bool simdize, bool unroll, bool overCompute);
 
-  mlir::Value dim(mlir::Type type, mlir::Value alloc, mlir::Value index) const;
+  mlir::Value dim(mlir::Type type, mlir::Value alloc, mlir::Value index);
 
-  mlir::KrnlMovableOp movable() const;
+  mlir::KrnlMovableOp movable();
 
   mlir::KrnlGetRefOp getRef(mlir::Type type, mlir::Value memref,
-      mlir::Value offset, mlir::ValueRange indices = {}) const;
+      mlir::Value offset, mlir::ValueRange indices = {});
 
   mlir::Value constant(mlir::MemRefType type, mlir::StringRef name,
       std::optional<mlir::Attribute> value,
       std::optional<mlir::IntegerAttr> offset = std::nullopt,
-      std::optional<mlir::IntegerAttr> alignment = std::nullopt) const;
+      std::optional<mlir::IntegerAttr> alignment = std::nullopt);
 
   // C library functions.
-  void memcpy(mlir::Value dest, mlir::Value src, mlir::Value numElems) const;
+  void memcpy(mlir::Value dest, mlir::Value src, mlir::Value numElems);
   void memcpy(mlir::Value dest, mlir::Value src, mlir::Value numElems,
-      mlir::Value destOffset, mlir::Value srcOffset) const;
-  void memset(mlir::Value dest, mlir::Value val, bool delayed = false) const;
-  mlir::Value strncmp(
-      mlir::Value str1, mlir::Value str2, mlir::Value len) const;
-  mlir::Value strlen(mlir::Value str) const;
-  void printf(mlir::StringRef msg) const;
+      mlir::Value destOffset, mlir::Value srcOffset);
+  void memset(mlir::Value dest, mlir::Value val, bool delayed = false);
+  mlir::Value strncmp(mlir::Value str1, mlir::Value str2, mlir::Value len);
+  mlir::Value strlen(mlir::Value str);
+  void printf(mlir::StringRef msg);
   void printf(mlir::StringRef msg, mlir::Value input, mlir::Type inputType,
-      bool endsWithNewLine = false) const;
-  void printf(mlir::Value input, mlir::Type inputType) const;
+      bool endsWithNewLine = false);
+  void printf(mlir::Value input, mlir::Type inputType);
 
   // Onnx-mlir runtime functions.
   void randomNormal(mlir::Value alloc, mlir::Value numberOfRandomValues,
-      mlir::Value mean, mlir::Value scale, mlir::Value seed) const;
+      mlir::Value mean, mlir::Value scale, mlir::Value seed);
   mlir::Value findIndex(
-      mlir::Value input, mlir::Value G, mlir::Value V, mlir::Value len) const;
-  void printTensor(mlir::StringRef msg, mlir::Value input) const;
+      mlir::Value input, mlir::Value G, mlir::Value V, mlir::Value len);
+  void printTensor(mlir::StringRef msg, mlir::Value input);
 };
 
 //====--- Support for Affine Builder with Krnl Mem Ops ------------------===//
@@ -178,6 +171,7 @@ struct IndexExprBuilderForKrnl : IndexExprBuilder {
   IndexExprBuilderForKrnl(mlir::OpBuilder &b, mlir::Location loc)
       : IndexExprBuilder(b, loc) {}
   IndexExprBuilderForKrnl(const DialectBuilder &db) : IndexExprBuilder(db) {}
+  IndexExprBuilderForKrnl(WithLoc<mlir::OpBuilder> &b) : IndexExprBuilder(b) {}
   virtual ~IndexExprBuilderForKrnl() {}
 
 protected:
@@ -196,9 +190,14 @@ template <class... Ts>
 struct MultiDialectBuilder<AffineBuilderKrnlMem, Ts...>
     : MultiDialectBuilder<Ts...> {
   MultiDialectBuilder(mlir::OpBuilder &b, mlir::Location loc)
-      : MultiDialectBuilder<Ts...>(b, loc), affineKMem(b, loc) {}
+      : MultiDialectBuilder<Ts...>(b, loc), affineKMem(loc, b) {}
   MultiDialectBuilder(const DialectBuilder &db)
       : MultiDialectBuilder<Ts...>(db), affineKMem(db) {}
+  MultiDialectBuilder(mlir::OpBuilder &b)
+      : MultiDialectBuilder<Ts...>(b), affineKMem(b){};
+  template <typename Builder>
+  MultiDialectBuilder(WithLoc<Builder> &b)
+      : MultiDialectBuilder<Ts...>(b), affineKMem(b){};
   AffineBuilderKrnlMem affineKMem;
 };
 
@@ -206,9 +205,14 @@ struct MultiDialectBuilder<AffineBuilderKrnlMem, Ts...>
 template <class... Ts>
 struct MultiDialectBuilder<KrnlBuilder, Ts...> : MultiDialectBuilder<Ts...> {
   MultiDialectBuilder(mlir::OpBuilder &b, mlir::Location loc)
-      : MultiDialectBuilder<Ts...>(b, loc), krnl(b, loc) {}
+      : MultiDialectBuilder<Ts...>(b, loc), krnl(loc, b) {}
   MultiDialectBuilder(const DialectBuilder &db)
       : MultiDialectBuilder<Ts...>(db), krnl(db) {}
+  MultiDialectBuilder(mlir::OpBuilder &b)
+      : MultiDialectBuilder<Ts...>(b), krnl(b){};
+  template <typename Builder>
+  MultiDialectBuilder(WithLoc<Builder> &b)
+      : MultiDialectBuilder<Ts...>(b), krnl(b){};
   KrnlBuilder krnl;
 };
 
@@ -221,6 +225,9 @@ struct MultiDialectBuilder<IndexExprBuilderForKrnl, Ts...>
       : MultiDialectBuilder<Ts...>(b, loc), krnlIE(b, loc) {}
   MultiDialectBuilder(const DialectBuilder &db)
       : MultiDialectBuilder<Ts...>(db), krnlIE(db) {}
+  template <typename Builder>
+  MultiDialectBuilder(WithLoc<Builder> &b)
+      : MultiDialectBuilder<Ts...>(b), krnlIE(b){};
   IndexExprBuilderForKrnl krnlIE;
 };
 

@@ -49,7 +49,7 @@ void handleIncludePadAttr(
       [&](mlir::IntegerAttr n) { intValues.push_back(n.getInt()); });
 
   // Create Padding and ConstPad tosa::ConstOp's
-  TosaBuilder tosaBuilder(rewriter, loc);
+  TosaBuilder tosaBuilder(op);
   Value padding = tosa::buildOnnxToTosaPaddingConstOp(
       rewriter, intValues, loc, {0, 0, 0, 0}, {});
   auto constTosaTensor = tosaBuilder.getSplattedConst(0.0);

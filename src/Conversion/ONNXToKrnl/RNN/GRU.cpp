@@ -161,8 +161,8 @@ getActivationPack<ONNXGRUOp, GruActivationPack>(ONNXGRUOp *op) {
 
 template <>
 std::tuple<GruWeightPack, GruWeightPack>
-getWeightPack<ONNXGRUOp, GruWeightPack>(
-    ConversionPatternRewriter &rewriter, Location loc, ONNXGRUOp *op) {
+getWeightPack<ONNXGRUOp, GruWeightPack>(ConversionPatternRewriter &rewriter,
+    Location loc, ONNXGRUOp *op, typename ONNXGRUOp::Adaptor &operandAdaptor) {
   MultiDialectBuilder<KrnlBuilder, MathBuilder, MemRefBuilder, OnnxBuilder>
       create(rewriter, loc);
   // Return values.
@@ -269,15 +269,16 @@ getWeightPack<ONNXGRUOp, GruWeightPack>(
 
 template <>
 std::tuple<GruBiasPack, GruBiasPack> getBiasPack<ONNXGRUOp, GruBiasPack>(
-    ConversionPatternRewriter &rewriter, Location loc, ONNXGRUOp *op) {
+    ConversionPatternRewriter &rewriter, Location loc, ONNXGRUOp *op,
+    typename ONNXGRUOp::Adaptor &operandAdaptor) {
   // Return values.
   GruBiasPack biasForward, biasReverse;
 
   // bias: [direction, 6*hiddenSize] for both parameter and recurrence weights.
-  Value B = op->getB();
+  Value B = operandAdaptor.getB();
 
   // direction
-  StringRef direction = op->getDirection();
+  StringRef direction = operandAdaptor.getDirection();
 
   MultiDialectBuilder<KrnlBuilder, MathBuilder, MemRefBuilder, OnnxBuilder>
       create(rewriter, loc);
@@ -462,8 +463,7 @@ void calculateState<GruState, GruActivationPack, GruWeightPack, GruBiasPack>(
             zt = createMath.add(zt, WbzVal);
             zt = createMath.add(zt, RbzVal);
           }
-          zt = applyActivation(
-              createKrnl.getBuilder(), loc, activationPack.f, zt);
+          zt = applyActivation(createKrnl, loc, activationPack.f, zt);
           // rt = f(Xt*(Wr^T) + Ht-1*(Rr^T) + Wbr + Rbr)"
           Value XtWrVal = createKrnl.loadIE(XtWT, {bsie, hsie + hsieLit});
           Value HtRrVal = createKrnl.loadIE(HtRT, {bsie, hsie + hsieLit});
@@ -474,8 +474,7 @@ void calculateState<GruState, GruActivationPack, GruWeightPack, GruBiasPack>(
             rt = createMath.add(rt, WbrVal);
             rt = createMath.add(rt, RbrVal);
           }
-          rt = applyActivation(
-              createKrnl.getBuilder(), loc, activationPack.f, rt);
+          rt = applyActivation(createKrnl, loc, activationPack.f, rt);
           // ht = g(Xt*(Wh^T) + (rt (.) (Ht-1*(Rh^T) + Rbh)) + Wbh)
           Value XtWhVal = createKrnl.loadIE(XtWT, {bsie, hsie + 2 * hsieLit});
           Value HtRhVal = createKrnl.loadIE(HtRT, {bsie, hsie + 2 * hsieLit});
@@ -489,8 +488,7 @@ void calculateState<GruState, GruActivationPack, GruWeightPack, GruBiasPack>(
             Value WbhVal = createKrnl.load(biasPack.Wbh, {hs});
             ht = createMath.add(ht, WbhVal);
           }
-          ht = applyActivation(
-              createKrnl.getBuilder(), loc, activationPack.g, ht);
+          ht = applyActivation(createKrnl, loc, activationPack.g, ht);
           // Ht = (1 - zt) (.) ht + zt (.) Ht-1
           Value oneMinusZt = createMath.sub(one, zt);
           Value ztht = createMath.mul(oneMinusZt, ht);
@@ -548,8 +546,7 @@ void calculateState<GruState, GruActivationPack, GruWeightPack, GruBiasPack>(
             rtVal = createMath.add(rtVal, WbrVal);
             rtVal = createMath.add(rtVal, RbrVal);
           }
-          rtVal = applyActivation(
-              createKrnl.getBuilder(), loc, activationPack.f, rtVal);
+          rtVal = applyActivation(createKrnl, loc, activationPack.f, rtVal);
           createKrnl.store(rtVal, rt, indices);
           // rt (.) Ht-1
           Value rtHtVal = createMath.mul(rtVal, HtVal);
@@ -581,8 +578,7 @@ void calculateState<GruState, GruActivationPack, GruWeightPack, GruBiasPack>(
             zt = createMath.add(zt, WbzVal);
             zt = createMath.add(zt, RbzVal);
           }
-          zt = applyActivation(
-              createKrnl.getBuilder(), loc, activationPack.f, zt);
+          zt = applyActivation(createKrnl, loc, activationPack.f, zt);
           // ht = g(Xt*(Wh^T) + (rt (.) Ht-1)*(Rh^T) + Rbh + Wbh)
           Value XtWhVal = createKrnl.loadIE(XtWT, {bsie, hsie + 2 * hsieLit});
           Value rtHtRhVal = createKrnl.load(rtHtRh, indices);
@@ -593,8 +589,7 @@ void calculateState<GruState, GruActivationPack, GruWeightPack, GruBiasPack>(
             ht = createMath.add(ht, WbhVal);
             ht = createMath.add(ht, RbhVal);
           }
-          ht = applyActivation(
-              createKrnl.getBuilder(), loc, activationPack.g, ht);
+          ht = applyActivation(createKrnl, loc, activationPack.g, ht);
           // Ht = (1 - zt) (.) ht + zt (.) Ht-1
           Value oneMinusZt = createMath.sub(one, zt);
           Value ztht = createMath.mul(oneMinusZt, ht);

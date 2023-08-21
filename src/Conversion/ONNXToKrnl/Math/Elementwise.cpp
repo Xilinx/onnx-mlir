@@ -1404,7 +1404,7 @@ static LogicalResult getPartiallyFlattenedSimdCode(
                           << collapsedInnermostLoops << " inner dims\n");
 
   // generate SIMD code of VL elements per vector.
-  IndexExprScope allocScope(create.vec, shapeHelper->getScope());
+  IndexExprScope allocScope(&create.vec, shapeHelper->getScope());
   int64_t VL =
       create.vec.getMachineVectorLength(outputElementType) * simdUnroll;
   // Alloc memory with padding for SIMD.
@@ -1457,7 +1457,7 @@ static LogicalResult getPartiallyFlattenedSimdCode(
   // Iterate only over the blocks.
   create.krnl.iterateIE(loopDef, optimizedLoopDef, lbs, ubs,
       [&](KrnlBuilder &ck, ValueRange loopInd) {
-        MultiDialectBuilder<KrnlBuilder, VectorBuilder> create(ck);
+        MultiDialectBuilder<KrnlBuilder, VectorBuilder> create(ck, ck.getLoc());
         SmallVector<IndexExpr, 4> outputAccessExprs;
         getIndexExprList<DimIndexExpr>(loopInd, outputAccessExprs);
 
@@ -1509,6 +1509,7 @@ static LogicalResult getPartiallyFlattenedSimdCode(
         if (isUnaryOp) {
           // For unary op, we through all operands at once as the other ones are
           // scalars / none values.
+          rewriter.setInsertionPointToEnd(loadedVals[0].getParentBlock());
           finalResult = emitScalarOpFor<OP_TYPE>(
               rewriter, create.getLoc(), op, vecElementType, loadedVals);
         } else {
@@ -1992,6 +1993,7 @@ struct ONNXElementwiseUnaryOpLowering
               Value loadedVal = create.krnl.load(operands[i]);
               args.emplace_back(loadedVal);
             }
+            rewriter.setInsertionPointToEnd(loadedVal.getParentBlock());
             auto loweredOpResult = emitScalarOpFor<ElementwiseUnaryOp>(
                 rewriter, loc, op, elementType, args);
             loweredOpResult =
@@ -2014,6 +2016,7 @@ struct ONNXElementwiseUnaryOpLowering
         Value loadedVal = create.krnl.load(operands[i]);
         args.emplace_back(loadedVal);
       }
+      rewriter.setInsertionPointToEnd(loadedVal.getParentBlock());
       auto loweredOpResult = emitScalarOpFor<ElementwiseUnaryOp>(
           rewriter, loc, op, elementType, args);
       loweredOpResult = opFusionHelper.emitFuseOps(loweredOpResult);
@@ -2127,7 +2130,7 @@ struct ONNXElementwiseBinaryOpLowering
       create.krnlIE.getShapeAsDims(alloc, ubs);
       create.krnl.iterateIE(loopDef, loopDef, lbs, ubs,
           [&](KrnlBuilder &createKrnl, ValueRange loopInd) {
-            IndexExprScope innerScope(createKrnl, shapeHelper.getScope());
+            IndexExprScope innerScope(&createKrnl, shapeHelper.getScope());
             SmallVector<IndexExpr, 4> outputAccessExprs;
             getIndexExprList<DimIndexExpr>(loopInd, outputAccessExprs);
 
@@ -2145,7 +2148,7 @@ struct ONNXElementwiseBinaryOpLowering
                 rhsAccessExprs, /*flattened dims*/ false, hasNoBroadcast);
             assert(succeeded(res) && "Could not compute access indices");
             Value rhs = createKrnl.loadIE(operands[1], rhsAccessExprs);
-
+            rewriter.setInsertionPointToEnd(rhs.getParentBlock());
             // Apply the element-wise function.
             Value result = emitScalarOpFor<ElementwiseBinaryOp>(
                 rewriter, loc, op, outputElementType, {lhs, rhs});
@@ -2157,7 +2160,7 @@ struct ONNXElementwiseBinaryOpLowering
     } else {
       Value lhs = create.krnl.load(operands[0]);
       Value rhs = create.krnl.load(operands[1]);
-
+      rewriter.setInsertionPointToEnd(lhs.getParentBlock());
       // Apply the element-wise function.
       Value result = emitScalarOpFor<ElementwiseBinaryOp>(
           rewriter, loc, op, outputElementType, {lhs, rhs});
@@ -2310,6 +2313,7 @@ struct ONNXElementwiseVariadicOpLowering
         // Obtain the next operand.
         Value next = create.krnl.load(operands[i]);
         // Fold.
+        rewriter.setInsertionPointToEnd(next.getParentBlock());
         accumulated = emitScalarOpFor<ElementwiseVariadicOp>(
             rewriter, loc, op, outputElementType, {accumulated, next});
       }

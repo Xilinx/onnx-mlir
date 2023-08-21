@@ -62,7 +62,7 @@ struct ONNXCompressOpLowering : public OpConversionPattern<ONNXCompressOp> {
     IndexExpr condShapeFirstRank = create.krnlIE.getShapeAsDim(condMemRef, 0);
     ValueRange loopDef = create.krnl.defineLoops(1);
     create.krnl.iterateIE(loopDef, loopDef, {zeroIE}, {condShapeFirstRank},
-        [&](KrnlBuilder createKrnl, ValueRange loopInd) {
+        [&](KrnlBuilder &createKrnl, ValueRange loopInd) {
           MathBuilder createMath(createKrnl);
           // Load the condition
           Value currCond = createKrnl.load(condMemRef, loopInd); // Type i1.
@@ -148,7 +148,7 @@ struct ONNXCompressOpLowering : public OpConversionPattern<ONNXCompressOp> {
 
       ValueRange inputLoopDef = create.krnl.defineLoops(inputRank);
       create.krnl.iterateIE(inputLoopDef, inputLoopDef, inputLbs, inputUbs,
-          [&](KrnlBuilder createKrnl, ValueRange inputLoopInd) {
+          [&](KrnlBuilder &createKrnl, ValueRange inputLoopInd) {
             MultiDialectBuilder<KrnlBuilder, MathBuilder, SCFBuilder> create(
                 createKrnl);
             Value readIndex = create.krnl.load(readIndexMemRef);
@@ -218,7 +218,7 @@ struct ONNXCompressOpLowering : public OpConversionPattern<ONNXCompressOp> {
       ValueRange axisLoopDef = create.krnl.defineLoops(1);
       create.krnl.iterateIE(axisLoopDef, axisLoopDef, {inputLbs[axisValue]},
           {inputUbs[axisValue]},
-          [&](KrnlBuilder createKrnl, ValueRange axisLoopInd) {
+          [&](KrnlBuilder &createKrnl, ValueRange axisLoopInd) {
             MultiDialectBuilder<KrnlBuilder, MathBuilder, SCFBuilder> create(
                 createKrnl);
             // Compute the test if we have enough condition value for current
@@ -240,7 +240,7 @@ struct ONNXCompressOpLowering : public OpConversionPattern<ONNXCompressOp> {
                 ValueRange innerLoopDefs = createKrnl.defineLoops(innerRank);
                 createKrnl.iterateIE(innerLoopDefs, innerLoopDefs, innerLbs,
                     innerUbs,
-                    [&](KrnlBuilder createKrnl, ValueRange innerLoopInd) {
+                    [&](KrnlBuilder &createKrnl, ValueRange innerLoopInd) {
                       MathBuilder createMath(createKrnl);
                       // Compute access functions for input and output.
                       SmallVector<Value, 4> inputAccessFct, outputAccessFct;

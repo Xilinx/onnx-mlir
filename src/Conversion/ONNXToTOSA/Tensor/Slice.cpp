@@ -39,7 +39,7 @@ public:
     ONNXSliceOpShapeHelper shapeHelper(op, {}, &createTosaIE);
     shapeHelper.computeShapeAndAssertOnFailure();
 
-    TosaBuilder tosaBuilder(rewriter, loc);
+    TosaBuilder tosaBuilder(op);
 
     Value input = adaptor.getData();
     if (!(IndexExpr::isLiteral(shapeHelper.starts)))

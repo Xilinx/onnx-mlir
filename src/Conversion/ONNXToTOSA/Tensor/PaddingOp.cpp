@@ -82,7 +82,7 @@ public:
       // Need float for F32 Type
       float valueFloat = (*valueIt).cast<FloatAttr>().getValueAsDouble();
 
-      TosaBuilder tosaBuilder(rewriter, loc);
+      TosaBuilder tosaBuilder(op);
       Value constTosaTensor = tosaBuilder.getSplattedConst(valueFloat);
 
       rewriter.replaceOpWithNewOp<mlir::tosa::PadOp>(

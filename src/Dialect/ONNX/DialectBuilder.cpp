@@ -31,14 +31,14 @@ namespace onnx_mlir {
 // Basic operations
 // =============================================================================
 
-Value OnnxBuilder::add(Value A, Value B) const {
+Value OnnxBuilder::add(Value A, Value B) {
   assert((A.getType().cast<ShapedType>().getElementType() ==
              B.getType().cast<ShapedType>().getElementType()) &&
          "A and B must have the same element type");
   return createOpAndInferShapes<ONNXAddOp>(toTensor(A), toTensor(B));
 }
 
-Value OnnxBuilder::cast(Value input, TypeAttr to) const {
+Value OnnxBuilder::cast(Value input, TypeAttr to) {
   Type resultType;
   if (input.getType().cast<ShapedType>().hasRank())
     resultType = RankedTensorType::get(
@@ -48,68 +48,66 @@ Value OnnxBuilder::cast(Value input, TypeAttr to) const {
   return createTypedOpAndInferShapes<ONNXCastOp>(resultType, input, to);
 }
 
-Value OnnxBuilder::cast(Value input, Type to) const {
+Value OnnxBuilder::cast(Value input, Type to) {
   return cast(input, TypeAttr::get(to));
 }
 
-Value OnnxBuilder::ceil(Value input) const {
+Value OnnxBuilder::ceil(Value input) {
   return createOpAndInferShapes<ONNXCeilOp>(toTensor(input.getType()), input);
 }
 
-Value OnnxBuilder::clip(
-    Value input, Value min, Value max, bool scalarType) const {
+Value OnnxBuilder::clip(Value input, Value min, Value max, bool scalarType) {
   if (scalarType)
-    return b().create<ONNXClipOp>(loc(), input.getType(), input, min, max);
+    return create<ONNXClipOp>(input.getType(), input, min, max);
   else
     return createOpAndInferShapes<ONNXClipOp>(toTensor(input.getType()),
         toTensor(input), toTensor(min), toTensor(max));
 }
 
-Value OnnxBuilder::concat(
-    Type outputType, ValueRange inputs, int64_t axis) const {
+Value OnnxBuilder::concat(Type outputType, ValueRange inputs, int64_t axis) {
   IntegerAttr concatAxisAttr =
-      IntegerAttr::get(b().getIntegerType(64, /*isSigned=*/true),
+      IntegerAttr::get(this->getIntegerType(64, /*isSigned=*/true),
           APInt(64, axis, /*isSigned=*/true));
   return createTypedOpAndInferShapes<ONNXConcatOp>(
       toTensor(outputType), inputs, concatAxisAttr);
 }
 
-Value OnnxBuilder::constant(Attribute denseAttr) const {
+Value OnnxBuilder::constant(Attribute denseAttr) {
   return createOpAndInferShapes<ONNXConstantOp>(Attribute(), denseAttr);
 }
 
-Value OnnxBuilder::constantInt64(const ArrayRef<int64_t> intVals) const {
-  Attribute denseAttr = b().getI64TensorAttr(intVals);
+Value OnnxBuilder::constantInt64(const ArrayRef<int64_t> intVals) {
+  Attribute denseAttr = this->getI64TensorAttr(intVals);
   return constant(denseAttr);
 }
 
-Value OnnxBuilder::dim(Value input, int axis) const {
-  Type resultType = RankedTensorType::get({1}, b().getI64Type());
+Value OnnxBuilder::dim(Value input, int axis) {
+  Type resultType = RankedTensorType::get({1}, this->getI64Type());
   IntegerAttr axisAttr =
-      IntegerAttr::get(b().getIntegerType(64, /*isSigned=*/true),
+      IntegerAttr::get(this->getIntegerType(64, /*isSigned=*/true),
           APInt(64, axis, /*isSigned=*/true));
   return createTypedOpAndInferShapes<ONNXDimOp>(resultType, input, axisAttr);
 }
 
-void OnnxBuilder::dimGroup(Value input, int axis, int groupID) const {
+void OnnxBuilder::dimGroup(Value input, int axis, int groupID) {
   IntegerAttr axisAttr =
-      IntegerAttr::get(b().getIntegerType(64, /*isSigned=*/true),
+      IntegerAttr::get(this->getIntegerType(64, /*isSigned=*/true),
           APInt(64, axis, /*isSigned=*/true));
   IntegerAttr groupIDAttr =
-      IntegerAttr::get(b().getIntegerType(64, /*isSigned=*/true),
+      IntegerAttr::get(this->getIntegerType(64, /*isSigned=*/true),
           APInt(64, groupID, /*isSigned=*/true));
   // No shape needed for this one I believe.
-  b().create<ONNXDimGroupOp>(loc(), input, axisAttr, groupIDAttr);
+  create<ONNXDimGroupOp>(input, axisAttr, groupIDAttr);
 }
 
-Value OnnxBuilder::div(Value A, Value B) const {
+Value OnnxBuilder::div(Value A, Value B) {
   assert((A.getType().cast<ShapedType>().getElementType() ==
              B.getType().cast<ShapedType>().getElementType()) &&
          "A and B must have the same element type");
   return createOpAndInferShapes<ONNXDivOp>(toTensor(A), toTensor(B));
 }
 
-Value OnnxBuilder::matmul(Type Y, Value A, Value B, bool useGemm) const {
+Value OnnxBuilder::matmul(Type Y, Value A, Value B, bool useGemm) {
   // Gemm only supports rank 2.
   bool canUseGemm = useGemm && A.getType().isa<ShapedType>() &&
                     A.getType().cast<ShapedType>().hasRank() &&
@@ -121,17 +119,18 @@ Value OnnxBuilder::matmul(Type Y, Value A, Value B, bool useGemm) const {
   auto bValue = toTensor(B);
   if (canUseGemm)
     return createOpAndInferShapes<ONNXGemmOp>(Y, aValue, bValue, none(),
-        /*alpha=*/b().getF32FloatAttr(1.0), /*beta=*/b().getF32FloatAttr(1.0),
+        /*alpha=*/this->getF32FloatAttr(1.0),
+        /*beta=*/this->getF32FloatAttr(1.0),
         /*transA=*/
-        IntegerAttr::get(b().getIntegerType(64, /*isSigned=*/true),
+        IntegerAttr::get(this->getIntegerType(64, /*isSigned=*/true),
             APInt(64, 0, /*isSigned=*/true)),
         /*transB=*/
-        IntegerAttr::get(b().getIntegerType(64, /*isSigned=*/true),
+        IntegerAttr::get(this->getIntegerType(64, /*isSigned=*/true),
             APInt(64, 0, /*isSigned=*/true)));
   return createOpAndInferShapes<ONNXMatMulOp>(toTensor(Y), aValue, bValue);
 }
 
-Value OnnxBuilder::min(ValueRange inputs) const {
+Value OnnxBuilder::min(ValueRange inputs) {
   assert(inputs.size() >= 2 && "Expect at least two inputs");
   Type elementType = getElementType(inputs[0].getType());
   assert(llvm::all_of(inputs, [elementType](Value v) {
@@ -144,14 +143,14 @@ Value OnnxBuilder::min(ValueRange inputs) const {
   return createTypedOpAndInferShapes<ONNXMinOp>(toTensor(outputType), inputs);
 }
 
-Value OnnxBuilder::mul(Value A, Value B) const {
+Value OnnxBuilder::mul(Value A, Value B) {
   assert((A.getType().cast<ShapedType>().getElementType() ==
              B.getType().cast<ShapedType>().getElementType()) &&
          "A and B must have the same element type");
   return createOpAndInferShapes<ONNXMulOp>(toTensor(A), toTensor(B));
 }
 
-Value OnnxBuilder::mul(Type resultType, Value A, Value B) const {
+Value OnnxBuilder::mul(Type resultType, Value A, Value B) {
   assert((A.getType().cast<ShapedType>().getElementType() ==
              B.getType().cast<ShapedType>().getElementType()) &&
          "A and B must have the same element type");
@@ -159,10 +158,10 @@ Value OnnxBuilder::mul(Type resultType, Value A, Value B) const {
       resultType, toTensor(A), toTensor(B));
 }
 
-Value OnnxBuilder::none() const { return b().create<ONNXNoneOp>(loc()); }
+Value OnnxBuilder::none() { return create<ONNXNoneOp>(); }
 
 Value OnnxBuilder::pad(
-    Value input, Value pads, Value constantValue, std::string mode) const {
+    Value input, Value pads, Value constantValue, std::string mode) {
   Type elementType = getElementType(input.getType());
   Type outputType = UnrankedTensorType::get(elementType);
   Value constant = constantValue.getType().isa<NoneType>()
@@ -170,15 +169,15 @@ Value OnnxBuilder::pad(
                        : toTensor(constantValue);
   return createTypedOpAndInferShapes<ONNXPadOp>(toTensor(outputType),
       toTensor(input), toTensor(pads), constant,
-      b().createOrFold<ONNXNoneOp>(loc()), b().getStringAttr(mode));
+      this->createOrFold<ONNXNoneOp>(getLoc()), this->getStringAttr(mode));
 }
 
-Value OnnxBuilder::padZero(Value input, Value pads) const {
-  return pad(input, pads, b().create<ONNXNoneOp>(loc()), "constant");
+Value OnnxBuilder::padZero(Value input, Value pads) {
+  return pad(input, pads, create<ONNXNoneOp>(), "constant");
 }
 
 Value OnnxBuilder::reduceMax(Type outputType, Value data, Value axes,
-    bool keepDims, bool noop_with_empty_axes) const {
+    bool keepDims, bool noop_with_empty_axes) {
   int64_t i_keepDims = keepDims; // 0 if false, 1 if true
   int64_t i_noop_with_empty_axes = noop_with_empty_axes; // ditto
   return createTypedOpAndInferShapes<ONNXReduceMaxOp>(toTensor(outputType),
@@ -186,7 +185,7 @@ Value OnnxBuilder::reduceMax(Type outputType, Value data, Value axes,
 }
 
 Value OnnxBuilder::reduceMin(Type outputType, Value data, Value axes,
-    bool keepDims, bool noop_with_empty_axes) const {
+    bool keepDims, bool noop_with_empty_axes) {
   int64_t i_keepDims = keepDims; // 0 if false, 1 if true
   int64_t i_noop_with_empty_axes = noop_with_empty_axes; // ditto
   return createTypedOpAndInferShapes<ONNXReduceMinOp>(toTensor(outputType),
@@ -194,46 +193,46 @@ Value OnnxBuilder::reduceMin(Type outputType, Value data, Value axes,
 }
 
 Value OnnxBuilder::reduceSum(Type outputType, Value data, Value axes,
-    bool keepDims, bool noop_with_empty_axes) const {
+    bool keepDims, bool noop_with_empty_axes) {
   int64_t i_keepDims = keepDims; // 0 if false, 1 if true
   int64_t i_noop_with_empty_axes = noop_with_empty_axes; // ditto
   return createTypedOpAndInferShapes<ONNXReduceSumOp>(toTensor(outputType),
       toTensor(data), toTensor(axes), i_keepDims, i_noop_with_empty_axes);
 }
 
-Value OnnxBuilder::reshape(Type outputType, Value input, Value shape) const {
+Value OnnxBuilder::reshape(Type outputType, Value input, Value shape) {
   return createTypedOpAndInferShapes<ONNXReshapeOp>(
       toTensor(outputType), toTensor(input), toTensor(shape));
 }
 
 Value OnnxBuilder::reverseSequence(Type outputType, Value input,
-    Value sequenceLens, int64_t batchAxis, int64_t timeAxis) const {
+    Value sequenceLens, int64_t batchAxis, int64_t timeAxis) {
   IntegerAttr batchAxisAttr =
-      IntegerAttr::get(b().getIntegerType(64, /*isSigned=*/true),
+      IntegerAttr::get(this->getIntegerType(64, /*isSigned=*/true),
           APInt(64, batchAxis, /*isSigned=*/true));
   IntegerAttr timeAxisAttr =
-      IntegerAttr::get(b().getIntegerType(64, /*isSigned=*/true),
+      IntegerAttr::get(this->getIntegerType(64, /*isSigned=*/true),
           APInt(64, timeAxis, /*isSigned=*/true));
   return createTypedOpAndInferShapes<ONNXReverseSequenceOp>(
       toTensor(outputType), toTensor(input), toTensor(sequenceLens),
       batchAxisAttr, timeAxisAttr);
 }
 
-Value OnnxBuilder::round(Value input, bool scalarType) const {
+Value OnnxBuilder::round(Value input, bool scalarType) {
   if (scalarType)
-    return b().create<ONNXRoundOp>(loc(), input.getType(), input);
+    return create<ONNXRoundOp>(input.getType(), input);
   else
     return createOpAndInferShapes<ONNXRoundOp>(
         toTensor(input.getType()), toTensor(input));
 }
 
-Value OnnxBuilder::shape(Type outputType, Value input) const {
+Value OnnxBuilder::shape(Type outputType, Value input) {
   return createTypedOpAndInferShapes<ONNXShapeOp>(
       toTensor(outputType), toTensor(input));
 }
 
 Value OnnxBuilder::slice(Type outputType, Value input, Value starts, Value ends,
-    Value axes, Value steps) const {
+    Value axes, Value steps) {
   return createTypedOpAndInferShapes<ONNXSliceOp>(toTensor(outputType),
       toTensor(input), toTensor(starts), toTensor(ends), toTensor(axes),
       toTensor(steps));
@@ -241,51 +240,49 @@ Value OnnxBuilder::slice(Type outputType, Value input, Value starts, Value ends,
 
 // 1D slice: take ints instead of values, and axis is by default 0 since we deal
 // here with 1D vectors.
-Value OnnxBuilder::slice(Type outputType, Value input, int64_t start,
-    int64_t end, int64_t step) const {
-  Value zeroVal = constant(b().getI64TensorAttr(ArrayRef<int64_t>({0})));
-  Value startVal = constant(b().getI64TensorAttr(ArrayRef<int64_t>({start})));
-  Value endVal = constant(b().getI64TensorAttr(ArrayRef<int64_t>({end})));
-  Value stepVal = constant(b().getI64TensorAttr(ArrayRef<int64_t>({step})));
+Value OnnxBuilder::slice(
+    Type outputType, Value input, int64_t start, int64_t end, int64_t step) {
+  Value zeroVal = constant(this->getI64TensorAttr(ArrayRef<int64_t>({0})));
+  Value startVal = constant(this->getI64TensorAttr(ArrayRef<int64_t>({start})));
+  Value endVal = constant(this->getI64TensorAttr(ArrayRef<int64_t>({end})));
+  Value stepVal = constant(this->getI64TensorAttr(ArrayRef<int64_t>({step})));
   return slice(outputType, input, startVal, endVal, /*axis*/ zeroVal, stepVal);
 }
 
 ValueRange OnnxBuilder::split(
-    TypeRange outputTypes, Value input, Value split, int64_t axis) const {
+    TypeRange outputTypes, Value input, Value split, int64_t axis) {
   IntegerAttr axisAttr =
-      IntegerAttr::get(b().getIntegerType(64, /*isSigned=*/true),
+      IntegerAttr::get(this->getIntegerType(64, /*isSigned=*/true),
           APInt(64, axis, /*isSigned=*/true));
   return createOpAndInferShapes<ONNXSplitOp>(toTensors(outputTypes),
       toTensor(input), toTensor(split), axisAttr, IntegerAttr())
       .getResults();
 }
 
-Value OnnxBuilder::squeeze(Type outputType, Value data, Value axes) const {
+Value OnnxBuilder::squeeze(Type outputType, Value data, Value axes) {
   return createTypedOpAndInferShapes<ONNXSqueezeOp>(
       toTensor(outputType), toTensor(data), toTensor(axes));
 }
 
-Value OnnxBuilder::sub(Value A, Value B) const {
+Value OnnxBuilder::sub(Value A, Value B) {
   assert((A.getType().cast<ShapedType>().getElementType() ==
              B.getType().cast<ShapedType>().getElementType()) &&
          "A and B must have the same element type");
   return createOpAndInferShapes<ONNXSubOp>(toTensor(A), toTensor(B));
 }
 
-Value OnnxBuilder::transpose(
-    Type outputType, Value input, ArrayAttr perm) const {
+Value OnnxBuilder::transpose(Type outputType, Value input, ArrayAttr perm) {
   return createTypedOpAndInferShapes<ONNXTransposeOp>(
       toTensor(outputType), toTensor(input), perm);
 }
 
-Value OnnxBuilder::transposeInt64(
-    Value input, ArrayRef<int64_t> intPerm) const {
+Value OnnxBuilder::transposeInt64(Value input, ArrayRef<int64_t> intPerm) {
   Type elementType = getElementType(input.getType());
   Type outputType = UnrankedTensorType::get(elementType);
-  return transpose(outputType, input, b().getI64ArrayAttr(intPerm));
+  return transpose(outputType, input, this->getI64ArrayAttr(intPerm));
 }
 
-Value OnnxBuilder::toTensor(Value input) const {
+Value OnnxBuilder::toTensor(Value input) {
   // None input.
   if (isNoneValue(input))
     return input;
@@ -295,12 +292,10 @@ Value OnnxBuilder::toTensor(Value input) const {
          "expect RankedMemref type when not a TensorType");
   auto aTensorTy = toTensor(input.getType());
   // No shape inference for this op.
-  return b()
-      .create<UnrealizedConversionCastOp>(loc(), aTensorTy, input)
-      .getResult(0);
+  return create<UnrealizedConversionCastOp>(aTensorTy, input).getResult(0);
 }
 
-TensorType OnnxBuilder::toTensor(Type input) const {
+TensorType OnnxBuilder::toTensor(Type input) {
   if (auto tensorType = input.dyn_cast<TensorType>())
     return tensorType;
   assert(input.isa<MemRefType>() &&
@@ -308,12 +303,12 @@ TensorType OnnxBuilder::toTensor(Type input) const {
   auto aTy = input.cast<ShapedType>();
   Type elementTy = aTy.getElementType();
   if (elementTy.isa<IndexType>()) {
-    elementTy = b().getIntegerType(64);
+    elementTy = this->getIntegerType(64);
   }
   return RankedTensorType::get(aTy.getShape(), elementTy);
 }
 
-TypeRange OnnxBuilder::toTensors(TypeRange inputs) const {
+TypeRange OnnxBuilder::toTensors(TypeRange inputs) {
   assert(inputs.size() >= 2 && "Expect at least two inputs");
   if (llvm::all_of(inputs, [](Type t) { return (t.isa<TensorType>()); }))
     return inputs;
@@ -324,14 +319,14 @@ TypeRange OnnxBuilder::toTensors(TypeRange inputs) const {
     ShapedType aTy = inputs[i].cast<ShapedType>();
     Type elementTy = aTy.getElementType();
     if (elementTy.isa<IndexType>()) {
-      elementTy = b().getIntegerType(64);
+      elementTy = this->getIntegerType(64);
     }
     resultTypes.emplace_back(RankedTensorType::get(aTy.getShape(), elementTy));
   }
   return TypeRange(resultTypes);
 }
 
-Value OnnxBuilder::toMemref(Value input) const {
+Value OnnxBuilder::toMemref(Value input) {
   if (input.getType().isa<MemRefType>())
     return input;
   assert(input.getType().isa<RankedTensorType>() &&
@@ -339,18 +334,15 @@ Value OnnxBuilder::toMemref(Value input) const {
   auto aTy = input.getType().cast<ShapedType>();
   auto aTensorTy = MemRefType::get(aTy.getShape(), aTy.getElementType());
   // No shape inference for this op.
-  return b()
-      .create<UnrealizedConversionCastOp>(loc(), aTensorTy, input)
-      .getResult(0);
+  return create<UnrealizedConversionCastOp>(aTensorTy, input).getResult(0);
 }
 
-Value OnnxBuilder::unsqueeze(Type outputType, Value data, Value axes) const {
+Value OnnxBuilder::unsqueeze(Type outputType, Value data, Value axes) {
   return createTypedOpAndInferShapes<ONNXUnsqueezeOp>(
       toTensor(outputType), toTensor(data), toTensor(axes));
 }
 
-Value OnnxBuilder::where(
-    Type outputType, Value condition, Value X, Value Y) const {
+Value OnnxBuilder::where(Type outputType, Value condition, Value X, Value Y) {
   return createTypedOpAndInferShapes<ONNXWhereOp>(
       toTensor(outputType), toTensor(condition), toTensor(X), toTensor(Y));
 }
@@ -372,7 +364,7 @@ Value OnnxBuilder::where(
 // e.g. reshape(val, 3, false) -> reshape([2, 3, -1], val, [2, 3, -1])
 
 Value OnnxBuilder::reshapeToNDim(
-    Value val, int64_t N, bool collapseMostSignificant) const {
+    Value val, int64_t N, bool collapseMostSignificant) {
   // Get rank of the original shape and determine if we have anything to do.
   int64_t rank = val.getType().cast<RankedTensorType>().getRank();
   int64_t keep = N - 1; // 1 dim for collapsed dims, keep N -1 from original.
@@ -383,9 +375,9 @@ Value OnnxBuilder::reshapeToNDim(
   // Compute types.
   ArrayRef<int64_t> inputShape = val.getType().cast<ShapedType>().getShape();
   Type elementType = getElementType(val.getType());
-  Type inputShapeType = RankedTensorType::get({rank}, b().getI64Type());
-  Type keepShapeType = RankedTensorType::get({keep}, b().getI64Type());
-  Type outputShapeType = RankedTensorType::get({N}, b().getI64Type());
+  Type inputShapeType = RankedTensorType::get({rank}, this->getI64Type());
+  Type keepShapeType = RankedTensorType::get({keep}, this->getI64Type());
+  Type outputShapeType = RankedTensorType::get({N}, this->getI64Type());
   // Get input shape value.
   Value inputShapeVals = shape(inputShapeType, val);
   // Construct ONNX constants.

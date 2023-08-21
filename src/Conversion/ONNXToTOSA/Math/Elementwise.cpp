@@ -126,7 +126,7 @@ public:
       shapeHelper.computeShapeAndAssertOnFailure();
 
       if (shapeHelper.hasRankBroadcast()) {
-        TosaBuilder tosaBuilder(rewriter, loc);
+        TosaBuilder tosaBuilder(op);
         llvm::SmallVector<Value, 4> newValues =
             tosaBuilder.equalizeRanks({lhs, rhs});
         lhs = newValues[0];
@@ -184,7 +184,7 @@ static LogicalResult LegalizeFloatingPointPrelu(Operation *op,
     PatternRewriter &rewriter, Value input, float alpha,
     TensorType outputType) {
   auto loc = op->getLoc();
-  TosaBuilder tosaBuilder(rewriter, loc);
+  TosaBuilder tosaBuilder(op);
   Value constZero = tosaBuilder.getSplattedConst(0.0, outputType.getShape());
 
   auto mul = tosa::CreateOpAndInfer<mlir::tosa::MulOp>(rewriter, op->getLoc(),

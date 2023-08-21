@@ -288,6 +288,8 @@ result in a new Dim variable.
 namespace onnx_mlir {
 
 struct DialectBuilder;
+template <typename GenericBuilder>
+struct WithLoc;
 
 class IndexExpr;
 class UndefinedIndexExpr;
@@ -337,11 +339,14 @@ public:
   // null if we cannot generate code at this time) and location.
   IndexExprScope(mlir::OpBuilder *rewriter, mlir::Location loc);
   IndexExprScope(DialectBuilder &db);
+  IndexExprScope(WithLoc<mlir::OpBuilder> &b);
+
   // Constructor for subsequent nested scopes. Providing enclosing scope is
   // technically not necessary (nullptr can be passed); it is used to allow a
   // user to explicitly name the enclosing scope.
   IndexExprScope(mlir::OpBuilder *rewriter, IndexExprScope *enclosingScope);
   IndexExprScope(DialectBuilder &db, IndexExprScope *enclosingScope);
+  IndexExprScope(WithLoc<mlir::OpBuilder> &b, IndexExprScope *enclosingScope);
   // Destructor which release all IndexExpr associated with this scope.
   virtual ~IndexExprScope();
 

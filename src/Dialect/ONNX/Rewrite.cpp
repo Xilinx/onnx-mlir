@@ -636,6 +636,8 @@ public:
     }
   }
 
+  onnx_mlir::OnnxBuilder &getBuilder() { return create; }
+
 private:
   // Helper to create an ONNX transposition, using
   // ONNXTransposeOp::inferShapes() to infer the output shape.
@@ -675,7 +677,8 @@ public:
     rewriter.updateRootInPlace(onnxOp, [&]() {
       // Transpose the X and initial_h inputs by inserting an ONNXTransposeOp
       // before each and replacing the each input with the transpose output.
-      rewriter.setInsertionPoint(onnxOp); // insert before (redundant)
+      transposer.getBuilder().setInsertionPoint(
+          onnxOp); // insert before (redundant)
       transposer.transposeInput(onnxOp.getXMutable(), perm3);
       transposer.transposeInput(onnxOp.getInitialHMutable(), perm3);
       if (onnxLSTMOp)
@@ -698,7 +701,7 @@ public:
     // after each and replace all uses of each with the transpose output.
     ValueRange results = onnxOp.getResults();
     if (results.size() > 0) {
-      rewriter.setInsertionPointAfter(onnxOp);
+      transposer.getBuilder().setInsertionPointAfter(onnxOp);
       transposer.transposeOutput(onnxOp.getY(), perm4RNN(rewriter));
       transposer.transposeOutput(onnxOp.getYH(), perm3);
       if (onnxLSTMOp)
