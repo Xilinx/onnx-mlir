@@ -159,6 +159,55 @@ public:
   }
 };
 
+class ONNXDivOpLoweringToTosa : public OpConversionPattern<ONNXDivOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(ONNXDivOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    if (failed(checkBasicTosaRequirementsForBinaryOps<OpAdaptor>(
+            rewriter, op, adaptor, op.getResult().getType())))
+      return failure();
+
+    Value lhs = adaptor.getA();
+    Value rhs = adaptor.getB();
+
+    if (mlir::tosa::DivOp::hasTrait<
+            mlir::OpTrait::ResultsBroadcastableShape>()) {
+
+      IndexExprBuilderForTosa createTosaIE(rewriter, op->getLoc());
+      ONNXBroadcastOpShapeHelper shapeHelper(op, {}, &createTosaIE);
+      shapeHelper.computeShapeAndAssertOnFailure();
+
+      if (shapeHelper.hasRankBroadcast()) {
+        TosaBuilder tosaBuilder(rewriter, op.getLoc());
+        llvm::SmallVector<Value, 4> newValues =
+            tosaBuilder.equalizeRanks({lhs, rhs});
+        lhs = newValues[0];
+        rhs = newValues[1];
+      }
+    }
+
+    Type resultElementType =
+        op.getResult().getType().cast<TensorType>().getElementType();
+
+    Value result;
+    if (!resultElementType.isa<IntegerType>()) {
+      auto rcpOp = tosa::CreateOpAndInfer<mlir::tosa::ReciprocalOp>(
+          rewriter, op->getLoc(), rhs.getType(), rhs);
+
+      result = tosa::CreateOpAndInfer<mlir::tosa::MulOp>(rewriter, op.getLoc(),
+          op.getType(), lhs, rcpOp.getResult(), /*shift=*/0)
+                   .getResult();
+    } else {
+      result = tosa::CreateOpAndInfer<mlir::tosa::DivOp>(
+          rewriter, op.getLoc(), op.getType(), lhs, rhs);
+    }
+    rewriter.replaceOp(op, result);
+
+    return success();
+  }
+};
+
 class ONNXReluOpLoweringToTOSA : public OpConversionPattern<ONNXReluOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -262,7 +311,7 @@ void populateLoweringONNXElementwiseOpToTOSAPattern(ConversionTarget &target,
     RewritePatternSet &patterns, TypeConverter &typeConverter,
     MLIRContext *ctx) {
   patterns.insert<ONNXReluOpLoweringToTOSA, ONNXLeakyReluOpLoweringToTOSA,
-      ONNXMulOpLoweringToTosa>(typeConverter, ctx);
+      ONNXMulOpLoweringToTosa, ONNXDivOpLoweringToTosa>(typeConverter, ctx);
 
   populateLoweringONNXElementwiseBinaryTemplateOpToTOSAPattern(
       patterns, typeConverter, ctx);
