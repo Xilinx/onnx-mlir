@@ -36,6 +36,7 @@ void populateONNXToTOSAConversionPattern(ConversionTarget &target,
   populateLoweringONNXConvOpToTOSAPattern(target, patterns, typeConverter, ctx);
   populateLoweringONNXReduceMeanOpToTOSAPattern(
       target, patterns, typeConverter, ctx);
+  populateLoweringONNXClipOpToTOSAPattern(target, patterns, typeConverter, ctx);
   // Tensor
   populateLoweringONNXConcatOpToTOSAPattern(
       target, patterns, typeConverter, ctx);

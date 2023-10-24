@@ -6,6 +6,7 @@ add_onnx_mlir_library(OMONNXToTOSA
   ONNXToTOSALegalizeUtils.cpp
   ONNXToTOSACommon.cpp
 
+  Math/Clip.cpp
   Math/Elementwise.cpp
   Math/Gemm.cpp
   Math/Softmax.cpp
