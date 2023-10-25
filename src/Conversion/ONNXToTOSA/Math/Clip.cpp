@@ -14,6 +14,7 @@
 
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "src/Conversion/ONNXToTOSA/DialectBuilder.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
@@ -49,24 +50,25 @@ public:
 
     if (!isNoneValue(max) && max.getDefiningOp<mlir::tosa::ConstOp>()) {
         auto maxType = cast<TensorType>(max.getType()).getElementType();
+        auto maxAttr = tosa::getValueFromTosaConst<DenseElementsAttr>(max);
         if (maxType.isF32()) {
-            maxFp = tosa::getValueFromTosaConst<FloatAttr>(max);
+            maxFp = maxAttr.getSplatValue<FloatAttr>();
         }
         else {
-            maxInt = tosa::getValueFromTosaConst<IntegerAttr>(max);
+            maxInt = maxAttr.getSplatValue<IntegerAttr>();
         }
     }
     if (!isNoneValue(min) && min.getDefiningOp<mlir::tosa::ConstOp>()) {
         auto minType = cast<TensorType>(min.getType()).getElementType();
+        auto minAttr = tosa::getValueFromTosaConst<DenseElementsAttr>(min);
         if (minType.isF32()) {
-            minFp = tosa::getValueFromTosaConst<FloatAttr>(min);
+            minFp = minAttr.getSplatValue<FloatAttr>();
         }
         else {
-            minInt = tosa::getValueFromTosaConst<IntegerAttr>(min);
+            minInt = minAttr.getSplatValue<IntegerAttr>();
         }
     }
-    
-    auto outputType = getTypeConverter()->convertType(op->getResult(0).getType());
+    auto outputType = op->getResult(0).getType();
 
     rewriter.replaceOpWithNewOp<mlir::tosa::ClampOp>(op, outputType, input, minInt, maxInt, minFp, maxFp);
     return success();
