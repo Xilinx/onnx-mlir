@@ -186,12 +186,99 @@ private:
   int64_t groupedConvThreshold;
 };
 
+class ONNXConvTransposeOpLoweringToTOSA : public ConversionPattern {
+public:
+  ONNXConvTransposeOpLoweringToTOSA(MLIRContext *ctx)
+      : ConversionPattern(ONNXConvTransposeOp::getOperationName(), 1, ctx) {}
+
+  using OpAdaptor = typename ONNXConvTransposeOp::Adaptor;
+  LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
+      ConversionPatternRewriter &rewriter) const final {
+    OpAdaptor adaptor(operands, op->getAttrDictionary());
+    auto loc = op->getLoc();
+    auto convOp = llvm::cast<ONNXConvTransposeOp>(op);
+
+    TosaBuilder tosaBuilder(rewriter, loc);
+
+    auto input = adaptor.getX();
+    auto weights = adaptor.getW();
+    auto bias = adaptor.getB();
+
+    auto inputType = input.getType().cast<TensorType>();
+    auto weightType = weights.getType().cast<ShapedType>();
+
+    // Get shapehelper for autopad attributes
+    IndexExprBuilderForTosa createTosaIE(rewriter, convOp->getLoc());
+    ONNXConvTransposeOpShapeHelper shapeHelper(op, operands, &createTosaIE);
+    shapeHelper.computeShapeAndAssertOnFailure();
+
+    auto weightShape = weightType.getShape();
+
+    Type resultType = convOp.getResult().getType();
+
+    if (inputType.getShape().size() != 4) {
+      return rewriter.notifyMatchFailure(op, "grouped Conv2D not supported");
+    }
+
+    // Convert input [N,IC,IH,IW] -> [N,IH,IW,IC]
+    Value newInput = tosaBuilder.transpose(input, {0, 2, 3, 1});
+
+    // Convert weights [OC,IC,KH,KW] -> [OC,KH,KW,IC]
+    Value newWeight = tosaBuilder.transpose(weights, {0, 2, 3, 1});
+
+    if (bias.getType().isa<NoneType>()) {
+      DenseElementsAttr newBiasAttr = DenseElementsAttr::get(
+          RankedTensorType::get({weightShape[0]}, rewriter.getF32Type()),
+          {0.0F});
+      bias = rewriter.create<mlir::tosa::ConstOp>(
+          convOp->getLoc(), newBiasAttr.getType(), newBiasAttr);
+    }
+
+    llvm::SmallVector<int64_t, 4> outShape{
+        resultType.cast<TensorType>().getShape()};
+    llvm::SmallVector<int64_t, 4> tosaLayoutOutShape{
+        outShape[0], outShape[2], outShape[3], outShape[1]};
+    DenseI64ArrayAttr strides =
+        rewriter.getDenseI64ArrayAttr(shapeHelper.strides);
+
+    if (!IndexExpr::isLiteral(shapeHelper.pads))
+      return rewriter.notifyMatchFailure(op, "pads is not a literal.");
+    llvm::SmallVector<int64_t, 4> pads;
+    IndexExpr::getLiteral(shapeHelper.pads, pads);
+    // reorder padding values
+    llvm::SmallVector<int64_t, 4> reorderedPads = {
+        pads[0], pads[2], pads[1], pads[3]};
+
+    DenseI64ArrayAttr newPads = rewriter.getDenseI64ArrayAttr(reorderedPads);
+
+    // Handle group parameter by creating multiple convs
+    const int64_t group = adaptor.getGroup();
+    Value conv2D = NULL;
+    if (group != 1)
+      return rewriter.notifyMatchFailure(
+          op, "grouped ConvTranspose not supported");
+
+    Type newConvOutputType = RankedTensorType::get(
+        llvm::SmallVector<int64_t, 4>(4, ShapedType::kDynamic),
+        resultType.cast<ShapedType>().getElementType());
+
+    conv2D = tosa::CreateOpAndInfer<mlir::tosa::TransposeConv2DOp>(rewriter,
+        convOp->getLoc(), newConvOutputType, newInput, newWeight, bias, newPads,
+        strides, rewriter.getDenseI64ArrayAttr(tosaLayoutOutShape));
+
+    // Convert output [N,OH,OW,OC] -> [N,OC,OH,OW]
+    Value newOutput = tosaBuilder.transpose(conv2D, {0, 3, 1, 2});
+    rewriter.replaceOp(convOp, {newOutput});
+    return success();
+  }
+};
 } // namespace
 
 void populateLoweringONNXConvOpToTOSAPattern(ConversionTarget &target,
     RewritePatternSet &patterns, TypeConverter &typeConverter, MLIRContext *ctx,
     int64_t groupedConvThreshold) {
   patterns.insert<ONNXConvOpLoweringToTOSA>(ctx, groupedConvThreshold);
+  patterns.insert<ONNXConvTransposeOpLoweringToTOSA>(ctx);
 }
 
 } // namespace onnx_mlir
