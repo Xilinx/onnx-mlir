@@ -189,3 +189,17 @@ func.func @test_onnx_conv2d_dyn_shapes_with_shape_inference(%arg0: tensor<5x3x25
 // CHECK-LABEL:  func.func @test_onnx_conv2d_dyn_shapes_with_shape_inference
 // CHECK: tosa.conv
 }
+
+func.func @test_onnx_convtranspose(%arg0: tensor<32x128x64x64xf32>, %arg1 : tensor<128x64x2x2xf32>, %arg2: tensor<64xf32>) ->  tensor<32x64x128x128xf32> {
+  %0 = "onnx.ConvTranspose"(%arg0, %arg1, %arg2) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [2, 2], onnx_node_name = "/module_37/ConvTranspose", pads = [0, 0, 0, 0], strides = [2, 2]} : (tensor<32x128x64x64xf32>, tensor<128x64x2x2xf32>, tensor<64xf32>) -> tensor<32x64x128x128xf32>
+  return %0 : tensor<32x64x128x128xf32>
+// CHECK-LABEL:  func.func @test_onnx_convtranspose
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<32x128x64x64xf32>, [[PARAM_1_:%.+]]: tensor<128x64x2x2xf32>, [[PARAM_2_:%.+]]: tensor<64xf32>) -> tensor<32x64x128x128xf32> {
+// CHECK:           [[VAR_0_:%.+]] = "tosa.const"() <{value = dense<[0, 2, 3, 1]> : tensor<4xi32>}> : () -> tensor<4xi32>
+// CHECK:           [[VAR_1_:%.+]] = "tosa.transpose"([[PARAM_0_]], [[VAR_0_]]) : (tensor<32x128x64x64xf32>, tensor<4xi32>) -> tensor<32x64x64x128xf32>
+// CHECK:           [[VAR_2_:%.+]] = "tosa.transpose"([[PARAM_1_]], [[VAR_0_]]) : (tensor<128x64x2x2xf32>, tensor<4xi32>) -> tensor<128x2x2x64xf32>
+// CHECK:           [[VAR_3_:%.+]] = "tosa.transpose_conv2d"([[VAR_1_]], [[VAR_2_]], [[PARAM_2_]]) <{out_pad = array<i64: 0, 0, 0, 0>, out_shape = array<i64: 32, 128, 128, 64>, stride = array<i64: 2, 2>}> : (tensor<32x64x64x128xf32>, tensor<128x2x2x64xf32>, tensor<64xf32>) -> tensor<32x128x128x64xf32>
+// CHECK:           [[VAR_4_:%.+]] = "tosa.const"() <{value = dense<[0, 3, 1, 2]> : tensor<4xi32>}> : () -> tensor<4xi32>
+// CHECK:           [[VAR_5_:%.+]] = "tosa.transpose"([[VAR_3_]], [[VAR_4_]]) : (tensor<32x128x128x64xf32>, tensor<4xi32>) -> tensor<32x64x128x128xf32>
+// CHECK:           return [[VAR_5_]] : tensor<32x64x128x128xf32>
+}

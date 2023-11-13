@@ -216,12 +216,112 @@ private:
   int64_t groupedConvThreshold;
 };
 
+class ONNXConvTransposeOpLoweringToTOSA
+    : public OpConversionPattern<ONNXConvTransposeOp> {
+public:
+  ONNXConvTransposeOpLoweringToTOSA(MLIRContext *ctx)
+      : OpConversionPattern<ONNXConvTransposeOp>(ctx) {}
+
+  using OpAdaptor = typename ONNXConvTransposeOp::Adaptor;
+  LogicalResult matchAndRewrite(ONNXConvTransposeOp convOp, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+
+    auto getDynamicShapeTypeTensor4D = [](Type elementType) {
+      return mlir::RankedTensorType::get(
+          llvm::SmallVector<int64_t, 4>(4, ShapedType::kDynamic), elementType);
+    };
+
+    auto loc = convOp->getLoc();
+    TosaBuilder tosaBuilder(rewriter, loc);
+
+    auto input = adaptor.getX();
+    auto weights = adaptor.getW();
+    auto bias = adaptor.getB();
+
+    auto inputType = input.getType().cast<TensorType>();
+    auto inputShape = inputType.getShape();
+    auto weightType = weights.getType().cast<TensorType>();
+    auto weightShape = weightType.getShape();
+    auto outputType = convOp.getResult().getType().cast<TensorType>();
+    auto outputShape = outputType.getShape();
+
+    if (inputShape.size() != 4)
+      return rewriter.notifyMatchFailure(
+          convOp, "only 2d tensor support is implemented");
+
+    if (adaptor.getGroup() != 1)
+      return rewriter.notifyMatchFailure(
+          convOp, "grouped ConvTranspose not supported");
+
+    auto dilations = adaptor.getDilations();
+    if (dilations.has_value() && llvm::any_of(*dilations, [](Attribute attr) {
+          return attr.cast<IntegerAttr>().getValue() != 1;
+        }))
+      return rewriter.notifyMatchFailure(
+          convOp, "dilation more than 1 is not supported");
+
+    // Get shapehelper for autopad attributes
+    IndexExprBuilderForTosa createTosaIE(rewriter, loc);
+    ONNXConvTransposeOpShapeHelper shapeHelper(
+        convOp, adaptor.getOperands(), &createTosaIE);
+    shapeHelper.computeShapeAndAssertOnFailure();
+
+    if (!IndexExpr::isLiteral(shapeHelper.pads))
+      return rewriter.notifyMatchFailure(convOp, "pads is not a literal.");
+
+    // Convert input [N,IC,IH,IW] -> [N,IH,IW,IC]
+    Value newInput = tosaBuilder.transpose(input, {0, 2, 3, 1});
+
+    // Convert weights [OC,IC,KH,KW] -> [OC,KH,KW,IC]
+    Value newWeight = tosaBuilder.transpose(weights, {0, 2, 3, 1});
+
+    if (bias.getType().isa<NoneType>()) {
+      DenseElementsAttr newBiasAttr = DenseElementsAttr::get(
+          RankedTensorType::get({weightShape[0]}, rewriter.getF32Type()),
+          {0.0F});
+      bias = rewriter.create<mlir::tosa::ConstOp>(
+          loc, newBiasAttr.getType(), newBiasAttr);
+    }
+
+    llvm::SmallVector<int64_t, 4> tosaLayoutOutShape{
+        outputShape[0], outputShape[2], outputShape[3], outputShape[1]};
+    DenseI64ArrayAttr strides =
+        rewriter.getDenseI64ArrayAttr(shapeHelper.strides);
+
+    llvm::SmallVector<int64_t, 4> pads;
+    IndexExpr::getLiteral(shapeHelper.pads, pads);
+
+    Value padding = tosa::buildOnnxToTosaPaddingConstOp(
+        rewriter, pads, loc, {0, 0}, {0, 0});
+    auto constTosaTensor =
+        tosaBuilder.getSplattedConst(0.0, inputType.getElementType());
+
+    auto padOp = tosa::CreateOpAndInfer<mlir::tosa::PadOp>(rewriter, loc,
+        getDynamicShapeTypeTensor4D(inputType.getElementType()), newInput,
+        padding, constTosaTensor);
+
+    Value transposeConv2d =
+        tosa::CreateOpAndInfer<mlir::tosa::TransposeConv2DOp>(rewriter, loc,
+            getDynamicShapeTypeTensor4D(outputType.getElementType()), padOp,
+            newWeight, bias,
+            rewriter.getDenseI64ArrayAttr({0, shapeHelper.outputPadding[0], 0,
+                shapeHelper.outputPadding[1]}),
+            strides, rewriter.getDenseI64ArrayAttr(tosaLayoutOutShape));
+
+    // Convert output [N,OH,OW,OC] -> [N,OC,OH,OW]
+    Value newOutput = tosaBuilder.transpose(transposeConv2d, {0, 3, 1, 2});
+
+    rewriter.replaceOp(convOp, {newOutput});
+    return success();
+  }
+};
 } // namespace
 
 void populateLoweringONNXConvOpToTOSAPattern(ConversionTarget &target,
     RewritePatternSet &patterns, TypeConverter &typeConverter, MLIRContext *ctx,
     int64_t groupedConvThreshold) {
   patterns.insert<ONNXConvOpLoweringToTOSA>(ctx, groupedConvThreshold);
+  patterns.insert<ONNXConvTransposeOpLoweringToTOSA>(ctx);
 }
 
 } // namespace onnx_mlir
