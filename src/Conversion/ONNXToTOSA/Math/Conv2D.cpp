@@ -161,10 +161,15 @@ public:
       conv2D = tosa::CreateOpAndInfer<mlir::tosa::Conv2DOp>(rewriter,
           convOp->getLoc(), newConvOutputType, newInput, newWeight, bias,
           newPads, strides, dilations);
-    } else {
+    // FXML-3612: Temporary hardcoding to prevent test memory explosion
+    } else if (group <= 16) {
       conv2D = createConvInGroups(rewriter, convOp, tosaBuilder, resultType,
           weightShape, newInput, newWeight, bias, group, newPads, strides,
           dilations);
+    }
+    else {
+      return rewriter.notifyMatchFailure(
+          op, "grouped convolution too big to be decomposed.");
     }
 
     // Convert output [N,OH,OW,OC] -> [N,OC,OH,OW]
