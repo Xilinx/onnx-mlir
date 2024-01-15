@@ -849,3 +849,76 @@ func.func @test_cos_dynamic(%arg0 : tensor<?x10xf32>) -> tensor<*xf32> {
 // CHECK-NEXT:      return [[VAR_0_]] : tensor<?x10xf32>
 // CHECK-NEXT:    }
 }
+
+// -----
+
+func.func @test_less(%arg0 : tensor<10x10xf32>, %arg1 : tensor<10x10xf32>) -> tensor<10x10xi1> {
+  %0 = "onnx.Less"(%arg0, %arg1) : (tensor<10x10xf32>, tensor<10x10xf32>) -> tensor<10x10xi1>
+  "func.return"(%0) : (tensor<10x10xi1>) -> ()
+// CHECK-LABEL:  func @test_less
+// CHECK-SAME:   ([[param_0_:%.+]]: tensor<10x10xf32>, [[param_1_:%.+]]: tensor<10x10xf32>) -> tensor<10x10xi1> {
+// CHECK-NEXT:      [[var_0_:%.+]] = "tosa.greater"([[param_1_]], [[param_0_]]) : (tensor<10x10xf32>, tensor<10x10xf32>) -> tensor<10x10xi1>
+// CHECK-NEXT:      return [[var_0_]] : tensor<10x10xi1>
+// CHECK-NEXT:    }
+}
+
+// -----
+
+func.func @test_less_equal(%arg0 : tensor<10x10xf32>, %arg1 : tensor<10x10xf32>) -> tensor<10x10xi1> {
+  %0 = "onnx.LessOrEqual"(%arg0, %arg1) : (tensor<10x10xf32>, tensor<10x10xf32>) -> tensor<10x10xi1>
+  "func.return"(%0) : (tensor<10x10xi1>) -> ()
+// CHECK-LABEL:  func @test_less_equal
+// CHECK-SAME:   ([[param_0_:%.+]]: tensor<10x10xf32>, [[param_1_:%.+]]: tensor<10x10xf32>) -> tensor<10x10xi1> {
+// CHECK-NEXT:      [[var_0_:%.+]] = "tosa.greater_equal"([[param_1_]], [[param_0_]]) : (tensor<10x10xf32>, tensor<10x10xf32>) -> tensor<10x10xi1>
+// CHECK-NEXT:      return [[var_0_]] : tensor<10x10xi1>
+// CHECK-NEXT:    }
+}
+
+// -----
+
+func.func @test_equal(%arg0 : tensor<10x10xf32>, %arg1 : tensor<10x10xf32>) -> tensor<10x10xi1> {
+  %0 = "onnx.Equal"(%arg0, %arg1) : (tensor<10x10xf32>, tensor<10x10xf32>) -> tensor<10x10xi1>
+  "func.return"(%0) : (tensor<10x10xi1>) -> ()
+// CHECK-LABEL:  func @test_equal
+// CHECK-SAME:   ([[param_0_:%.+]]: tensor<10x10xf32>, [[param_1_:%.+]]: tensor<10x10xf32>) -> tensor<10x10xi1> {
+// CHECK-NEXT:      [[var_0_:%.+]] = "tosa.equal"([[param_0_]], [[param_1_]]) : (tensor<10x10xf32>, tensor<10x10xf32>) -> tensor<10x10xi1>
+// CHECK-NEXT:      return [[var_0_]] : tensor<10x10xi1>
+// CHECK-NEXT:    }
+}
+
+// -----
+
+func.func @test_greater_equal(%arg0 : tensor<10x10xf32>, %arg1 : tensor<10x10xf32>) -> tensor<10x10xi1> {
+  %0 = "onnx.GreaterOrEqual"(%arg0, %arg1) : (tensor<10x10xf32>, tensor<10x10xf32>) -> tensor<10x10xi1>
+  "func.return"(%0) : (tensor<10x10xi1>) -> ()
+// CHECK-LABEL:  func @test_greater_equal
+// CHECK-SAME:   ([[param_0_:%.+]]: tensor<10x10xf32>, [[param_1_:%.+]]: tensor<10x10xf32>) -> tensor<10x10xi1> {
+// CHECK-NEXT:      [[var_0_:%.+]] = "tosa.greater_equal"([[param_0_]], [[param_1_]]) : (tensor<10x10xf32>, tensor<10x10xf32>) -> tensor<10x10xi1>
+// CHECK-NEXT:      return [[var_0_]] : tensor<10x10xi1>
+// CHECK-NEXT:    }
+}
+
+// -----
+
+func.func @test_greater(%arg0 : tensor<10x10xf32>, %arg1 : tensor<10x10xf32>) -> tensor<10x10xi1> {
+  %0 = "onnx.Greater"(%arg0, %arg1) : (tensor<10x10xf32>, tensor<10x10xf32>) -> tensor<10x10xi1>
+  "func.return"(%0) : (tensor<10x10xi1>) -> ()
+// CHECK-LABEL:  func @test_greater
+// CHECK-SAME:   ([[param_0_:%.+]]: tensor<10x10xf32>, [[param_1_:%.+]]: tensor<10x10xf32>) -> tensor<10x10xi1> {
+// CHECK-NEXT:      [[var_0_:%.+]] = "tosa.greater"([[param_0_]], [[param_1_]]) : (tensor<10x10xf32>, tensor<10x10xf32>) -> tensor<10x10xi1>
+// CHECK-NEXT:      return [[var_0_]] : tensor<10x10xi1>
+// CHECK-NEXT:    }
+}
+
+// -----
+
+func.func @test_greater_broadcast(%arg0 : tensor<10x10xf32>, %arg1 : tensor<1xf32>) -> tensor<10x10xi1> {
+  %0 = "onnx.Greater"(%arg0, %arg1) : (tensor<10x10xf32>, tensor<1xf32>) -> tensor<10x10xi1>
+  "func.return"(%0) : (tensor<10x10xi1>) -> ()
+// CHECK-LABEL:  func @test_greater
+// CHECK-SAME:   ([[param_0_:%.+]]: tensor<10x10xf32>, [[param_1_:%.+]]: tensor<1xf32>) -> tensor<10x10xi1> {
+// CHECK-NEXT:      [[var_0_:%.+]] = "tosa.reshape"([[param_1_]]) <{new_shape = array<i64: 1, 1>}> : (tensor<1xf32>) -> tensor<1x1xf32>
+// CHECK-NEXT:      [[var_1_:%.+]] = "tosa.greater"([[param_0_]], [[var_0_]]) : (tensor<10x10xf32>, tensor<1x1xf32>) -> tensor<10x10xi1>
+// CHECK-NEXT:      return [[var_1_]] : tensor<10x10xi1>
+// CHECK-NEXT:    }
+}

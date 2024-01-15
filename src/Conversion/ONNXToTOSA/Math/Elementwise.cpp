@@ -210,6 +210,53 @@ public:
   }
 };
 
+template <typename ONNXOpT>
+class ONNXBinaryElementwiseCompareOpLoweringToTOSA
+    : public OpConversionPattern<ONNXOpT> {
+public:
+  using OpConversionPattern<ONNXOpT>::OpConversionPattern;
+  using OpAdaptor = typename ONNXOpT::Adaptor;
+  LogicalResult matchAndRewrite(ONNXOpT op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+
+    auto loc = op.getLoc();
+    Value lhs = adaptor.getOperands()[0];
+    Value rhs = adaptor.getOperands()[1];
+
+    IndexExprBuilderForTosa createTosaIE(rewriter, op->getLoc());
+    ONNXBroadcastOpShapeHelper shapeHelper(op, {}, &createTosaIE);
+    shapeHelper.computeShapeAndAssertOnFailure();
+
+    if (shapeHelper.hasRankBroadcast()) {
+      TosaBuilder tosaBuilder(rewriter, loc);
+      llvm::SmallVector<Value, 4> newValues =
+          tosaBuilder.equalizeRanks({lhs, rhs});
+      lhs = newValues[0];
+      rhs = newValues[1];
+    }
+
+    TosaBuilder tosaBuilder(rewriter, loc);
+    mlir::Value cmpOp;
+    if constexpr (std::is_same_v<ONNXOpT, ONNXLessOp>) {
+      cmpOp = tosaBuilder.less(lhs, rhs);
+    } else if constexpr (std::is_same_v<ONNXOpT, ONNXLessOrEqualOp>) {
+      cmpOp = tosaBuilder.lessEqual(lhs, rhs);
+    } else if constexpr (std::is_same_v<ONNXOpT, ONNXEqualOp>) {
+      cmpOp = tosaBuilder.equal(lhs, rhs);
+    } else if constexpr (std::is_same_v<ONNXOpT, ONNXGreaterOrEqualOp>) {
+      cmpOp = tosaBuilder.greaterEqual(lhs, rhs);
+    } else {
+      static_assert(
+          std::is_same_v<ONNXOpT, ONNXGreaterOp>, "Expected ONNXGreaterOp");
+      cmpOp = tosaBuilder.greater(lhs, rhs);
+    }
+
+    rewriter.replaceOp(op, cmpOp);
+
+    return success();
+  }
+};
+
 template <typename ONNXOpT, typename TosaOpT, typename TypeChecker>
 class ONNXBinaryElementwiseOpLoweringToTOSA
     : public OpConversionPattern<ONNXOpT> {
@@ -652,7 +699,13 @@ static void populateLoweringONNXElementwiseBinaryTemplateOpToTOSAPattern(
       ONNXBinaryElementwiseOpLoweringToTOSA<ONNXMinOp, mlir::tosa::MinimumOp,
           IsIntOrFloat>,
       ONNXBinaryElementwiseOpLoweringToTOSA<ONNXMaxOp, mlir::tosa::MaximumOp,
-          IsIntOrFloat>>(typeConverter, ctx);
+          IsIntOrFloat>,
+      ONNXBinaryElementwiseCompareOpLoweringToTOSA<ONNXLessOp>,
+      ONNXBinaryElementwiseCompareOpLoweringToTOSA<ONNXLessOrEqualOp>,
+      ONNXBinaryElementwiseCompareOpLoweringToTOSA<ONNXEqualOp>,
+      ONNXBinaryElementwiseCompareOpLoweringToTOSA<ONNXGreaterOrEqualOp>,
+      ONNXBinaryElementwiseCompareOpLoweringToTOSA<ONNXGreaterOp>>(
+      typeConverter, ctx);
 }
 
 static void populateLoweringONNXElementwiseUnaryTemplateOpToTOSAPattern(
