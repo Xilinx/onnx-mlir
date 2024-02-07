@@ -37,8 +37,7 @@ LogicalResult ONNXRangeOpShapeHelper::computeShape() {
       createIE->getIntFromArrayAsDim(operandAdaptor.getDelta(), 0);
   // Dim = max(ceil((limit-start)/delta), 0).
   IndexExpr num = limit - start;
-  num.ceilDiv(delta);
-  IndexExpr res = IndexExpr::max(num, 0);
+  IndexExpr res = IndexExpr::max(num.ceilDiv(delta), 0);
   DimsExpr outputDims(1, res);
   // Save the final result.
   setOutputDims(outputDims);

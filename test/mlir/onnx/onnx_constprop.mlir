@@ -1325,6 +1325,22 @@ func.func @test_range_int() -> tensor<8xi16> {
 
 // -----
 
+func.func @test_range_delta_as_3() -> tensor<3xi16> {
+  %start = onnx.Constant dense<2> : tensor<i16>
+  %limit = onnx.Constant dense<10> : tensor<i16>
+  %delta = onnx.Constant dense<3> : tensor<i16>
+  %1 = "onnx.Range"(%start, %limit, %delta) : (tensor<i16>, tensor<i16>, tensor<i16>) -> tensor<3xi16>
+  onnx.Return %1 : tensor<3xi16>
+// CHECK-NOT: Warning
+// CHECK-LABEL:  func.func @test_range_delta_as_3
+// CHECK-SAME:   () -> tensor<3xi16> {
+// CHECK:           [[VAR:%.+]] = onnx.Constant dense<[2, 5, 8]> : tensor<3xi16>
+// CHECK:           onnx.Return [[VAR]] : tensor<3xi16>
+// CHECK:         }
+}
+
+// -----
+
 func.func @test_range_fp() -> tensor<3xf32> {
   %start = onnx.Constant dense<0.2> : tensor<f32>
   %limit = onnx.Constant dense<0.5> : tensor<f32>
