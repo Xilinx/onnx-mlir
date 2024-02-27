@@ -36,8 +36,7 @@ struct ScaleHelper {
 
 // Adapted from TFL to TOSA.
 ScaleHelper normalize(int64_t output, int64_t input, bool pytorchHalfPixel,
-    bool alignCorners, bool halfPixel, bool isNearest,
-    bool isNearestModeFloor) {
+    bool alignCorners, bool halfPixel) {
   int64_t numerator, denominator, offset, border;
   // Test if pytorch_half_pixel needs special handling
   if (pytorchHalfPixel && output == 1) {
@@ -60,11 +59,6 @@ ScaleHelper normalize(int64_t output, int64_t input, bool pytorchHalfPixel,
 
   // If half pixel centers we need to sample half a pixel inward.
   offset = halfPixel || pytorchHalfPixel ? (denominator - numerator) / 2 : 0;
-
-  // If round_half_up we need to adjust the offset
-  if (isNearest && isNearestModeFloor) {
-    offset -= numerator / 2;
-  }
 
   // We can compute this directly based on previous values.
   border = denominator * (output - 1) - numerator * (input - 1) + offset;
@@ -184,7 +178,6 @@ public:
         resizeOp.getResult().getType().dyn_cast<RankedTensorType>();
 
     StringRef mode = adaptor.getMode();
-    StringRef nearestMode = adaptor.getNearestMode();
     StringRef coordinateTransformationMode =
         adaptor.getCoordinateTransformationMode();
     std::optional<ArrayAttr> axis = adaptor.getAxes();
@@ -211,12 +204,6 @@ public:
     if (mode == "cubic") {
       return rewriter.notifyMatchFailure(
           resizeOp, "TOSA does not support cubic interpolation.");
-    }
-
-    if (mode == "nearest" &&
-        (nearestMode == "ceil" || nearestMode == "round_prefer_floor")) {
-      return rewriter.notifyMatchFailure(resizeOp,
-          "TOSA does not support ceil and round_prefer_floor as nearestMode.");
     }
 
     // This also makes roi as an input irrelevant.
@@ -275,8 +262,6 @@ public:
     bool halfPixelSymmetric =
         coordinateTransformationMode == "half_pixel_symmetric";
     bool isBilinear = mode == "linear";
-    bool isNearest = mode == "nearest";
-    bool isNearestModeFloor = nearestMode == "floor";
     StringRef resizeMode = isBilinear ? "BILINEAR" : "NEAREST_NEIGHBOR";
 
     if (halfPixelSymmetric)
@@ -284,12 +269,10 @@ public:
           "TOSA does not support float offsets which are required "
           "for symmetric mode.");
 
-    ScaleHelper yDimension =
-        normalize(outputHeight, inputHeight, pytorchHalfPixel, alignCorners,
-            halfPixel, isNearest, isNearestModeFloor);
-    ScaleHelper xDimension =
-        normalize(outputWidth, inputWidth, pytorchHalfPixel, alignCorners,
-            halfPixel, isNearest, isNearestModeFloor);
+    ScaleHelper yDimension = normalize(
+        outputHeight, inputHeight, pytorchHalfPixel, alignCorners, halfPixel);
+    ScaleHelper xDimension = normalize(
+        outputWidth, inputWidth, pytorchHalfPixel, alignCorners, halfPixel);
 
     // Convert input [N,IC,IH,IW] -> [N,IH,IW,IC]
     Value newInput = tosaBuilder.transpose(input, {0, 2, 3, 1});
@@ -302,13 +285,15 @@ public:
     auto border =
         rewriter.getDenseI64ArrayAttr({yDimension.border, xDimension.border});
     auto resizeModeAttr = rewriter.getStringAttr(resizeMode);
+    auto nearestRoundModeAttr = adaptor.getNearestModeAttr();
     Type newOutputType =
         RankedTensorType::get(llvm::SmallVector<int64_t, 4>(
                                   inputType.getRank(), ShapedType::kDynamic),
             resultType.cast<ShapedType>().getElementType());
 
     Value resize = tosa::CreateOpAndInfer<mlir::tosa::ResizeOp>(rewriter, loc,
-        newOutputType, newInput, scale, offset, border, resizeModeAttr);
+        newOutputType, newInput, scale, offset, border, resizeModeAttr,
+        nearestRoundModeAttr);
 
     // Convert output [N,OH,OW,OC] -> [N,OC,OH,OW]
     Value newOutput = tosaBuilder.transpose(resize, {0, 3, 1, 2});
