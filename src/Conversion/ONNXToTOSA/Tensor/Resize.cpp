@@ -309,6 +309,12 @@ public:
 
     Value resize = tosa::CreateOpAndInfer<mlir::tosa::ResizeOp>(rewriter, loc,
         newOutputType, newInput, scale, offset, border, resizeModeAttr);
+    
+    // Annotate the coordinate transformation mode and nearest mode on the op
+    auto newResizeOp = resize.getDefiningOp();
+    newResizeOp->setAttr(rewriter.getStringAttr("coordinate_transformation_mode"), rewriter.getStringAttr(coordinateTransformationMode));
+    newResizeOp->setAttr(rewriter.getStringAttr("nearest_mode"), rewriter.getStringAttr(nearestMode));
+
 
     // Convert output [N,OH,OW,OC] -> [N,OC,OH,OW]
     Value newOutput = tosaBuilder.transpose(resize, {0, 3, 1, 2});
