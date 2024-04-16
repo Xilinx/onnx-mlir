@@ -962,3 +962,28 @@ func.func @test_less_broadcast(%arg0: tensor<13x21x1xf32>, %arg1: tensor<1xf32>)
 // CHECK:           [[VAR_1_:%.+]] = tosa.greater [[VAR_0_]], %arg0 : (tensor<1x1x1xf32>, tensor<13x21x1xf32>) -> tensor<13x21x1xi1>
 // CHECK:           return [[VAR_1_]] : tensor<13x21x1xi1>
 }
+
+// -----
+
+func.func @test_expand(%arg0: tensor<1x64x1x1xf32>) -> tensor<1x64x64x64xf32> {
+  %0 = "onnx.Constant"() {value = dense<[1, 64, 64, 64]> : tensor<4xi64>} : () -> tensor<4xi64>
+  %1 = "onnx.Expand"(%arg0, %0) {onnx_node_name = "Expand_335"} : (tensor<1x64x1x1xf32>, tensor<4xi64>) -> tensor<1x64x64x64xf32>
+  return %1 : tensor<1x64x64x64xf32>
+// CHECK-LABEL:  func @test_expand
+// CHECK:           %[[VAL_1:.*]] = tosa.tile %[[VAL_0]] {multiples = array<i64: 1, 64, 64, 64>} : (tensor<1x64x1x1xf32>) -> tensor<1x64x64x64xf32>
+}
+
+func.func @test_expand_splat(%arg0: tensor<1x64x1x1xf32>) -> tensor<64x64x64x64xf32> {
+  %0 = "onnx.Constant"() {value = dense<64> : tensor<4xi64>} : () -> tensor<4xi64>
+  %1 = "onnx.Expand"(%arg0, %0) {onnx_node_name = "Expand_335"} : (tensor<1x64x1x1xf32>, tensor<4xi64>) -> tensor<64x64x64x64xf32>
+  return %1 : tensor<64x64x64x64xf32>
+// CHECK-LABEL:  func @test_expand_splat
+// CHECK:           tosa.tile %[[VAL_0]] {multiples = array<i64: 64, 64, 64, 64>} : (tensor<1x64x1x1xf32>) -> tensor<64x64x64x64xf32>
+}
+
+func.func @test_expand_no_legalization(%arg0: tensor<1x64x1x1xf32>, %arg1: tensor<4xi64>) -> tensor<1x64x64x64xf32> {
+  %0 = "onnx.Expand"(%arg0, %arg1) {onnx_node_name = "Expand_335"} : (tensor<1x64x1x1xf32>, tensor<4xi64>) -> tensor<1x64x64x64xf32>
+  return %0 : tensor<1x64x64x64xf32>
+// CHECK-LABEL:  func @test_expand_no_legalization
+// CHECK: onnx.Expand
+}

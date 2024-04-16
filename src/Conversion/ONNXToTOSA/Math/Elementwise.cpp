@@ -20,6 +20,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
+#include "src/Dialect/ONNX/ElementsAttr/ElementsAttrHelper.hpp"
 #include <src/Conversion/ONNXToTOSA/DialectBuilder.hpp>
 
 using namespace mlir;
@@ -289,6 +290,32 @@ public:
   }
 };
 
+class ONNXExpandOpLoweringToTOSA : public OpConversionPattern<ONNXExpandOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(ONNXExpandOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+
+    Value shape = adaptor.getShape();
+
+    DenseIntElementsAttr denseAttr;
+    if (!matchPattern(shape, m_Constant(&denseAttr))) {
+      return rewriter.notifyMatchFailure(
+          op, "Tosa only supports constant shapes");
+    }
+
+    // Convert denseAttr to DenseI64ArrayAttr. This handles both splat and
+    // non-splat scenarios.
+    ArrayBuffer<WideNum> shapeWideNums = getElementsWideNums(denseAttr);
+    ArrayRef<int64_t> shapeArray =
+        castArrayRef<int64_t, WideNum>(shapeWideNums.get());
+    auto denseI64Attr = DenseI64ArrayAttr::get(op.getContext(), shapeArray);
+
+    rewriter.replaceOpWithNewOp<mlir::tosa::TileOp>(
+        op, op.getType(), adaptor.getInput(), denseI64Attr);
+    return success();
+  }
+};
 // Support for prelu/leakyrelu adapted from tensorflow to tosa implementation
 static LogicalResult legalizeFloatingPointPrelu(Operation *op,
     PatternRewriter &rewriter, Value input, Value alphaOrSlope,
@@ -783,7 +810,8 @@ void populateLoweringONNXElementwiseOpToTOSAPattern(ConversionTarget &target,
       ONNXSqrtOpLoweringToTOSA, ONNXEluOpLoweringToTOSA,
       ONNXPReluOpLoweringToTOSA, ONNXThresholdedReluOpLoweringToTOSA,
       ONNXSoftplusOpLoweringToTOSA, ONNXSeluOpLoweringToTOSA,
-      ONNXCastOpLoweringToTOSA, ONNXComparisonOpLoweringToTOSA<ONNXEqualOp>,
+      ONNXCastOpLoweringToTOSA, ONNXExpandOpLoweringToTOSA,
+      ONNXComparisonOpLoweringToTOSA<ONNXEqualOp>,
       ONNXComparisonOpLoweringToTOSA<ONNXGreaterOrEqualOp>,
       ONNXComparisonOpLoweringToTOSA<ONNXGreaterOp>,
       ONNXComparisonOpLoweringToTOSA<ONNXLessOrEqualOp>,
