@@ -72,7 +72,6 @@ using namespace mlir;
 namespace onnx_mlir {
 namespace krnl {
 
-bool LLVM_USE_OPAQUE_POINTER = true;
 std::string EXTERNAL_CONSTANT_PREFIX = "om_external_constant_";
 
 uint64_t KRNL_ENTRY_POINT_ID = 0;
@@ -362,7 +361,7 @@ void genSignatureFunction(ModuleOp &module,
     LLVM::LLVMFuncOp funcOp = create.llvm.func(
         "omQueryEntryPoints", llvmFnType, /*createUniqueFunc=*/true);
     // Emit the body of the function.
-    Block *entryBlock = funcOp.addEntryBlock();
+    Block *entryBlock = funcOp.addEntryBlock(b);
     OpBuilder::InsertionGuard bodyGuard(b);
     b.setInsertionPointToStart(entryBlock);
     Value numOfEntryPoints = entryBlock->getArgument(0);
@@ -400,7 +399,7 @@ void genSignatureFunction(ModuleOp &module,
         create.llvm.func(funcNames[i], llvmFnType, /*createUniqueFunc=*/true);
 
     // 2. Emit the body of the function.
-    Block *entryBlock = funcOp.addEntryBlock();
+    Block *entryBlock = funcOp.addEntryBlock(b);
     OpBuilder::InsertionGuard bodyGuard(b);
     b.setInsertionPointToStart(entryBlock);
 
@@ -477,6 +476,15 @@ bool extractConstantsToFile(ModuleOp &module, std::string filepath,
       }
     }
     if (isReturnedValue)
+      return WalkResult::advance();
+
+    // Ignore constants of bool.
+    // For an unknown reason, enabling constants of bool caused segfault in the
+    // IBM granite.20B model (The model with KV cache) at 1265 input tokens.
+    // See issue https://github.com/onnx/onnx-mlir/issues/2713.
+    if (llvm::cast<MemRefType>(op->getResult(0).getType())
+            .getElementType()
+            .isInteger(1))
       return WalkResult::advance();
 
     // Get raw data from DenseElementsAttr or DenseResourceElementsAttr.
@@ -560,8 +568,7 @@ bool extractConstantsToFile(ModuleOp &module, std::string filepath,
       EXTERNAL_CONSTANT_PREFIX + "filesize",
       b.getI64IntegerAttr(packedConst.size()));
   // Create a global to store isLE.
-  bool isLE = llvm::support::endian::system_endianness() ==
-              llvm::support::endianness::little;
+  bool isLE = llvm::endianness::native == llvm::endianness::little;
   create.llvm.globalOp(llvmI8Ty,
       /*isConstant=*/true, LLVM::Linkage::Internal,
       EXTERNAL_CONSTANT_PREFIX + "isLE", b.getI8IntegerAttr(isLE));
@@ -614,9 +621,12 @@ void loadConstantsFromFile(ModuleOp &module,
     funcOp = create.llvm.func(
         loadAllConstantsFuncName, llvmFnType, /*createUniqueFunc=*/true);
     // Call loadAllConstantsFuncName in each entry point function.
+    bool zOS = isZOS(module);
     for (auto entryGlobalOp : entryGlobalOps) {
       std::string entryName =
           entryGlobalOp.getValue().value().cast<StringAttr>().getValue().str();
+      // Entry point name is encoded in EBCDIC on z/OS.
+      entryName = (zOS) ? krnl::e2a_s(entryName) : entryName;
       // Erase the null symbol.
       entryName.erase(
           std::find(entryName.begin(), entryName.end(), '\0'), entryName.end());
@@ -638,7 +648,7 @@ void loadConstantsFromFile(ModuleOp &module,
   }
 
   // Emit the body of the function.
-  Block *entryBlock = funcOp.addEntryBlock();
+  Block *entryBlock = funcOp.addEntryBlock(b);
   OpBuilder::InsertionGuard guard(b);
   b.setInsertionPointToStart(entryBlock);
 
@@ -685,7 +695,7 @@ void loadConstantsFromFile(ModuleOp &module,
     // Get the global op for data.
     StringRef dataSymbol = dataGlobalOp.getSymName();
     std::string prefixData = EXTERNAL_CONSTANT_PREFIX + "data";
-    if (!dataSymbol.startswith(prefixData))
+    if (!dataSymbol.starts_with(prefixData))
       return WalkResult::advance();
     std::string constantName = dataSymbol.drop_front(prefixData.size()).str();
 
@@ -727,13 +737,11 @@ struct ConvertKrnlToLLVMPass
   ConvertKrnlToLLVMPass() = default;
   ConvertKrnlToLLVMPass(const ConvertKrnlToLLVMPass &pass)
       : PassWrapper<ConvertKrnlToLLVMPass, OperationPass<ModuleOp>>() {}
-  ConvertKrnlToLLVMPass(bool verifyInputTensors, bool useOpaquePointers,
-      bool useLRODATA, bool storeConstantsToFile,
-      uint64_t constantsToFileSingleThreshold,
+  ConvertKrnlToLLVMPass(bool verifyInputTensors, bool useLRODATA,
+      bool storeConstantsToFile, uint64_t constantsToFileSingleThreshold,
       uint64_t constantsToFileTotalThreshold, std::string outputNameNoExt,
       bool enableParallel) {
     this->verifyInputTensors = verifyInputTensors;
-    this->useOpaquePointers = useOpaquePointers;
     // Exclusive options. no option or only one option can be True.
     this->useLRODATA = useLRODATA;
     this->storeConstantsToFile = storeConstantsToFile;
@@ -754,11 +762,6 @@ struct ConvertKrnlToLLVMPass
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<cf::ControlFlowDialect>();
   }
-
-  Option<bool> useOpaquePointers{*this, "use-opaque-pointers",
-      llvm::cl::desc("Whether to use opaque pointers instead of typed pointers "
-                     "when lowering to LLVM. Default: true"),
-      llvm::cl::init(true)};
 
   Option<bool> verifyInputTensors{*this, "verify-input-tensors",
       llvm::cl::desc(
@@ -795,9 +798,11 @@ struct ConvertKrnlToLLVMPass
           "constants-to-file-total-threshold. Value is in KB."),
       llvm::cl::init(1.0)};
 
+  Option<bool> enableParallel{*this, "enable-parallel",
+      llvm::cl::desc("Enable parallelization"), llvm::cl::init(false)};
+
 private:
   std::string outputNameNoExt = "./model";
-  bool enableParallel;
 };
 
 void ConvertKrnlToLLVMPass::runOnOperation() {
@@ -806,11 +811,6 @@ void ConvertKrnlToLLVMPass::runOnOperation() {
   OpBuilder builder(ctx);
   const auto &dataLayoutAnalysis = getAnalysis<DataLayoutAnalysis>();
   LowerToLLVMOptions options(ctx, dataLayoutAnalysis.getAtOrAbove(module));
-
-  // MLIR/LLVM is moving to using opaque pointers instead of typed pointers.
-  // Remove this once MLIR/LLVM completely uses opaque pointers.
-  options.useOpaquePointers = useOpaquePointers; // for LLVMTypeConverter.
-  LLVM_USE_OPAQUE_POINTER = useOpaquePointers; // for onnx-mlir util functions.
 
   // Append a unique string to each entry point function.
   // The string is getting from the module's attribute
@@ -937,13 +937,12 @@ std::unique_ptr<Pass> createConvertKrnlToLLVMPass() {
   return std::make_unique<ConvertKrnlToLLVMPass>();
 }
 std::unique_ptr<Pass> createConvertKrnlToLLVMPass(bool verifyInputTensors,
-    bool useOpaquePointers, bool useLRODATA, bool storeConstantsToFile,
+    bool useLRODATA, bool storeConstantsToFile,
     float constantsToFileSingleThreshold, float constantsToFileTotalThreshold,
     std::string outputNameNoExt, bool enableParallel) {
-  return std::make_unique<ConvertKrnlToLLVMPass>(verifyInputTensors,
-      useOpaquePointers, useLRODATA, storeConstantsToFile,
-      constantsToFileSingleThreshold, constantsToFileTotalThreshold,
-      outputNameNoExt, enableParallel);
+  return std::make_unique<ConvertKrnlToLLVMPass>(verifyInputTensors, useLRODATA,
+      storeConstantsToFile, constantsToFileSingleThreshold,
+      constantsToFileTotalThreshold, outputNameNoExt, enableParallel);
 }
 
 void populateKrnlToLLVMConversion(LLVMTypeConverter &typeConverter,
@@ -962,7 +961,6 @@ void populateKrnlToLLVMConversion(LLVMTypeConverter &typeConverter,
   krnl::populateLoweringKrnlCallOpPattern(typeConverter, patterns, ctx);
   krnl::populateLoweringKrnlFindIndexOpPattern(typeConverter, patterns, ctx);
   krnl::populateLoweringKrnlGlobalOpPattern(typeConverter, patterns, ctx);
-  krnl::populateLoweringKrnlGetRefOpPattern(typeConverter, patterns, ctx);
   krnl::populateLoweringKrnlInstrumentOpPattern(typeConverter, patterns, ctx);
   krnl::populateLoweringKrnlMemcpyOpPattern(typeConverter, patterns, ctx);
   krnl::populateLoweringKrnlPrintOpPattern(typeConverter, patterns, ctx);
@@ -973,6 +971,7 @@ void populateKrnlToLLVMConversion(LLVMTypeConverter &typeConverter,
   krnl::populateLoweringKrnlStrlenOpPattern(typeConverter, patterns, ctx);
   krnl::populateLoweringKrnlUnaryMathOpPattern(typeConverter, patterns, ctx);
   krnl::populateLoweringKrnlStrncmpOpPattern(typeConverter, patterns, ctx);
+  krnl::populateLoweringKrnlNoneOpPattern(typeConverter, patterns, ctx);
 }
 
 } // namespace krnl

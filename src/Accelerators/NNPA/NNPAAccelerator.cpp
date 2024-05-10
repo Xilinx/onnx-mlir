@@ -18,12 +18,14 @@
 #include "llvm/Support/Debug.h"
 
 #include "src/Accelerators/NNPA/Compiler/NNPACompilerUtils.hpp"
+#include "src/Accelerators/NNPA/Conversion/ONNXToZHigh/ONNXLegalityCheck.hpp"
 #include "src/Accelerators/NNPA/Conversion/ZHighToZLow/ZHighToZLow.hpp"
 #include "src/Accelerators/NNPA/Conversion/ZLowToLLVM/ZLowToLLVM.hpp"
 #include "src/Accelerators/NNPA/Dialect/ZHigh/ZHighOps.hpp"
 #include "src/Accelerators/NNPA/Dialect/ZLow/ZLowOps.hpp"
 #include "src/Accelerators/NNPA/NNPAAccelerator.hpp"
 #include "src/Accelerators/NNPA/Pass/NNPAPasses.hpp"
+#include "src/Accelerators/NNPA/Support/NNPALimit.h"
 #include "src/Compiler/CompilerOptions.hpp"
 #include "zdnn.h"
 
@@ -48,9 +50,15 @@ NNPAAccelerator *NNPAAccelerator::getInstance() {
 
 NNPAAccelerator::NNPAAccelerator() : Accelerator(Accelerator::Kind::NNPA) {
   LLVM_DEBUG(llvm::dbgs() << "Creating an NNPA accelerator\n");
+
+  // Print a warning if mcpu is not set or < z16.
+  if (!isCompatibleWithNNPALevel(NNPA_Z16))
+    llvm::outs() << "Warning: No NNPA code is generated because --mcpu is not "
+                    "set or < z16.\n";
+
   acceleratorTargets.push_back(this);
   // Order is important! libRuntimeNNPA depends on libzdnn
-  addCompilerConfig(CCM_SHARED_LIB_DEPS, {"RuntimeNNPA", "zdnn"});
+  addCompilerConfig(CCM_SHARED_LIB_DEPS, {"RuntimeNNPA", "zdnn"}, true);
 };
 
 NNPAAccelerator::~NNPAAccelerator() { delete instance; }
@@ -72,6 +80,11 @@ void NNPAAccelerator::registerDialects(mlir::DialectRegistry &registry) const {
 
 void NNPAAccelerator::registerPasses(int optLevel) const {
   LLVM_DEBUG(llvm::dbgs() << "Registering passes for NNPA accelerator\n");
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return onnx_mlir::createDevicePlacementPass(nnpaLoadDevicePlacementFile,
+        nnpaSaveDevicePlacementFile, nnpaPlacementHeuristic);
+  });
+
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return onnx_mlir::createONNXToZHighPass();
   });
@@ -105,6 +118,10 @@ void NNPAAccelerator::registerPasses(int optLevel) const {
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return onnx_mlir::zhigh::createZHighClipToDLFloatPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return onnx_mlir::zhigh::createZHighDecomposeStickUnstickPass();
   });
 }
 
@@ -140,7 +157,7 @@ void NNPAAccelerator::rewritePatternONNXToKrnl(
     mlir::RewritePatternSet &patterns, mlir::TypeConverter &typeConverter,
     mlir::MLIRContext *ctx) const {
   onnx_mlir::zhigh::populateZHighToZLowConversionPattern(
-      patterns, typeConverter, ctx);
+      patterns, typeConverter, ctx, enableParallel);
 }
 
 void NNPAAccelerator::conversionTargetKrnlToLLVM(

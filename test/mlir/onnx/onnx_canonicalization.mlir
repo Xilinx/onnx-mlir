@@ -85,7 +85,7 @@ func.func @test_gemm_add_fusion_beta_zero(%arg0: tensor<128x128xf32>, %arg1: ten
 
 // -----
 
-//CHECK-LABEL: @test_gemm_add_fusion_rank3(%{{.*}}: tensor<128x128x256xf32>, %{{.*}}: tensor<128x128x256xf32>, %{{.*}}: tensor<256xf32>) -> tensor<*xf32> {
+// CHECK-LABEL: @test_gemm_add_fusion_rank3(%{{.*}}: tensor<128x128x256xf32>, %{{.*}}: tensor<128x128x256xf32>, %{{.*}}: tensor<256xf32>) -> tensor<*xf32> {
 func.func @test_gemm_add_fusion_rank3(%arg0: tensor<128x128x256xf32>, %arg1: tensor<128x128x256xf32>, %arg2: tensor<256xf32>) -> tensor<*xf32> {
   %cst = "onnx.NoValue"() {value} : () -> none
   %0 = "onnx.Gemm"(%arg0, %arg1, %cst) : (tensor<128x128x256xf32>, tensor<128x128x256xf32>, none) -> tensor<*xf32>
@@ -98,12 +98,43 @@ func.func @test_gemm_add_fusion_rank3(%arg0: tensor<128x128x256xf32>, %arg1: ten
 
 // -----
 
-//CHECK-LABEL: @cast_elimination(%{{.*}}: tensor<2xf32>) -> tensor<2xf32> {
+// CHECK-LABEL: @cast_elimination(%{{.*}}: tensor<2xf32>) -> tensor<2xf32> {
 func.func @cast_elimination(%arg0: tensor<2xf32>) -> tensor<2xf32> {
   %0 = "onnx.Cast"(%arg0) {to = f32} : (tensor<2xf32>) -> tensor<2xf32>
   onnx.Return %0 : tensor<2xf32>
 
   // CHECK-NEXT: onnx.Return %arg0 : tensor<2xf32>
+}
+
+// -----
+
+func.func @cast_concat_swap(%arg0: tensor<1xi32>, %arg1: tensor<1xi32>) -> tensor<2xi64> {
+  %0 = "onnx.Concat"(%arg0, %arg1) {axis = 0 : si64} : (tensor<1xi32>, tensor<1xi32>) -> tensor<2xi32>
+  %1 = "onnx.Cast"(%0) {to = i64} : (tensor<2xi32>) -> tensor<2xi64>
+  onnx.Return %1 : tensor<2xi64>
+
+// CHECK-LABEL:  func.func @cast_concat_swap
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1xi32>, [[PARAM_1_:%.+]]: tensor<1xi32>) -> tensor<2xi64> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {saturate = 1 : si64, to = i64} : (tensor<1xi32>) -> tensor<1xi64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.Cast"([[PARAM_1_]]) {saturate = 1 : si64, to = i64} : (tensor<1xi32>) -> tensor<1xi64>
+// CHECK:           [[VAR_2_:%.+]] = "onnx.Concat"([[VAR_0_]], [[VAR_1_]]) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>) -> tensor<2xi64>
+// CHECK:           onnx.Return [[VAR_2_]] : tensor<2xi64>
+// CHECK:         }
+}
+
+// -----
+
+func.func @cast_slice_swap(%arg0: tensor<3xi32>, %arg1: tensor<1xi64>, %arg2: tensor<1xi64>, %arg3: tensor<1xi64>, %arg4: tensor<1xi64>) -> tensor<1xi64> {
+  %0 = "onnx.Slice"(%arg0, %arg1, %arg2, %arg3, %arg4) {axis = 0 : si64} : (tensor<3xi32>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<1xi32>
+  %1 = "onnx.Cast"(%0) {to = i64} : (tensor<1xi32>) -> tensor<1xi64>
+  onnx.Return %1 : tensor<1xi64>
+
+// CHECK-LABEL:  func.func @cast_slice_swap
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3xi32>, [[PARAM_1_:%.+]]: tensor<1xi64>, [[PARAM_2_:%.+]]: tensor<1xi64>, [[PARAM_3_:%.+]]: tensor<1xi64>, [[PARAM_4_:%.+]]: tensor<1xi64>) -> tensor<1xi64> {
+// CHECK:           [[VAR_0_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {saturate = 1 : si64, to = i64} : (tensor<3xi32>) -> tensor<*xi64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Slice"([[VAR_0_]], [[PARAM_1_]], [[PARAM_2_]], [[PARAM_3_]], [[PARAM_4_]]) : (tensor<*xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<1xi64>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<1xi64>
+// CHECK:         }
 }
 
 // -----
@@ -116,18 +147,19 @@ func.func @test_conv_batchnormtestmode_fusion_nobias(%arg0: tensor<1x3x224x224xf
 
     // CHECK-LABEL:  func.func @test_conv_batchnormtestmode_fusion_nobias
     // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x224x224xf32>, [[PARAM_1_:%.+]]: tensor<64x3x7x7xf32>, [[PARAM_2_:%.+]]: tensor<64xf32>, [[PARAM_3_:%.+]]: tensor<64xf32>, [[PARAM_4_:%.+]]: tensor<64xf32>, [[PARAM_5_:%.+]]: tensor<64xf32>) -> tensor<1x64x112x112xf32> {
-    // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<1.00000007E-5> : tensor<1xf32>
-    // CHECK:           [[VAR_1_:%.+]] = "onnx.Add"([[PARAM_5_]], [[VAR_0_]]) : (tensor<64xf32>, tensor<1xf32>) -> tensor<64xf32>
-    // CHECK:           [[VAR_2_:%.+]] = "onnx.Sqrt"([[VAR_1_]]) : (tensor<64xf32>) -> tensor<*xf32>
-    // CHECK:           [[VAR_3_:%.+]] = "onnx.Div"([[PARAM_2_]], [[VAR_2_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
-    // CHECK:           [[VAR_4_:%.+]] = "onnx.UnsqueezeV11"([[VAR_3_]]) {axes = [1, 2, 3]} : (tensor<*xf32>) -> tensor<*xf32>
-    // CHECK-DAG:       [[VAR_5_:%.+]] = "onnx.Mul"([[PARAM_1_]], [[VAR_4_]]) : (tensor<64x3x7x7xf32>, tensor<*xf32>) -> tensor<*xf32>
-    // CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.Neg"([[PARAM_4_]]) : (tensor<64xf32>) -> tensor<*xf32>
-    // CHECK:           [[VAR_7_:%.+]] = "onnx.Mul"([[VAR_3_]], [[VAR_6_]]) : (tensor<*xf32>, tensor<*xf32>) -> tensor<*xf32>
-    // CHECK:           [[VAR_8_:%.+]] = "onnx.Add"([[PARAM_3_]], [[VAR_7_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
-    // CHECK:           [[VAR_9_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_5_]], [[VAR_8_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [7, 7], pads = [3, 3, 3, 3], strides = [2, 2]} : (tensor<1x3x224x224xf32>, tensor<*xf32>, tensor<*xf32>) -> tensor<1x64x112x112xf32>
+    // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.00000007E-5> : tensor<1xf32>
+    // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<[1, 2, 3]> : tensor<3xi64>
+    // CHECK:           [[VAR_2_:%.+]] = "onnx.Add"([[PARAM_5_]], [[VAR_0_]]) : (tensor<64xf32>, tensor<1xf32>) -> tensor<64xf32>
+    // CHECK:           [[VAR_3_:%.+]] = "onnx.Sqrt"([[VAR_2_]]) : (tensor<64xf32>) -> tensor<*xf32>
+    // CHECK:           [[VAR_4_:%.+]] = "onnx.Div"([[PARAM_2_]], [[VAR_3_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
+    // CHECK:           [[VAR_5_:%.+]] = "onnx.Unsqueeze"([[VAR_4_]], [[VAR_1_]]) : (tensor<*xf32>, tensor<3xi64>) -> tensor<*xf32>
+    // CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.Mul"([[PARAM_1_]], [[VAR_5_]]) : (tensor<64x3x7x7xf32>, tensor<*xf32>) -> tensor<*xf32>
+    // CHECK-DAG:       [[VAR_7_:%.+]] = "onnx.Neg"([[PARAM_4_]]) : (tensor<64xf32>) -> tensor<*xf32>
+    // CHECK:           [[VAR_8_:%.+]] = "onnx.Mul"([[VAR_4_]], [[VAR_7_]]) : (tensor<*xf32>, tensor<*xf32>) -> tensor<*xf32>
+    // CHECK:           [[VAR_9_:%.+]] = "onnx.Add"([[PARAM_3_]], [[VAR_8_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
+    // CHECK:           [[VAR_10_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_6_]], [[VAR_9_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [7, 7], pads = [3, 3, 3, 3], strides = [2, 2]} : (tensor<1x3x224x224xf32>, tensor<*xf32>, tensor<*xf32>) -> tensor<1x64x112x112xf32>
     // CHECK-NOT: {{.*}} = "onnx.BatchNormalizationInferenceMode"{{.*}}
-    // CHECK:           onnx.Return [[VAR_9_]] : tensor<1x64x112x112xf32>
+    // CHECK:           onnx.Return [[VAR_10_]] : tensor<1x64x112x112xf32>
 }
 
 // -----
@@ -140,18 +172,19 @@ func.func @test_conv_batchnormtestmode_fusion(%arg0 : tensor<1x3x224x224xf32>, %
 
     // CHECK-LABEL:  func.func @test_conv_batchnormtestmode_fusion
     // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x224x224xf32>, [[PARAM_1_:%.+]]: tensor<64xf32>, [[PARAM_2_:%.+]]: tensor<64x3x7x7xf32>, [[PARAM_3_:%.+]]: tensor<64xf32>, [[PARAM_4_:%.+]]: tensor<64xf32>, [[PARAM_5_:%.+]]: tensor<64xf32>, [[PARAM_6_:%.+]]: tensor<64xf32>) -> tensor<1x64x112x112xf32> {
-    // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<1.00000007E-5> : tensor<1xf32>
-    // CHECK:           [[VAR_1_:%.+]] = "onnx.Add"([[PARAM_6_]], [[VAR_0_]]) : (tensor<64xf32>, tensor<1xf32>) -> tensor<64xf32>
-    // CHECK:           [[VAR_2_:%.+]] = "onnx.Sqrt"([[VAR_1_]]) : (tensor<64xf32>) -> tensor<*xf32>
-    // CHECK:           [[VAR_3_:%.+]] = "onnx.Div"([[PARAM_3_]], [[VAR_2_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
-    // CHECK:           [[VAR_4_:%.+]] = "onnx.UnsqueezeV11"([[VAR_3_]]) {axes = [1, 2, 3]} : (tensor<*xf32>) -> tensor<*xf32>
-    // CHECK-DAG:       [[VAR_5_:%.+]] = "onnx.Mul"([[PARAM_2_]], [[VAR_4_]]) : (tensor<64x3x7x7xf32>, tensor<*xf32>) -> tensor<*xf32>
-    // CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.Sub"([[PARAM_1_]], [[PARAM_5_]]) : (tensor<64xf32>, tensor<64xf32>) -> tensor<64xf32>
-    // CHECK:           [[VAR_7_:%.+]] = "onnx.Mul"([[VAR_3_]], [[VAR_6_]]) : (tensor<*xf32>, tensor<64xf32>) -> tensor<*xf32>
-    // CHECK:           [[VAR_8_:%.+]] = "onnx.Add"([[PARAM_4_]], [[VAR_7_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
-    // CHECK:           [[VAR_9_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_5_]], [[VAR_8_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [7, 7], pads = [3, 3, 3, 3], strides = [2, 2]} : (tensor<1x3x224x224xf32>, tensor<*xf32>, tensor<*xf32>) -> tensor<1x64x112x112xf32>
+    // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.00000007E-5> : tensor<1xf32>
+    // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<[1, 2, 3]> : tensor<3xi64>
+    // CHECK:           [[VAR_2_:%.+]] = "onnx.Add"([[PARAM_6_]], [[VAR_0_]]) : (tensor<64xf32>, tensor<1xf32>) -> tensor<64xf32>
+    // CHECK:           [[VAR_3_:%.+]] = "onnx.Sqrt"([[VAR_2_]]) : (tensor<64xf32>) -> tensor<*xf32>
+    // CHECK:           [[VAR_4_:%.+]] = "onnx.Div"([[PARAM_3_]], [[VAR_3_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
+    // CHECK:           [[VAR_5_:%.+]] = "onnx.Unsqueeze"([[VAR_4_]], [[VAR_1_]]) : (tensor<*xf32>, tensor<3xi64>) -> tensor<*xf32>
+    // CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.Mul"([[PARAM_2_]], [[VAR_5_]]) : (tensor<64x3x7x7xf32>, tensor<*xf32>) -> tensor<*xf32>
+    // CHECK-DAG:       [[VAR_7_:%.+]] = "onnx.Sub"([[PARAM_1_]], [[PARAM_5_]]) : (tensor<64xf32>, tensor<64xf32>) -> tensor<64xf32>
+    // CHECK:           [[VAR_8_:%.+]] = "onnx.Mul"([[VAR_4_]], [[VAR_7_]]) : (tensor<*xf32>, tensor<64xf32>) -> tensor<*xf32>
+    // CHECK:           [[VAR_9_:%.+]] = "onnx.Add"([[PARAM_4_]], [[VAR_8_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
+    // CHECK:           [[VAR_10_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_6_]], [[VAR_9_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [7, 7], pads = [3, 3, 3, 3], strides = [2, 2]} : (tensor<1x3x224x224xf32>, tensor<*xf32>, tensor<*xf32>) -> tensor<1x64x112x112xf32>
     // CHECK-NOT: {{.*}} = "onnx.BatchNormalizationInferenceMode"{{.*}}
-    // CHECK:           onnx.Return [[VAR_9_]] : tensor<1x64x112x112xf32>
+    // CHECK:           onnx.Return [[VAR_10_]] : tensor<1x64x112x112xf32>
 }
 
 // -----
@@ -238,6 +271,20 @@ func.func @test_reshape_should_not_remove(%arg0: tensor<3x5x10x20xf32>, %arg1: t
 
 // -----
 
+func.func @test_reshape_propagate_through_elementwise_ops(%arg0: tensor<3x5x10x20xf32>, %arg1: tensor<1xf32>) -> tensor<150x20xf32> {
+  %shape1 = onnx.Constant dense<[150, 20]> : tensor<2xi64>
+  %0 = "onnx.Reshape"(%arg0, %shape1) : (tensor<3x5x10x20xf32>, tensor<2xi64>) -> tensor<150x20xf32>
+  %1 = "onnx.Mul"(%0, %arg1) : (tensor<150x20xf32>, tensor<1xf32>) -> tensor<150x20xf32>
+  onnx.Return %1 : tensor<150x20xf32>
+  // CHECK-LABEL: test_reshape_propagate_through_elementwise_ops
+  // CHECK-NEXT: [[CST:%.+]] = onnx.Constant dense<[150, 20]> : tensor<2xi64>
+  // CHECK-NEXT: [[MUL:%.+]] = "onnx.Mul"(%arg0, %arg1) : (tensor<3x5x10x20xf32>, tensor<1xf32>) -> tensor<3x5x10x20xf32>
+  // CHECK-NEXT: [[RES:%.+]] = "onnx.Reshape"([[MUL]], [[CST]]) {allowzero = 0 : si64} : (tensor<3x5x10x20xf32>, tensor<2xi64>) -> tensor<150x20xf32>
+  // CHECK: onnx.Return [[RES]] : tensor<150x20xf32>
+}
+
+// -----
+
 // Check EmptyTensorInputsResizePattern. Example from yolov4 model after --decompose-onnx.
 func.func @test_resize_empty_tensor_inputs(%8: tensor<0xf32>, %714: tensor<*xf32>, %719: tensor<*xi64>) -> tensor<*xf32> {
   %720 = "onnx.Resize"(%714, %8, %8, %719) {antialias = 0 : si64, coordinate_transformation_mode = "half_pixel", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "nearest", nearest_mode = "floor"} : (tensor<*xf32>, tensor<0xf32>, tensor<0xf32>, tensor<*xi64>) -> tensor<*xf32>
@@ -302,8 +349,8 @@ func.func @test_transpose_besides_hardsigmoid_fusion(%arg0: tensor<10x11x12x13xf
 // -----
 
 // Check the combining of reshape into a simple reshape.
-// CHECK-LABEL: func @test_reshape_fusion(%arg0: tensor<10x11x12x13xf32>) -> tensor<8x15x13x11xf32> {
-func.func @test_reshape_fusion(%arg0: tensor<10x11x12x13xf32>) -> tensor<8x15x13x11xf32> {
+// CHECK-LABEL: func @test_reshape_fusion1(%arg0: tensor<10x11x12x13xf32>) -> tensor<8x15x13x11xf32> {
+func.func @test_reshape_fusion1(%arg0: tensor<10x11x12x13xf32>) -> tensor<8x15x13x11xf32> {
   %0 = onnx.Constant dense<[2, 60, 11, 13]> : tensor<4xi64>
   %1 = "onnx.Reshape"(%arg0, %0) : (tensor<10x11x12x13xf32>, tensor<4xi64>) -> tensor<2x60x11x13xf32>
   %2 = onnx.Constant dense<[8, 15, 13, 11]> : tensor<4xi64>
@@ -311,6 +358,47 @@ func.func @test_reshape_fusion(%arg0: tensor<10x11x12x13xf32>) -> tensor<8x15x13
   // CHECK-NEXT: [[RES:%.+]] = onnx.Constant dense<[8, 15, 13, 11]> : tensor<4xi64>
   // CHECK-NEXT: %{{.*}} = "onnx.Reshape"(%arg0, [[RES]]) {allowzero = 0 : si64} : (tensor<10x11x12x13xf32>, tensor<4xi64>) -> tensor<8x15x13x11xf32>
   "onnx.Return"(%3) : (tensor<8x15x13x11xf32>) -> ()
+}
+
+// -----
+
+// Check the combining of reshape into a simple reshape.
+func.func @test_reshape_fusion_2(%arg0: tensor<3x4x2x2xf32>) -> tensor<3x2x8xf32> {
+  %0 = onnx.Constant dense<[3, 2, 2, 2, 2]> : tensor<5xi64>
+  %1 = onnx.Constant dense<[0, 0, -1]> : tensor<3xi64>
+  %2 = "onnx.Reshape"(%arg0, %0) {allowzero = 0 : si64} : (tensor<3x4x2x2xf32>, tensor<5xi64>) -> tensor<3x2x2x2x2xf32>
+  %3 = "onnx.Reshape"(%2, %1) {allowzero = 0 : si64} : (tensor<3x2x2x2x2xf32>, tensor<3xi64>) -> tensor<3x2x8xf32>
+  onnx.Return %3 : tensor<3x2x8xf32>
+
+// CHECK-LABEL:  func.func @test_reshape_fusion_2
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3x4x2x2xf32>) -> tensor<3x2x8xf32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[3, 2, -1]> : tensor<3xi64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<3x4x2x2xf32>, tensor<3xi64>) -> tensor<3x2x8xf32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<3x2x8xf32>
+// CHECK:         }
+}
+
+// -----
+
+// Check the combining of reshape into a simple reshape.
+func.func @test_reshape_fusion3(%arg0: tensor<?x4x2x2xf32>) -> tensor<?x2x?xf32> {
+  %0 = onnx.Constant dense<2> : tensor<1xi64>
+  %1 = onnx.Constant dense<[0, 0, -1]> : tensor<3xi64>
+  %2 = "onnx.Dim"(%arg0) {axis = 0 : si64} : (tensor<?x4x2x2xf32>) -> tensor<1xi64>
+  %3 = "onnx.Concat"(%2, %0, %0, %0, %0) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<5xi64>
+  %4 = "onnx.Reshape"(%arg0, %3) {allowzero = 0 : si64} : (tensor<?x4x2x2xf32>, tensor<5xi64>) -> tensor<?x2x2x2x2xf32>
+  %5 = "onnx.Reshape"(%4, %1) {allowzero = 0 : si64} : (tensor<?x2x2x2x2xf32>, tensor<3xi64>) -> tensor<?x2x?xf32>
+  onnx.Return %5 : tensor<?x2x?xf32>
+
+// CHECK-LABEL:  func.func @test_reshape_fusion3
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x4x2x2xf32>) -> tensor<?x2x?xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<-1> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<2> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.Dim"([[PARAM_0_]]) {axis = 0 : si64} : (tensor<?x4x2x2xf32>) -> tensor<1xi64>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.Concat"([[VAR_2_]], [[VAR_1_]], [[VAR_0_]]) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<3xi64>
+// CHECK:           [[VAR_4_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_3_]]) {allowzero = 0 : si64} : (tensor<?x4x2x2xf32>, tensor<3xi64>) -> tensor<?x2x?xf32>
+// CHECK:           onnx.Return [[VAR_4_]] : tensor<?x2x?xf32>
+// CHECK:         }
 }
 
 // -----
@@ -403,6 +491,16 @@ func.func @test_global_average_pool_dyn_dims(%arg0: tensor<1x?x?x5xf32>) -> tens
   // CHECK: [[RES:%.+]] = "onnx.ReduceMeanV13"(%arg0) {axes = [2, 3], keepdims = 1 : si64} : (tensor<1x?x?x5xf32>) -> tensor<1x?x?x1xf32>
   // CHECK: onnx.Return [[RES]] : tensor<1x?x?x1xf32>
 }
+
+// -----
+
+// COM: Test that GlobalAveragePool with dynamic rank does not crash
+func.func @test_global_average_pool_dynamic_rank(%arg0: tensor<*xf32>) -> tensor<*xf32> {
+  %0 = "onnx.GlobalAveragePool"(%arg0) : (tensor<*xf32>) -> tensor<*xf32>
+  onnx.Return %0 : tensor<*xf32>
+  // CHECK-LABEL: test_global_average_pool_dynamic_rank
+  // CHECK: "onnx.GlobalAveragePool"
+  }
 
 // -----
 
@@ -625,55 +723,24 @@ func.func @test_remove_space_to_depth_depth_to_space(%arg0 : tensor<1x256x8x16xf
 
 // -----
 
-func.func @test_constant_1() -> tensor<i64> {
-  %0 = onnx.Constant {value_int = 1 : si64} : tensor<i64>
-  onnx.Return %0 : tensor<i64>
-// CHECK-LABEL:       func @test_constant_1
-// CHECK:           [[VAR_0:%.+]] = onnx.Constant dense<1> : tensor<i64>
-// CHECK:           onnx.Return [[VAR_0]] : tensor<i64>
-}
-
-
-// -----
-
-func.func @test_constant_2() -> tensor<f32> {
-  %0 = onnx.Constant {value_float = 2.0 : f32 } : tensor<f32>
-  onnx.Return %0 : tensor<f32>
-// CHECK-LABEL:     func @test_constant_2
-// CHECK: [[VAR_0:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<f32>
-// CHECK: onnx.Return [[VAR_0]] : tensor<f32>
-}
-
-// -----
-
-func.func @test_constant_3() -> tensor<3xi64> {
-  %0 = onnx.Constant {value_ints = [1, 2, 3] } : tensor<3xi64>
-  onnx.Return %0 : tensor<3xi64>
-// CHECK-LABEL:       func @test_constant_3
-// CHECK-SAME:     () -> tensor<3xi64> {
-// CHECK:           [[VAR_0:%.+]] = onnx.Constant dense<[1, 2, 3]> : tensor<3xi64>
-// CHECK:           onnx.Return [[VAR_0]] : tensor<3xi64>
-}
-
-// -----
-
 func.func @test_rewrite_batchnormtestmode_Nd(%arg0 : tensor<1x64x112x112xf32>, %scale : tensor<64xf32>, %bias : tensor<64xf32>, %mean : tensor<64xf32>, %var : tensor<64xf32>) -> tensor<1x64x112x112xf32> {
     %0 = "onnx.BatchNormalizationInferenceMode"(%arg0, %scale, %bias, %mean, %var) {epsilon = 1.00000007E-5 : f32} : (tensor<1x64x112x112xf32>, tensor<64xf32>, tensor<64xf32>, tensor<64xf32>, tensor<64xf32>) -> tensor<1x64x112x112xf32>
     onnx.Return %0 :  tensor<1x64x112x112xf32>
 
   // CHECK-LABEL:  func.func @test_rewrite_batchnormtestmode_Nd
   // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x64x112x112xf32>, [[PARAM_1_:%.+]]: tensor<64xf32>, [[PARAM_2_:%.+]]: tensor<64xf32>, [[PARAM_3_:%.+]]: tensor<64xf32>, [[PARAM_4_:%.+]]: tensor<64xf32>) -> tensor<1x64x112x112xf32> {
-  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<1.00000007E-5> : tensor<1xf32>
-  // CHECK:           [[VAR_1_:%.+]] = "onnx.Add"([[PARAM_4_]], [[VAR_0_]]) : (tensor<64xf32>, tensor<1xf32>) -> tensor<64xf32>
-  // CHECK:           [[VAR_2_:%.+]] = "onnx.Sqrt"([[VAR_1_]]) : (tensor<64xf32>) -> tensor<*xf32>
-  // CHECK:           [[VAR_3_:%.+]] = "onnx.Div"([[PARAM_1_]], [[VAR_2_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
-  // CHECK:           [[VAR_4_:%.+]] = "onnx.UnsqueezeV11"([[VAR_3_]]) {axes = [1, 2]} : (tensor<*xf32>) -> tensor<*xf32>
-  // CHECK-DAG:       [[VAR_5_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[VAR_4_]]) : (tensor<1x64x112x112xf32>, tensor<*xf32>) -> tensor<*xf32>
-  // CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.Mul"([[PARAM_3_]], [[VAR_3_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
-  // CHECK:           [[VAR_7_:%.+]] = "onnx.Sub"([[PARAM_2_]], [[VAR_6_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
-  // CHECK:           [[VAR_8_:%.+]] = "onnx.UnsqueezeV11"([[VAR_7_]]) {axes = [1, 2]} : (tensor<*xf32>) -> tensor<*xf32>
-  // CHECK:           [[VAR_9_:%.+]] = "onnx.Add"([[VAR_5_]], [[VAR_8_]]) : (tensor<*xf32>, tensor<*xf32>) -> tensor<1x64x112x112xf32>
-  // CHECK:           onnx.Return [[VAR_9_]] : tensor<1x64x112x112xf32>
+  // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.00000007E-5> : tensor<1xf32>
+  // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<[1, 2]> : tensor<2xi64>
+  // CHECK:           [[VAR_2_:%.+]] = "onnx.Add"([[PARAM_4_]], [[VAR_0_]]) : (tensor<64xf32>, tensor<1xf32>) -> tensor<64xf32>
+  // CHECK:           [[VAR_3_:%.+]] = "onnx.Sqrt"([[VAR_2_]]) : (tensor<64xf32>) -> tensor<*xf32>
+  // CHECK:           [[VAR_4_:%.+]] = "onnx.Div"([[PARAM_1_]], [[VAR_3_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
+  // CHECK:           [[VAR_5_:%.+]] = "onnx.Unsqueeze"([[VAR_4_]], [[VAR_1_]]) : (tensor<*xf32>, tensor<2xi64>) -> tensor<*xf32>
+  // CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[VAR_5_]]) : (tensor<1x64x112x112xf32>, tensor<*xf32>) -> tensor<*xf32>
+  // CHECK-DAG:       [[VAR_7_:%.+]] = "onnx.Mul"([[PARAM_3_]], [[VAR_4_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
+  // CHECK:           [[VAR_8_:%.+]] = "onnx.Sub"([[PARAM_2_]], [[VAR_7_]]) : (tensor<64xf32>, tensor<*xf32>) -> tensor<*xf32>
+  // CHECK:           [[VAR_9_:%.+]] = "onnx.Unsqueeze"([[VAR_8_]], [[VAR_1_]]) : (tensor<*xf32>, tensor<2xi64>) -> tensor<*xf32>
+  // CHECK:           [[VAR_10_:%.+]] = "onnx.Add"([[VAR_6_]], [[VAR_9_]]) : (tensor<*xf32>, tensor<*xf32>) -> tensor<1x64x112x112xf32>
+  // CHECK:           onnx.Return [[VAR_10_]] : tensor<1x64x112x112xf32>
 }
 
 // -----
@@ -704,13 +771,13 @@ func.func @test_rewrite_batchnormtestmode_1d_f16(%arg0 : tensor<64xf16>, %scale 
 // CHECK-LABEL:  func.func @test_rewrite_batchnormtestmode_1d_f16
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<64xf16>, [[PARAM_1_:%.+]]: tensor<1xf32>, [[PARAM_2_:%.+]]: tensor<1xf32>, [[PARAM_3_:%.+]]: tensor<1xf32>, [[PARAM_4_:%.+]]: tensor<1xf32>) -> tensor<64xf16> {
 // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<1.001360e-05> : tensor<1xf16>
-// CHECK:           [[VAR_1_:%.+]] = "onnx.Add"([[PARAM_4_]], [[VAR_0_]]) : (tensor<1xf32>, tensor<1xf16>) -> tensor<*xf32>
-// CHECK:           [[VAR_2_:%.+]] = "onnx.Sqrt"([[VAR_1_]]) : (tensor<*xf32>) -> tensor<*xf32>
-// CHECK:           [[VAR_3_:%.+]] = "onnx.Div"([[PARAM_1_]], [[VAR_2_]]) : (tensor<1xf32>, tensor<*xf32>) -> tensor<*xf32>
-// CHECK-DAG:       [[VAR_4_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[VAR_3_]]) : (tensor<64xf16>, tensor<*xf32>) -> tensor<*xf16>
-// CHECK-DAG:       [[VAR_5_:%.+]] = "onnx.Mul"([[PARAM_3_]], [[VAR_3_]]) : (tensor<1xf32>, tensor<*xf32>) -> tensor<*xf32>
-// CHECK:           [[VAR_6_:%.+]] = "onnx.Sub"([[PARAM_2_]], [[VAR_5_]]) : (tensor<1xf32>, tensor<*xf32>) -> tensor<*xf32>
-// CHECK:           [[VAR_7_:%.+]] = "onnx.Add"([[VAR_4_]], [[VAR_6_]]) : (tensor<*xf16>, tensor<*xf32>) -> tensor<64xf16>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Add"({{.*}}, [[VAR_0_]]) : (tensor<1xf16>, tensor<1xf16>) -> tensor<1xf16>
+// CHECK:           [[VAR_2_:%.+]] = "onnx.Sqrt"([[VAR_1_]]) : (tensor<1xf16>) -> tensor<*xf16>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.Div"({{.*}}, [[VAR_2_]]) : (tensor<1xf16>, tensor<*xf16>) -> tensor<*xf16>
+// CHECK-DAG:       [[VAR_4_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[VAR_3_]]) : (tensor<64xf16>, tensor<*xf16>) -> tensor<*xf16>
+// CHECK-DAG:       [[VAR_5_:%.+]] = "onnx.Mul"({{.*}}, [[VAR_3_]]) : (tensor<1xf16>, tensor<*xf16>) -> tensor<*xf16>
+// CHECK:           [[VAR_6_:%.+]] = "onnx.Sub"({{.*}}, [[VAR_5_]]) : (tensor<1xf16>, tensor<*xf16>) -> tensor<*xf16>
+// CHECK:           [[VAR_7_:%.+]] = "onnx.Add"([[VAR_4_]], [[VAR_6_]]) : (tensor<*xf16>, tensor<*xf16>) -> tensor<64xf16>
 // CHECK:           onnx.Return [[VAR_7_]] : tensor<64xf16>
 // CHECK:         }
 }
@@ -802,13 +869,14 @@ func.func @test_fuse_mul_conv(%arg0: tensor<1x1x28x28xf32>) -> tensor<*xf32> {
 
   // CHECK-LABEL:  func.func @test_fuse_mul_conv
   // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x1x28x28xf32>) -> tensor<*xf32> {
-  // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}{{.}}[-0.161539719]{{.}}, {{.}}[-0.433835655]{{.}}, {{.}}[0.091641359]{{.}}, {{.}}[-0.0168522168]{{.}}, {{.}}[-0.0650264397]{{.}}, {{.}}[-0.131737873]{{.}}, {{.}}[0.0204175506]{{.}}, {{.}}[-0.121110231]{{.}}{{.}}> : tensor<8x1x1xf32>
-  // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<{{.}}[{{.}}[0.0234164055, 0.0228030644], [2.442580e-02, 0.0237577036]{{.}}{{.}}, {{.}}{{.}}[-0.0410864502, 0.0488203131], [0.164448678, -0.0200194642]{{.}}{{.}}, {{.}}{{.}}[-4.34581793E-9, 0.025325032], [0.0373019315, 0.165243402]{{.}}{{.}}, {{.}}{{.}}[-0.0198689923, 0.131284416], [0.0572107285, 2.33985098E-8]{{.}}{{.}}, {{.}}{{.}}[0.0187684372, -0.148515195], [0.0154875498, 0.019133633]{{.}}{{.}}, {{.}}{{.}}[0.0176953916, -0.0154658081], [0.0233727545, -0.274110436]{{.}}{{.}}, {{.}}{{.}}[-0.021181887, 0.0936150252], [0.135688141, -0.0202601217]{{.}}{{.}}, {{.}}{{.}}[-0.0201558527, 0.0192655921], [0.227748245, -0.196346223]{{.}}{{.}}]> : tensor<8x1x2x2xf32>
-  // CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.NoValue"() {value} : () -> none
-  // CHECK:           [[VAR_3_:%.+]] = "onnx.UnsqueezeV11"([[VAR_0_]]) {axes = [3]} : (tensor<8x1x1xf32>) -> tensor<*xf32>
-  // CHECK:           [[VAR_4_:%.+]] = "onnx.Mul"([[VAR_3_]], [[VAR_1_]]) : (tensor<*xf32>, tensor<8x1x2x2xf32>) -> tensor<*xf32>
-  // CHECK:           [[VAR_5_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_4_]], [[VAR_2_]]) {auto_pad = "NOTSET", group = 1 : si64, kernel_shape = [2, 2], strides = [1, 1]} : (tensor<1x1x28x28xf32>, tensor<*xf32>, none) -> tensor<*xf32>
-  // CHECK:           onnx.Return [[VAR_5_]] : tensor<*xf32>
+  // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<3> : tensor<1xi64>
+  // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<{{.}}{{.}}[-0.161539719]{{.}}, {{.}}[-0.433835655]{{.}}, {{.}}[0.091641359]{{.}}, {{.}}[-0.0168522168]{{.}}, {{.}}[-0.0650264397]{{.}}, {{.}}[-0.131737873]{{.}}, {{.}}[0.0204175506]{{.}}, {{.}}[-0.121110231]{{.}}{{.}}> : tensor<8x1x1xf32>
+  // CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<{{.}}[{{.}}[0.0234164055, 0.0228030644], [2.442580e-02, 0.0237577036]{{.}}{{.}}, {{.}}{{.}}[-0.0410864502, 0.0488203131], [0.164448678, -0.0200194642]{{.}}{{.}}, {{.}}{{.}}[-4.34581793E-9, 0.025325032], [0.0373019315, 0.165243402]{{.}}{{.}}, {{.}}{{.}}[-0.0198689923, 0.131284416], [0.0572107285, 2.33985098E-8]{{.}}{{.}}, {{.}}{{.}}[0.0187684372, -0.148515195], [0.0154875498, 0.019133633]{{.}}{{.}}, {{.}}{{.}}[0.0176953916, -0.0154658081], [0.0233727545, -0.274110436]{{.}}{{.}}, {{.}}{{.}}[-0.021181887, 0.0936150252], [0.135688141, -0.0202601217]{{.}}{{.}}, {{.}}{{.}}[-0.0201558527, 0.0192655921], [0.227748245, -0.196346223]{{.}}{{.}}]> : tensor<8x1x2x2xf32>
+  // CHECK-DAG:       [[VAR_3_:%.+]] = "onnx.NoValue"() {value} : () -> none
+  // CHECK:           [[VAR_4_:%.+]] = "onnx.Unsqueeze"([[VAR_1_]], [[VAR_0_]]) : (tensor<8x1x1xf32>, tensor<1xi64>) -> tensor<*xf32>
+  // CHECK:           [[VAR_5_:%.+]] = "onnx.Mul"([[VAR_4_]], [[VAR_2_]]) : (tensor<*xf32>, tensor<8x1x2x2xf32>) -> tensor<*xf32>
+  // CHECK:           [[VAR_6_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_5_]], [[VAR_3_]]) {auto_pad = "NOTSET", group = 1 : si64, kernel_shape = [2, 2], strides = [1, 1]} : (tensor<1x1x28x28xf32>, tensor<*xf32>, none) -> tensor<*xf32>
+  // CHECK:           onnx.Return [[VAR_6_]] : tensor<*xf32>
 }
 
 // -----
@@ -1135,6 +1203,18 @@ func.func @test_layout_transform(%arg0: tensor<5x3x32x32xf32, #onnx.layout<{data
 
 // -----
 
+func.func @test_layout_transform_fusion(%arg0: tensor<5x3x32x32xf32>) -> tensor<5x3x32x32xf32> {
+    %0 = "onnx.LayoutTransform"(%arg0) {target_layout = #onnx.layout<{dataLayout = "NCHW4C"}>} : (tensor<5x3x32x32xf32>) -> tensor<5x3x32x32xf32, #onnx.layout<{dataLayout = "NCHW4C"}>>
+    %1 = "onnx.LayoutTransform"(%0) : (tensor<5x3x32x32xf32, #onnx.layout<{dataLayout = "NCHW4C"}>>) -> tensor<5x3x32x32xf32>
+    onnx.Return %1 : tensor<5x3x32x32xf32>
+
+// CHECK-LABEL: test_layout_transform_fusion
+// CHECK-NOT: "onnx.LayoutTransform"
+// CHECK: onnx.Return
+}
+
+// -----
+
 func.func @test_softmax_v11_ranked(%arg0 : tensor<10x20x30xf32>) -> tensor<10x20x30xf32> {
   %0 = "onnx.SoftmaxV11"(%arg0) {axis = 2 : si64} : (tensor<10x20x30xf32>) -> tensor<10x20x30xf32>
   onnx.Return %0 : tensor<10x20x30xf32>
@@ -1202,57 +1282,32 @@ func.func @shape_transform_identity_map(%arg0: tensor<128x128xf32>) -> tensor<12
 
 // -----
 
-// COM: Expand Pow into multiple Mul if exponent is an integer and <= 64.
+// COM: Expand Pow into multiple Mul if exponent is an integer and <= 2.
 func.func @expand_pow_into_mul_f32(%arg0: tensor<3x4x5xf32>) -> tensor<3x4x5xf32> {
-    %cst = onnx.Constant dense<5.0> : tensor<f32>
+    %cst = onnx.Constant dense<2.0> : tensor<f32>
     %0 = "onnx.Pow"(%arg0, %cst) : (tensor<3x4x5xf32>, tensor<f32>) -> tensor<3x4x5xf32>
     onnx.Return %0 : tensor<3x4x5xf32>
 
 // CHECK-LABEL:  func.func @expand_pow_into_mul_f32
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3x4x5xf32>) -> tensor<3x4x5xf32> {
 // CHECK:           [[VAR_1_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[PARAM_0_]]) : (tensor<3x4x5xf32>, tensor<3x4x5xf32>) -> tensor<3x4x5xf32>
-// CHECK:           [[VAR_2_:%.+]] = "onnx.Mul"([[VAR_1_]], [[VAR_1_]]) : (tensor<3x4x5xf32>, tensor<3x4x5xf32>) -> tensor<3x4x5xf32>
-// CHECK:           [[VAR_3_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[VAR_2_]]) : (tensor<3x4x5xf32>, tensor<3x4x5xf32>) -> tensor<3x4x5xf32>
-// CHECK:           onnx.Return [[VAR_3_]] : tensor<3x4x5xf32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<3x4x5xf32>
 // CHECK:        }
 }
 
 // -----
 
-// COM: Expand Pow into multiple Mul if exponent is an integer and <= 64.
-func.func @expand_pow_into_mul_f16(%arg0: tensor<3x4x5xf16>) -> tensor<3x4x5xf16> {
-    %cst = onnx.Constant dense<5.0> : tensor<f16>
-    %0 = "onnx.Pow"(%arg0, %cst) : (tensor<3x4x5xf16>, tensor<f16>) -> tensor<3x4x5xf16>
-    onnx.Return %0 : tensor<3x4x5xf16>
+// COM: Expand a bfloat16 Pow into multiple Mul if exponent is an integer and <= 2.
+func.func @expand_pow_bf16_into_mul(%arg0: tensor<3x4x5xbf16>) -> tensor<3x4x5xbf16> {
+    %cst = onnx.Constant dense<2.0> : tensor<bf16>
+    %0 = "onnx.Pow"(%arg0, %cst) : (tensor<3x4x5xbf16>, tensor<bf16>) -> tensor<3x4x5xbf16>
+    onnx.Return %0 : tensor<3x4x5xbf16>
 
-// CHECK-LABEL:  func.func @expand_pow_into_mul_f16
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3x4x5xf16>) -> tensor<3x4x5xf16> {
-// CHECK:           [[VAR_1_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[PARAM_0_]]) : (tensor<3x4x5xf16>, tensor<3x4x5xf16>) -> tensor<3x4x5xf16>
-// CHECK:           [[VAR_2_:%.+]] = "onnx.Mul"([[VAR_1_]], [[VAR_1_]]) : (tensor<3x4x5xf16>, tensor<3x4x5xf16>) -> tensor<3x4x5xf16>
-// CHECK:           [[VAR_3_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[VAR_2_]]) : (tensor<3x4x5xf16>, tensor<3x4x5xf16>) -> tensor<3x4x5xf16>
-// CHECK:           onnx.Return [[VAR_3_]] : tensor<3x4x5xf16>
+// CHECK-LABEL:  func.func @expand_pow_bf16_into_mul
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3x4x5xbf16>) -> tensor<3x4x5xbf16> {
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[PARAM_0_]]) : (tensor<3x4x5xbf16>, tensor<3x4x5xbf16>) -> tensor<3x4x5xbf16>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<3x4x5xbf16>
 // CHECK:        }
-}
-
-// -----
-
-// COM: Expand Pow into multiple Mul if exponent is an integer and <= 64.
-
-func.func @expand_pow_into_mul13(%arg0: tensor<3x4x5xf32>) -> tensor<3x4x5xf32> {
-    %cst = onnx.Constant dense<13.0> : tensor<f32>
-    %0 = "onnx.Pow"(%arg0, %cst) : (tensor<3x4x5xf32>, tensor<f32>) -> tensor<3x4x5xf32>
-    onnx.Return %0 : tensor<3x4x5xf32>
-
-// mlir2FileCheck.py
-// CHECK-LABEL:  func.func @expand_pow_into_mul13
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3x4x5xf32>) -> tensor<3x4x5xf32> {
-// CHECK:           [[VAR_0_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[PARAM_0_]]) : (tensor<3x4x5xf32>, tensor<3x4x5xf32>) -> tensor<3x4x5xf32>
-// CHECK:           [[VAR_1_:%.+]] = "onnx.Mul"([[VAR_0_]], [[VAR_0_]]) : (tensor<3x4x5xf32>, tensor<3x4x5xf32>) -> tensor<3x4x5xf32>
-// CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[VAR_1_]]) : (tensor<3x4x5xf32>, tensor<3x4x5xf32>) -> tensor<3x4x5xf32>
-// CHECK-DAG:       [[VAR_3_:%.+]] = "onnx.Mul"([[VAR_1_]], [[VAR_1_]]) : (tensor<3x4x5xf32>, tensor<3x4x5xf32>) -> tensor<3x4x5xf32>
-// CHECK:           [[VAR_4_:%.+]] = "onnx.Mul"([[VAR_2_]], [[VAR_3_]]) : (tensor<3x4x5xf32>, tensor<3x4x5xf32>) -> tensor<3x4x5xf32>
-// CHECK:           onnx.Return [[VAR_4_]] : tensor<3x4x5xf32>
-// CHECK:         }
 }
 
 // -----
@@ -1561,5 +1616,115 @@ func.func @test_not_replace_sub_by_expand_two_expands(%arg0: tensor<?xi64>) -> t
 // CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.Expand"([[VAR_0_]], [[VAR_4_]]) : (tensor<f32>, tensor<2xi64>) -> tensor<2x?xf32>
 // CHECK:           [[VAR_7_:%.+]] = "onnx.Sub"([[VAR_5_]], [[VAR_6_]]) : (tensor<2x?xf32>, tensor<2x?xf32>) -> tensor<2x?xf32>
 // CHECK:           return [[VAR_7_]] : tensor<2x?xf32>
+// CHECK:         }
+}
+
+// -----
+
+// COM: Optimize the scalar div in self-attention layer.
+func.func @test_div_in_attention(%arg0: tensor<?x?x768xf32>, %arg1: tensor<?x?x768xf32>) -> tensor<?x12x?x?xf32> {
+  %0 = onnx.Constant dense<1.280000e+02> : tensor<768xf32>
+  %1 = onnx.Constant dense<64> : tensor<1xi64>
+  %2 = onnx.Constant dense<12> : tensor<1xi64>
+  %3 = onnx.Constant dense<1.280000e+02> : tensor<768x768xf32>
+  %4 = "onnx.MatMul"(%arg1, %3) : (tensor<?x?x768xf32>, tensor<768x768xf32>) -> tensor<?x?x768xf32>
+  %5 = "onnx.Add"(%4, %0) : (tensor<?x?x768xf32>, tensor<768xf32>) -> tensor<?x?x768xf32>
+  %6 = "onnx.Dim"(%5) {axis = 0 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+  %7 = "onnx.Dim"(%5) {axis = 1 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+  %8 = "onnx.Concat"(%6, %7, %2, %1) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<4xi64>
+  %9 = "onnx.Reshape"(%5, %8) {allowzero = 0 : si64} : (tensor<?x?x768xf32>, tensor<4xi64>) -> tensor<?x?x12x64xf32>
+  %10 = "onnx.Transpose"(%9) {perm = [0, 2, 1, 3]} : (tensor<?x?x12x64xf32>) -> tensor<?x12x?x64xf32>
+  %11 = "onnx.MatMul"(%arg0, %3) : (tensor<?x?x768xf32>, tensor<768x768xf32>) -> tensor<?x?x768xf32>
+  %12 = "onnx.Add"(%11, %0) : (tensor<?x?x768xf32>, tensor<768xf32>) -> tensor<?x?x768xf32>
+  %13 = "onnx.Dim"(%12) {axis = 0 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+  %14 = "onnx.Dim"(%12) {axis = 1 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+  %15 = "onnx.Concat"(%13, %14, %2, %1) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<4xi64>
+  %16 = "onnx.Reshape"(%12, %15) {allowzero = 0 : si64} : (tensor<?x?x768xf32>, tensor<4xi64>) -> tensor<?x?x12x64xf32>
+  %17 = "onnx.Transpose"(%16) {perm = [0, 2, 3, 1]} : (tensor<?x?x12x64xf32>) -> tensor<?x12x64x?xf32>
+  %18 = "onnx.MatMul"(%10, %17) : (tensor<?x12x?x64xf32>, tensor<?x12x64x?xf32>) -> tensor<?x12x?x?xf32>
+  %19 = onnx.Constant dense<8.000000e+00> : tensor<f32>
+  %20 = "onnx.Div"(%18, %19) : (tensor<?x12x?x?xf32>, tensor<f32>) -> tensor<?x12x?x?xf32>
+  onnx.Return %20 : tensor<?x12x?x?xf32>
+
+// CHECK-LABEL:  func.func @test_div_in_attention
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x?x768xf32>, [[PARAM_1_:%.+]]: tensor<?x?x768xf32>) -> tensor<?x12x?x?xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.280000e+02> : tensor<768xf32>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<64> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<12> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_3_:%.+]] = onnx.Constant dense<1.280000e+02> : tensor<768x768xf32>
+// CHECK-DAG:       [[VAR_4_:%.+]] = onnx.Constant dense<8.000000e+00> : tensor<f32>
+// CHECK:           [[VAR_5_:%.+]] = "onnx.Div"([[VAR_3_]], [[VAR_4_]]) : (tensor<768x768xf32>, tensor<f32>) -> tensor<768x768xf32>
+// CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.MatMul"([[PARAM_1_]], [[VAR_5_]]) : (tensor<?x?x768xf32>, tensor<768x768xf32>) -> tensor<?x?x768xf32>
+// CHECK-DAG:       [[VAR_7_:%.+]] = "onnx.Div"([[VAR_0_]], [[VAR_4_]]) : (tensor<768xf32>, tensor<f32>) -> tensor<768xf32>
+// CHECK:           [[VAR_8_:%.+]] = "onnx.Add"([[VAR_6_]], [[VAR_7_]]) : (tensor<?x?x768xf32>, tensor<768xf32>) -> tensor<?x?x768xf32>
+// CHECK-DAG:       [[VAR_9_:%.+]] = "onnx.Dim"([[VAR_8_]]) {axis = 0 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+// CHECK-DAG:       [[VAR_10_:%.+]] = "onnx.Dim"([[VAR_8_]]) {axis = 1 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+// CHECK:           [[VAR_11_:%.+]] = "onnx.Concat"([[VAR_9_]], [[VAR_10_]], [[VAR_2_]], [[VAR_1_]]) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<4xi64>
+// CHECK:           [[VAR_12_:%.+]] = "onnx.Reshape"([[VAR_8_]], [[VAR_11_]]) {allowzero = 0 : si64} : (tensor<?x?x768xf32>, tensor<4xi64>) -> tensor<?x?x12x64xf32>
+// CHECK-DAG:       [[VAR_13_:%.+]] = "onnx.Transpose"([[VAR_12_]]) {perm = [0, 2, 1, 3]} : (tensor<?x?x12x64xf32>) -> tensor<?x12x?x64xf32>
+// CHECK-DAG:       [[VAR_14_:%.+]] = "onnx.MatMul"([[PARAM_0_]], [[VAR_3_]]) : (tensor<?x?x768xf32>, tensor<768x768xf32>) -> tensor<?x?x768xf32>
+// CHECK:           [[VAR_15_:%.+]] = "onnx.Add"([[VAR_14_]], [[VAR_0_]]) : (tensor<?x?x768xf32>, tensor<768xf32>) -> tensor<?x?x768xf32>
+// CHECK-DAG:       [[VAR_16_:%.+]] = "onnx.Dim"([[VAR_15_]]) {axis = 0 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+// CHECK-DAG:       [[VAR_17_:%.+]] = "onnx.Dim"([[VAR_15_]]) {axis = 1 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+// CHECK:           [[VAR_18_:%.+]] = "onnx.Concat"([[VAR_16_]], [[VAR_17_]], [[VAR_2_]], [[VAR_1_]]) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<4xi64>
+// CHECK:           [[VAR_19_:%.+]] = "onnx.Reshape"([[VAR_15_]], [[VAR_18_]]) {allowzero = 0 : si64} : (tensor<?x?x768xf32>, tensor<4xi64>) -> tensor<?x?x12x64xf32>
+// CHECK:           [[VAR_20_:%.+]] = "onnx.Transpose"([[VAR_19_]]) {perm = [0, 2, 3, 1]} : (tensor<?x?x12x64xf32>) -> tensor<?x12x64x?xf32>
+// CHECK:           [[VAR_21_:%.+]] = "onnx.MatMul"([[VAR_13_]], [[VAR_20_]]) : (tensor<?x12x?x64xf32>, tensor<?x12x64x?xf32>) -> tensor<?x12x?x?xf32>
+// CHECK:           onnx.Return [[VAR_21_]] : tensor<?x12x?x?xf32>
+// CHECK:         }
+}
+
+// -----
+
+// COM: Optimize the scalar multiplication in self-attention layer.
+func.func @test_mul_in_attention(%arg0: tensor<?x?x768xf32>, %arg1: tensor<?x?x768xf32>) -> tensor<?x12x?x?xf32> {
+  %0 = onnx.Constant dense<1.280000e+02> : tensor<768xf32>
+  %1 = onnx.Constant dense<64> : tensor<1xi64>
+  %2 = onnx.Constant dense<12> : tensor<1xi64>
+  %3 = onnx.Constant dense<1.280000e+02> : tensor<768x768xf32>
+  %4 = "onnx.MatMul"(%arg1, %3) : (tensor<?x?x768xf32>, tensor<768x768xf32>) -> tensor<?x?x768xf32>
+  %5 = "onnx.Add"(%4, %0) : (tensor<?x?x768xf32>, tensor<768xf32>) -> tensor<?x?x768xf32>
+  %6 = "onnx.Dim"(%5) {axis = 0 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+  %7 = "onnx.Dim"(%5) {axis = 1 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+  %8 = "onnx.Concat"(%6, %7, %2, %1) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<4xi64>
+  %9 = "onnx.Reshape"(%5, %8) {allowzero = 0 : si64} : (tensor<?x?x768xf32>, tensor<4xi64>) -> tensor<?x?x12x64xf32>
+  %10 = "onnx.Transpose"(%9) {perm = [0, 2, 1, 3]} : (tensor<?x?x12x64xf32>) -> tensor<?x12x?x64xf32>
+  %11 = "onnx.MatMul"(%arg0, %3) : (tensor<?x?x768xf32>, tensor<768x768xf32>) -> tensor<?x?x768xf32>
+  %12 = "onnx.Add"(%11, %0) : (tensor<?x?x768xf32>, tensor<768xf32>) -> tensor<?x?x768xf32>
+  %13 = "onnx.Dim"(%12) {axis = 0 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+  %14 = "onnx.Dim"(%12) {axis = 1 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+  %15 = "onnx.Concat"(%13, %14, %2, %1) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<4xi64>
+  %16 = "onnx.Reshape"(%12, %15) {allowzero = 0 : si64} : (tensor<?x?x768xf32>, tensor<4xi64>) -> tensor<?x?x12x64xf32>
+  %17 = "onnx.Transpose"(%16) {perm = [0, 2, 3, 1]} : (tensor<?x?x12x64xf32>) -> tensor<?x12x64x?xf32>
+  %18 = "onnx.MatMul"(%10, %17) : (tensor<?x12x?x64xf32>, tensor<?x12x64x?xf32>) -> tensor<?x12x?x?xf32>
+  %19 = onnx.Constant dense<0.125> : tensor<f32>
+  %20 = "onnx.Mul"(%18, %19) : (tensor<?x12x?x?xf32>, tensor<f32>) -> tensor<?x12x?x?xf32>
+  onnx.Return %20 : tensor<?x12x?x?xf32>
+
+// CHECK-LABEL:  func.func @test_mul_in_attention
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x?x768xf32>, [[PARAM_1_:%.+]]: tensor<?x?x768xf32>) -> tensor<?x12x?x?xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.280000e+02> : tensor<768xf32>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<64> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<12> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_3_:%.+]] = onnx.Constant dense<1.280000e+02> : tensor<768x768xf32>
+// CHECK-DAG:       [[VAR_4_:%.+]] = onnx.Constant dense<1.250000e-01> : tensor<f32>
+// CHECK:           [[VAR_5_:%.+]] = "onnx.Mul"([[VAR_3_]], [[VAR_4_]]) : (tensor<768x768xf32>, tensor<f32>) -> tensor<768x768xf32>
+// CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.MatMul"([[PARAM_1_]], [[VAR_5_]]) : (tensor<?x?x768xf32>, tensor<768x768xf32>) -> tensor<?x?x768xf32>
+// CHECK-DAG:       [[VAR_7_:%.+]] = "onnx.Mul"([[VAR_0_]], [[VAR_4_]]) : (tensor<768xf32>, tensor<f32>) -> tensor<768xf32>
+// CHECK:           [[VAR_8_:%.+]] = "onnx.Add"([[VAR_6_]], [[VAR_7_]]) : (tensor<?x?x768xf32>, tensor<768xf32>) -> tensor<?x?x768xf32>
+// CHECK-DAG:       [[VAR_9_:%.+]] = "onnx.Dim"([[VAR_8_]]) {axis = 0 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+// CHECK-DAG:       [[VAR_10_:%.+]] = "onnx.Dim"([[VAR_8_]]) {axis = 1 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+// CHECK:           [[VAR_11_:%.+]] = "onnx.Concat"([[VAR_9_]], [[VAR_10_]], [[VAR_2_]], [[VAR_1_]]) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<4xi64>
+// CHECK:           [[VAR_12_:%.+]] = "onnx.Reshape"([[VAR_8_]], [[VAR_11_]]) {allowzero = 0 : si64} : (tensor<?x?x768xf32>, tensor<4xi64>) -> tensor<?x?x12x64xf32>
+// CHECK-DAG:       [[VAR_13_:%.+]] = "onnx.Transpose"([[VAR_12_]]) {perm = [0, 2, 1, 3]} : (tensor<?x?x12x64xf32>) -> tensor<?x12x?x64xf32>
+// CHECK-DAG:       [[VAR_14_:%.+]] = "onnx.MatMul"([[PARAM_0_]], [[VAR_3_]]) : (tensor<?x?x768xf32>, tensor<768x768xf32>) -> tensor<?x?x768xf32>
+// CHECK:           [[VAR_15_:%.+]] = "onnx.Add"([[VAR_14_]], [[VAR_0_]]) : (tensor<?x?x768xf32>, tensor<768xf32>) -> tensor<?x?x768xf32>
+// CHECK-DAG:       [[VAR_16_:%.+]] = "onnx.Dim"([[VAR_15_]]) {axis = 0 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+// CHECK-DAG:       [[VAR_17_:%.+]] = "onnx.Dim"([[VAR_15_]]) {axis = 1 : si64} : (tensor<?x?x768xf32>) -> tensor<1xi64>
+// CHECK:           [[VAR_18_:%.+]] = "onnx.Concat"([[VAR_16_]], [[VAR_17_]], [[VAR_2_]], [[VAR_1_]]) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<4xi64>
+// CHECK:           [[VAR_19_:%.+]] = "onnx.Reshape"([[VAR_15_]], [[VAR_18_]]) {allowzero = 0 : si64} : (tensor<?x?x768xf32>, tensor<4xi64>) -> tensor<?x?x12x64xf32>
+// CHECK:           [[VAR_20_:%.+]] = "onnx.Transpose"([[VAR_19_]]) {perm = [0, 2, 3, 1]} : (tensor<?x?x12x64xf32>) -> tensor<?x12x64x?xf32>
+// CHECK:           [[VAR_21_:%.+]] = "onnx.MatMul"([[VAR_13_]], [[VAR_20_]]) : (tensor<?x12x?x64xf32>, tensor<?x12x64x?xf32>) -> tensor<?x12x?x?xf32>
+// CHECK:           onnx.Return [[VAR_21_]] : tensor<?x12x?x?xf32>
 // CHECK:         }
 }

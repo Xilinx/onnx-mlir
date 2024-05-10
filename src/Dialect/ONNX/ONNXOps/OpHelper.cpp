@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Path.h"
@@ -317,6 +319,30 @@ ONNXConstantOp getONNXConstantOp(Value value) {
   return dyn_cast_or_null<ONNXConstantOp>(value.getDefiningOp());
 }
 
+bool getI64ValuesFromONNXConstantOp(
+    mlir::Value val, mlir::SmallVectorImpl<int64_t> &iRes) {
+  ElementsAttr elemsAttr = getElementAttributeFromONNXValue(val);
+  if (!elemsAttr)
+    return false;
+  if (!getElementType(elemsAttr.getType()).isInteger(64))
+    return false;
+  SmallVector<int64_t, 4> iVals(elemsAttr.getValues<int64_t>());
+  iRes.append(iVals);
+  return true;
+}
+
+//===----------------------------------------------------------------------===//
+// Support for BatchNorm
+
+ONNXConstantOp createConstantOp(
+    PatternRewriter &rewriter, Location loc, ArrayAttr values) {
+  return rewriter.create<ONNXConstantOp>(loc, Attribute(),
+      DenseElementsAttr::get(
+          RankedTensorType::get(
+              {static_cast<long>(values.size())}, rewriter.getI64Type()),
+          llvm::ArrayRef(values.getValue())));
+}
+
 //===----------------------------------------------------------------------===//
 // Support for transpose patterns.
 //===----------------------------------------------------------------------===//
@@ -375,6 +401,18 @@ bool HasSpecifiedConstantShape(Value value, Value shape) {
   return true;
 }
 
+/// Test if a value is a scalar constant tensor or not, i.e. tensor<dtype> or
+/// tensor<1xdtype>.
+bool isScalarConstantTensor(mlir::Value v) {
+  if (!hasShapeAndRank(v))
+    return false;
+
+  auto t = dyn_cast<ShapedType>(v.getType());
+  int64_t r = t.getRank();
+  return isDenseONNXConstant(v) &&
+         ((r == 0) || ((r == 1) && (t.getShape()[0] == 1)));
+}
+
 /// Test if 'val' has shape and rank or not.
 bool hasShapeAndRank(Value val) {
   Type valType = val.getType();
@@ -394,6 +432,17 @@ bool hasShapeAndRank(Operation *op) {
     if (!hasShapeAndRank(op->getOperand(i)))
       return false;
   return true;
+}
+
+/// Test if a value has only one use except ONNXDimOp.
+bool hasOneUseExceptDimOp(Value val) {
+  int64_t numOfUsersExceptDim = 0;
+  for (auto user : val.getUsers()) {
+    if (isa<ONNXDimOp>(user))
+      continue;
+    numOfUsersExceptDim++;
+  }
+  return (numOfUsersExceptDim == 1);
 }
 
 //===----------------------------------------------------------------------===//
@@ -418,25 +467,20 @@ DenseElementsAttr createDenseElementsAttrFromFloatAttr(
   return DenseElementsAttr::get(tensorType, {f});
 }
 
+ONNXCastOp castTo(
+    PatternRewriter &rewriter, Value val, Type newElementTy, int64_t saturate) {
+  return rewriter.create<ONNXCastOp>(val.getLoc(),
+      val.getType().cast<RankedTensorType>().clone(newElementTy), val,
+      rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), saturate),
+      TypeAttr::get(newElementTy));
+}
+
 //===----------------------------------------------------------------------===//
 // Support for dim operations.
 //===----------------------------------------------------------------------===//
 
-/// Check the defining operation of a value.
-template <typename OP>
-bool definedBy(Value v) {
-  return !v.isa<BlockArgument>() && isa<OP>(v.getDefiningOp());
-}
-
-/// Template instantiation for definedBy.
-template bool definedBy<ONNXCastOp>(Value v);
-template bool definedBy<ONNXConcatOp>(Value v);
-template bool definedBy<ONNXConstantOp>(Value v);
-template bool definedBy<ONNXDimOp>(Value v);
-template bool definedBy<ONNXExpandOp>(Value v);
-
-/// Check if a value is to store dimensions, meaning it is defined by
-/// Dim/Constant/Cast/Concat.
+/// Check if a value is to store dimensions, meaning it is a tensor of one
+/// element or concatenation of one-element tensors.
 bool areDims(Value val) {
   // Value must be a 1D tensor.
   Type vType = val.getType();
@@ -444,11 +488,9 @@ bool areDims(Value val) {
     return false;
 
   // Base case.
-  if (definedBy<ONNXConstantOp>(val) || definedBy<ONNXDimOp>(val) ||
-      definedBy<ONNXCastOp>(val)) {
-    // Value must be a 1D tensor of one element.
-    return (getShape(vType)[0] == 1);
-  }
+  // A dimension must be a 1D tensor of one i64 element.
+  if ((getShape(vType)[0] == 1) && getElementType(vType).isSignlessInteger(64))
+    return true;
 
   // Recursion case.
   if (definedBy<ONNXConcatOp>(val)) {
@@ -539,6 +581,9 @@ RESULT_TYPE getScalarValue(ElementsAttr denseAttr, Type type) {
   } else if (elementaryType.isa<FloatType>()) {
     auto valueIt = denseAttr.getValues<APFloat>().begin();
     return (RESULT_TYPE)(*valueIt).convertToDouble();
+  } else if (elementaryType.isBF16()) {
+    auto valueIt = denseAttr.getValues<APFloat>().begin();
+    return (RESULT_TYPE)(*valueIt).convertToFloat();
   }
   llvm_unreachable("Unexpected type.");
   return 0;
@@ -688,6 +733,29 @@ bool isScalarTensor(Value v) {
               (getRank(v.getType()) == 1 && getShape(v.getType())[0] == 1)));
 }
 
+bool hasIntegerPowerExponent(ONNXPowOp *op, int64_t &exponentValue) {
+  Value exponent = op->getY();
+  ElementsAttr elementAttr = getElementAttributeFromONNXValue(exponent);
+  if (!elementAttr)
+    return false;
+  if (elementAttr.getNumElements() != 1)
+    return false;
+  Type elementType = elementAttr.getElementType();
+  if (elementType.isa<FloatType>()) {
+    double floatVal = getScalarValue<double>(elementAttr, elementType);
+    if (floatVal == ceil(floatVal)) {
+      // We essentially have an integer value represented as a float.
+      exponentValue = (int64_t)floatVal;
+      return true;
+    }
+  } else if (elementType.isa<IntegerType>()) {
+    exponentValue = getScalarValue<int64_t>(elementAttr, elementType);
+    return true;
+  }
+  // Other type, just fails.
+  return false;
+}
+
 //===----------------------------------------------------------------------===//
 // Support for location.
 //===----------------------------------------------------------------------===//
@@ -701,7 +769,14 @@ bool isScalarTensor(Value v) {
 // 2) `getNodeNameInPresenceOfOpt` from
 //    `src/Dialect/ONNX/ONNXOps/OpHelper.cpp`
 
-std::string getNodeNameInPresenceOfOpt(Operation *op) {
+std::string getNodeNameInPresenceOfOpt(Operation *op, bool useFileLine) {
+  auto getNameFromFileLineLoc = [](FileLineColLoc loc, std::string &name,
+                                    std::string postfix = "") {
+    std::string filename =
+        llvm::sys::path::filename(loc.getFilename().str()).str();
+    name += filename + ":" + std::to_string(loc.getLine()) + postfix;
+  };
+
   StringAttr nodeName;
   // Try with op onnx_node_name attribute.
   nodeName = op->getAttrOfType<StringAttr>("onnx_node_name");
@@ -719,10 +794,10 @@ std::string getNodeNameInPresenceOfOpt(Operation *op) {
     for (Location locIt : fusedLoc.getLocations()) {
       if (auto nameLocIt = locIt.dyn_cast<NameLoc>())
         name += nameLocIt.getName().str() + "-";
-      else if (auto fileLineColLoc = locIt.dyn_cast<FileLineColLoc>()) {
-        std::string filename =
-            llvm::sys::path::filename(fileLineColLoc.getFilename().str()).str();
-        name += filename + ":" + std::to_string(fileLineColLoc.getLine()) + "-";
+      else if (useFileLine) {
+        if (auto fileLineColLoc = locIt.dyn_cast<FileLineColLoc>()) {
+          getNameFromFileLineLoc(fileLineColLoc, name, "-");
+        }
       }
     }
     if (name.empty())
@@ -731,12 +806,12 @@ std::string getNodeNameInPresenceOfOpt(Operation *op) {
       name.pop_back(); // remove last "-"
     return name;
   }
-  if (auto fileLineColLoc = loc.dyn_cast<FileLineColLoc>()) {
-    std::string filename =
-        llvm::sys::path::filename(fileLineColLoc.getFilename().str()).str();
-    std::string name =
-        filename + ":" + std::to_string(fileLineColLoc.getLine());
-    return name;
+  if (useFileLine) {
+    if (auto fileLineColLoc = loc.dyn_cast<FileLineColLoc>()) {
+      std::string name = "";
+      getNameFromFileLineLoc(fileLineColLoc, name);
+      return name;
+    }
   }
   return "NOTSET";
 }

@@ -4,7 +4,7 @@
 
 //===---------------- ONNXShapeHelper.hpp - help for shapes ---------------===//
 //
-// Copyright 2020-2023 The IBM Research Authors.
+// Copyright 2020-2024 The IBM Research Authors.
 //
 // =============================================================================
 //
@@ -42,6 +42,19 @@ namespace onnx_mlir {
 // Support functions.
 //===----------------------------------------------------------------------===//
 
+// Check if axis is in [-rank, rank), or [-rank, rank] when includeRank is
+// true.  Assert when not in range. Return positive axis.
+int64_t getAxisInRange(int64_t axis, int64_t rank, bool includeRank = false);
+int64_t getAxisInRange(int64_t axis, mlir::Value val, bool includeRank = false);
+// Check if axis is in [-rank, rank), or [-rank, rank] when includeRank is true.
+// Return false when not in range; set axis to positive value when in range.
+bool isAxisInRange(int64_t &axis, int64_t rank, bool includeRank = false);
+bool isAxisInRange(int64_t &axis, mlir::Value val, bool includeRank = false);
+
+//===----------------------------------------------------------------------===//
+// Support functions.
+//===----------------------------------------------------------------------===//
+
 // Update a tensor type by using the given shape, elementType and encoding.
 // TODO: when all ops are migrated to the new scheme, make this function private
 // to ONNXOpShapeHelper.
@@ -50,9 +63,9 @@ namespace onnx_mlir {
 // shape: shape of the ranked tensor type of val.
 // elementType: When nullptr, pick the elementary type from val.
 // encoding: When nullptr, pick the encoding from val if defined.
-void updateType(mlir::Value val, llvm::ArrayRef<int64_t> shape,
-    mlir::Type elementType = nullptr, mlir::Attribute encoding = nullptr,
-    bool refineShape = true);
+void updateType(mlir::Operation *op, mlir::Value val,
+    llvm::ArrayRef<int64_t> shape, mlir::Type elementType = nullptr,
+    mlir::Attribute encoding = nullptr, bool refineShape = true);
 
 // When we perform shape inference, we always assume that the type's shape in
 // onnx is correct. There are rare instance where we transform an existing op
@@ -246,6 +259,7 @@ using ONNXLessOrEqualOpShapeHelper = ONNXBroadcastOpShapeHelper;
 using ONNXMaxOpShapeHelper = ONNXBroadcastOpShapeHelper;
 using ONNXMeanOpShapeHelper = ONNXBroadcastOpShapeHelper;
 using ONNXMinOpShapeHelper = ONNXBroadcastOpShapeHelper;
+using ONNXMishOpShapeHelper = ONNXBroadcastOpShapeHelper;
 using ONNXModOpShapeHelper = ONNXBroadcastOpShapeHelper;
 using ONNXMulOpShapeHelper = ONNXBroadcastOpShapeHelper;
 using ONNXOrOpShapeHelper = ONNXBroadcastOpShapeHelper;
@@ -276,6 +290,22 @@ struct ONNXPReluOpShapeHelper : public ONNXBroadcastOpShapeHelper {
     return ONNXBroadcastOpShapeHelper::computeShape();
   }
 };
+
+// Template for Layer Normalization (LN) ops
+template <typename OP_TYPE>
+struct ONNXLNOpShapeHelper : public ONNXBroadcastOpShapeHelper {
+  ONNXLNOpShapeHelper(mlir::Operation *op, mlir::ValueRange operands,
+      IndexExprBuilder *ieBuilder = nullptr, IndexExprScope *scope = nullptr)
+      : ONNXBroadcastOpShapeHelper(op, operands, ieBuilder, scope,
+            /*hasUniBroadcasting*/ true) {}
+  virtual ~ONNXLNOpShapeHelper() {}
+  mlir::LogicalResult computeShape() final;
+};
+
+// clang-format off
+using ONNXLayerNormalizationOpShapeHelper = ONNXLNOpShapeHelper<mlir::ONNXLayerNormalizationOp>;
+using ONNXRMSLayerNormalizationOpShapeHelper = ONNXLNOpShapeHelper<mlir::ONNXRMSLayerNormalizationOp>;
+// clang-format on
 
 //===----------------------------------------------------------------------===//
 // Unary Ops
@@ -323,7 +353,6 @@ using ONNXAtanOpShapeHelper = ONNXUnaryOpShapeHelper;
 using ONNXAtanhOpShapeHelper = ONNXUnaryOpShapeHelper;
 using ONNXBernoulliOpShapeHelper = ONNXUnaryOpShapeHelper;
 using ONNXBitwiseNotOpShapeHelper = ONNXUnaryOpShapeHelper;
-using ONNXCastLikeOpShapeHelper = ONNXUnaryOpShapeHelper;
 using ONNXCastOpShapeHelper = ONNXUnaryOpShapeHelper;
 using ONNXCeilOpShapeHelper = ONNXUnaryOpShapeHelper;
 using ONNXCeluOpShapeHelper = ONNXUnaryOpShapeHelper;
@@ -335,6 +364,7 @@ using ONNXEluOpShapeHelper = ONNXUnaryOpShapeHelper;
 using ONNXErfOpShapeHelper = ONNXUnaryOpShapeHelper;
 using ONNXExpOpShapeHelper = ONNXUnaryOpShapeHelper;
 using ONNXFloorOpShapeHelper = ONNXUnaryOpShapeHelper;
+using ONNXGeluOpShapeHelper = ONNXUnaryOpShapeHelper;
 using ONNXHardSigmoidOpShapeHelper = ONNXUnaryOpShapeHelper;
 using ONNXHardSwishOpShapeHelper = ONNXUnaryOpShapeHelper;
 using ONNXHardmaxOpShapeHelper = ONNXUnaryOpShapeHelper;
@@ -439,8 +469,7 @@ struct ONNXConvTransposeOpShapeHelper : public ONNXOpShapeHelper {
   ONNXConvTransposeOpShapeHelper(mlir::Operation *op, mlir::ValueRange operands,
       IndexExprBuilder *ieBuilder = nullptr, IndexExprScope *scope = nullptr)
       : ONNXOpShapeHelper(op, operands, ieBuilder, scope), kernelShape(),
-        pads(), strides(), dilations(), outputPadding(), dimsNoOutputPadding() {
-  }
+        pads(), strides(), dilations(), outputPadding() {}
   virtual ~ONNXConvTransposeOpShapeHelper() {}
   mlir::LogicalResult computeShape() final;
   // Values set by computeShape.
@@ -449,7 +478,6 @@ struct ONNXConvTransposeOpShapeHelper : public ONNXOpShapeHelper {
   llvm::SmallVector<int64_t, 2> strides;
   llvm::SmallVector<int64_t, 2> dilations;
   llvm::SmallVector<int64_t, 2> outputPadding;
-  llvm::SmallVector<IndexExpr, 2> dimsNoOutputPadding;
 };
 
 //===----------------------------------------------------------------------===//
@@ -722,10 +750,12 @@ using ONNXReduceLogSumExpOpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir:
 using ONNXReduceLogSumExpV13OpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir::ONNXReduceLogSumExpV13Op>;
 using ONNXReduceMaxOpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir::ONNXReduceMaxOp>;
 using ONNXReduceMaxV13OpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir::ONNXReduceMaxV13Op>;
+using ONNXReduceMaxV18OpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir::ONNXReduceMaxV18Op>;
 using ONNXReduceMeanOpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir::ONNXReduceMeanOp>;
 using ONNXReduceMeanV13OpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir::ONNXReduceMeanV13Op>;
 using ONNXReduceMinOpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir::ONNXReduceMinOp>;
 using ONNXReduceMinV13OpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir::ONNXReduceMinV13Op>;
+using ONNXReduceMinV18OpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir::ONNXReduceMinV18Op>;
 using ONNXReduceProdOpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir::ONNXReduceProdOp>;
 using ONNXReduceProdV13OpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir::ONNXReduceProdV13Op>;
 using ONNXReduceSumOpShapeHelper = ONNXGenericReductionOpShapeHelper<mlir::ONNXReduceSumOp>;
@@ -802,6 +832,7 @@ struct ONNXNonSpecificOpShapeHelper : public ONNXOpShapeHelper {
 
 // Ops listed in alphabetical order. Disable formatting for easier sorting.
 // clang-format off
+using ONNXBatchNormalizationOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXBatchNormalizationOp>;
 using ONNXBatchNormalizationInferenceModeOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXBatchNormalizationInferenceModeOp>;
 using ONNXCategoryMapperOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXCategoryMapperOp>;
 using ONNXCompressOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXCompressOp>;
@@ -816,6 +847,7 @@ using ONNXDimOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXDimOp>;
 using ONNXDropoutOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXDropoutOp>;
 using ONNXDynamicQuantizeLinearOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXDynamicQuantizeLinearOp>;
 using ONNXEinsumOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXEinsumOp>;
+using ONNXGridSampleOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXGridSampleOp>;
 using ONNXEyeLikeOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXEyeLikeOp>;
 using ONNXFlattenOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXFlattenOp>;
 using ONNXGatherElementsOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXGatherElementsOp>;

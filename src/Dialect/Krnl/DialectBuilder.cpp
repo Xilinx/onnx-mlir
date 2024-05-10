@@ -126,8 +126,8 @@ ValueRange KrnlBuilder::getInductionVarValue(ValueRange loops) const {
       .getResults();
 }
 
-void KrnlBuilder::parallel(Value loop) const {
-  b().template create<KrnlParallelOp>(loc(), loop);
+void KrnlBuilder::parallel(ValueRange loops) const {
+  b().template create<KrnlParallelOp>(loc(), loops);
 }
 
 void KrnlBuilder::iterate(ValueRange originalLoops, ValueRange optimizedLoops,
@@ -211,17 +211,8 @@ void KrnlBuilder::matmul(Value A, ValueRange aStart, Value B, ValueRange bStart,
       globalUBs[1], globalUBs[2], simdize, unroll, overCompute);
 }
 
-Value KrnlBuilder::dim(Type type, Value alloc, Value index) const {
-  return b().create<KrnlDimOp>(loc(), type, alloc, index);
-}
-
 KrnlMovableOp KrnlBuilder::movable() const {
   return b().create<KrnlMovableOp>(loc());
-}
-
-KrnlGetRefOp KrnlBuilder::getRef(
-    Type type, Value memref, Value offset, ValueRange indices) const {
-  return b().create<KrnlGetRefOp>(loc(), type, memref, offset, indices);
 }
 
 Value KrnlBuilder::constant(MemRefType type, StringRef name,

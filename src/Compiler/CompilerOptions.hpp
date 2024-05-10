@@ -4,7 +4,7 @@
 
 //===------------------------ CompilerOptions.hpp -------------------------===//
 //
-// Copyright 2022 The IBM Research Authors.
+// Copyright 2022, 2023 The IBM Research Authors.
 //
 // =============================================================================
 //
@@ -25,6 +25,10 @@
 
 #define DEFAULT_INSTRUMENTSTAGE_CL_ENUM clEnumVal(Onnx, "Profile for onnx ops.")
 
+// Variable contains the name of the default environment variable that is used
+// to find the default onnx-mlir options.
+// Its default value is ONNX_MLIR_FLAGS, as defined in CompilerOptions.cpp.
+// TODO: may want to do this constant set by a variable in CMakeFiles.
 extern const std::string OnnxMlirEnvOptionName;
 
 namespace onnx_mlir {
@@ -74,14 +78,17 @@ extern std::string mtriple;                                   // common for both
 extern std::string mcpu;                                      // common for both
 extern std::string march;                                     // common for both
 extern InstrumentStages instrumentStage;                      // common for both
+extern bool onnxConstPropRoundFPToInt;                        // common for both
 extern int onnxConstPropExpansionBound;                       // common for both
 extern std::vector<std::string> onnxConstPropDisablePatterns; // common for both
 extern bool enableONNXHybridPass;                             // common for both
 extern std::vector<std::string> functionsToDecompose;         // common for both
+extern std::string opsForCall;                                // common for both
 extern EmissionTargetType emissionTarget;                     // onnx-mlir only
 extern bool invokeOnnxVersionConverter;                       // onnx-mlir only
 extern bool preserveLocations;                                // onnx-mlir only
 extern bool printIR;                                          // onnx-mlir only
+extern bool printBytecode;                                    // onnx-mlir only
 extern bool preserveBitcode;                                  // onnx-mlir only
 extern bool preserveLLVMIR;                                   // onnx-mlir only
 extern bool preserveMLIR;                                     // onnx-mlir only
@@ -98,12 +105,14 @@ extern std::vector<std::string> Xllc;                         // onnx-mlir only
 extern std::string mllvm;                                     // onnx-mlir only
 extern std::string instrumentOps;                             // onnx-mlir only
 extern unsigned instrumentControlBits;                        // onnx-mlir only
+extern std::string parallelizeOps;                            // onnx-mlir only
 extern bool instrumentONNXSignature;                          // onnx-mlir only
 extern std::string ONNXOpStats;                               // onnx-mlir only
 extern int onnxOpTransformThreshold;                          // onnx-mlir only
 extern bool onnxOpTransformReport;                            // onnx-mlir only
 extern bool enableParallel;                                   // onnx-mlir only
 extern bool disableSimdOption;                                // onnx-mlir only
+extern bool disableRecomposeOption;                           // onnx-mlir only
 extern bool enableSimdDataLayout;                             // onnx-mlir only
 extern bool verifyInputTensors;                               // onnx-mlir only
 extern bool allowSorting;                                     // onnx-mlir only
@@ -111,10 +120,12 @@ extern std::string reportHeapBefore;                          // onnx-mlir only
 extern std::string reportHeapAfter;                           // onnx-mlir only
 extern std::string modelTag;                                  // onnx-mlir only
 extern bool enableConvOptPass;                                // onnx-mlir only
+extern bool disableConstantProp;                              // onnx-mlir only
 extern std::vector<std::string> extraLibPaths;                // onnx-mlir only
 extern std::vector<std::string> extraLibs;                    // onnx-mlir only
 extern ProfileIRs profileIR;                                  // onnx-mlir only
 extern OptReport optReport;                                   // onnx-mlir only
+extern bool useOldBufferization;                              // onnx-mlir only
 extern bool split_input_file;          // onnx-mlir-opt only
 extern bool verify_diagnostics;        // onnx-mlir-opt only
 extern bool verify_passes;             // onnx-mlir-opt only
@@ -181,7 +192,8 @@ std::string getCompilerOption(const onnx_mlir::OptionKind kind);
 // The add and del functions are not thread-safe and should only be
 // called from one thread.
 std::vector<std::string> getCompilerConfig(std::string k);
-void addCompilerConfig(std::string k, std::vector<std::string> v);
+void addCompilerConfig(
+    std::string k, std::vector<std::string> v, bool head = false);
 void delCompilerConfig(std::string k, std::vector<std::string> v);
 
 // Functions related to initializing compiler configuration states based on

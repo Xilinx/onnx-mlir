@@ -83,6 +83,22 @@ func.func @test_concat_from_sequence_verifier_2(%arg0 : !onnx.Seq<tensor<5x5x1x3
 
 // -----
 
+func.func @test_dim_verifier_1(%arg0 : tensor<*xf32>) -> tensor<i64> {
+  // expected-error @+1 {{input must have shape and rank}}
+  %1 = "onnx.Dim"(%arg0) {axis = 0 : si64} : (tensor<*xf32>)  -> tensor<i64>
+  "onnx.Return"(%1) : (tensor<i64>) -> ()
+}
+
+// -----
+
+func.func @test_dim_verifier_2(%arg0 : tensor<5x5xf32>) -> tensor<i64> {
+  // expected-error @+1 {{'onnx.Dim' op attribute "axis" value is -1, accepted range is [0, 1].}}
+  %1 = "onnx.Dim"(%arg0) {axis = -1 : si64} : (tensor<5x5xf32>)  -> tensor<i64>
+  "onnx.Return"(%1) : (tensor<i64>) -> ()
+}
+
+// -----
+
 func.func @test_dequantize_linear_verifier_1(%arg0 : tensor<5x5x1xi32>, %arg1 : tensor<3xf32>, %arg2 : tensor<3xi32>) -> tensor<*xf32> {
   // expected-error @+1 {{onnx.DequantizeLinear: 'axis' value is 3, accepted range is [-3, 2]}}
   %1 = "onnx.DequantizeLinear"(%arg0, %arg1, %arg2) {axis = 3 : si64} : (tensor<5x5x1xi32>, tensor<3xf32>, tensor<3xi32>)  -> tensor<*xf32>
@@ -665,4 +681,124 @@ func.func @test_matmulinteger_wrong_B_broadcast(%arg0: tensor<16x32xui8>, %arg1:
   // expected-error @+1 {{onnx.MatMulInteger: 'B' dimension at index 2 has value 64, 'bZeroPoint' dimension at index 2 has value 2. The two dimensions must have the same value}}
   %0 = "onnx.MatMulInteger"(%arg0, %arg1, %arg2, %arg3) : (tensor<16x32xui8>, tensor<5x32x64xui8>, tensor<16xui8>, tensor<5x1x2xui8>) -> tensor<5x16x64xi32>
   onnx.Return %0 : tensor<5x16x64xi32>
+}
+
+// -----
+
+func.func @test_add_diff_element_type(%arg0: tensor<16x32xf32>, %arg1: tensor<16x32xbf16>) -> tensor<5x16xf32> {
+  // expected-error @+1 {{op requires the same element type for all operands and results}}
+  %0 = "onnx.Add"(%arg0, %arg1) : (tensor<16x32xf32>, tensor<16x32xbf16>) -> tensor<5x16xf32>
+  onnx.Return %0 : tensor<5x16xf32>
+}
+
+// -----
+
+func.func @test_sub_diff_element_type(%arg0: tensor<16x32xf32>, %arg1: tensor<16x32xbf16>) -> tensor<5x16xf32> {
+  // expected-error @+1 {{op requires the same element type for all operands and results}}
+  %0 = "onnx.Sub"(%arg0, %arg1) : (tensor<16x32xf32>, tensor<16x32xbf16>) -> tensor<5x16xf32>
+  onnx.Return %0 : tensor<5x16xf32>
+}
+
+// -----
+
+func.func @test_mul_diff_element_type(%arg0: tensor<16x32xf32>, %arg1: tensor<16x32xbf16>) -> tensor<5x16xf32> {
+  // expected-error @+1 {{op requires the same element type for all operands and results}}
+  %0 = "onnx.Mul"(%arg0, %arg1) : (tensor<16x32xf32>, tensor<16x32xbf16>) -> tensor<5x16xf32>
+  onnx.Return %0 : tensor<5x16xf32>
+}
+
+// -----
+
+func.func @test_div_diff_element_type(%arg0: tensor<16x32xf32>, %arg1: tensor<16x32xbf16>) -> tensor<5x16xf32> {
+  // expected-error @+1 {{op requires the same element type for all operands and results}}
+  %0 = "onnx.Div"(%arg0, %arg1) : (tensor<16x32xf32>, tensor<16x32xbf16>) -> tensor<5x16xf32>
+  onnx.Return %0 : tensor<5x16xf32>
+}
+
+// -----
+
+func.func @test_equal_diff_element_type(%arg0: tensor<16x32xf32>, %arg1: tensor<16x32xbf16>) -> tensor<5x16xi1> {
+  // expected-error @+1 {{op requires the same element type for all operands}}
+  %0 = "onnx.Equal"(%arg0, %arg1) : (tensor<16x32xf32>, tensor<16x32xbf16>) -> tensor<5x16xi1>
+  onnx.Return %0 : tensor<5x16xi1>
+}
+
+// -----
+
+func.func @test_greater_diff_element_type(%arg0: tensor<16x32xf32>, %arg1: tensor<16x32xbf16>) -> tensor<5x16xi1> {
+  // expected-error @+1 {{op requires the same element type for all operands}}
+  %0 = "onnx.Greater"(%arg0, %arg1) : (tensor<16x32xf32>, tensor<16x32xbf16>) -> tensor<5x16xi1>
+  onnx.Return %0 : tensor<5x16xi1>
+}
+
+// -----
+
+func.func @test_greater_or_equal_diff_element_type(%arg0: tensor<16x32xf32>, %arg1: tensor<16x32xbf16>) -> tensor<5x16xi1> {
+  // expected-error @+1 {{op requires the same element type for all operands}}
+  %0 = "onnx.GreaterOrEqual"(%arg0, %arg1) : (tensor<16x32xf32>, tensor<16x32xbf16>) -> tensor<5x16xi1>
+  onnx.Return %0 : tensor<5x16xi1>
+}
+
+// -----
+
+func.func @test_less_diff_element_type(%arg0: tensor<16x32xf32>, %arg1: tensor<16x32xbf16>) -> tensor<5x16xi1> {
+  // expected-error @+1 {{op requires the same element type for all operands}}
+  %0 = "onnx.Less"(%arg0, %arg1) : (tensor<16x32xf32>, tensor<16x32xbf16>) -> tensor<5x16xi1>
+  onnx.Return %0 : tensor<5x16xi1>
+}
+
+// -----
+
+func.func @test_less_or_equal_diff_element_type(%arg0: tensor<16x32xf32>, %arg1: tensor<16x32xbf16>) -> tensor<5x16xi1> {
+  // expected-error @+1 {{op requires the same element type for all operands}}
+  %0 = "onnx.LessOrEqual"(%arg0, %arg1) : (tensor<16x32xf32>, tensor<16x32xbf16>) -> tensor<5x16xi1>
+  onnx.Return %0 : tensor<5x16xi1>
+}
+
+// -----
+
+func.func @test_min_diff_element_type(%arg0: tensor<16x32xf32>, %arg1: tensor<16x32xbf16>) -> tensor<5x16xf32> {
+  // expected-error @+1 {{op requires the same element type for all operands and results}}
+  %0 = "onnx.Min"(%arg0, %arg1) : (tensor<16x32xf32>, tensor<16x32xbf16>) -> tensor<5x16xf32>
+  onnx.Return %0 : tensor<5x16xf32>
+}
+
+// -----
+
+func.func @test_max_diff_element_type(%arg0: tensor<16x32xf32>, %arg1: tensor<16x32xbf16>) -> tensor<5x16xf32> {
+  // expected-error @+1 {{op requires the same element type for all operands and results}}
+  %0 = "onnx.Max"(%arg0, %arg1) : (tensor<16x32xf32>, tensor<16x32xbf16>) -> tensor<5x16xf32>
+  onnx.Return %0 : tensor<5x16xf32>
+}
+
+// -----
+
+func.func @test_mod_diff_element_type(%arg0: tensor<16x32xf32>, %arg1: tensor<16x32xbf16>) -> tensor<5x16xf32> {
+  // expected-error @+1 {{op requires the same element type for all operands and results}}
+  %0 = "onnx.Mod"(%arg0, %arg1) : (tensor<16x32xf32>, tensor<16x32xbf16>) -> tensor<5x16xf32>
+  onnx.Return %0 : tensor<5x16xf32>
+}
+
+// -----
+
+func.func @test_grid_sample_diff_ranks(%arg0: tensor<1x3x1152x1344xf32>, %arg1: tensor<1x1152x2xf32>) -> tensor<*xf32> {
+  // expected-error @+1 {{'onnx.GridSample' op Input(=4) and grid(=3) have different dim sizes.}}
+  %0 = "onnx.GridSample"(%arg0, %arg1) {align_corners = 1 : si64, mode = "bilinear", onnx_node_name = "GridSample_181", padding_mode = "border"} : (tensor<1x3x1152x1344xf32>, tensor<1x1152x2xf32>) -> tensor<*xf32>
+  return %0 : tensor<*xf32>
+}
+
+// -----
+
+func.func @test_grid_sample_diff_batch(%arg0: tensor<1x1x4x4xf32>, %arg1: tensor<2x6x6x2xf32>) -> tensor<*xf32> {
+  // expected-error @+1 {{'onnx.GridSample' op Input and grid must have the same batch value.}}
+  %0 = "onnx.GridSample"(%arg0, %arg1) {align_corners = 1 : si64, mode = "bilinear", onnx_node_name = "GridSample_181", padding_mode = "border"} : (tensor<1x1x4x4xf32>, tensor<2x6x6x2xf32>) -> tensor<*xf32>
+  return %0 : tensor<*xf32>
+}
+
+// -----
+
+func.func @test_grid_sample_wrong_dim_grid(%arg0: tensor<1x1x4x4xf32>, %arg1: tensor<1x6x6x3xf32>) -> tensor<*xf32> {
+  // expected-error @+1 {{'onnx.GridSample' op Grid last dim must have been '2' instead of '3'.}}
+  %0 = "onnx.GridSample"(%arg0, %arg1) {align_corners = 1 : si64, mode = "bilinear", onnx_node_name = "GridSample_181", padding_mode = "border"} : (tensor<1x1x4x4xf32>, tensor<1x6x6x3xf32>) -> tensor<*xf32>
+  return %0 : tensor<*xf32>
 }

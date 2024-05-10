@@ -22,7 +22,7 @@ func.func @test_buffer_loop_hoisting() {
       %c5 = arith.constant 5 : index
       scf.for %arg2 = %c0 to %c20 step %c5 {
         %0 = memref.alloca() : memref<10x10xf32>
-        %1 = "krnl.getref"(%0, %c0_i64, %c0) : (memref<10x10xf32>, i64, index) -> memref<2x10xf32>
+        %1 = memref.dim %0, %c0 : memref<10x10xf32>
         memref.dealloc %0 : memref<10x10xf32>
       }
     }

@@ -4,7 +4,7 @@
 
 //===---------- Passes.hpp - ONNX-MLIR Passes Definition ------------------===//
 //
-// Copyright 2019-2023 The IBM Research Authors.
+// Copyright 2019-2024 The IBM Research Authors.
 //
 // =============================================================================
 //
@@ -33,10 +33,12 @@ std::unique_ptr<mlir::Pass> createScrubDisposablePass(bool closeAfter = true);
 std::unique_ptr<mlir::Pass> createONNXOpTransformPass();
 std::unique_ptr<mlir::Pass> createONNXOpTransformPass(int threshold,
     bool report, bool targetCPU, bool enableSimdDataLayoutOpt,
-    bool enableConvOptPass);
+    bool enableConvOptPass, bool enableRecomposeOptPass);
 
 /// Pass for rewriting inside frontend dialect.
 std::unique_ptr<mlir::Pass> createDecomposeONNXToONNXPass(
+    const std::string &target = "");
+std::unique_ptr<mlir::Pass> createRecomposeONNXToONNXPass(
     const std::string &target = "");
 
 std::unique_ptr<mlir::Pass> createConvOptONNXToONNXPass(
@@ -45,8 +47,8 @@ std::unique_ptr<mlir::Pass> createConvOptONNXToONNXPass(
 std::unique_ptr<mlir::Pass> createShapeInferencePass();
 
 // To configure ConstPropONNXToONNXPass at program start.
-void configureConstPropONNXToONNXPass(
-    int expansionBound, llvm::ArrayRef<std::string> disabledPatterns = {});
+void configureConstPropONNXToONNXPass(bool roundFPToInt, int expansionBound,
+    llvm::ArrayRef<std::string> disabledPatterns, bool constantPropIsDisabled);
 
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass();
 
@@ -67,31 +69,32 @@ std::unique_ptr<mlir::Pass> createStandardFuncReturnPass();
 
 /// Pass that combines multiple ONNX dialect transformations,
 /// including shape inference.
-std::unique_ptr<mlir::Pass> createONNXHybridTransformPass();
+std::unique_ptr<mlir::Pass> createONNXHybridTransformPass(
+    bool enableRecomposition);
 
 /// Pass for analyzing unknown dimension in ONNX operations.
 std::unique_ptr<mlir::Pass> createONNXDimAnalysisPass();
+
+/// Pass for setting onnx_node_name attribute if absent.
+std::unique_ptr<mlir::Pass> createSetONNXNodeNamePass();
 
 /// Pass for verifying Onnx ops before lowering to Krnl
 std::unique_ptr<mlir::Pass> createONNXPreKrnlVerifyPass();
 
 /// Add pass for lowering to Krnl IR.
 std::unique_ptr<mlir::Pass> createLowerToKrnlPass();
-std::unique_ptr<mlir::Pass> createLowerToKrnlPass(
-    bool enableTiling, bool enableSIMD, bool enableParallel);
+std::unique_ptr<mlir::Pass> createLowerToKrnlPass(bool enableTiling,
+    bool enableSIMD, bool enableParallel, std::string opsForCall);
 void configureOnnxToKrnlLoweringPass(bool reportOnParallel,
-    bool parallelIsEnabled, bool reportOnSimd, bool simdIsEnabled);
+    bool parallelIsEnabled, std::string specificParallelOps, bool reportOnSimd,
+    bool simdIsEnabled);
+std::unique_ptr<mlir::Pass> createProcessScfParallelPrivatePass();
 
-#ifdef ONNX_MLIR_ENABLE_MHLO
-/// Add pass for lowering to Mhlo IR.
-std::unique_ptr<mlir::Pass> createLowerToMhloPass();
+#ifdef ONNX_MLIR_ENABLE_STABLEHLO
+/// Add pass for lowering to Stablehlo IR.
+std::unique_ptr<mlir::Pass> createLowerToStablehloPass();
+std::unique_ptr<mlir::Pass> createLowerToStablehloPass(bool enableUnroll);
 #endif
-
-/// Pass for lowering krnl.dim operations to standard dialect.
-std::unique_ptr<mlir::Pass> createDisconnectKrnlDimFromAllocPass();
-
-/// Pass for lowering krnl.shape operation.
-std::unique_ptr<mlir::Pass> createLowerKrnlShapePass();
 
 /// Pass for eliding the values of global Krnl operations.
 std::unique_ptr<mlir::Pass> createElideConstGlobalValuePass();
@@ -109,7 +112,7 @@ std::unique_ptr<mlir::Pass> createLowerKrnlRegionPass();
 /// Pass for lowering Krnl dialect to LLVM dialect.
 std::unique_ptr<mlir::Pass> createConvertKrnlToLLVMPass();
 std::unique_ptr<mlir::Pass> createConvertKrnlToLLVMPass(bool verifyInputTensors,
-    bool useOpaquePointer, bool useLRODATA, bool storeConstantsToFile,
+    bool useLRODATA, bool storeConstantsToFile,
     float constantsToFileSingleThreshold, float constantsToFileTotalThreshold,
     std::string outputNameNoExt, bool enableParallel);
 
@@ -117,5 +120,4 @@ std::unique_ptr<mlir::Pass> createConvertKrnlToLLVMPass(bool verifyInputTensors,
 
 /// Pass for lowering Onnx ops to TOSA dialect
 std::unique_ptr<mlir::Pass> createConvertONNXToTOSAPass();
-
 } // namespace onnx_mlir

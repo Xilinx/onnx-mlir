@@ -4,7 +4,7 @@
 
 //===------------------------ CompilerOptions.cpp -------------------------===//
 //
-// Copyright 2022 The IBM Research Authors.
+// Copyright 2022, 2023 The IBM Research Authors.
 //
 // =============================================================================
 //
@@ -21,6 +21,9 @@
 
 #define DEBUG_TYPE "compiler_options"
 
+// Default env var where to find default options, when defined.
+const std::string OnnxMlirEnvOptionName = "ONNX_MLIR_FLAGS";
+
 namespace onnx_mlir {
 
 // Use external storage for the options so that they are globally accessible
@@ -32,14 +35,17 @@ std::string mtriple;                                   // common for both
 std::string mcpu;                                      // common for both
 std::string march;                                     // common for both
 InstrumentStages instrumentStage;                      // common for both
+bool onnxConstPropRoundFPToInt;                        // common for both
 int onnxConstPropExpansionBound;                       // common for both
 std::vector<std::string> onnxConstPropDisablePatterns; // common for both
 bool enableONNXHybridPass;                             // common for both
 std::vector<std::string> functionsToDecompose;         // common for both
+std::string opsForCall;                                // common for both
 EmissionTargetType emissionTarget;                     // onnx-mlir only
 bool invokeOnnxVersionConverter;                       // onnx-mlir only
 bool preserveLocations;                                // onnx-mlir only
 bool printIR;                                          // onnx-mlir only
+bool printBytecode;                                    // onnx-mlir only
 bool preserveBitcode;                                  // onnx-mlir only
 bool preserveLLVMIR;                                   // onnx-mlir only
 bool preserveMLIR;                                     // onnx-mlir only
@@ -56,12 +62,14 @@ std::vector<std::string> Xllc;                         // onnx-mlir only
 std::string mllvm;                                     // onnx-mlir only
 std::string instrumentOps;                             // onnx-mlir only
 unsigned instrumentControlBits;                        // onnx-mlir only
+std::string parallelizeOps;                            // onnx-mlir only
 bool instrumentONNXSignature;                          // onnx-mlir only
 std::string ONNXOpStats;                               // onnx-mlir only
 int onnxOpTransformThreshold;                          // onnx-mlir only
 bool onnxOpTransformReport;                            // onnx-mlir only
 bool enableParallel;                                   // onnx-mlir only
 bool disableSimdOption;                                // onnx-mlir only
+bool disableRecomposeOption;                           // onnx-mlir only
 bool enableSimdDataLayout;                             // onnx-mlir only
 bool verifyInputTensors;                               // onnx-mlir only
 bool allowSorting;                                     // onnx-mlir only
@@ -69,10 +77,12 @@ std::string reportHeapBefore;                          // onnx-mlir only
 std::string reportHeapAfter;                           // onnx-mlir only
 std::string modelTag;                                  // onnx-mlir only
 bool enableConvOptPass;                                // onnx-mlir only
+bool disableConstantProp;                              // onnx-mlir only
 std::vector<std::string> extraLibPaths;                // onnx-mlir only
 std::vector<std::string> extraLibs;                    // onnx-mlir only
 ProfileIRs profileIR;                                  // onnx-mlir only
 OptReport optReport;                                   // onnx-mlir only
+bool useOldBufferization;                              // onnx-mlir only
 bool split_input_file;                                 // onnx-mlir-opt only
 bool verify_diagnostics;                               // onnx-mlir-opt only
 bool verify_passes;                                    // onnx-mlir-opt only
@@ -123,9 +133,9 @@ static llvm::cl::list<accel::Accelerator::Kind,
 static llvm::cl::opt<OptLevel, true> OptimizationLevelOpt(
     llvm::cl::desc("Levels:"),
     llvm::cl::values(clEnumVal(O0, "Optimization level 0 (default):"),
-        clEnumVal(O1, "Optimization level 1,"),
-        clEnumVal(O2, "Optimization level 2,"),
-        clEnumVal(O3, "Optimization level 3.")),
+        clEnumVal(O1, "Optimization level 1"),
+        clEnumVal(O2, "Optimization level 2"),
+        clEnumVal(O3, "Optimization level 3, SIMD is enabled")),
     llvm::cl::location(OptimizationLevel), llvm::cl::init(O0),
     llvm::cl::cat(OnnxMlirCommonOptions));
 
@@ -154,6 +164,14 @@ static llvm::cl::opt<InstrumentStages, true> instrumentStageOpt(
             APPLY_TO_ACCELERATORS(ACCEL_INSTRUMENTSTAGE_CL_ENUM)),
     llvm::cl::init(Onnx), llvm::cl::cat(OnnxMlirCommonOptions));
 
+static llvm::cl::opt<bool, true> onnxConstPropRoundFPToIntOpt(
+    "onnx-const-prop-round-fp-to-int",
+    llvm::cl::desc("If true constant propagates onnx.Cast from a floating "
+                   "point type to an integer type by rounding to nearest, "
+                   "ties to even. If false truncates towards zero."),
+    llvm::cl::location(onnxConstPropRoundFPToInt), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirCommonOptions));
+
 static llvm::cl::opt<int, true> onnxConstPropExpansionBoundOpt(
     "onnx-const-prop-expansion-bound",
     llvm::cl::desc("ONNX dialect constant propagation maximum expansion factor."
@@ -165,9 +183,9 @@ static llvm::cl::opt<int, true> onnxConstPropExpansionBoundOpt(
 
 static llvm::cl::list<std::string, std::vector<std::string>>
     onnxConstPropDisablePatternsOpt("onnx-const-prop-disable-pattern",
-        llvm::cl::desc("Named constant propagation pattern to disable. "
+        llvm::cl::desc("Named constant propagation pattern to disable.\n"
                        "Repeat the flag to disable multiple patterns."),
-        llvm::cl::value_desc("named constant propagation patterns to disable"),
+        llvm::cl::value_desc("named constant propagation pattern to disable"),
         llvm::cl::location(onnxConstPropDisablePatterns),
         llvm::cl::cat(OnnxMlirCommonOptions));
 
@@ -182,6 +200,11 @@ static llvm::cl::list<std::string, std::vector<std::string>>
         llvm::cl::desc("Specify ONNX functions to decompose"),
         llvm::cl::location(functionsToDecompose),
         llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> disableRecomposeOptionOpt("disable-recompose",
+    llvm::cl::desc("Disable recomposition of ONNX operations."),
+    llvm::cl::location(disableRecomposeOption), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirOptions));
 
 // Options for onnx-mlir only
 static llvm::cl::opt<EmissionTargetType, true> emissionTargetOpt(
@@ -219,6 +242,11 @@ static llvm::cl::opt<bool, true> printIROpt("printIR",
     llvm::cl::desc("print the IR to stdout:"), llvm::cl::location(printIR),
     llvm::cl::init(false), llvm::cl::cat(OnnxMlirOptions));
 
+static llvm::cl::opt<bool, true> printBytecodeOpt("printBytecode",
+    llvm::cl::desc("print bytecode to stdout:"),
+    llvm::cl::location(printBytecode), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirOptions));
+
 static llvm::cl::opt<bool, true> preserveBitcodeOpt("preserveBitcode",
     llvm::cl::desc(
         "dont delete the bitcode files (optimized and unoptimized):"),
@@ -252,18 +280,23 @@ static llvm::cl::opt<std::string, true> shapeInformationOpt("shapeInformation",
         "shapes for dynamic inputs.\n"
         "\"value\" is in the format of "
         "\"INPUT_ID1:D1xD2x...xDn,INPUT_ID2:D1xD2x...xDn, ...\",\n"
-        "where \"INPUT_ID1, INPUT_ID2, ...\" are input indices starting from "
-        "0, and\n"
-        "\"D1, D2, ...\" are dimension sizes (positive integers of -1 for "
+        "where \"INPUT_ID1, INPUT_ID2, ...\" are input indices (starting from "
+        "0 or being -1 for all input indices), and\n"
+        "\"D1, D2, ...\" are dimension sizes (positive integers or -1 for "
         "unknown dimensions)"),
     llvm::cl::value_desc("value"), llvm::cl::location(shapeInformation),
     llvm::cl::cat(OnnxMlirOptions));
 
+// Default value is defined by the OnnxMlirEnvOptionName constant string
+// variable, but the default setting mechanism here cannot be used here as we
+// need to evaluate this value prior to the compiler options being set. Proper
+// handling of the value of this compiler option is set by the calling the
+// parseCustomEnvFlagsCommandLineOption(...) function.
 static llvm::cl::opt<std::string, true> customEnvFlagsOpt("customEnvFlags",
     llvm::cl::desc("Override default option env var OnnxMlirEnvOptionName: "
                    "ONNX_MLIR_FLAGS"),
     llvm::cl::value_desc("option env var"), llvm::cl::location(customEnvFlags),
-    llvm::cl::init("ONNX_MLIR_FLAGS"), llvm::cl::cat(OnnxMlirOptions));
+    llvm::cl::cat(OnnxMlirOptions));
 
 static llvm::cl::opt<ModelSize, true> modelSizeOpt("modelSize",
     llvm::cl::desc("Model to generate code"),
@@ -299,7 +332,7 @@ static llvm::cl::opt<float, true> constantsToFileTotalThresholdOpt(
         "bytes of constants is greater than this threshold. "
         "store-constants-to-file must be enabled for this to be effective. "
         "Only count constants whose size is greater than "
-        "constants-to-file-single-threshold. Value is in GB."),
+        "constants-to-file-single-threshold. Value is in GB. Default is 2GB."),
     llvm::cl::location(constantsToFileTotalThreshold), llvm::cl::init(2.0),
     llvm::cl::cat(OnnxMlirOptions));
 
@@ -310,7 +343,7 @@ static llvm::cl::opt<float, true> constantsToFileSingleThresholdOpt(
         "bytes is greater than this threshold. "
         "store-constants-to-file must be enabled for this to be effective. "
         "Total sizes in bytes of satisfied constants must be greater than "
-        "constants-to-file-total-threshold. Value is in KB."),
+        "constants-to-file-total-threshold. Value is in KB. Default is 1KB."),
     llvm::cl::location(constantsToFileSingleThreshold), llvm::cl::init(1.0),
     llvm::cl::cat(OnnxMlirOptions));
 
@@ -338,8 +371,9 @@ static llvm::cl::opt<std::string, true> mllvmOpt("mllvm",
     llvm::cl::ValueRequired);
 
 static llvm::cl::opt<std::string, true> instrumentOpsOpt("instrument-ops",
-    llvm::cl::desc("Specify operations operations to be instrumented:\n"
-                   "\"NONE\" or \"\" for no instrument,\n"
+    llvm::cl::desc("Specify operations to be instrumented:\n"
+                   "\"NONE\" or \"\" for no instrument (default),\n"
+                   "\"ALL\" for instrument of all ops,\n"
                    "\"ops1,ops2, ...\" for the multiple ops.\n"
                    "e.g. \"onnx.Conv,onnx.Add\" for Conv and Add ops.\n"
                    "Asterisk is also available.\n"
@@ -357,6 +391,17 @@ static llvm::cl::bits<InstrumentActions, unsigned> instrumentControlBitsOpt(
             InstrumentReportTime, "instrument runtime reports time usage,"),
         clEnumVal(InstrumentReportMemory,
             "instrument runtime reports memory usage.")),
+    llvm::cl::cat(OnnxMlirOptions));
+
+static llvm::cl::opt<std::string, true> parallelizeOpsOpt("parallelize-ops",
+    llvm::cl::desc("Specify explicitly which operations to parallelize:\n"
+                   "\"ALL\" or \"\" for all available operations (default),\n"
+                   "\"NONE\" for no instrument,\n"
+                   "\"ops1,ops2, ...\" for the multiple ops.\n"
+                   "e.g. \"onnx.MatMul,onnx.Add\" for MatMul and Add ops.\n"
+                   "Asterisk is also available.\n"
+                   "e.g. \"onnx.*\" for all onnx operations.\n"),
+    llvm::cl::location(parallelizeOps), llvm::cl::init(""),
     llvm::cl::cat(OnnxMlirOptions));
 
 static llvm::cl::opt<bool, true> instrumentONNXSignatureOpt(
@@ -409,6 +454,15 @@ static llvm::cl::opt<bool, true> enableSimdDataLayoutOpt("simd-data-layout",
     llvm::cl::location(enableSimdDataLayout), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirOptions));
 
+llvm::cl::opt<std::string, true> opsForCallOpt("ops-for-call",
+    llvm::cl::desc("Specify which ops are lowered to knrl.call instead of"
+                   "krnl loops. op name are used to check against this option."
+                   "Names of opa are separated with space."
+                   "Example: ops-for-call=Conv MatMul"
+                   "The regex match will be used to check against op name"),
+    llvm::cl::location(opsForCall), llvm::cl::init(""),
+    llvm::cl::cat(OnnxMlirOptions));
+
 static llvm::cl::opt<bool, true> verifyInputTensorsOpt("verifyInputTensors",
     llvm::cl::desc(
         "Verify input tensors whenever the entry point function is called.\n"
@@ -459,6 +513,12 @@ static llvm::cl::opt<bool, true> enableConvOptPassOpt("enable-conv-opt-pass",
     llvm::cl::desc("Enable the ConvOptPass. Default is true."),
     llvm::cl::location(enableConvOptPass), llvm::cl::init(true),
     llvm::cl::cat(OnnxMlirOptions));
+
+static llvm::cl::opt<bool, true> disableConstantPropOpt("disable-constant-prop",
+    llvm::cl::desc("Disable Constant Propagation (default is false)\n"
+                   "Set to 'true' to disable Constant Propagation."),
+    llvm::cl::location(disableConstantProp), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::list<std::string, std::vector<std::string>> extraLibPathsOpt(
     "L",
@@ -517,6 +577,15 @@ static llvm::cl::opt<bool, true> allowUnregisteredDialectsOpt(
     llvm::cl::location(allowUnregisteredDialects), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirOptOptions));
 
+// Removed once the new LLVM bufferization works without performance regression.
+static llvm::cl::opt<bool, true> useOldBufferizationOpt("use-old-bufferization",
+    llvm::cl::desc(
+        "Enable the old LLVM bufferization mechanism (default=true)\n"
+        "This option should be removed once the new LLVM bufferization works "
+        "well in onnx-mlir"),
+    llvm::cl::location(useOldBufferization), llvm::cl::init(true),
+    llvm::cl::cat(OnnxMlirOptions));
+
 // Configuration states associated with certain options.
 // For example, when maccel is specified, NNPA can register
 // dependent libdnn.
@@ -537,35 +606,48 @@ std::string customEnvFlags;
 // The customEnvFlags must be scanned before the normal options.
 bool parseCustomEnvFlagsCommandLineOption(
     int argc, const char *const *argv, llvm::raw_ostream *errs) {
-  // Find -customEnvFlags=val and save its value.
-  std::string envVar;
-  for (int i = argc - 1; i > 1; --i) {
+  // Use the default ONNX MLIR Environment variable, unless specified otherwise
+  // by an argument, see below.
+  std::string envVar = OnnxMlirEnvOptionName;
+  // VerboseOutput is not yet set, so scan ourselves.
+  bool verbose = false;
+  // Customized version? -customEnvFlags=val and save its value.
+  for (int i = 1; i < argc; ++i) {
     std::string arg(argv[i]);
     if (arg.find("--customEnvFlags") == 0) {
       envVar = arg.substr(sizeof("--customEnvFlags"));
-      break;
-    }
-    if (arg.find("-customEnvFlags") == 0) {
+    } else if (arg.find("-customEnvFlags") == 0) {
       envVar = arg.substr(sizeof("-customEnvFlags"));
-      break;
+    } else if (arg.compare("-v") == 0) {
+      verbose = true;
     }
   }
-  if (!envVar.empty()) {
-    // We have a custom env var, verify that it does not recursively hold
-    // another -customEnvFlags.
-    const char *envValCstr;
-    if ((envValCstr = std::getenv(envVar.c_str()))) {
-      std::string envVal(envValCstr);
-      if (envVal.find("-customEnvFlags") != std::string::npos) {
-        if (errs)
-          *errs << "Warning: recursive use of --customEnvFlags in custom "
-                   "environment flag not permited\n";
-        return false;
-      }
+  // Check that the env var does not recursively hold another -customEnvFlags.
+  const char *envValCstr;
+  if ((envValCstr = std::getenv(envVar.c_str()))) {
+    std::string envVal(envValCstr);
+    if (envVal.find("-customEnvFlags") != std::string::npos) {
+      if (errs)
+        *errs << "Warning: recursive use of --customEnvFlags in "
+                 "environment flag not permited\n";
+      return false;
     }
-    // The envVar is verified, use it.
-    setCustomEnvVar(envVar);
+    if (envVal.find("-v") != std::string::npos)
+      verbose = true;
+    if (verbose)
+      printf("Onnx-mlir default options from '%s' are '%s'.\n", envVar.c_str(),
+          envValCstr);
   }
+  if (verbose && argc > 0) {
+    printf("Onnx-mlir command: %s", argv[0]);
+    if (envValCstr)
+      printf(" %s", envValCstr);
+    for (int i = 1; i < argc; ++i)
+      printf(" %s", argv[i]);
+    printf("\n");
+  }
+  // The envVar is verified, use it.
+  setCustomEnvVar(envVar);
   return true;
 }
 
@@ -881,10 +963,10 @@ std::vector<std::string> getCompilerConfig(std::string k) {
 
 // Add strings in a vector to the string vector associated
 // with the specified key
-void addCompilerConfig(std::string k, std::vector<std::string> v) {
+void addCompilerConfig(std::string k, std::vector<std::string> v, bool head) {
   std::vector<std::string> u = CompilerConfigMap[k];
 
-  u.insert(u.end(), v.begin(), v.end());
+  u.insert(head ? u.begin() : u.end(), v.begin(), v.end());
   CompilerConfigMap[k] = u;
 }
 
@@ -1040,6 +1122,10 @@ void initCompilerConfig() {
             ? std::vector<std::string>{"cruntime"}
             : std::vector<std::string>{"jniruntime", "cruntime"});
     addCompilerConfig(CCM_SHARED_LIB_PATH_DEPS, {getLibraryPath()});
+
+    // Add OpenMP LLVM library if parallel is enabled.
+    if (enableParallel)
+      addCompilerConfig(CCM_SHARED_LIB_DEPS, {"ompruntime"});
 
     // Add user specified libs and their path
     // Multiple lib or directory can be specified with multiple options.

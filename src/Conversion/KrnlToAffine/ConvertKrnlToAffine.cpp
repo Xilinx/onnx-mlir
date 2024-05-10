@@ -210,13 +210,12 @@ public:
     // Find the forOp associated with loopRef, get ready to insert into
     // forOp body.
     // Cast to affine.forOp or affine.parallelOp
-    Block &loopBody = dyn_cast_or_null<AffineForOp>(loopRefToOp[loopRef])
-                          ? llvm::cast<AffineForOp>(loopRefToOp[loopRef])
-                                .getLoopBody()
-                                .front()
-                          : llvm::cast<AffineParallelOp>(loopRefToOp[loopRef])
-                                .getLoopBody()
-                                .front();
+    Block &loopBody =
+        dyn_cast_or_null<AffineForOp>(loopRefToOp[loopRef])
+            ? llvm::cast<AffineForOp>(loopRefToOp[loopRef]).getRegion().front()
+            : llvm::cast<AffineParallelOp>(loopRefToOp[loopRef])
+                  .getRegion()
+                  .front();
     auto insertPt = loopBody.begin();
 
     // Find the ops to transfer (saved into a Movable) associated with
@@ -620,42 +619,49 @@ static LogicalResult interpretOperation(Operation *op, OpBuilder &builder,
     // affine.parallel
     LLVM_DEBUG(llvm::dbgs() << DEBUG_TYPE << " interpret parallel op "
                             << parallelOp << "\n");
+    // ToFix handle multiple parallel loop
+    ValueRange loopRefs = parallelOp.getLoops();
+
     // Obtain the the reference the loop that needs to be parallelized
-    Value loopRef = parallelOp.getLoop();
-    // Obtain the lowered affine.forOp
-    AffineForOp loopToParallel = llvm::cast<AffineForOp>(loopRefToOp[loopRef]);
-    OpBuilder opBuilder(loopToParallel);
+    for (Value loopRef : loopRefs) {
+      // Value loopRef = parallelOp.getLoops()[0];
+      //  Obtain the lowered affine.forOp
+      AffineForOp loopToParallel =
+          llvm::cast<AffineForOp>(loopRefToOp[loopRef]);
+      OpBuilder opBuilder(loopToParallel);
 
-    // Extract the metadata from the original affine.forOp and then create a
-    // affine.parallelOp
-    Location loc = loopToParallel.getLoc();
-    AffineMap lbsMap = loopToParallel.getLowerBoundMap();
-    ValueRange lbsOperands = loopToParallel.getLowerBoundOperands();
-    AffineMap ubsMap = loopToParallel.getUpperBoundMap();
-    ValueRange ubsOperands = loopToParallel.getUpperBoundOperands();
+      // Extract the metadata from the original affine.forOp and then create a
+      // affine.parallelOp
+      Location loc = loopToParallel.getLoc();
+      AffineMap lbsMap = loopToParallel.getLowerBoundMap();
+      ValueRange lbsOperands = loopToParallel.getLowerBoundOperands();
+      AffineMap ubsMap = loopToParallel.getUpperBoundMap();
+      ValueRange ubsOperands = loopToParallel.getUpperBoundOperands();
 
-    // Current: parallel reduction is not used. Parallel reduction can be
-    // enabled after the Ops have been lowered to Affine. Please check
-    // Dialect/Affine/Transforms/AffineParallelize.cpp in MLIR repo to see how
-    // to enable parallel reduction.
-    SmallVector<LoopReduction> parallelReductions;
-    auto reducedValues = llvm::to_vector<4>(llvm::map_range(parallelReductions,
-        [](const LoopReduction &red) { return red.value; }));
-    auto reductionKinds = llvm::to_vector<4>(llvm::map_range(
-        parallelReductions, [](const LoopReduction &red) { return red.kind; }));
+      // Current: parallel reduction is not used. Parallel reduction can be
+      // enabled after the Ops have been lowered to Affine. Please check
+      // Dialect/Affine/Transforms/AffineParallelize.cpp in MLIR repo to see how
+      // to enable parallel reduction.
+      SmallVector<LoopReduction> parallelReductions;
+      auto reducedValues =
+          llvm::to_vector<4>(llvm::map_range(parallelReductions,
+              [](const LoopReduction &red) { return red.value; }));
+      auto reductionKinds =
+          llvm::to_vector<4>(llvm::map_range(parallelReductions,
+              [](const LoopReduction &red) { return red.kind; }));
 
-    AffineParallelOp parallelLoop = opBuilder.create<AffineParallelOp>(loc,
-        ValueRange(reducedValues).getTypes(), reductionKinds, ArrayRef(lbsMap),
-        lbsOperands, ArrayRef(ubsMap), ubsOperands,
-        ArrayRef(loopToParallel.getStep()));
-    parallelLoop.getRegion().takeBody(loopToParallel.getRegion());
-    Operation *yieldOp = &parallelLoop.getBody()->back();
-
-    yieldOp->setOperands(reducedValues);
-    // Replace the affine.forOp with affine.parallelOp in loopRefToTop
-    loopRefToOp[loopRef] = parallelLoop;
+      AffineParallelOp parallelLoop = opBuilder.create<AffineParallelOp>(loc,
+          ValueRange(reducedValues).getTypes(), reductionKinds,
+          ArrayRef(lbsMap), lbsOperands, ArrayRef(ubsMap), ubsOperands,
+          ArrayRef(loopToParallel.getStepAsInt()));
+      parallelLoop.getRegion().takeBody(loopToParallel.getRegion());
+      Operation *yieldOp = &parallelLoop.getBody()->back();
+      yieldOp->setOperands(reducedValues);
+      // Replace the affine.forOp with affine.parallelOp in loopRefToTop
+      loopRefToOp[loopRef] = parallelLoop;
+      loopToParallel.erase();
+    }
     opsToErase.insert(parallelOp);
-    loopToParallel.erase();
     return success();
   }
   return success();
@@ -686,6 +692,7 @@ AffineTypeConverter::AffineTypeConverter() {
   });
 }
 
+//
 //===----------------------------------------------------------------------===//
 // ConvertKrnlToAffinePass
 //===----------------------------------------------------------------------===//
@@ -744,7 +751,6 @@ void ConvertKrnlToAffinePass::runOnOperation() {
     signalPassFailure();
     return;
   }
-
   funcOp->walk([&](Operation *op) {
     if (SpecializedKernelOpInterface kernelOp =
             dyn_cast<SpecializedKernelOpInterface>(op)) {
@@ -767,8 +773,6 @@ void ConvertKrnlToAffinePass::runOnOperation() {
   ConversionTarget target(*ctx);
   // Legal/illegal ops.
   target.addIllegalOp<KrnlTerminatorOp>();
-  // krnl.dim operations must be lowered prior to this pass.
-  target.addIllegalOp<KrnlDimOp>();
   target.addIllegalOp<KrnlMatMulOp>();
   target.addIllegalOp<KrnlCopyToBufferOp>();
   target.addIllegalOp<KrnlCopyFromBufferOp>();
@@ -796,9 +800,8 @@ void ConvertKrnlToAffinePass::runOnOperation() {
     unrollAndJamMap[currFuncOp] = currUnrollAndJamList;
   }
 
-  DenseSet<Operation *> unconverted;
   if (failed(applyPartialConversion(
-          getOperation(), target, std::move(patterns), &unconverted))) {
+          getOperation(), target, std::move(patterns)))) {
     {
       const std::lock_guard<std::mutex> lock(unrollAndJamMutex);
       unrollAndJamMap.erase(currFuncOp);

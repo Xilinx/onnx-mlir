@@ -13,33 +13,72 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Dialect/Tosa/IR/TosaOps.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
+#include <mlir/Dialect/Arith/IR/Arith.h>
 
 using namespace mlir;
 
 namespace onnx_mlir {
 
 void populateONNXToTOSAConversionPattern(ConversionTarget &target,
-    RewritePatternSet &patterns, TypeConverter &typeConverter,
-    MLIRContext *ctx) {
+    RewritePatternSet &patterns, TypeConverter &typeConverter, MLIRContext *ctx,
+    int64_t groupedConvThreshold) {
   // Math
   populateLoweringONNXElementwiseOpToTOSAPattern(
       target, patterns, typeConverter, ctx);
-  populateLoweringONNXReduceMeanOpToTOSAPattern(
+  populateLoweringONNXReduceOpsToTOSAPattern(
       target, patterns, typeConverter, ctx);
   populateLoweringONNXGemmOpToTOSAPattern(target, patterns, typeConverter, ctx);
   populateLoweringONNXSoftmaxOpToTOSAPattern(
       target, patterns, typeConverter, ctx);
-  populateLoweringONNXConvOpToTOSAPattern(target, patterns, typeConverter, ctx);
+  populateLoweringONNXConvOpToTOSAPattern(
+      target, patterns, typeConverter, ctx, groupedConvThreshold);
+  // Tensor
+  populateLoweringONNXConcatOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXReshapeOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXGatherOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXResizeOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXShrinkOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXConstOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXPadOpToTOSAPattern(target, patterns, typeConverter, ctx);
+  populateLoweringONNXFlattenOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXPadOpToTOSAPattern(target, patterns, typeConverter, ctx);
+  populateLoweringONNXSliceOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXSqueezeOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXTileOpToTOSAPattern(target, patterns, typeConverter, ctx);
+  populateLoweringONNXTransposeOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
   // NN
   populateLoweringONNXMaxPoolSingleOutOpToTOSAPattern(
       target, patterns, typeConverter, ctx);
   populateLoweringONNXAveragePoolOpToTOSAPattern(
       target, patterns, typeConverter, ctx);
-  // Tensor
-  populateLoweringONNXConstOpToTOSAPattern(
+  populateLoweringONNXQuantizeLinearOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXDequantizeLinearOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXMatMulOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXBatchNormalizationOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  // Flow
+  populateLoweringONNXEntryPointOpToTOSAPattern(
       target, patterns, typeConverter, ctx);
   populateLoweringONNXReshapeOpToTOSAPattern(
+      target, patterns, typeConverter, ctx);
+  populateLoweringONNXResizeOpToTOSAPattern(
       target, patterns, typeConverter, ctx);
 }
 
@@ -56,7 +95,17 @@ struct FrontendToTosaLoweringPass
   FrontendToTosaLoweringPass(const FrontendToTosaLoweringPass &pass)
       : PassWrapper<FrontendToTosaLoweringPass, OperationPass<ModuleOp>>() {}
 
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<mlir::tosa::TosaDialect>();
+  }
   void runOnOperation() final;
+
+public:
+  Option<int64_t> groupedConvThreshold{*this, "grouped-conv-threshold",
+      llvm::cl::desc("The threshold used to decompose grouped convolution "
+                     "into a concatenation of tosa.conv2d operations"),
+      llvm::cl::ZeroOrMore,
+      llvm::cl::init(std::numeric_limits<int64_t>::max())};
 };
 
 void FrontendToTosaLoweringPass::runOnOperation() {
@@ -71,7 +120,8 @@ void FrontendToTosaLoweringPass::runOnOperation() {
   // conversion failures. Quantized types are not supported right now.
   TypeConverter typeConverter;
   typeConverter.addConversion([](Type type) -> std::optional<Type> {
-    if (isTOSASignedInt(type) || isTOSAFloat(type) || type.isa<NoneType>())
+    if (isTOSAInt(type) || isTOSAFloat(type) || type.isa<NoneType>() ||
+        isTOSABool(type))
       return type;
     return std::nullopt;
   });
@@ -86,7 +136,8 @@ void FrontendToTosaLoweringPass::runOnOperation() {
       mlir::arith::ArithDialect>();
 
   // Define patterns
-  populateONNXToTOSAConversionPattern(target, patterns, typeConverter, context);
+  populateONNXToTOSAConversionPattern(
+      target, patterns, typeConverter, context, groupedConvThreshold);
 
   if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
     signalPassFailure();

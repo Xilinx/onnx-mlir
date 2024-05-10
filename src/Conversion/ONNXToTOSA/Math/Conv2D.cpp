@@ -19,13 +19,6 @@
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
 #include <src/Dialect/Mlir/IndexExpr.hpp>
 
-#include "mlir/Dialect/Tosa/IR/TosaOps.h"
-#include "src/Conversion/ONNXToTOSA/DialectBuilder.hpp"
-#include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
-#include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
-#include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
-#include <src/Dialect/Mlir/IndexExpr.hpp>
-
 using namespace mlir;
 
 namespace onnx_mlir {
@@ -87,8 +80,9 @@ Value createConvInGroups(PatternRewriter &rewriter, Operation *op,
 
 class ONNXConvOpLoweringToTOSA : public ConversionPattern {
 public:
-  ONNXConvOpLoweringToTOSA(MLIRContext *ctx)
-      : ConversionPattern(ONNXConvOp::getOperationName(), 1, ctx) {}
+  ONNXConvOpLoweringToTOSA(MLIRContext *ctx, int64_t groupedConvThreshold)
+      : ConversionPattern(ONNXConvOp::getOperationName(), 1, ctx),
+        groupedConvThreshold(groupedConvThreshold) {}
 
   using OpAdaptor = typename ONNXConvOp::Adaptor;
   LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
@@ -144,8 +138,18 @@ public:
     llvm::SmallVector<int64_t, 4> pads;
     IndexExpr::getLiteral(shapeHelper.pads, pads);
     // reorder padding values
-    DenseI64ArrayAttr newPads =
-        rewriter.getDenseI64ArrayAttr({pads[0], pads[2], pads[1], pads[3]});
+    llvm::SmallVector<int64_t, 4> reorderedPads = {
+        pads[0], pads[2], pads[1], pads[3]};
+    FailureOr<Value> resizedInput = tosaBuilder.resizeWindowBasedOps(newInput,
+        cast<RankedTensorType>(newInput.getType()).getShape(),
+        {weightShape[2], weightShape[3]}, reorderedPads, shapeHelper.strides,
+        shapeHelper.dilations);
+
+    if (failed(resizedInput))
+      return rewriter.notifyMatchFailure(
+          op, "could not resize input to match parameters");
+
+    DenseI64ArrayAttr newPads = rewriter.getDenseI64ArrayAttr(reorderedPads);
 
     // Handle group parameter by creating multiple convs
     const int64_t group = adaptor.getGroup();
@@ -159,9 +163,40 @@ public:
           convOp->getLoc(), newConvOutputType, newInput, newWeight, bias,
           newPads, strides, dilations);
     } else {
-      conv2D = createConvInGroups(rewriter, convOp, tosaBuilder, resultType,
-          weightShape, newInput, newWeight, bias, group, newPads, strides,
-          dilations);
+      auto inputChannels = inputType.getDimSize(1);
+      auto outputChannels = resultType.cast<ShapedType>().getDimSize(1);
+      if (group == inputChannels && (outputChannels % inputChannels == 0)) {
+        // If the group == inputChannels and
+        // outputChannels == inputChannels * integerNumber,
+        // this grouped convolution is equal to a Depthwise convolution.
+
+        // Convert weights [OC,IC,KH,KW] -> [KH, KW, OC, M(ChannelMultiplier)]
+        Value transposedWeight = tosaBuilder.transpose(weights, {2, 3, 0, 1});
+        // A reshape op is needed to adhere to the TOSA standard
+        // https://www.mlplatform.org/tosa/tosa_spec.html#_depthwise_conv2d
+        Value newWeight = tosaBuilder.reshape(
+            transposedWeight, {weightShape[2], weightShape[3], inputChannels,
+                                  outputChannels / inputChannels});
+
+        Type newConvOutputType = RankedTensorType::get(
+            llvm::SmallVector<int64_t, 4>(4, ShapedType::kDynamic),
+            resultType.cast<ShapedType>().getElementType());
+
+        conv2D = tosa::CreateOpAndInfer<mlir::tosa::DepthwiseConv2DOp>(rewriter,
+            convOp->getLoc(), newConvOutputType, newInput, newWeight, bias,
+            newPads, strides, dilations);
+      } else if (group <= groupedConvThreshold) {
+        // Decompose group convolution into a concatenation of tosa.conv2d ops
+        // can be costly, so only allow it when the number of groups is less
+        // than configurable threshold.
+
+        conv2D = createConvInGroups(rewriter, convOp, tosaBuilder, resultType,
+            weightShape, newInput, newWeight, bias, group, newPads, strides,
+            dilations);
+      } else {
+        return rewriter.notifyMatchFailure(
+            op, "this type of grouped Conv is not supported");
+      }
     }
 
     // Convert output [N,OH,OW,OC] -> [N,OC,OH,OW]
@@ -170,13 +205,17 @@ public:
     rewriter.replaceOp(convOp, {newOutput});
     return success();
   }
+
+private:
+  int64_t groupedConvThreshold;
 };
+
 } // namespace
 
 void populateLoweringONNXConvOpToTOSAPattern(ConversionTarget &target,
-    RewritePatternSet &patterns, TypeConverter &typeConverter,
-    MLIRContext *ctx) {
-  patterns.insert<ONNXConvOpLoweringToTOSA>(ctx);
+    RewritePatternSet &patterns, TypeConverter &typeConverter, MLIRContext *ctx,
+    int64_t groupedConvThreshold) {
+  patterns.insert<ONNXConvOpLoweringToTOSA>(ctx, groupedConvThreshold);
 }
 
 } // namespace onnx_mlir

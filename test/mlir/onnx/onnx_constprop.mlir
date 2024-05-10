@@ -380,7 +380,7 @@ func.func @test_div_ones(%arg0 : tensor<1x2xui8>) -> tensor<1x2xui8> {
 }
 
 //===----------------------------------------------------------------------===//
-/// Equal tests
+/// Equal test
 
 // -----
 
@@ -395,7 +395,7 @@ func.func @test_equal() -> tensor<3xi1> {
 }
 
 //===----------------------------------------------------------------------===//
-/// Less tests
+/// Less test
 
 // -----
 
@@ -410,7 +410,7 @@ func.func @test_less() -> tensor<3xi1> {
 }
 
 //===----------------------------------------------------------------------===//
-/// Greater tests
+/// Greater test
 
 // -----
 
@@ -425,7 +425,7 @@ func.func @test_greater() -> tensor<3xi1> {
 }
 
 //===----------------------------------------------------------------------===//
-/// LessOrEqual tests
+/// LessOrEqual test
 
 // -----
 
@@ -440,7 +440,7 @@ func.func @test_lessorequal() -> tensor<3xi1> {
 }
 
 //===----------------------------------------------------------------------===//
-/// GreaterOrEqual tests
+/// GreaterOrEqual test
 
 // -----
 
@@ -455,7 +455,67 @@ func.func @test_greaterorequal() -> tensor<3xi1> {
 }
 
 //===----------------------------------------------------------------------===//
-/// Sqrt tests
+/// Modulo tests
+
+// -----
+
+// CHECK-LABEL: @test_modulo_int_both_neg() -> tensor<i64>
+func.func @test_modulo_int_both_neg() -> tensor<i64> {
+  %0 = onnx.Constant dense<-7> : tensor<i64>
+  %1 = onnx.Constant dense<-5> : tensor<i64>
+  %2 = "onnx.Mod"(%0, %1) : (tensor<i64> , tensor<i64>) -> tensor<i64>
+  "onnx.Return"(%2) : (tensor<i64>) -> ()
+  // CHECK: [[CONST:%.+]] = onnx.Constant dense<-2> : tensor<i64>
+}
+
+// -----
+
+// CHECK-LABEL: @test_modulo_int_neg() -> tensor<i64>
+func.func @test_modulo_int_neg() -> tensor<i64> {
+  %0 = onnx.Constant dense<-4> : tensor<i64>
+  %1 = onnx.Constant dense<2> : tensor<i64>
+  %2 = "onnx.Mod"(%0, %1) : (tensor<i64> , tensor<i64>) -> tensor<i64>
+  "onnx.Return"(%2) : (tensor<i64>) -> ()
+  // CHECK: [[CONST:%.+]] = onnx.Constant dense<0> : tensor<i64>
+}
+
+// -----
+
+// CHECK-LABEL: @test_modulo_int_pos() -> tensor<i64>
+func.func @test_modulo_int_pos() -> tensor<i64> {
+  %0 = onnx.Constant dense<5> : tensor<i64>
+  %1 = onnx.Constant dense<8> : tensor<i64>
+  %2 = "onnx.Mod"(%0, %1) : (tensor<i64> , tensor<i64>) -> tensor<i64>
+  "onnx.Return"(%2) : (tensor<i64>) -> ()
+  // CHECK: [[CONST:%.+]] = onnx.Constant dense<5> : tensor<i64>
+}
+
+// -----
+
+// CHECK-LABEL: @test_modulo_float() -> tensor<1xf32>
+func.func @test_modulo_float() -> tensor<1xf32> {
+  %0 = onnx.Constant dense<[2.0]> : tensor<1xf32>
+  %1 = onnx.Constant dense<[7.0]> : tensor<1xf32>
+  %2 = "onnx.Mod"(%0, %1) {fmod = 1 : si64} : (tensor<1xf32> , tensor<1xf32>) -> tensor<1xf32>
+  "onnx.Return"(%2) : (tensor<1xf32>) -> ()
+  // CHECK: [[CONST:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<1xf32>
+  // CHECK-NOT: {{.*}} = "onnx.Mod"{{.*}}
+}
+
+// -----
+
+// CHECK-LABEL: @test_modulo_float_mixed() -> tensor<1xf32>
+func.func @test_modulo_float_mixed() -> tensor<1xf32> {
+  %0 = onnx.Constant dense<[-4.3]> : tensor<1xf32>
+  %1 = onnx.Constant dense<[2.1]> : tensor<1xf32>
+  %2 = "onnx.Mod"(%0, %1) {fmod = 1 : si64} : (tensor<1xf32> , tensor<1xf32>) -> tensor<1xf32>
+  "onnx.Return"(%2) : (tensor<1xf32>) -> ()
+  // CHECK: [[CONST:%.+]] = onnx.Constant dense<-0.100000381> : tensor<1xf32>
+  // CHECK-NOT: {{.*}} = "onnx.Mod"{{.*}}
+}
+
+//===----------------------------------------------------------------------===//
+/// Sqrt test
 
 // -----
 
@@ -468,7 +528,8 @@ func.func @test_sqrt() -> tensor<1x2xf32> {
   // CHECK-NOT: {{.*}} = "onnx.Sqrt"{{.*}}
 }
 
-/// Relu tests
+//===----------------------------------------------------------------------===//
+/// Relu test
 
 // -----
 
@@ -1253,6 +1314,21 @@ func.func @test_mul_folding(%arg0: tensor<1x1x28x28xf32>) -> tensor<*xf32> {
 
 // -----
 
+func.func @test_cast_i32_i1_i32() -> tensor<4xi32> {
+  %0 = onnx.Constant dense<[-1, 0, 1, 2]> : tensor<4xi32>
+  %1 = "onnx.Cast"(%0) {to = i1} : (tensor<4xi32>) -> tensor<4xi1>
+  %2 = "onnx.Cast"(%1) {to = i32} : (tensor<4xi1>) -> tensor<4xi32>
+  "onnx.Return"(%2) : (tensor<4xi32>) -> ()
+
+  // CHECK-LABEL:  func @test_cast_i32_i1_i32
+  // CHECK-SAME:   () -> tensor<4xi32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[1, 0, 1, 1]> : tensor<4xi32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<4xi32>
+  // CHECK:         }
+}
+
+// -----
+
 func.func @test_cast_i32_i64() -> tensor<3x2xi64> {
   %0 = onnx.Constant dense<[[2, 3], [4, 5], [6, 7]]> : tensor<3x2xi32>
   %1 = "onnx.Cast"(%0) {to = i64} : (tensor<3x2xi32>) -> tensor<3x2xi64>
@@ -1295,15 +1371,17 @@ func.func @test_cast_i32_f32() -> tensor<3x2xf32> {
 
 // -----
 
-func.func @test_cast_f32_i32() -> tensor<3x2xi32> {
-  %0 = onnx.Constant dense<[[2.3, 3.6], [4.5, 5.5], [6.0, 7.0]]> : tensor<3x2xf32>
-  %1 = "onnx.Cast"(%0) {to = i32} : (tensor<3x2xf32>) -> tensor<3x2xi32>
-  "onnx.Return"(%1) : (tensor<3x2xi32>) -> ()
+func.func @test_cast_f32_i32() -> tensor<8xi32> {
+  // COM: 0x7F800000/0xFF800000 are +/-INF
+  // COM: 0x7F800001/0xFFFFFFFF are smallest positive NaN/largest negative NaN
+  %0 = onnx.Constant dense<[2.3, 3.6, -1.0e10, 1.0e10, 0x7F800000, 0xFF800000, 0x7F800001, 0xFFFFFFFF]> : tensor<8xf32>
+  %1 = "onnx.Cast"(%0) {to = i32} : (tensor<8xf32>) -> tensor<8xi32>
+  "onnx.Return"(%1) : (tensor<8xi32>) -> ()
 
   // CHECK-LABEL:  func @test_cast_f32_i32
-  // CHECK-SAME:   () -> tensor<3x2xi32> {
-  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}[2, 3], [4, 5], [6, 7]{{.}}> : tensor<3x2xi32>
-  // CHECK:           onnx.Return [[VAR_0_]] : tensor<3x2xi32>
+  // CHECK-SAME:   () -> tensor<8xi32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[2, 3, -2147483648, 2147483647, 2147483647, -2147483648, 0, 0]> : tensor<8xi32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<8xi32>
   // CHECK:         }
 }
 
@@ -1916,3 +1994,63 @@ func.func @test_sum_3_inputs() -> tensor<2x2xf32> {
 // CHECK:           onnx.Return [[VAR_0_]] : tensor<2x2xf32>
 // CHECK:         }
 }
+
+// -----
+
+func.func @test_if_true(%arg0 : tensor<*xf16>, %arg1 : tensor<1xi64>, %arg2 : tensor<*xf16>) -> tensor<?xi64> {
+    %487 = onnx.Constant dense<true> : tensor<1xi1>
+    %488 = "onnx.If"(%487) ({
+      %6277 = onnx.Constant dense<1> : tensor<1xi64>
+      %6278 = "onnx.Squeeze"(%arg0, %arg1) : (tensor<*xf16>, tensor<1xi64>) -> tensor<?x?x?xf16>
+      onnx.Yield %6278 : tensor<?x?x?xf16>
+    }, {
+      %6277 = "onnx.Identity"(%arg2) : (tensor<*xf16>) -> tensor<?x?x?x?xf16>
+      onnx.Yield %6277 : tensor<?x?x?x?xf16>
+    }) : (tensor<1xi1>) -> tensor<*xf16>
+    %490 = "onnx.Shape"(%488) { start = 0 : si64} : (tensor<*xf16>) -> tensor<?xi64>
+   onnx.Return %490 : tensor<?xi64>
+}
+// CHECK-LABEL:  func.func @test_if_true
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<*xf16>, [[PARAM_1_:%.+]]: tensor<1xi64>, [[PARAM_2_:%.+]]: tensor<*xf16>) -> tensor<?xi64> {
+// CHECK:           [[VAR_0_:%.+]] = "onnx.Squeeze"([[PARAM_0_]], [[PARAM_1_]]) : (tensor<*xf16>, tensor<1xi64>) -> tensor<?x?x?xf16>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Shape"([[VAR_0_]]) {start = 0 : si64} : (tensor<?x?x?xf16>) -> tensor<?xi64>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<?xi64>
+// CHECK:         }
+
+// -----
+
+func.func @test_if_false(%arg0 : tensor<*xf16>, %arg1 : tensor<1xi64>, %arg2 : tensor<*xf16>) -> tensor<?xi64> {
+    %487 = onnx.Constant dense<false> : tensor<1xi1>
+    %488 = "onnx.If"(%487) ({
+      %6277 = onnx.Constant dense<1> : tensor<1xi64>
+      %6278 = "onnx.Squeeze"(%arg0, %arg1) : (tensor<*xf16>, tensor<1xi64>) -> tensor<?x?x?xf16>
+      onnx.Yield %6278 : tensor<?x?x?xf16>
+    }, {
+      %6277 = "onnx.Identity"(%arg2) : (tensor<*xf16>) -> tensor<?x?x?x?xf16>
+      onnx.Yield %6277 : tensor<?x?x?x?xf16>
+    }) : (tensor<1xi1>) -> tensor<*xf16>
+    %490 = "onnx.Shape"(%488) { start = 0 : si64} : (tensor<*xf16>) -> tensor<?xi64>
+   onnx.Return %490 : tensor<?xi64>
+}
+// CHECK-LABEL:  func.func @test_if_false
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<*xf16>, [[PARAM_1_:%.+]]: tensor<1xi64>, [[PARAM_2_:%.+]]: tensor<*xf16>) -> tensor<?xi64> {
+// CHECK:           [[VAR_0_:%.+]] = "onnx.Identity"([[PARAM_2_]]) : (tensor<*xf16>) -> tensor<?x?x?x?xf16>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Shape"([[VAR_0_]]) {start = 0 : si64} : (tensor<?x?x?x?xf16>) -> tensor<?xi64>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<?xi64>
+// CHECK:         }
+
+// -----
+
+func.func @test_pow() -> tensor<2x2xf32> {
+  %0 = onnx.Constant dense<64.0> : tensor<2x2xf32>
+  %1 = onnx.Constant dense<0.5> : tensor<f32>
+  %2 = "onnx.Pow"(%0, %1) : (tensor<2x2xf32> , tensor<f32>) -> tensor<2x2xf32>
+  onnx.Return %2 : tensor<2x2xf32>
+
+// CHECK-LABEL:  func.func @test_pow
+// CHECK-SAME:   () -> tensor<2x2xf32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<8.000000e+00> : tensor<2x2xf32>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<2x2xf32>
+// CHECK:         }
+}
+

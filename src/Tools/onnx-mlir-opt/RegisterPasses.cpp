@@ -46,13 +46,16 @@ void registerOMPasses(int optLevel) {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createDecomposeONNXToONNXPass();
   });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createRecomposeONNXToONNXPass();
+  });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createConvOptONNXToONNXPass();
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createONNXHybridTransformPass();
+    return createONNXHybridTransformPass(/*recompose ops*/ true);
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
@@ -71,6 +74,10 @@ void registerOMPasses(int optLevel) {
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createSetONNXNodeNamePass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createONNXPreKrnlVerifyPass();
   });
 
@@ -81,11 +88,12 @@ void registerOMPasses(int optLevel) {
   mlir::registerPass([optLevel]() -> std::unique_ptr<mlir::Pass> {
     return createLowerToKrnlPass(/*enableTiling*/ optLevel >= 3,
         /*enableSIMD, should consider disableSimdOption*/ optLevel >= 3,
-        /*enableParallel*/ false);
+        /*enableParallel*/ false,
+        /*opsForCall*/ "");
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createElideConstGlobalValuePass();
+    return createProcessScfParallelPrivatePass();
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
@@ -101,15 +109,11 @@ void registerOMPasses(int optLevel) {
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createDisconnectKrnlDimFromAllocPass();
-  });
-
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createLowerKrnlShapePass();
-  });
-
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createSimplifyShapeRelatedOpsPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createStandardFuncReturnPass();
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
@@ -120,9 +124,10 @@ void registerOMPasses(int optLevel) {
     return createConvertONNXToTOSAPass();
   });
 
-#ifdef ONNX_MLIR_ENABLE_MHLO
-  mlir::registerPass(
-      []() -> std::unique_ptr<mlir::Pass> { return createLowerToMhloPass(); });
+#ifdef ONNX_MLIR_ENABLE_STABLEHLO
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createLowerToStablehloPass();
+  });
 #endif
 }
 

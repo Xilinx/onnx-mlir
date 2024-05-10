@@ -5,10 +5,10 @@ add_onnx_mlir_library(OMKrnlToLLVM
   KrnlFindIndex.cpp
   KrnlCall.cpp
   KrnlEntryPoint.cpp
-  KrnlGetRef.cpp  
   KrnlGlobal.cpp
   KrnlInstrument.cpp
   KrnlMemcpy.cpp
+  KrnlNone.cpp
   KrnlPrintTensor.cpp
   KrnlPrint.cpp
   KrnlRandomNormal.cpp
@@ -35,6 +35,6 @@ add_onnx_mlir_library(OMKrnlToLLVM
   MLIRReconcileUnrealizedCasts
   MLIRSCFToControlFlow
   MLIRShapeToStandard
-  MLIRVectorToLLVM
+  MLIRVectorToLLVMPass
   onnx
   )

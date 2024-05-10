@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 set(ONNX_BACKENDTEST_SRC_DIR ${ONNX_MLIR_SRC_ROOT}/test/backend)
-set(ONNX_BACKENDTEST_BIN_DIR ${ONNX_MLIR_BIN_ROOT}/test/backend)
 
 file(GENERATE
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/conftest.py
@@ -16,6 +15,11 @@ file(GENERATE
 file(GENERATE
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/inference_backend.py
   INPUT ${ONNX_BACKENDTEST_SRC_DIR}/inference_backend.py
+  )
+
+file(GENERATE
+  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/onnxmlir_node_tests.py
+  INPUT ${ONNX_BACKENDTEST_SRC_DIR}/onnxmlir_node_tests.py
   )
 
 file(GENERATE
@@ -40,24 +44,24 @@ file(GENERATE
 
 configure_file(
  ${ONNX_BACKENDTEST_SRC_DIR}/test_config.py.in
- ${ONNX_BACKENDTEST_BIN_DIR}/test_config.py.cfg
+ ${CMAKE_CURRENT_BINARY_DIR}/test_config.py.cfg
  @ONLY
  )
 
 file(GENERATE
  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/test_config.py
- INPUT ${ONNX_BACKENDTEST_BIN_DIR}/test_config.py.cfg
+ INPUT ${CMAKE_CURRENT_BINARY_DIR}/test_config.py.cfg
  )
 
 configure_file(
   ${ONNX_BACKENDTEST_SRC_DIR}/test_config_compilerlib.py.in
-  ${ONNX_BACKENDTEST_BIN_DIR}/test_config_compilerlib.py.cfg
+  ${CMAKE_CURRENT_BINARY_DIR}/test_config_compilerlib.py.cfg
   @ONLY
   )
 
 file(GENERATE
  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/test_config_compilerlib.py
- INPUT ${ONNX_BACKENDTEST_BIN_DIR}/test_config_compilerlib.py.cfg
+ INPUT ${CMAKE_CURRENT_BINARY_DIR}/test_config_compilerlib.py.cfg
  )
 
 # CMAKE_CFG_INTDIR is . for single-config generators such as make, and
@@ -93,7 +97,7 @@ endif()
 set(NNPA_TEST_LIST
 
     # ==ARCH== NNPA
-    # ==ADDITIONAL_PARAGRAPH== NNPA has hardware limitations in dimension index size and tensor size, which are described in [NNPALimit.h](../src/Accelerators/NNPA/Conversion/ONNXToZHigh/NNPALimit.h). They are large enough for normal use cases, but if your model exceeds the limitations, CPU is used instead of NNPA.
+    # ==ADDITIONAL_PARAGRAPH== NNPA has hardware limitations in dimension index size and tensor size, which are described in [NNPALimit.h](../src/Accelerators/NNPA/Support/NNPALimit.h). They are large enough for normal use cases, but if your model exceeds the limitations, CPU is used instead of NNPA.
 
     # ==OP== Add
     # ==MIN== 6
@@ -187,7 +191,7 @@ set(NNPA_TEST_LIST
 
     # ==OP== GRU
     # ==MIN== 7
-    # ==LIM== - `direction` and `hidden_size` in `W` must have static dimensions.<br>- `R` must have static dimensions.<br>- If `B` and `initial_h` are given, they must have static dimensions.<br>- `sequence_lens` is not supported.<br>- `activations` must be `["Sigmoid", "Tanh", "Tanh"]`.<br>- `clip` is not supported.<br>- `linear_before_reset` must be 1.<br>- `layout` is not supported.
+    # ==LIM== - `direction` and `hidden_size` in `W` must have static dimensions.<br>- `R` must have static dimensions.<br>- If `B` and `initial_h` are given, they must have static dimensions.<br>- `sequence_lens` is not supported for bidirectional GRU.<br>- `activations` must be `["Sigmoid", "Tanh", "Tanh"]`.<br>- `clip` is not supported.<br>- `linear_before_reset` must be 1.<br>- `layout` is not supported.
     # test_gru_defaults_cpu
     # test_gru_seq_length_cpu
     # test_gru_with_initial_bias_cpu
@@ -355,7 +359,7 @@ foreach(test_name IN LISTS NNPA_TEST_LIST)
   set(ENV_TEST_CASE_BY_USER "${ENV_TEST_CASE_BY_USER} ${test_name}")
 endforeach()
 
-set(NNPA_TESTS_ENVS TEST_MACCEL=NNPA TEST_CASE_BY_USER=${ENV_TEST_CASE_BY_USER} TEST_ATOL=0.01 TEST_RTOL=0.05)
+set(NNPA_TESTS_ENVS TEST_MCPU=z16 TEST_MACCEL=NNPA TEST_CASE_BY_USER=${ENV_TEST_CASE_BY_USER} TEST_ATOL=0.01 TEST_RTOL=0.05)
 
 # ${ONNX_HOME} is the directory where onnx downloads real model files.
 # Model files are saved under ${ONNX_HOME}/models/model_name/model.onnx.
@@ -364,7 +368,7 @@ set(NNPA_TESTS_ENVS TEST_MACCEL=NNPA TEST_CASE_BY_USER=${ENV_TEST_CASE_BY_USER} 
 add_custom_target(check-onnx-backend-nnpa
   COMMAND
     TEST_INSTRUCTION_CHECK=true
-    ONNX_HOME=${CMAKE_CURRENT_BINARY_DIR}/cpp
+    ONNX_HOME=${FILE_GENERATE_DIR}/check-onnx-backend-nnpa
     ${NNPA_TESTS_ENVS} ${BACKEND_TEST_COMMAND} ${BACKEND_TEST_ARGS} ${FILE_GENERATE_DIR}/test.py
   DEPENDS
     ${FILE_GENERATE_DIR}/test.py
@@ -373,6 +377,7 @@ add_custom_target(check-onnx-backend-nnpa
 
 add_custom_target(check-onnx-backend-dynamic-nnpa
   COMMAND
+    ONNX_HOME=${FILE_GENERATE_DIR}/check-onnx-backend-dynamic-nnpa
     TEST_INSTRUCTION_CHECK=true
     TEST_DYNAMIC=true
     ${NNPA_TESTS_ENVS} ${BACKEND_TEST_COMMAND} ${BACKEND_TEST_ARGS} ${FILE_GENERATE_DIR}/test.py
@@ -386,6 +391,7 @@ add_custom_target(check-onnx-backend-constant-nnpa
     # In some test cases such as `test_add_cpu`, operations are removed by optimization and
     # instruction check fails. So, currently instruction check is disabled in constant test.
     # TEST_INSTRUCTION_CHECK=true
+    ONNX_HOME=${FILE_GENERATE_DIR}/check-onnx-backend-constant-nnpa
     TEST_CONSTANT=true
     ${NNPA_TESTS_ENVS} ${BACKEND_TEST_COMMAND} ${BACKEND_TEST_ARGS} ${FILE_GENERATE_DIR}/test.py
   DEPENDS
@@ -410,13 +416,13 @@ add_custom_target(clean-onnx-backend-nnpa
   )
 
 add_dependencies(check-onnx-backend-nnpa onnx-mlir)
-add_dependencies(check-onnx-backend-nnpa PyRuntime)
+add_dependencies(check-onnx-backend-nnpa PyRuntimeC)
 add_dependencies(check-onnx-backend-dynamic-nnpa onnx-mlir)
-add_dependencies(check-onnx-backend-dynamic-nnpa PyRuntime)
+add_dependencies(check-onnx-backend-dynamic-nnpa PyRuntimeC)
 add_dependencies(check-onnx-backend-constant-nnpa onnx-mlir)
-add_dependencies(check-onnx-backend-constant-nnpa PyRuntime)
+add_dependencies(check-onnx-backend-constant-nnpa PyRuntimeC)
 add_dependencies(check-onnx-backend-compilerlib-nnpa CompilerLibTest)
-add_dependencies(check-onnx-backend-compilerlib-nnpa PyRuntime)
+add_dependencies(check-onnx-backend-compilerlib-nnpa PyRuntimeC)
 
 add_dependencies(check-onnx-backend-numerical-nnpa check-onnx-backend-nnpa)
 add_dependencies(check-onnx-backend-numerical-nnpa check-onnx-backend-dynamic-nnpa)
@@ -427,8 +433,8 @@ if (ONNX_MLIR_ENABLE_JNI)
   message(STATUS "JSONITER_JAR             : ${JSONITER_JAR}")
   add_custom_target(check-onnx-backend-jni-nnpa
     COMMAND
-      ONNX_HOME=${CMAKE_CURRENT_BINARY_DIR}/jni
-       TEST_EMIT=jni JSONITER_JAR=${JSONITER_JAR}
+      ONNX_HOME=${FILE_GENERATE_DIR}/check-onnx-backend-jni-nnpa
+      TEST_EMIT=jni JSONITER_JAR=${JSONITER_JAR}
       ${NNPA_TESTS_ENVS} ${BACKEND_TEST_COMMAND} ${BACKEND_TEST_ARGS} ${FILE_GENERATE_DIR}/test.py
     DEPENDS
       ${FILE_GENERATE_DIR}/test.py
@@ -437,6 +443,7 @@ if (ONNX_MLIR_ENABLE_JNI)
 
   add_custom_target(check-onnx-backend-dynamic-jni-nnpa
     COMMAND
+      ONNX_HOME=${FILE_GENERATE_DIR}/check-onnx-backend-dynamic-jni-nnpa
       TEST_DYNAMIC=true TEST_EMIT=jni JSONITER_JAR=${JSONITER_JAR}
       ${NNPA_TESTS_ENVS} ${BACKEND_TEST_COMMAND} ${BACKEND_TEST_ARGS} ${FILE_GENERATE_DIR}/test.py
     DEPENDS
@@ -446,6 +453,7 @@ if (ONNX_MLIR_ENABLE_JNI)
 
   add_custom_target(check-onnx-backend-constant-jni-nnpa
     COMMAND
+      ONNX_HOME=${FILE_GENERATE_DIR}/check-onnx-backend-constant-jni-nnpa
       TEST_CONSTANT=true TEST_EMIT=jni JSONITER_JAR=${JSONITER_JAR}
       ${NNPA_TESTS_ENVS} ${BACKEND_TEST_COMMAND} ${BACKEND_TEST_ARGS} ${FILE_GENERATE_DIR}/test.py
     DEPENDS
@@ -454,15 +462,15 @@ if (ONNX_MLIR_ENABLE_JNI)
     )
 
   add_dependencies(check-onnx-backend-jni-nnpa onnx-mlir)
-  add_dependencies(check-onnx-backend-jni-nnpa PyRuntime)
+  add_dependencies(check-onnx-backend-jni-nnpa PyRuntimeC)
   add_dependencies(check-onnx-backend-jni-nnpa javaruntime)
   add_dependencies(check-onnx-backend-jni-nnpa jniruntime)
   add_dependencies(check-onnx-backend-dynamic-jni-nnpa onnx-mlir)
-  add_dependencies(check-onnx-backend-dynamic-jni-nnpa PyRuntime)
+  add_dependencies(check-onnx-backend-dynamic-jni-nnpa PyRuntimeC)
   add_dependencies(check-onnx-backend-dynamic-jni-nnpa javaruntime)
   add_dependencies(check-onnx-backend-dynamic-jni-nnpa jniruntime)
   add_dependencies(check-onnx-backend-constant-jni-nnpa onnx-mlir)
-  add_dependencies(check-onnx-backend-constant-jni-nnpa PyRuntime)
+  add_dependencies(check-onnx-backend-constant-jni-nnpa PyRuntimeC)
   add_dependencies(check-onnx-backend-constant-jni-nnpa javaruntime)
   add_dependencies(check-onnx-backend-constant-jni-nnpa jniruntime)
 

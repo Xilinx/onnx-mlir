@@ -11,6 +11,7 @@ add_onnx_mlir_library(OMONNXToZHigh
   libzdnn
 
   LINK_LIBS PUBLIC
+  OMCompilerOptions
   OMONNXOps
   OMONNXToKrnl
   OMZHighOps
@@ -31,6 +32,7 @@ add_onnx_mlir_library(OMRewriteONNXForZHigh
   libzdnn
   
   LINK_LIBS PUBLIC
+  OMCompilerOptions
   OMONNXOps
   OMONNXToKrnl
   OMZHighOps
@@ -49,6 +51,23 @@ add_onnx_mlir_library(OMZHighToONNX
   LINK_LIBS PUBLIC
   OMONNXOps
   OMZHighOps
+
+  ACCEL_INCLUDE_DIRS PRIVATE
+  ${NNPA_INCLUDE_PATH}
+  )
+
+add_onnx_mlir_library(OMDevicePlacement
+  DevicePlacement.cpp
+  DevicePlacementHeuristic.cpp
+  PerfModel.cpp
+
+  DEPENDS
+  libzdnn
+
+  LINK_LIBS PUBLIC
+  OMONNXOps
+  OMONNXToZHigh
+  OMRewriteONNXForZHigh
 
   ACCEL_INCLUDE_DIRS PRIVATE
   ${NNPA_INCLUDE_PATH}

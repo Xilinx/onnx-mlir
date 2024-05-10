@@ -1,5 +1,5 @@
 
-// RUN: onnx-mlir --maccel=NNPA -v -tag="test" %s -o %t 2>&1 | FileCheck %s
+// RUN: onnx-mlir --mcpu=z16 --maccel=NNPA -v -tag="test" %s -o %t 2>&1 | FileCheck %s
 
 // -----
 
@@ -13,4 +13,4 @@ module {
 }
 // CHECK: {{.*}} opt {{.*}} -o {{.*}}.bc
 // CHECK-NEXT: {{.*}} llc {{.*}}  {{.*}} {{.*}}.bc
-// CHECK-NEXT: {{.*}} {{clang|c|g}}++{{.*}} {{.*}}.o -o {{.*}}.so -shared -fPIC -L{{.*}}/lib -lcruntime -lRuntimeNNPA -lzdnn
+// CHECK-NEXT: {{.*}} {{clang|c|g}}++{{.*}} {{.*}}.o -o {{.*}}.so -shared -fPIC -L{{.*}}/lib -lRuntimeNNPA -lzdnn -lcruntime

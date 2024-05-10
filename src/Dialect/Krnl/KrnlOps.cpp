@@ -506,7 +506,9 @@ ParseResult KrnlIterateOp::parse(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-Region &KrnlIterateOp::getLoopBody() { return getBodyRegion(); }
+::llvm::SmallVector<mlir::Region *> KrnlIterateOp::getLoopRegions() {
+  return {&getBodyRegion()};
+}
 
 LogicalResult KrnlIterateOp::verify() {
   // TODO: Verify number of induction variable bounds matches the number of
@@ -910,6 +912,15 @@ void KrnlSeqExtractOp::getEffects(
   effects.emplace_back(MemoryEffects::Write::get(), getOutput(),
       SideEffects::DefaultResource::get());
   effects.emplace_back(MemoryEffects::Allocate::get(), getOutput(),
+      SideEffects::DefaultResource::get());
+}
+
+void KrnlSeqStoreOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(), getSeq(),
+      SideEffects::DefaultResource::get());
+  effects.emplace_back(MemoryEffects::Read::get(), getInput(),
       SideEffects::DefaultResource::get());
 }
 

@@ -45,12 +45,11 @@ using namespace onnx_mlir;
 
 namespace onnx_mlir {
 
-void addONNXToZHighPasses(
-    mlir::PassManager &pm, ArrayRef<std::string> execNodesOnCpu) {
+void addONNXToZHighPasses(mlir::PassManager &pm) {
   for (unsigned i = 0; i < 3; i++) {
     // Repeat this process so that shape-related ops such as Shape, Expand,
     // Gather generated during RewriteONNXForZHigh will become constants.
-    pm.addPass(onnx_mlir::createRewriteONNXForZHighPass(execNodesOnCpu));
+    pm.addPass(onnx_mlir::createRewriteONNXForZHighPass());
     // Simplify shape-related ops, including ShapeOp-to-DimOp replacement,
     // constant propagation, shape inference and canonicalize.
     pm.addPass(onnx_mlir::createSimplifyShapeRelatedOpsPass());
@@ -75,7 +74,7 @@ void addONNXToZHighPasses(
     pm.addNestedPass<func::FuncOp>(
         onnx_mlir::createInstrumentPass(instrumentOps, instrumentActions));
 
-  pm.addPass(onnx_mlir::createONNXToZHighPass(execNodesOnCpu));
+  pm.addPass(onnx_mlir::createONNXToZHighPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
   // There are more opportunities for const propagation once all zhigh ops were
   // generated.
@@ -103,26 +102,43 @@ void addONNXToZHighPasses(
   if (nnpaEnableZHighToOnnx)
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createZHighToONNXPass());
 
-  // Constant propagation at ZHighIR: constant stickify.
-  // Only support BE machines.
-  bool isBE = llvm::support::endian::system_endianness() ==
-              llvm::support::endianness::big;
-  if (isBE)
-    pm.addNestedPass<func::FuncOp>(
-        onnx_mlir::zhigh::createZHighConstPropagationPass());
   // One more call to ONNX shape inference/canonicalization/... to update shape
   // if possible.
   if (enableONNXHybridPass) {
     // For starters only illustrating the new hybrid pass by replacing 3 passes
     // here. The plan is to replace most of the passes in addONNXToMLIRPasses.
-    pm.addNestedPass<func::FuncOp>(onnx_mlir::createONNXHybridTransformPass());
+    pm.addNestedPass<func::FuncOp>(
+        onnx_mlir::createONNXHybridTransformPass(!disableRecomposeOption));
   } else {
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
     pm.addPass(mlir::createCanonicalizerPass());
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
   }
+
+  // Replace every DisposableElementsAttr with DenseElementsAttr.
+  // ZHighConstPropagation currently assumes that DenseElementsAttr is used.
+  pm.addPass(createScrubDisposablePass());
+
+  // Constant propagation at ZHighIR: constant stickify.
+  // Only support BE machines.
+  bool isBE = llvm::endianness::native == llvm::endianness::big;
+  if (isBE)
+    pm.addNestedPass<func::FuncOp>(
+        onnx_mlir::zhigh::createZHighConstPropagationPass());
+
+  // Experimental feature: Decompose stick/unstick into two phases: layout
+  // transform and data conversion.
+  if (nnpaEnableZHighDecomposeStickUnstick) {
+    pm.addNestedPass<func::FuncOp>(
+        onnx_mlir::zhigh::createZHighDecomposeStickUnstickPass());
+    pm.addPass(mlir::createCanonicalizerPass());
+  }
+
   // Remove common sub-expressions.
   pm.addPass(mlir::createCSEPass());
+
+  // Clean dead code.
+  pm.addPass(mlir::createSymbolDCEPass());
 
   // Insert an instrumentation after lowering onnx to zhigh to get profiling
   // for onnx and zhigh ops.
@@ -149,13 +165,28 @@ void addPassesNNPA(mlir::OwningOpRef<mlir::ModuleOp> &module,
   // TODO: Develop and use determineInputIRLevel for NNPA
   // InputIRLevelType inputIRLevel = determineInputIRLevel(module);
 
+  // Disable constprop rules:
+  // - add(add(x, c), y) to add(add(x, y), c)
+  // - add(x, add(y, c)) to add(add(x, y), c)
+  // because in foundation models we have add(add(matmul(x, z), c), y), and we
+  // want to keep c near matmul so that add(matmul(x, z), c) will be run on zAIU
+  // as one call.
+  onnxConstPropDisablePatterns.emplace_back("AddConstAssociative2");
+  onnxConstPropDisablePatterns.emplace_back("AddConstAssociative3");
+
+  // Override pass configurations.
+  configurePasses();
+
   // LLVM_DEBUG(llvm::dbgs() << "Adding NNPA passes" << std::endl;);
-  if (emissionTarget >= EmitONNXIR)
+  if (emissionTarget >= EmitONNXIR) {
     addONNXToMLIRPasses(pm, /*target CPU*/ maccel.empty());
+    pm.addPass(onnx_mlir::createDevicePlacementPass(nnpaLoadDevicePlacementFile,
+        nnpaSaveDevicePlacementFile, nnpaPlacementHeuristic));
+  }
 
   if (emissionTarget >= EmitMLIR) {
     // Lower zAIU-compatible ONNX ops to ZHigh dialect where possible.
-    addONNXToZHighPasses(pm, execNodesOnCpu);
+    addONNXToZHighPasses(pm);
 
     if (nnpaEmissionTarget >= EmitZHighIR)
       emissionTarget = EmitMLIR;
@@ -187,7 +218,7 @@ void addPassesNNPA(mlir::OwningOpRef<mlir::ModuleOp> &module,
         pm.addPass(mlir::createCanonicalizerPass());
         // Normalize MemRefs.
         normalizeMemRefsPasses(pm);
-        // Some Knrl ops, e.g. KrnlMemset, potentially exist and will be lowered
+        // Some Krnl ops, e.g. KrnlMemset, potentially exist and will be lowered
         // to Affine when its operands are normalized.
         addKrnlToAffinePasses(pm);
         // Optimizations at ZLow after normalizing MemRefs.
