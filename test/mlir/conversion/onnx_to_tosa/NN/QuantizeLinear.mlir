@@ -39,7 +39,6 @@ func.func @test_quantizeLinear_per_axis(%arg0: tensor<8x2xf32>) -> tensor<8x2xi8
 // CHECK:           return %[[CAST]] : tensor<8x2xi8>
 // CHECK:         }
 
-
 // -----
 
 func.func @test_quantizeLinear_negative_axis(%arg0: tensor<8x2xf32>) -> tensor<8x2xi8> {
