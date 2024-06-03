@@ -89,7 +89,6 @@ public:
                       .getResult();
     Value castOp = tosaBuilder.castToNewTensorElementType(
         mulOp, resultType.getElementType());
-    // rewriter.createOrFold<mlir::tosa::CastOp>(loc, resultType, mulOp);
 
     rewriter.replaceOp(op, castOp);
     return success();
