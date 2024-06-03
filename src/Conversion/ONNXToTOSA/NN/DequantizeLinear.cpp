@@ -81,12 +81,15 @@ public:
     Value subOp = tosa::CreateOpAndInfer<mlir::tosa::SubOp>(
         rewriter, loc, subOpA.getType(), subOpA, subOpB)
                       .getResult();
+    // There are no guarantees about the bitwith of the scale factor
+    Value scaleFactorCast =
+        tosaBuilder.castToNewTensorElementType(scaleFactorConst, arithType);
     Value mulOp = tosa::CreateOpAndInfer<mlir::tosa::MulOp>(
-        rewriter, loc, subOp.getType(), subOp, scaleFactorConst, 0)
+        rewriter, loc, subOp.getType(), subOp, scaleFactorCast, 0)
                       .getResult();
-    Value castOp = tosa::CreateOpAndInfer<mlir::tosa::CastOp>(
-        rewriter, loc, resultType, mulOp)
-                       .getResult();
+    Value castOp = tosaBuilder.castToNewTensorElementType(
+        mulOp, resultType.getElementType());
+    // rewriter.createOrFold<mlir::tosa::CastOp>(loc, resultType, mulOp);
 
     rewriter.replaceOp(op, castOp);
     return success();
