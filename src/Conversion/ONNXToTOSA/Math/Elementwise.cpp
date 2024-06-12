@@ -94,12 +94,8 @@ LogicalResult checkBasicTosaRequirementsForBinaryOps(
 
   if (TosaOpT::template hasTrait<
           ::mlir::OpTrait::SameOperandsAndResultElementType>()) {
-    auto lhsElementType =
-        lhs.getType().template cast<TensorType>().getElementType();
-    auto rhsElementType =
-        rhs.getType().template cast<TensorType>().getElementType();
-    if (lhsElementType != rhsElementType ||
-        lhsElementType != resultElementType) {
+    if (lhsType.getElementType() != rhsType.getElementType() ||
+        lhsType.getElementType() != resultElementType) {
       return rewriter.notifyMatchFailure(
           op, "lhs, rhs and result must have the same type");
     }
