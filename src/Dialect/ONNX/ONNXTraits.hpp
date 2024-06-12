@@ -4,7 +4,7 @@
 
 //===----------------- ONNXTraits.hpp - ONNX Op Traits --------------------===//
 //
-// Copyright 2024 Advanced Micro Devices, Inc.
+// Copyright (C) 2024, Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
