@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//===------------------ ONNXOps.cpp - ONNX Operations ---------------------===//
+//===------------------ ONNXTraits.hpp - ONNX Op Traits --------------------===//
 //
 // Copyright 2024 Advanced Micro Devices, Inc.
 //
