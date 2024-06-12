@@ -25,7 +25,7 @@ public:
   template <typename ConcreteType>
   class Impl : public OpTrait::TraitBase<ConcreteType, Impl> {
   public:
-    int getOpsetMinVersion() { return version; }
+    int getOpVersion() { return version; }
   };
 };
 

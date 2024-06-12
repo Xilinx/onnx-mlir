@@ -232,8 +232,8 @@ def ONNXConstantOpFromDenseAttr: NativeCodeCall<
 class ONNX_Op<string mnemonic, list<Trait> traits = []> :
   Op<ONNX_Dialect, mnemonic, traits> ;
 
-// Trait to specify which operation set a given operator was introduced in.
-// For multi-versioned operators, this also appears in the operator's name.
+// Trait to specify which operation set introduced a revision of an operator.
+// For multi-versioned operators, the version also appears in the operator's name.
 class OpVersionTrait<int version>
   : ParamNativeOpTrait<"OpVersionTrait", !cast<string>(version)>;
 
