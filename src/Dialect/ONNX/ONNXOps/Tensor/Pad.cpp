@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
+#include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
 using namespace mlir::OpTrait::util;
@@ -28,10 +29,24 @@ LogicalResult ONNXPadOpShapeHelper::computeShape() {
   ONNXPadOpAdaptor operandAdaptor(operands);
   Value dataOperand = operandAdaptor.getData();
   Value padsOperand = operandAdaptor.getPads();
+  Value axesOperand = operandAdaptor.getAxes();
   DimsExpr outputDims;
 
   // Get info about input data operand.
   uint64_t dataRank = createIE->getShapedTypeRank(dataOperand);
+
+  // If the axes operand is provided, the output shape is at least guaranteed to
+  // keep the same rank as the input. But nothing can be said about the actual
+  // size of each dimension
+  if (!isNoneValue(axesOperand)) {
+    bool isFloat = isa<FloatType>(getElementType(dataOperand.getType()));
+    llvm::for_each(llvm::iota_range<int64_t>(0, dataRank, /*Inclusive=*/false),
+        [&outputDims, isFloat](const auto /*idx*/) {
+          outputDims.push_back(QuestionmarkIndexExpr(/*IsFloat=*/isFloat));
+        });
+    setOutputDims(outputDims);
+    return success();
+  }
 
   // Initialize context and results (pads & output)
   pads.resize(2 * dataRank); // pads two sides of each axis.
@@ -47,7 +62,7 @@ LogicalResult ONNXPadOpShapeHelper::computeShape() {
     // Get begin/end pads.
     SymbolIndexExpr padBegin(createIE->getIntFromArrayAsSymbol(padsOperand, i));
     SymbolIndexExpr padEnd(
-        createIE->getIntFromArrayAsSymbol(padsOperand, i + dataRank));
+        createIE->getIntFromArrayAsSymbol(padsOperand, i + dataRank - 1));
     if (padBegin.isUndefined() || padEnd.isUndefined())
       return op->emitError("pad parameter could not be processed");
     // Get input dim.
@@ -55,6 +70,9 @@ LogicalResult ONNXPadOpShapeHelper::computeShape() {
 
     // Calculation for output size.
     IndexExpr dimOutputFinal = (padBegin + dimInput) + padEnd;
+    std::string debug;
+    dimOutputFinal.debugPrint(debug);
+    llvm::errs() << debug << "\n";
 
     // Save results.
     pads[i] = padBegin;
@@ -84,10 +102,6 @@ LogicalResult ONNXPadOp::verify() {
       return emitOpError("Pad with constant_value that doesn't match the "
                          "element type of the input.");
     }
-  }
-
-  if (!isNoneValue(getAxes())) {
-    return emitOpError("Axes input is not currently supported");
   }
 
   return success();
