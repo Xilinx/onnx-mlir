@@ -568,6 +568,8 @@ struct ONNXPadOpShapeHelper : public ONNXOpShapeHelper {
       : ONNXOpShapeHelper(op, operands, ieBuilder, scope), pads() {}
   virtual ~ONNXPadOpShapeHelper() {}
   mlir::LogicalResult computeShape() final;
+  IndexExpr computOutputDim(mlir::Value dataOperand, mlir::Value padsOperand,
+      mlir::Value axesOperand, uint64_t padsIndex, uint64_t axesIndex);
   // Additional data for PadOp.
   llvm::SmallVector<IndexExpr, 4> pads;
 };

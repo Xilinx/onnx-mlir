@@ -12,8 +12,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "src/Dialect/Mlir/IndexExpr.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
+#include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/Error.h"
 
 using namespace mlir;
 using namespace mlir::OpTrait::util;
@@ -25,6 +28,29 @@ using namespace onnx_mlir;
 
 namespace onnx_mlir {
 
+IndexExpr ONNXPadOpShapeHelper::computOutputDim(Value dataOperand,
+    Value padsOperand, Value axesOperand, uint64_t padsIndex,
+    uint64_t padsAxis) {
+  // Get the size of the axes parameter.
+  auto axesSize = createIE->getArraySize(axesOperand);
+
+  // Get begin/end pads.
+  SymbolIndexExpr padBegin(
+      createIE->getIntFromArrayAsSymbol(padsOperand, padsIndex));
+  SymbolIndexExpr padEnd(
+      createIE->getIntFromArrayAsSymbol(padsOperand, padsIndex + axesSize));
+  if (padBegin.isUndefined() || padEnd.isUndefined()) {
+    // FIXME
+    assert(false && "pad parameter could not be processed");
+  }
+  // Get input dim.
+  DimIndexExpr dimInput(createIE->getShapeAsDim(dataOperand, padsAxis));
+
+  // Calculation for output size.
+  IndexExpr dimOutputFinal = (padBegin + dimInput) + padEnd;
+  return dimOutputFinal;
+}
+
 LogicalResult ONNXPadOpShapeHelper::computeShape() {
   ONNXPadOpAdaptor operandAdaptor(operands);
   Value dataOperand = operandAdaptor.getData();
@@ -35,15 +61,25 @@ LogicalResult ONNXPadOpShapeHelper::computeShape() {
   // Get info about input data operand.
   uint64_t dataRank = createIE->getShapedTypeRank(dataOperand);
 
-  // If the axes operand is provided, the output shape is at least guaranteed to
-  // keep the same rank as the input. But nothing can be said about the actual
-  // size of each dimension
   if (!isNoneValue(axesOperand)) {
     bool isFloat = isa<FloatType>(getElementType(dataOperand.getType()));
-    llvm::for_each(llvm::iota_range<int64_t>(0, dataRank, /*Inclusive=*/false),
-        [&outputDims, isFloat](const auto /*idx*/) {
-          outputDims.push_back(QuestionmarkIndexExpr(/*IsFloat=*/isFloat));
-        });
+    // Pad operation keeps the rank of dataOperand
+    outputDims.resize(dataRank, QuestionmarkIndexExpr(/*IsFloat=*/isFloat));
+    // Axes is guaranteed to be 1-D
+    auto axesSize = createIE->getArraySize(axesOperand);
+
+    for (auto axesIndex : llvm::seq(axesSize)) {
+      IndexExpr padsAxis =
+          createIE->getIntFromArrayAsSymbol(axesOperand, axesIndex);
+      if (padsAxis.isLiteral()) {
+        IndexExpr outputDimSize = computOutputDim(dataOperand, padsOperand,
+            axesOperand, axesIndex, padsAxis.getLiteral());
+        llvm::errs() << "Literal: " << outputDimSize.getLiteral() << "\n";
+        outputDims[padsAxis.getLiteral()] = outputDimSize;
+      } else {
+        outputDims[axesSize] = QuestionmarkIndexExpr(/*IsFloat=*/isFloat);
+      }
+    }
     setOutputDims(outputDims);
     return success();
   }
