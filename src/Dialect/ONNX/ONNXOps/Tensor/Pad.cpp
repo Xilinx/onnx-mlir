@@ -30,17 +30,17 @@ using namespace onnx_mlir;
 
 namespace onnx_mlir {
 
-IndexExpr ONNXPadOpShapeHelper::computOutputDim(Value dataOperand,
-    Value padsOperand, uint64_t beginEndSplit, uint64_t padsIndex,
-    uint64_t padsAxis) {
+llvm::Expected<IndexExpr> ONNXPadOpShapeHelper::computOutputDim(
+    Value dataOperand, Value padsOperand, uint64_t beginEndSplit,
+    uint64_t padsIndex, uint64_t padsAxis) {
   // Get begin/end pads.
   SymbolIndexExpr padBegin(
       createIE->getIntFromArrayAsSymbol(padsOperand, padsIndex));
   SymbolIndexExpr padEnd(createIE->getIntFromArrayAsSymbol(
       padsOperand, padsIndex + beginEndSplit));
   if (padBegin.isUndefined() || padEnd.isUndefined()) {
-    // FIXME
-    assert(false && "pad parameter could not be processed");
+    return llvm::createStringError(
+        llvm::inconvertibleErrorCode(), "pad parameter could not be processed");
   }
   // Get input dim.
   DimIndexExpr dimInput(createIE->getShapeAsDim(dataOperand, padsAxis));
@@ -75,20 +75,29 @@ LogicalResult ONNXPadOpShapeHelper::computeShape() {
       return success();
     }
 
-    assert(axesSize > 0 && "axes size must be greater than 0");
+    if (axesSize <= 0) {
+      op->emitError("axes size must be greater than 0");
+    }
+
     auto beginEndSplit = (uint64_t)createIE->getArraySize(axesOperand);
 
     // Iterate over axesOperand to figure out to which axes the pads apply.
     for (auto axesOperandIndex : llvm::seq(axesSize)) {
+      // TODO: Axes values can be negative. Add special logic for that
       IndexExpr padsAxis =
           createIE->getIntFromArrayAsSymbol(axesOperand, axesOperandIndex);
 
       if (padsAxis.isLiteral()) {
-        IndexExpr outputDimSize = computOutputDim(dataOperand, padsOperand,
-            beginEndSplit, axesOperandIndex, padsAxis.getLiteral());
-        if (outputDimSize.isLiteral()) {
-          llvm::errs() << "Literal: " << outputDimSize.getLiteral() << "\n";
-          outputDims[padsAxis.getLiteral()] = outputDimSize;
+        llvm::Expected<IndexExpr> outputDimSize =
+            computOutputDim(dataOperand, padsOperand, beginEndSplit,
+                axesOperandIndex, padsAxis.getLiteral());
+        if (!outputDimSize) {
+          return op->emitError(llvm::toString(outputDimSize.takeError()));
+        }
+
+        if (outputDimSize->isLiteral()) {
+          llvm::errs() << "Literal: " << outputDimSize->getLiteral() << "\n";
+          outputDims[padsAxis.getLiteral()] = *outputDimSize;
         }
       }
     }
