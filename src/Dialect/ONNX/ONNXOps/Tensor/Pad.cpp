@@ -74,8 +74,10 @@ LogicalResult ONNXPadOpShapeHelper::computeShape() {
       if (padsAxis.isLiteral()) {
         IndexExpr outputDimSize = computOutputDim(dataOperand, padsOperand,
             axesOperand, axesIndex, padsAxis.getLiteral());
-        llvm::errs() << "Literal: " << outputDimSize.getLiteral() << "\n";
-        outputDims[padsAxis.getLiteral()] = outputDimSize;
+        if (outputDimSize.isLiteral()) {
+          llvm::errs() << "Literal: " << outputDimSize.getLiteral() << "\n";
+          outputDims[padsAxis.getLiteral()] = outputDimSize;
+        }
       } else {
         outputDims[axesSize] = QuestionmarkIndexExpr(/*IsFloat=*/isFloat);
       }
@@ -98,7 +100,7 @@ LogicalResult ONNXPadOpShapeHelper::computeShape() {
     // Get begin/end pads.
     SymbolIndexExpr padBegin(createIE->getIntFromArrayAsSymbol(padsOperand, i));
     SymbolIndexExpr padEnd(
-        createIE->getIntFromArrayAsSymbol(padsOperand, i + dataRank - 1));
+        createIE->getIntFromArrayAsSymbol(padsOperand, i + dataRank));
     if (padBegin.isUndefined() || padEnd.isUndefined())
       return op->emitError("pad parameter could not be processed");
     // Get input dim.
