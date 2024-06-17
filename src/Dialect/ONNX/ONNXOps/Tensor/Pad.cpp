@@ -14,7 +14,9 @@
 
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "llvm/ADT/Sequence.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/Error.h"
+#include <numeric>
 
 using namespace mlir;
 using namespace mlir::OpTrait::util;
@@ -55,117 +57,98 @@ llvm::Expected<DimData> computOutputDim(IndexExprBuilder *createIE,
   return DimData{padBegin, padEnd, dimOutputFinal};
 }
 
-static llvm::Expected<DimsExpr> computeOutputShapeWithAxesOp(
-    IndexExprBuilder *createIE, Value dataOperand, Value padsOperand,
-    Value axesOperand) {
-  DimsExpr outputDims;
-
-  uint64_t dataRank = createIE->getShapedTypeRank(dataOperand);
-
-  // Pad operation keeps rank and element type of dataOperand
-  bool isFloat = isa<FloatType>(getElementType(dataOperand.getType()));
-  outputDims.resize(dataRank, QuestionmarkIndexExpr(/*IsFloat=*/isFloat));
-
-  // If axes is present, the size of pads is set to 2 * axes_size.
-  // Axes is guaranteed to be 1-D per op definition
-  auto axesSize = createIE->getArraySize(axesOperand);
-
-  // Bail out: If axes is dynamic, output is also dynamic.
-  if (axesSize == ShapedType::kDynamic) {
-    return outputDims;
-  }
-
-  if (axesSize <= 0) {
-    return llvm::createStringError(
-        llvm::inconvertibleErrorCode(), "axes size must be greater than 0");
-  }
-
-  auto beginEndSplit = (uint64_t)createIE->getArraySize(axesOperand);
-
-  // Iterate over axesOperand to figure out to which axes the pads apply.
-  for (auto axesOperandIndex : llvm::seq(axesSize)) {
-    IndexExpr padsAxis =
-        createIE->getIntFromArrayAsSymbol(axesOperand, axesOperandIndex);
-
-    if (!padsAxis.isLiteral()) {
-      return outputDims;
-    }
-
-    int64_t positiveAxis = padsAxis.getLiteral();
-    if (positiveAxis < 0) {
-      if (positiveAxis + (int)dataRank < 0) {
-        return llvm::createStringError(
-            llvm::inconvertibleErrorCode(), "axes value is out of bounds");
-      }
-      positiveAxis += dataRank;
-    }
-
-    llvm::Expected<DimData> newDim = computOutputDim(createIE, dataOperand,
-        padsOperand, beginEndSplit, axesOperandIndex, positiveAxis);
-
-    if (!newDim) {
-      return newDim.takeError();
-    }
-
-    if (newDim->dim.isLiteral()) {
-      outputDims[positiveAxis] = newDim->dim;
-    }
-  }
-
-  return outputDims;
-}
-
 LogicalResult ONNXPadOpShapeHelper::computeShape() {
   ONNXPadOpAdaptor operandAdaptor(operands);
   Value dataOperand = operandAdaptor.getData();
   Value padsOperand = operandAdaptor.getPads();
   Value axesOperand = operandAdaptor.getAxes();
-  DimsExpr outputDims;
 
-  // Get info about input data operand.
   uint64_t dataRank = createIE->getShapedTypeRank(dataOperand);
 
+  DimsExpr outputDims;
+  bool isFloat = isa<FloatType>(getElementType(dataOperand.getType()));
+  outputDims.resize(dataRank, QuestionmarkIndexExpr(/*IsFloat=*/isFloat));
+
+  SmallVector<uint64_t> axes;
   // If axes is not present, the shape computation is simpler and the size
   // of pads in known to be 2 * dataRank.
   if (isNoneValue(axesOperand)) {
+    axes.resize(dataRank);
+    std::iota(axes.begin(), axes.end(), 0);
+  } else {
+    auto axesSize = createIE->getArraySize(axesOperand);
 
-    // Initialize context and results (pads & output)
-    pads.resize(2 * dataRank); // pads two sides of each axis.
-    outputDims.resize(dataRank);
-
-    // `pads` format is : [x1_begin, x2_begin,...,x1_end, x2_end,...],
-    // where
-    // - xi_begin: the number of pad values added at the beginning of axis `i`
-    // - xi_end: the number of pad values added at the end of axis `i`.
-
-    // Calculate output dimension sizes.
-    for (auto axis : llvm::seq(dataRank)) {
-      llvm::Expected<DimData> newDim = computOutputDim(
-          createIE, dataOperand, padsOperand, dataRank, axis, axis);
-      if (!newDim) {
-        return op->emitError(llvm::toString(newDim.takeError()));
-      }
-
-      // Save results.
-      pads[axis] = newDim->begin;
-      pads[axis + dataRank] = newDim->end;
-      outputDims[axis] = newDim->dim;
+    // Bail out: If axes is dynamic, output is also dynamic.
+    if (axesSize == ShapedType::kDynamic) {
+      setOutputDims(outputDims);
+      return success();
     }
 
-    // Save the final result.
-    setOutputDims(outputDims);
-    return success();
+    if (axesSize <= 0) {
+      return op->emitError("axes size must be greater than 0");
+    }
+
+    // Iterate over axesOperand to figure out the axes that will be padded
+    for (auto axesOperandIndex : llvm::seq(axesSize)) {
+      IndexExpr padsAxis =
+          createIE->getIntFromArrayAsSymbol(axesOperand, axesOperandIndex);
+
+      if (!padsAxis.isLiteral()) {
+        continue;
+      }
+
+      int64_t positiveAxis = padsAxis.getLiteral();
+      if (positiveAxis < 0) {
+        positiveAxis += dataRank;
+      }
+
+      if (positiveAxis + (int)dataRank < 0 || positiveAxis >= (int)dataRank) {
+        return op->emitError("axes value is out of bounds");
+      }
+
+      axes.push_back(positiveAxis);
+    }
   }
 
-  assert(!isNoneValue(axesOperand) && "axes must be present");
+  // Initialize context and results (pads & output)
+  pads.resize(2 * dataRank); // pads two sides of each axis.
 
-  auto res = computeOutputShapeWithAxesOp(
-      createIE, dataOperand, padsOperand, axesOperand);
-  if (res) {
-    setOutputDims(*res);
-    return success();
+  // `pads` format is : [x1_begin, x2_begin,...,x1_end, x2_end,...],
+  // where
+  // - xi_begin: the number of pad values added at the beginning of axis `i`
+  // - xi_end: the number of pad values added at the end of axis `i`.
+  llvm::SmallSet<uint64_t, 4> visited;
+  for (auto [idx, axis] : llvm::enumerate(axes)) {
+    llvm::Expected<DimData> newDim = computOutputDim(
+        createIE, dataOperand, padsOperand, axes.size(), idx, axis);
+
+    if (!newDim) {
+      return op->emitError(llvm::toString(newDim.takeError()));
+    }
+
+    visited.insert(axis);
+
+    // Currently "pads" is only used when axes is NoneType and for constant
+    // propagation
+    if (isNoneValue(axesOperand)) {
+      pads[axis] = newDim->begin;
+      pads[axis + dataRank] = newDim->end;
+    }
+
+    outputDims[axis] = newDim->dim;
   }
-  return op->emitError(llvm::toString(res.takeError()));
+
+  if (!axes.empty()) {
+    for (auto i : llvm::seq(dataRank)) {
+      if (!visited.count(i)) {
+        outputDims[i] = createIE->getShapeAsLiteral(dataOperand, i);
+      }
+    }
+  }
+
+  // Save the final result.
+  setOutputDims(outputDims);
+  return success();
 }
 
 } // namespace onnx_mlir

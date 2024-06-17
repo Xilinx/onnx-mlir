@@ -638,7 +638,6 @@ func.func @test_pad_const_pad_unknown_axes_size(%arg0: tensor<1x3x4x5xf32>, %arg
 }
 
 // -----
-
 func.func @test_pad_const_pad_axes(%arg0: tensor<1x3x4x5xf32>) -> tensor<?x?x?x?xf32> {
   %0 = onnx.Constant dense<[1, 3]> : tensor<2xi64>
   %1 = onnx.Constant dense<[0, 3, 0, 4]> : tensor<4xi64>
@@ -647,12 +646,12 @@ func.func @test_pad_const_pad_axes(%arg0: tensor<1x3x4x5xf32>) -> tensor<?x?x?x?
   return %3 : tensor<?x?x?x?xf32>
 
   // CHECK-LABEL: func @test_pad_const_pad_axes
-  // CHECK-SAME: (%[[VAR_arg0:.*]]: tensor<1x3x4x5xf32>) -> tensor<?x3x?x12xf32> {
+  // CHECK-SAME: (%[[VAR_arg0:.*]]: tensor<1x3x4x5xf32>) -> tensor<1x3x4x12xf32> {
   // CHECK: %[[CONST_0:.*]] = onnx.Constant dense<[1, 3]> : tensor<2xi64>
   // CHECK: %[[CONST_1:.*]] = onnx.Constant dense<[0, 3, 0, 4]> : tensor<4xi64>
   // CHECK: %[[CONST_2:.*]] = onnx.Constant dense<1.000000e+00> : tensor<1xf32>
-  // CHECK: %[[PAD_0:.*]] = "onnx.Pad"(%[[VAR_arg0]], %[[CONST_1]], %[[CONST_2]], %[[CONST_0]]) {mode = "constant"} : (tensor<1x3x4x5xf32>, tensor<4xi64>, tensor<1xf32>, tensor<2xi64>) -> tensor<?x3x?x12xf32>
-  // %3 = "onnx.Pad"(%arg0, %1, %2, %0)  // CHECK: return %[[PAD_0]] : tensor<?x3x?x12xf32>
+  // CHECK: %[[PAD_0:.*]] = "onnx.Pad"(%[[VAR_arg0]], %[[CONST_1]], %[[CONST_2]], %[[CONST_0]]) {mode = "constant"} : (tensor<1x3x4x5xf32>, tensor<4xi64>, tensor<1xf32>, tensor<2xi64>) -> tensor<1x3x4x12xf32>
+  // %3 = "onnx.Pad"(%arg0, %1, %2, %0)  // CHECK: return %[[PAD_0]] : tensor<1x3x4x12xf32>
 }
 
 // -----
@@ -664,10 +663,10 @@ func.func @test_pad_const_axes(%arg0: tensor<1x2x3x4xf32>, %arg1: tensor<4xi64>)
     return %2 : tensor<?x?x?x?xf32>
 
     // CHECK-LABEL: func @test_pad_const_axes
-    // CHECK-SAME: (%[[VAR_arg0:.*]]: tensor<1x2x3x4xf32>, %[[VAR_arg1:.*]]: tensor<4xi64>) -> tensor<?x?x?x?xf32> {
+    // CHECK-SAME: (%[[VAR_arg0:.*]]: tensor<1x2x3x4xf32>, %[[VAR_arg1:.*]]: tensor<4xi64>) -> tensor<1x?x3x?xf32> {
     // CHECK: %[[CONST_0:.*]] = onnx.Constant dense<[1, 3]> : tensor<2xi64>
     // CHECK: %[[CONST_1:.*]] = onnx.Constant dense<1.000000e+00> : tensor<1xf32>
-    // CHECK: %[[PAD_0:.*]] = "onnx.Pad"(%[[VAR_arg0]], %[[VAR_arg1]], %[[CONST_1]], %[[CONST_0]]) {mode = "constant"} : (tensor<1x2x3x4xf32>, tensor<4xi64>, tensor<1xf32>, tensor<2xi64>) -> tensor<?x?x?x?xf32>
+    // CHECK: %[[PAD_0:.*]] = "onnx.Pad"(%[[VAR_arg0]], %[[VAR_arg1]], %[[CONST_1]], %[[CONST_0]]) {mode = "constant"} : (tensor<1x2x3x4xf32>, tensor<4xi64>, tensor<1xf32>, tensor<2xi64>) -> tensor<1x?x3x?xf32>
 }
 
 // -----
@@ -691,12 +690,12 @@ func.func @test_pad_const_negative_axes(%arg0: tensor<1x3x4x5xf32>) -> tensor<?x
   %3 = "onnx.Pad"(%arg0, %1, %2, %0) {mode = "constant"}: (tensor<1x3x4x5xf32>, tensor<4xi64>, tensor<1xf32>, tensor<2xi64>) -> tensor<?x?x?x?xf32>
   return %3 : tensor<?x?x?x?xf32>
   // CHECK-LABEL: func @test_pad_const_negative_axes
-  // CHECK-SAME: ([[VAR_arg0:%.*]]: tensor<1x3x4x5xf32>) -> tensor<?x3x11x?xf32> {
+  // CHECK-SAME: ([[VAR_arg0:%.*]]: tensor<1x3x4x5xf32>) -> tensor<1x3x11x5xf32> {
   // CHECK: [[VAR_0:%.+]] = onnx.Constant dense<[1, -2]> : tensor<2xi64>
   // CHECK: [[VAR_1:%.+]] = onnx.Constant dense<[0, 3, 0, 4]> : tensor<4xi64>
   // CHECK: [[VAR_2:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<1xf32>
-  // CHECK: [[VAR_3:%.+]] = "onnx.Pad"([[VAR_arg0]], [[VAR_1]], [[VAR_2]], [[VAR_0]]) {mode = "constant"} : (tensor<1x3x4x5xf32>, tensor<4xi64>, tensor<1xf32>, tensor<2xi64>) -> tensor<?x3x11x?xf32>
-  // CHECK: return [[VAR_3]] : tensor<?x3x11x?xf32>
+  // CHECK: [[VAR_3:%.+]] = "onnx.Pad"([[VAR_arg0]], [[VAR_1]], [[VAR_2]], [[VAR_0]]) {mode = "constant"} : (tensor<1x3x4x5xf32>, tensor<4xi64>, tensor<1xf32>, tensor<2xi64>) -> tensor<1x3x11x5xf32>
+  // CHECK: return [[VAR_3]] : tensor<1x3x11x5xf32>
 }
 
 // -----
