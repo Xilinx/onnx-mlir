@@ -15,7 +15,6 @@
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/SmallSet.h"
-#include "llvm/Support/Error.h"
 #include <numeric>
 
 using namespace mlir;
