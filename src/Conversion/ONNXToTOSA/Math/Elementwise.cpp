@@ -371,17 +371,23 @@ public:
     }
     if (isa<FloatType>(inputTy.getElementType()) &&
         isa<IntegerType>(resultTy.getElementType())) {
-      // ONNX.Cast has truncating behavior, and tosa.cast has rounds
-      // half-to-even. We simulate truncate by floor for positive values and
-      // ceil for negative ones.
       auto zero = tosaBuilder.getSplattedConst(0.0f, resultTy.getRank());
       zero = tosaBuilder.castToNewTensorElementType(
           zero, inputTy.getElementType());
-      auto positive = tosaBuilder.greaterEqual(input, zero);
+      if (resultTy.getElementType().getIntOrFloatBitWidth() == 1) {
+        Value equal = tosaBuilder.equal(input, zero);
+        auto one = tosaBuilder.getConst(SmallVector<bool>{true}, {1});
+        input = tosaBuilder.binaryOp<mlir::tosa::BitwiseXorOp>(one, equal);
+      } else {
+        // ONNX.Cast has truncating behavior, and tosa.cast has rounds
+        // half-to-even. We simulate truncate by floor for positive values and
+        // ceil for negative ones.
+        auto positive = tosaBuilder.greaterEqual(input, zero);
 
-      auto floor = tosaBuilder.unaryOp<mlir::tosa::FloorOp>(input);
-      auto ceil = tosaBuilder.unaryOp<mlir::tosa::CeilOp>(input);
-      input = tosaBuilder.select(positive, floor, ceil);
+        auto floor = tosaBuilder.unaryOp<mlir::tosa::FloorOp>(input);
+        auto ceil = tosaBuilder.unaryOp<mlir::tosa::CeilOp>(input);
+        input = tosaBuilder.select(positive, floor, ceil);
+      }
     }
 
     rewriter.replaceOpWithNewOp<mlir::tosa::CastOp>(op, resultTy, input);

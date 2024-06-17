@@ -123,6 +123,17 @@ Value TosaBuilder::getConst(ArrayRef<int8_t> vec, ArrayRef<int64_t> shape) {
   return constOp;
 }
 
+mlir::Value TosaBuilder::getConst(
+    llvm::ArrayRef<bool> vec, llvm::ArrayRef<int64_t> shape) {
+  assert(testNumberOfElementsMatch(vec, shape) &&
+         "getConstTensor(): number of elements mismatch.");
+
+  auto constType = RankedTensorType::get(shape, rewriter().getI1Type());
+
+  Value constOp = this->createConstFromRankedTensorAndVec(vec, constType);
+  return constOp;
+}
+
 Value TosaBuilder::getConst(ArrayRef<float> vec, ArrayRef<int64_t> shape) {
   auto elementType = rewriter().getF32Type();
   Value constOp = this->createConst<float>(vec, shape, elementType);
@@ -244,6 +255,9 @@ template Value TosaBuilder::binaryOp<mlir::tosa::SubOp>(
     mlir::Value &lhs, mlir::Value &rhs);
 
 template Value TosaBuilder::binaryOp<mlir::tosa::PowOp>(
+    mlir::Value &lhs, mlir::Value &rhs);
+
+template Value TosaBuilder::binaryOp<mlir::tosa::BitwiseXorOp>(
     mlir::Value &lhs, mlir::Value &rhs);
 
 template <typename T>
