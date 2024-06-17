@@ -55,7 +55,7 @@ LogicalResult ONNXPadOpShapeHelper::computeShape() {
       return success();
     }
 
-    if (axesSize <= 0) {
+    if (axesSize < 0) {
       return op->emitError("axes size must be greater than 0");
     }
 
