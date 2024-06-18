@@ -35,9 +35,9 @@ LogicalResult ONNXPadOpShapeHelper::computeShape() {
 
   uint64_t dataRank = createIE->getShapedTypeRank(dataOperand);
 
-  DimsExpr outputDims;
   bool isFloat = isa<FloatType>(getElementType(dataOperand.getType()));
-  outputDims.resize(dataRank, QuestionmarkIndexExpr(/*IsFloat=*/isFloat));
+  // Initially, output dim sizes are all unknown.
+  DimsExpr outputDims(dataRank, QuestionmarkIndexExpr(/*IsFloat=*/isFloat));
 
   // Compute the values of the "axes" array. If "axes" operand is not provided,
   // it is a range from 0 to dataRank. If it is provided, it is a list of
