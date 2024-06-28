@@ -23,7 +23,7 @@ using namespace onnx_mlir;
 //===----------------------------------------------------------------------===//
 
 namespace onnx_mlir {
-
+  static constexpr int MAX_BOXES = 1;
 template <>
 LogicalResult ONNXNonMaxSuppressionOpShapeHelper::computeShape() {
   // Three is a backend test where the result of ONNXNonMaxSuppressionOp is set
@@ -31,7 +31,7 @@ LogicalResult ONNXNonMaxSuppressionOpShapeHelper::computeShape() {
   // since its data dependent. Thus disable the refineDims because of this test
   // case.
   return setOutputDimsFromLiterals(
-      {ShapedType::kDynamic, 3}, 0, /*refineDims*/ false);
+      {MAX_BOXES, 3}, 0, /*refineDims*/ true);
 }
 
 } // namespace onnx_mlir
