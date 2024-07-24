@@ -140,17 +140,20 @@ public:
 
       // Compute the max/min values for the said type from the 64-bit max
       auto width = resTypeInt.getIntOrFloatBitWidth();
-      int64_t maxVal =
-          (resTypeInt.isUnsigned() ? UINT64_MAX : INT64_MAX) >> (64 - width);
-      int64_t minVal =
-          resTypeInt.isUnsigned() ? 0 : (INT64_MIN >> (64 - width));
+      APInt maxVal = resTypeInt.isUnsigned() ? APInt::getMaxValue(width)
+                                             : APInt::getSignedMaxValue(width);
+      APInt minVal = resTypeInt.isUnsigned() ? APInt::getZero(width)
+                                             : APInt::getSignedMinValue(width);
 
       clampedRes = tosa::CreateOpAndInfer<mlir::tosa::ClampOp>(rewriter, loc,
           addOp.getType(), addOp,
-          rewriter.getIntegerAttr(rewriter.getI64Type(), minVal),
-          rewriter.getIntegerAttr(rewriter.getI64Type(), maxVal),
-          rewriter.getFloatAttr(rewriter.getF32Type(), minVal),
-          rewriter.getFloatAttr(rewriter.getF32Type(), maxVal));
+          rewriter.getIntegerAttr(rewriter.getI64Type(), minVal.sext(64)),
+          rewriter.getIntegerAttr(rewriter.getI64Type(), maxVal.zext(64)),
+          // We ignore floating point values, we're clamping integers.
+          rewriter.getFloatAttr(
+              rewriter.getF32Type(), (float)(minVal.getSExtValue())),
+          rewriter.getFloatAttr(
+              rewriter.getF32Type(), (float)(maxVal.getZExtValue())));
     }
 
     // Cast into the result type
