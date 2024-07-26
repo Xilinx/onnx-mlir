@@ -935,3 +935,14 @@ func.func @test_pad_slice_dynamic(%data : tensor<*xf32>) -> tensor<*xf32> {
 // CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.NoValue"() {value} : () -> none
 // CHECK:           [[VAR_2_:%.+]] = "onnx.Pad"([[PARAM_0_]], [[VAR_0_]], [[VAR_1_]], [[VAR_1_]]) {mode = "constant"} : (tensor<*xf32>, tensor<4xi64>, none, none) -> tensor<*xf32>
 // CHECK:           onnx.Return [[VAR_2_]] : tensor<*xf32>
+
+// -----
+
+func.func @test_leakyrelu_alpha_zero(%arg0: tensor<10x11x12x13xf32>) -> tensor<10x11x12x13xf32> {
+  %0 = "onnx.LeakyRelu"(%arg0) {alpha = 0.0 : f32} : ( tensor<10x11x12x13xf32>) ->  tensor<10x11x12x13xf32>
+  "onnx.Return"(%0) : ( tensor<10x11x12x13xf32>) -> ()
+}
+// CHECK-LABEL:  func.func @test_leakyrelu_alpha_zero
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<10x11x12x13xf32>) -> tensor<10x11x12x13xf32> {
+// CHECK:           [[VAR_0_:%.+]] = "onnx.Relu"([[PARAM_0_]]) : (tensor<10x11x12x13xf32>) -> tensor<10x11x12x13xf32>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<10x11x12x13xf32>

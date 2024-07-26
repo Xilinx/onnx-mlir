@@ -1150,6 +1150,22 @@ public:
   }
 };
 
+// Replaces LeakyRelus with zero alpha by Relu
+struct DecomposeLeakyReluToReluPattern
+    : public OpRewritePattern<ONNXLeakyReluOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXLeakyReluOp leakyReluOp, PatternRewriter &rewriter) const final {
+    if (!leakyReluOp.getAlpha().isZero()) {
+      return failure();
+    }
+    rewriter.replaceOpWithNewOp<ONNXReluOp>(
+        leakyReluOp, leakyReluOp.getResult().getType(), leakyReluOp.getX());
+    return success();
+  }
+};
+
 struct DecomposeONNXToONNXPass
     : public PassWrapper<DecomposeONNXToONNXPass, OperationPass<func::FuncOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(DecomposeONNXToONNXPass)
@@ -1211,6 +1227,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   patterns.insert<DecomposeBatchNormToBatchNormInferenceMode>(context);
   patterns.insert<DecomposeBatchNormV9ToBatchNorm>(context);
   patterns.insert<DecomposeSlicePadPattern>(context);
+  patterns.insert<DecomposeLeakyReluToReluPattern>(context);
 
   // TODO: consider whether to include SoftmaxPattern here
 }
