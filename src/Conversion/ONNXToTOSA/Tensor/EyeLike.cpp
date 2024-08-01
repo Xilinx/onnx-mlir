@@ -1,5 +1,6 @@
 // (c) Copyright 2022 - 2024 Advanced Micro Devices, Inc. All Rights Reserved.
 
+#include "mlir/Support/LogicalResult.h"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 
 using namespace mlir;
@@ -42,8 +43,7 @@ public:
           APFloat::getZero(floatType.getFloatSemantics()),
           APFloat(floatType.getFloatSemantics(), 1));
     } else {
-      llvm_unreachable(
-          "Type not 'int' or 'float' in onnx.EyeLike to tosa conv");
+      return rewriter.notifyMatchFailure(op, "Only int and float supported");
     }
 
     rewriter.replaceOpWithNewOp<mlir::tosa::ConstOp>(
