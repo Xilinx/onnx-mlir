@@ -100,7 +100,7 @@ version_dict = {
     "Atan": [7],
     "Atanh": [9],
     "AveragePool": [19],
-    "BatchNormalization": [15],
+    "BatchNormalization": [15, 9],
     "Bernoulli": [15],
     "Binarizer": [1],
     "BitShift": [11],
@@ -450,8 +450,10 @@ OpsWithFolder = ["Constant", "Squeeze", "SqueezeV11"]
 OpsWithConstantLike = ["Constant"]
 
 # Op with Helper functions
-# Here the functions are for data flow analysis.
 OpsWithHelpers = {
+    "EyeLike": """
+    mlir::Type getResultElementType();
+  """,
     "Loop": """
     mlir::Operation::result_range v_final();
     mlir::Operation::result_range scan_outputs();
@@ -471,6 +473,7 @@ OpsWithResultTypeInference = [
     "Constant",
     "Cast",
     "ConstantOfShape",
+    "EyeLike",
     "If",
     "Loop",
     "RandomNormal",
@@ -1169,7 +1172,7 @@ def gen_op_def(schema, with_version=False):
                 regions[attr.name] = "AnyRegion"
 
     # Generate decl for op traits.
-    traits = ["Pure"]
+    traits = ["Pure", f"OpVersionTrait<{schema.since_version}>"]
 
     # Generate ConstantLike traits.
     if opName in OpsWithConstantLike:

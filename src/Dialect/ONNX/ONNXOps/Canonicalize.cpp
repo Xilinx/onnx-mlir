@@ -321,6 +321,31 @@ bool matchShapeAddMatMul(Value v, Value &matA, Value &biasB,
   return true;
 }
 
+// Check if Reshape with allowzero == 1 can be replaced by
+// another one with allowzero == 0. Conditions:
+// - If no value in the 'shape' input is set to zero.
+bool isConstantOpWithNoZeroElements(Value constVal) {
+  if (!isDenseONNXConstant(constVal))
+    return false;
+
+  ONNXConstantOp constOp = constVal.getDefiningOp<ONNXConstantOp>();
+  DenseElementsAttr intElemsAttr;
+  if (auto elms =
+          dyn_cast<mlir::DenseIntElementsAttr>(constOp.getValueAttr())) {
+    intElemsAttr = elms;
+  } else if (auto elms = dyn_cast<mlir::DisposableElementsAttr>(
+                 constOp.getValueAttr())) {
+    intElemsAttr = dyn_cast_or_null<mlir::DenseIntElementsAttr>(
+        elms.toDenseElementsAttr());
+  }
+  if (!intElemsAttr)
+    return false;
+
+  auto isZero = [](int64_t val) { return val == 0; };
+
+  return llvm::none_of(intElemsAttr.getValues<int64_t>(), isZero);
+}
+
 } // namespace onnx_mlir
 
 // =============================================================================
@@ -1355,10 +1380,26 @@ public:
         {firstReshapeOp.getLoc(), secondReshapeOp.getLoc()});
     OnnxBuilder createONNX(rewriter, loc);
 
+    auto eraseTriviallyDeadValues = [&](PatternRewriter &rewriter,
+                                        SmallVector<Value, 4> &values) {
+      for (auto val : values) {
+        auto *op = val.getDefiningOp();
+        if (!op || !isOpTriviallyDead(op))
+          continue;
+        rewriter.eraseOp(op);
+      }
+    };
+
     // Try to compute a new shape tensor by fusing the two old shapes.
     SmallVector<Value, 4> firstDims, secondDims, fusedDims;
     if (!getValuesFromShape(createONNX, firstShape, firstDims) ||
         !getValuesFromShape(createONNX, secondShape, secondDims)) {
+      // New values may be created by getValuesFromShape. Erase newly-created
+      // values before failing. This avoids that the PatternRewriter notify
+      // changes and prevent convergence issue.
+      eraseTriviallyDeadValues(rewriter, firstDims);
+      eraseTriviallyDeadValues(rewriter, secondDims);
+
       // Not rewrite if we can not read dimension values (0, -1, L) from a shape
       // tensor.
       return rewriter.notifyMatchFailure(
@@ -1399,6 +1440,12 @@ public:
         minusOnes++;
     }
     if (minusOnes > 1) {
+      // New values may be created by getValuesFromShape. Erase newly-created
+      // values before failing. This avoids that the PatternRewriter notify
+      // changes and prevent convergence issue.
+      eraseTriviallyDeadValues(rewriter, firstDims);
+      eraseTriviallyDeadValues(rewriter, secondDims);
+
       // The fused shape is invalid because it has two -1s.
       return rewriter.notifyMatchFailure(op, "Failed to compute a fused shape");
     }
@@ -1712,6 +1759,7 @@ void ONNXReshapeOp::getCanonicalizationPatterns(
   result.insert<RemoveIdentityReshapePattern1>(context);
   result.insert<RemoveIdentityReshapePattern2>(context);
   result.insert<SwapReshapeMatMulPattern>(context);
+  result.insert<ReplaceReshapeAllowZeroByReshape>(context);
 }
 
 /// on the ONNXResizeOp.
@@ -1843,7 +1891,8 @@ void ONNXUnsqueezeV11Op::getCanonicalizationPatterns(
 void ONNXPowOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   // Is 64 necessary? Maybe too high?
-  result.insert<PowToMulRewritePattern>(context, 64);
+  // Changed from upstream 64 to 2 because it can break quantization patterns
+  result.insert<PowToMulRewritePattern>(context, 2);
   result.insert<BinaryOpBroadcastAxisPattern<ONNXPowOp>>(context);
 }
 
@@ -1861,6 +1910,4 @@ void ONNXWhereOp::getCanonicalizationPatterns(
 
 // on the ONNXDequantizeLinearOp.
 void ONNXDequantizeLinearOp::getCanonicalizationPatterns(
-    RewritePatternSet &result, MLIRContext *context) {
-  result.insert<QuantizeDequantizePattern>(context);
-}
+    RewritePatternSet &result, MLIRContext *context) {}

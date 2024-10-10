@@ -16,6 +16,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 #include "src/Conversion/ONNXToTOSA/DialectBuilder.hpp"
+#include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 
@@ -112,19 +113,32 @@ Value TosaBuilder::getConst(ArrayRef<int32_t> vec, ArrayRef<int64_t> shape) {
   return constOp;
 }
 
+Value TosaBuilder::getConst(ArrayRef<int8_t> vec, ArrayRef<int64_t> shape) {
+  assert(testNumberOfElementsMatch(vec, shape) &&
+         "getConstTensor(): number of elements mismatch.");
+
+  auto constType = RankedTensorType::get(shape, rewriter().getI8Type());
+
+  Value constOp = this->createConstFromRankedTensorAndVec(vec, constType);
+  return constOp;
+}
+
 Value TosaBuilder::getConst(ArrayRef<float> vec, ArrayRef<int64_t> shape) {
   auto elementType = rewriter().getF32Type();
   Value constOp = this->createConst<float>(vec, shape, elementType);
   return constOp;
 }
 
-Value TosaBuilder::getSplattedConst(float val, llvm::ArrayRef<int64_t> shape) {
+Value TosaBuilder::getSplattedConst(
+    float val, Type dtype, llvm::ArrayRef<int64_t> shape) {
   auto constType = tosa::reduceAxisToOne(shape, rewriter().getF32Type());
   auto constAttr = DenseElementsAttr::get(constType, val);
 
   auto constOp =
       rewriter().create<mlir::tosa::ConstOp>(loc(), constType, constAttr);
-  return constOp;
+
+  return rewriter().createOrFold<mlir::tosa::CastOp>(
+      loc(), RankedTensorType::get(constType.getShape(), dtype), constOp);
 }
 
 Value TosaBuilder::transpose(mlir::Value &value, llvm::ArrayRef<int32_t> perm) {
@@ -158,7 +172,12 @@ Value TosaBuilder::slice(Value &inputConst, llvm::ArrayRef<int64_t> size,
   return newSliceInput;
 }
 
-Value TosaBuilder::reshape(mlir::Value &value, llvm::ArrayRef<int64_t> shape) {
+std::optional<Value> TosaBuilder::gather(Value resultValue, Value inputValue,
+    Value indicesValue, int32_t batchDims, int32_t axis) {
+  return tosa::convertGatherOp(rewriter(), loc(), resultValue, inputValue,
+      indicesValue, batchDims, axis);
+};
+Value TosaBuilder::reshape(mlir::Value value, llvm::ArrayRef<int64_t> shape) {
   auto shapeAttr = rewriter().getDenseI64ArrayAttr(shape);
   auto valueType = mlir::cast<ShapedType>(value.getType());
   Type newValueType = RankedTensorType::get(
@@ -183,11 +202,10 @@ Value TosaBuilder::mul(mlir::Value &lhs, mlir::Value &rhs, int32_t shift) {
 }
 
 Value TosaBuilder::intdiv(mlir::Value &lhs, mlir::Value &rhs) {
-  Type lhsElementType = mlir::cast<ShapedType>(lhs.getType()).getElementType();
-  Type rhsElementType = mlir::cast<ShapedType>(rhs.getType()).getElementType();
-  assert((lhsElementType.isSignlessInteger(32) &&
-             rhsElementType.isSignlessInteger(32)) &&
-         "Tosa IntDivOp needs 32-bit signless integer inputs");
+  Type lhsElementType = cast<ShapedType>(lhs.getType()).getElementType();
+  Type rhsElementType = cast<ShapedType>(rhs.getType()).getElementType();
+  assert(lhsElementType == rhsElementType &&
+         "Tosa DivOp needs matching element types on lhs and rhs");
 
   if (needsRankBroadcast({lhs, rhs})) {
     llvm::SmallVector<Value, 4> valueVec = equalizeRanks({lhs, rhs});
@@ -201,15 +219,6 @@ Value TosaBuilder::intdiv(mlir::Value &lhs, mlir::Value &rhs) {
       lhsElementType);
   return tosa::CreateOpAndInfer<mlir::tosa::IntDivOp>(
       rewriter(), loc(), newValueType, lhs, rhs);
-}
-
-Value TosaBuilder::reciprocal(mlir::Value &input) {
-  auto inputType = mlir::cast<ShapedType>(input.getType());
-  Type newValueType = RankedTensorType::get(
-      llvm::SmallVector<int64_t, 4>(inputType.getRank(), ShapedType::kDynamic),
-      inputType.getElementType());
-  return tosa::CreateOpAndInfer<mlir::tosa::ReciprocalOp>(
-      rewriter(), loc(), newValueType, input);
 }
 
 template <typename T>
@@ -231,6 +240,172 @@ template Value TosaBuilder::binaryOp<mlir::tosa::AddOp>(
 
 template Value TosaBuilder::binaryOp<mlir::tosa::SubOp>(
     mlir::Value &lhs, mlir::Value &rhs);
+
+template Value TosaBuilder::binaryOp<mlir::tosa::PowOp>(
+    mlir::Value &lhs, mlir::Value &rhs);
+
+template <typename T>
+Value TosaBuilder::unaryOp(mlir::Value &input) {
+  auto inputType = input.getType().cast<ShapedType>();
+  Type newValueType = RankedTensorType::get(
+      llvm::SmallVector<int64_t, 4>(inputType.getRank(), ShapedType::kDynamic),
+      inputType.getElementType());
+  return tosa::CreateOpAndInfer<T>(rewriter(), loc(), newValueType, input);
+}
+
+template Value TosaBuilder::unaryOp<mlir::tosa::ExpOp>(mlir::Value &input);
+
+template Value TosaBuilder::unaryOp<mlir::tosa::ReciprocalOp>(
+    mlir::Value &input);
+
+template Value TosaBuilder::unaryOp<mlir::tosa::LogOp>(mlir::Value &input);
+
+template Value TosaBuilder::unaryOp<mlir::tosa::RsqrtOp>(mlir::Value &input);
+template Value TosaBuilder::unaryOp<mlir::tosa::FloorOp>(mlir::Value &input);
+template Value TosaBuilder::unaryOp<mlir::tosa::CeilOp>(mlir::Value &input);
+
+template <typename T>
+Value TosaBuilder::compareOp(mlir::PatternRewriter &rewriter,
+    mlir::Location loc, mlir::Value &lhs, mlir::Value &rhs) {
+  if (needsRankBroadcast({lhs, rhs})) {
+    llvm::SmallVector<Value, 4> valueVec = equalizeRanks({lhs, rhs});
+    lhs = valueVec[0];
+    rhs = valueVec[1];
+  }
+  return tosa::CreateOpAndInfer<T>(
+      rewriter, loc, UnrankedTensorType::get(rewriter.getI1Type()), lhs, rhs);
+}
+
+mlir::Value TosaBuilder::equal(mlir::Value &lhs, mlir::Value &rhs) {
+  return compareOp<mlir::tosa::EqualOp>(rewriter(), loc(), lhs, rhs);
+}
+
+mlir::Value TosaBuilder::greater(mlir::Value &lhs, mlir::Value &rhs) {
+  return compareOp<mlir::tosa::GreaterOp>(rewriter(), loc(), lhs, rhs);
+}
+
+mlir::Value TosaBuilder::greaterEqual(mlir::Value &lhs, mlir::Value &rhs) {
+  return compareOp<mlir::tosa::GreaterEqualOp>(rewriter(), loc(), lhs, rhs);
+}
+
+mlir::Value TosaBuilder::less(mlir::Value &lhs, mlir::Value &rhs) {
+  return this->greater(rhs, lhs);
+}
+
+mlir::Value TosaBuilder::lessEqual(mlir::Value &lhs, mlir::Value &rhs) {
+  return this->greaterEqual(rhs, lhs);
+}
+
+Value TosaBuilder::select(
+    mlir::Value &cond, mlir::Value &lhs, mlir::Value &rhs) {
+  if (needsRankBroadcast({cond, lhs, rhs})) {
+    llvm::SmallVector<Value, 4> valueVec = equalizeRanks({cond, lhs, rhs});
+    cond = valueVec[0];
+    lhs = valueVec[1];
+    rhs = valueVec[2];
+  }
+  auto lhsType = lhs.getType().cast<ShapedType>();
+  Type newValueType = RankedTensorType::get(
+      llvm::SmallVector<int64_t, 4>(lhsType.getRank(), ShapedType::kDynamic),
+      lhsType.getElementType());
+  return tosa::CreateOpAndInfer<mlir::tosa::SelectOp>(
+      rewriter(), loc(), newValueType, cond, lhs, rhs);
+}
+
+mlir::Value TosaBuilder::castToNewTensorElementType(
+    mlir::Value in, mlir::Type newElemTy) {
+  auto tensorTy = cast<TensorType>(in.getType());
+  if (tensorTy.getElementType() == newElemTy) {
+    // Nothing to do
+    return in;
+  }
+
+  auto newTensorTy = tensorTy.clone(newElemTy);
+  return tosa::CreateOpAndInfer<mlir::tosa::CastOp>(
+      rewriter(), loc(), newTensorTy, in);
+}
+
+Value TosaBuilder::sqrt(mlir::Value &input) {
+  auto inputType = input.getType().cast<ShapedType>();
+  auto oneHalf = this->getSplattedConst(
+      0.5, inputType.getElementType(), inputType.getShape());
+  return this->binaryOp<mlir::tosa::PowOp>(input, oneHalf);
+}
+
+static bool containsNonZero(llvm::SmallVectorImpl<int64_t> &values) {
+  return llvm::any_of(values, [](int64_t value) { return value != 0; });
+}
+
+FailureOr<Value> TosaBuilder::resizeWindowBasedOps(mlir::Value &value,
+    const llvm::ArrayRef<int64_t> inputShape,
+    const llvm::ArrayRef<int64_t> weightSpatialShape,
+    llvm::SmallVectorImpl<int64_t> &padding,
+    const llvm::ArrayRef<int64_t> strides,
+    const llvm::ArrayRef<int64_t> dilation) {
+
+  // Returns the number of unused values at the end of a dimension
+  auto getOffset = [](int64_t inputDimension, int64_t outputDimension,
+                       int64_t kernelDimension, int64_t padFront,
+                       int64_t padBack, int64_t stride, int64_t dilation) {
+    int64_t offset = inputDimension + padFront + padBack -
+                     dilation * (kernelDimension - 1) - 1 -
+                     outputDimension * stride + stride;
+    assert(offset >= 0);
+    return offset;
+  };
+
+  auto getOutputSpatialDimension =
+      [](int64_t inputDimension, int64_t kernelDimension, int64_t padFront,
+          int64_t padBack, int64_t stride, int64_t dilation) {
+        int64_t outputSpatialDimension =
+            std::floor((inputDimension + padFront + padBack -
+                        dilation * (kernelDimension - 1) - 1)) /
+                stride +
+            1;
+        return outputSpatialDimension;
+      };
+
+  // Only the end of a dimension is cut or padded differently. The beginning
+  // is unchanged.
+  llvm::SmallVector<int64_t, 2> cellsToCut;
+  llvm::SmallVector<int64_t, 2> cellsToPad;
+  for (int i = 0; i < 2; i++) {
+    int64_t padFront = padding[2 * i];
+    int64_t padBack = padding[2 * i + 1];
+    int64_t outputSpatialDimension =
+        getOutputSpatialDimension(inputShape[i + 1], weightSpatialShape[i],
+            padFront, padBack, strides[i], dilation[i]);
+    int64_t offset = getOffset(inputShape[i + 1], outputSpatialDimension,
+        weightSpatialShape[i], padFront, padBack, strides[i], dilation[i]);
+    if (offset > padBack) {
+      cellsToPad.push_back(0);
+      cellsToCut.push_back(offset - padBack);
+    } else {
+      cellsToPad.push_back(padBack - offset);
+      cellsToCut.push_back(0);
+    }
+  }
+
+  // Edge case where the kernel only uses padding values and none of the actual
+  // input values
+  if ((inputShape[1] - cellsToCut[0] == 0) ||
+      (inputShape[2] - cellsToCut[1] == 0))
+    return rewriter().notifyMatchFailure(
+        loc(), "the operation does not use any value of the input tensor");
+
+  // Only slice if we actually need it
+  if (containsNonZero(cellsToCut)) {
+    value = this->slice(value,
+        {inputShape[0], inputShape[1] - cellsToCut[0],
+            inputShape[2] - cellsToCut[1], inputShape[3]},
+        {0, 0, 0, 0});
+  }
+  padding[1] = cellsToPad[0];
+  padding[3] = cellsToPad[1];
+
+  return value;
+}
+
 // =============================================================================
 // IndexExpr Builder for Lowering using Shape/TOSA Dialect.
 // =============================================================================
@@ -255,10 +430,8 @@ ElementsAttr IndexExprBuilderForTosa::getConst(Value value) {
 }
 
 Value IndexExprBuilderForTosa::getVal(Value intArrayVal, uint64_t i) {
-  MultiDialectBuilder<AffineBuilder, MathBuilder> create(*this);
-  // Need to add some acceptable dialects to TOSA conversion.
-  llvm_unreachable(
-      "unimplemented (see IndexExprBuilderForKrnl for functionality).");
+  // TODO: unimplemented (see IndexExprBuilderForKrnl for functionality).
+  return {};
 }
 
 Value IndexExprBuilderForTosa::getShapeVal(

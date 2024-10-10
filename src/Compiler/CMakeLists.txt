@@ -37,6 +37,8 @@ if (ONNX_MLIR_VENDOR)
 endif()
 target_compile_definitions(OMVersion PUBLIC ${DEFINITIONS})
 
+get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
+
 add_onnx_mlir_library(OMCompilerOptions
   CompilerOptions.cpp
 
@@ -70,6 +72,7 @@ add_onnx_mlir_library(OMCompilerDialects
   OMONNXOps
   MLIRIR
   MLIROpenMPToLLVMIRTranslation
+  ${dialect_libs}
   )
 
 add_onnx_mlir_library(OMCompilerPasses
@@ -159,6 +162,7 @@ add_onnx_mlir_library(OMCompilerUtils
   ExternalUtil
   llc
   opt
+  ${dialect_libs}
 
   INCLUDE_DIRS PRIVATE
   ${FILE_GENERATE_DIR}
@@ -167,10 +171,12 @@ add_onnx_mlir_library(OMCompilerUtils
   ${ONNX_MLIR_SRC_ROOT}/include
 
   LINK_LIBS PUBLIC
+  MLIRBytecodeWriter
   OMCompilerDialects
   OMCompilerPasses
   OMAccelerator
   OMVersion
+  ${dialect_libs}
 
   # Link LLVM libraries necessary to query which target architectures
   # are configured.
@@ -234,11 +240,12 @@ endif()
 
 pybind11_add_module(PyCompile PyOMCompileSession.cpp)
 add_dependencies(PyCompile onnx_proto)
-target_compile_options(PyCompile
-  PRIVATE
-  $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:-frtti -fexceptions>
-  $<$<CXX_COMPILER_ID:MSVC>:/EHsc /GR>
-  )
+if (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+  target_compile_options(PyCompile PRIVATE /EHsc /GR)
+elseif (CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU")
+  target_compile_options(PyCompile PRIVATE -frtti -fexceptions)
+endif()
+
 target_compile_definitions(PyCompile
   PRIVATE
   $<TARGET_PROPERTY:onnx,COMPILE_DEFINITIONS>
@@ -252,6 +259,8 @@ target_link_libraries(PyCompile
   OMCompiler
   )
 
-install(TARGETS PyCompile
-  DESTINATION lib
-  )
+if(ONNX_MLIR_INSTALL_PYTHON_EXTENSIONS)
+  install(TARGETS PyCompile
+    DESTINATION lib
+    )
+endif()

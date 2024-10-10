@@ -60,9 +60,11 @@ SUPPRESS_WARNINGS_POP
 
 using namespace mlir;
 
-namespace onnx_mlir {
-
 namespace {
+
+bool isDefaultDomain(std::string_view domain) {
+  return domain.empty() || (domain == "ai.onnx");
+}
 
 /// We consider opset < 6 is old. Users will see a warning if their model
 /// contains ops of old opset.
@@ -146,6 +148,8 @@ void replaceAttrRefs(onnx::GraphProto &graph, const AttrMap &attr_map) {
 
 } // namespace
 
+namespace onnx_mlir {
+
 namespace detail {
 
 using ValueSymbolMapping = SymbolMapping<Value>;
@@ -167,7 +171,7 @@ public:
     in_model_functions_ = GetModelLocalFunctions(model);
     importGraph(model.graph());
     if (options_.verboseOutput) {
-      llvm::outs()
+      llvm::errs()
           << "The ONNX model has " << num_of_parameters_
           << " elements in its initializers. This value would be close to and "
              "greater than the number of parameters in the model. Because "
@@ -304,12 +308,10 @@ private:
     }
     auto shape_proto = tensor_type.shape();
     for (int i = 0; i < shape_proto.dim_size(); i++) {
-      if (shape_proto.dim()[i].dim_value()) {
+      if (shape_proto.dim()[i].has_dim_value()) {
         // Dim is a constant value.
         int dim_numeric_size = shape_proto.dim()[i].dim_value();
-        assert(dim_numeric_size != 0 &&
-               "Parsed an tensor with a dimension size of zero");
-        if (dim_numeric_size > 0) {
+        if (dim_numeric_size >= 0) {
           dims.push_back(dim_numeric_size);
         } else {
           // If dim_value < 0, then dim is parametric.
@@ -784,7 +786,10 @@ private:
         // Variadic output is a single ODS result.
         if (variadicOut)
           j = 0;
-        if (j < outputMap.size() && outputMap[j] >= MAX_NUM_TYPES) {
+        if (!givenOutputTypes.empty()) {
+          outputTypes.emplace_back(
+              UnrankedTensorType::get(givenOutputTypes[i]));
+        } else if (j < outputMap.size() && outputMap[j] >= MAX_NUM_TYPES) {
           // Mapping gives a connection with an input.
           Type inputType = inputs[outputMap[j] - MAX_NUM_TYPES].getType();
           if (mlir::isa<TensorType>(inputType)) {
@@ -800,9 +805,6 @@ private:
           Type elementType = buildTypeFromIndex(outputMap[j]);
           auto outType = UnrankedTensorType::get(elementType);
           outputTypes.emplace_back(outType);
-        } else if (!givenOutputTypes.empty()) {
-          outputTypes.emplace_back(
-              UnrankedTensorType::get(givenOutputTypes[i]));
         } else {
           outputTypes.emplace_back(builder_.getNoneType());
         }
@@ -906,10 +908,16 @@ private:
     std::vector<NamedAttribute> attributes;
     for (int i = 0; i < node.attribute_size(); ++i) {
       auto attr = node.attribute(i);
-      auto mlir_type = convertONNXTypeToMLIRType(
-          builder_, static_cast<onnx::TensorProto_DataType>(attr.i()));
-      Attribute mlirAttr = TypeAttr::get(mlir_type);
-      attributes.push_back(builder_.getNamedAttr(attr.name(), mlirAttr));
+      // The 'to' attribute is an integer in ONNX that represents a type.
+      if (attr.name() == "to") {
+        auto mlir_type = convertONNXTypeToMLIRType(
+            builder_, static_cast<onnx::TensorProto_DataType>(attr.i()));
+        Attribute mlirAttr = TypeAttr::get(mlir_type);
+        attributes.push_back(builder_.getNamedAttr(attr.name(), mlirAttr));
+      } else {
+        attributes.push_back(
+            convertOnnxAttributeProtoToMlirNamedAttribute(attr));
+      }
     }
 
     // If the node has a name, then import it.
@@ -961,8 +969,11 @@ private:
     if (nOuts == 1) {
       // Inference mode with one output.
       buildOperation<ONNXBatchNormalizationInferenceModeOp>(node);
+    } else if (nOuts == 5) {
+      // Training mode with four trailing optional outputs.
+      buildOperation<ONNXBatchNormalizationV9Op>(node);
     } else {
-      // Training mode with four trailing optional outputs. Not handled yet.
+      // Training mode with two trailing optional outputs.
       buildOperation<ONNXBatchNormalizationOp>(node);
     }
   }
@@ -1140,14 +1151,14 @@ private:
 
     auto opset_list = opset_list_it->second;
 
-    // A new opset is added to onnx-mlir when it becomes imcompactible.
+    // A new opset is added to onnx-mlir when it becomes incompatible.
     // But the lowest opset in op_dialect_version_map_ is an exception.
     // It is the current opset when onnx-mlir project is started.
-    // All opset lower than the last opset should use the last opset(version)
-    if (node.domain().compare("ai.onnx.ml") != 0 &&
-        current_opset < opset_list.back() &&
+    // All opset lower than the last opset should use the last opset(version).
+    // Note the minimum supported opset only applies to the default domain.
+    if (isDefaultDomain(node.domain()) && current_opset < opset_list.back() &&
         current_opset < MINIMUM_SUPPORTED_OPSET)
-      llvm::outs() << "Warning: ONNX " << node.op_type()
+      llvm::errs() << "Warning: ONNX " << node.op_type()
                    << " in your model is using Opset " << current_opset
                    << ", which is quite old. Please consider regenerating your "
                       "model with a newer Opset.\n";
@@ -1355,20 +1366,50 @@ private:
     int nOut = 0;
     getNodeInputs(node, inputs);
     nOut = node.output().size();
+    std::vector<Type> givenOutputTypes;
+
+    // We lack a way of specifying import behavior for custom domains. For now
+    // some are hard-coded here, but an extension specification would be
+    // preferred.
+    if (node.domain().compare("com.microsoft") == 0) {
+      Type outElementType = {};
+      if (opName == "DequantizeLinear") {
+        outElementType =
+            inputs.at(1).getType().cast<ShapedType>().getElementType();
+      } else if (opName == "QuantizeLinear") {
+        outElementType =
+            inputs.at(2).getType().cast<ShapedType>().getElementType();
+      }
+      if (outElementType) {
+        auto outElemTypeAttr = builder_.getNamedAttr(
+            "output_element_type", TypeAttr::get(outElementType));
+        attributes.push_back(outElemTypeAttr);
+        givenOutputTypes.push_back(outElementType);
+
+        auto shapeInferAttr = builder_.getNamedAttr(
+            "shape_infer_pattern", builder_.getStringAttr("MDBroadcast"));
+        attributes.push_back(shapeInferAttr);
+      }
+    }
+
     // ToFix: The type inference may go wrong if the element type of the output
     // of CustomOp is not the same as the first input.
-    buildOutputAndOperation<ONNXCustomOp>(node, inputs, nIn, nOut, attributes);
+    buildOutputAndOperation<ONNXCustomOp>(
+        node, inputs, nIn, nOut, attributes, givenOutputTypes);
   }
 
   void ImportNode(const onnx::NodeProto &node) {
-    std::string opName = node.op_type() + GetImportVersionOfNode(node);
-    auto handler = import_handler_map_.find(opName);
-    std::vector<std::string> funcs = options_.functionsToDecompose;
-    if (!(std::find(funcs.begin(), funcs.end(), opName) != funcs.end())) {
-      if (handler != import_handler_map_.end()) {
-        // It's a regular op with a registered handler.
-        (this->*(handler->second))(node);
-        return;
+    if (isDefaultDomain(node.domain()) || (node.domain() == "ai.onnx.ml") ||
+        (node.domain() == "ai.onnx.preview.training")) {
+      std::string opName = node.op_type() + GetImportVersionOfNode(node);
+      auto handler = import_handler_map_.find(opName);
+      std::vector<std::string> funcs = options_.functionsToDecompose;
+      if (!(std::find(funcs.begin(), funcs.end(), opName) != funcs.end())) {
+        if (handler != import_handler_map_.end()) {
+          // It's a regular op with a registered handler.
+          (this->*(handler->second))(node);
+          return;
+        }
       }
     }
 
@@ -1518,7 +1559,7 @@ bool ImportFrontendModelInternal(onnx::ModelProto &model, MLIRContext &context,
   // Code copied from onnx/onnx/version_coverter/convert.cc
   for (auto it = model.opset_import().begin(); it != model.opset_import().end();
        ++it) {
-    if (it->domain() == "" || it->domain() == "ai.onnx") {
+    if (isDefaultDomain(it->domain())) {
       originVersion = it->version();
       break;
     }
@@ -1526,7 +1567,7 @@ bool ImportFrontendModelInternal(onnx::ModelProto &model, MLIRContext &context,
 
   if (options.allowSorting && !IsTopologicallySorted(model.graph())) {
     if (!SortGraph(model.mutable_graph())) {
-      llvm::outs() << "The graph is not topologically sortable.\n";
+      llvm::errs() << "The graph is not topologically sortable.\n";
       return false;
     }
   }

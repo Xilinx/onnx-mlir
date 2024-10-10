@@ -20,6 +20,7 @@
 #include <memory>
 #include <regex>
 
+#include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Parser/Parser.h"
@@ -191,10 +192,10 @@ void showCompilePhase(std::string msg) {
     firstRawTime = rawTime;
     hasFirstRawTime = true;
   }
-  llvm::outs() << "[" << CURRENT_COMPILE_PHASE++ << "/" << TOTAL_COMPILE_PHASE
+  llvm::errs() << "[" << CURRENT_COMPILE_PHASE++ << "/" << TOTAL_COMPILE_PHASE
                << "] " << currentTime << " (" << diff << "s) " << msg << "\n";
   // Flush so that if there are errors, we know where it came from.
-  llvm::outs().flush();
+  llvm::errs().flush();
 
   // Reset current phase.
   if (CURRENT_COMPILE_PHASE > TOTAL_COMPILE_PHASE) {
@@ -934,6 +935,12 @@ static int emitOutput(mlir::OwningOpRef<ModuleOp> &module,
     mlir::PassManager &pm, EmissionTargetType emissionTarget) {
   if (printIR) {
     outputModule(module, llvm::outs());
+    return CompilerSuccess;
+  }
+  if (printBytecode) {
+    if (failed(mlir::writeBytecodeToFile(*module, llvm::outs()))) {
+      return CompilerFailure;
+    }
     return CompilerSuccess;
   }
   return emitOutputFiles(outputNameNoExt, emissionTarget, context, module);

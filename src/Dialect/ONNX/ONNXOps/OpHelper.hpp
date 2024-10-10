@@ -44,6 +44,7 @@
 #include "src/Support/TypeUtilities.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 
 namespace onnx_mlir {
@@ -188,6 +189,12 @@ bool getI64ValuesFromONNXConstantOp(
 inline bool isNoneValue(mlir::Value value);
 
 //===----------------------------------------------------------------------===//
+// Support for BatchNorm
+
+mlir::ONNXConstantOp createConstantOp(mlir::PatternRewriter &rewriter,
+    mlir::Location loc, mlir::ArrayAttr values);
+
+//===----------------------------------------------------------------------===//
 // Support for transpose patterns.
 //===----------------------------------------------------------------------===//
 
@@ -221,6 +228,12 @@ bool hasOneUseExceptDimOp(mlir::Value val);
 mlir::DenseElementsAttr createDenseElementsAttrFromFloatAttr(
     mlir::PatternRewriter &rewriter, mlir::Type elementType,
     mlir::FloatAttr attr);
+
+mlir::ONNXCastOp castTo(mlir::PatternRewriter &rewriter, mlir::Value val,
+    mlir::Type newElementTy, int64_t saturate);
+
+mlir::Value normalizeConstantOp(
+    mlir::PatternRewriter &rewriter, mlir::Value output, mlir::Attribute attr);
 
 // Create a DenseElementsAttr based on the shape of type at the given index.
 mlir::DenseElementsAttr createDenseElementsAttrFromShapeAtIndex(

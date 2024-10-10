@@ -32,22 +32,37 @@ LogicalResult ONNXBatchNormalizationInferenceModeOpShapeHelper::computeShape() {
   return setOutputDimsFromOperand(operandAdaptor.getX());
 }
 
-} // namespace onnx_mlir
+template <>
+LogicalResult ONNXBatchNormalizationOpShapeHelper::computeShape() {
+  // Single output in inference mode, Y same shape as X.
+  ONNXBatchNormalizationOpAdaptor operandAdaptor(operands);
 
-LogicalResult ONNXBatchNormalizationInferenceModeOp::inferShapes(
-    std::function<void(Region &)> doShapeInference) {
-  // Cannot infer shape if no shape exists.
-  if (!hasShapeAndRank(getX()) || !hasShapeAndRank(getScale()) ||
-      !hasShapeAndRank(getB()) || !hasShapeAndRank(getMean()) ||
-      !hasShapeAndRank(getVar()))
+  // Input, RunningMean and RunningVar have the same dimensions as their inputs
+  // counterparts.
+  auto inputShapeInferRes =
+      setOutputDimsFromOperand(operandAdaptor.getX()).succeeded();
+  auto meanShapeInferRes =
+      setOutputDimsFromOperand(operandAdaptor.getInputMean(), 1).succeeded();
+  auto varShapeInferRes =
+      setOutputDimsFromOperand(operandAdaptor.getInputVar(), 2).succeeded();
+  return LogicalResult::success(
+      inputShapeInferRes && meanShapeInferRes && varShapeInferRes);
+}
+
+template <typename BatchNormOpShapeHelper>
+LogicalResult inferShapesForBatchNorm(Operation *op, Value input, Value scale,
+    Value bias, Value mean, Value variance) {
+  if (!hasShapeAndRank(input) || !hasShapeAndRank(scale) ||
+      !hasShapeAndRank(bias) || !hasShapeAndRank(mean) ||
+      !hasShapeAndRank(variance))
     return success();
 
   // Verifier code.
-  auto inputTensorTy = mlir::cast<RankedTensorType>(getX().getType());
-  auto scaleTensorTy = mlir::cast<RankedTensorType>(getScale().getType());
-  auto biasTensorTy = mlir::cast<RankedTensorType>(getB().getType());
-  auto meanTensorTy = mlir::cast<RankedTensorType>(getMean().getType());
-  auto varianceTensorTy = mlir::cast<RankedTensorType>(getVar().getType());
+  auto inputTensorTy = cast<RankedTensorType>(input.getType());
+  auto scaleTensorTy = cast<RankedTensorType>(scale.getType());
+  auto biasTensorTy = cast<RankedTensorType>(bias.getType());
+  auto meanTensorTy = cast<RankedTensorType>(mean.getType());
+  auto varianceTensorTy = cast<RankedTensorType>(variance.getType());
 
   // Check whether the shapes of scale, bias, mean and variance are valid.
   // Operand's dimensions can be in the form of NxCxD1xD2x...xDn or N.
@@ -69,26 +84,72 @@ LogicalResult ONNXBatchNormalizationInferenceModeOp::inferShapes(
     auto v = varianceTensorTy.getShape();
 
     if ((s.size() != 1) || (!ShapedType::isDynamic(s[0]) && s[0] != c))
-      return emitError("Wrong rank for the scale");
+      return op->emitError("Wrong rank for the scale");
     if ((b.size() != 1) || (!ShapedType::isDynamic(b[0]) && b[0] != c))
-      return emitError("Wrong rank for the bias");
+      return op->emitError("Wrong rank for the bias");
     if ((m.size() != 1) || (!ShapedType::isDynamic(m[0]) && m[0] != c))
-      return emitError("Wrong rank for the mean");
+      return op->emitError("Wrong rank for the mean");
     if ((v.size() != 1) || (!ShapedType::isDynamic(v[0]) && v[0] != c))
-      return emitError("Wrong rank for the variance");
+      return op->emitError("Wrong rank for the variance");
   }
 
   // The output tensor of the same shape as the input.
-  Type elementType =
-      mlir::cast<RankedTensorType>(getX().getType()).getElementType();
-  ONNXBatchNormalizationInferenceModeOpShapeHelper shapeHelper(
-      getOperation(), {});
+  Type elementType = inputTensorTy.getElementType();
+  BatchNormOpShapeHelper shapeHelper(op, {});
   return shapeHelper.computeShapeAndUpdateType(elementType);
+}
+
+template <>
+LogicalResult ONNXBatchNormalizationV9OpShapeHelper::computeShape() {
+  // Single output in inference mode, Y same shape as X.
+  ONNXBatchNormalizationV9OpAdaptor operandAdaptor(operands);
+
+  // Input, RunningMean and RunningVar have the same dimensions as their inputs
+  // counterparts.
+  auto inputShapeInferRes =
+      setOutputDimsFromOperand(operandAdaptor.getX()).succeeded();
+  auto meanShapeInferRes =
+      setOutputDimsFromOperand(operandAdaptor.getMean(), 1).succeeded();
+  auto varShapeInferRes =
+      setOutputDimsFromOperand(operandAdaptor.getVar(), 2).succeeded();
+  auto savedMeanShapeInferRes =
+      setOutputDimsFromOperand(operandAdaptor.getMean(), 3).succeeded();
+  auto savedVarShapeInferRes =
+      setOutputDimsFromOperand(operandAdaptor.getVar(), 4).succeeded();
+  return LogicalResult::success(inputShapeInferRes && meanShapeInferRes &&
+                                varShapeInferRes && savedMeanShapeInferRes &&
+                                savedVarShapeInferRes);
+}
+
+} // namespace onnx_mlir
+
+LogicalResult ONNXBatchNormalizationInferenceModeOp::inferShapes(
+    std::function<void(Region &)> doShapeInference) {
+  return inferShapesForBatchNorm<
+      ONNXBatchNormalizationInferenceModeOpShapeHelper>(
+      getOperation(), getX(), getScale(), getB(), getMean(), getVar());
+}
+
+LogicalResult ONNXBatchNormalizationOp::inferShapes(
+    std::function<void(Region &)> doShapeInference) {
+  // Cannot infer shape if no shape exists.
+
+  return inferShapesForBatchNorm<ONNXBatchNormalizationOpShapeHelper>(
+      getOperation(), getX(), getScale(), getB(), getInputMean(),
+      getInputVar());
+}
+
+LogicalResult ONNXBatchNormalizationV9Op::inferShapes(
+    std::function<void(Region &)> doShapeInference) {
+  return inferShapesForBatchNorm<ONNXBatchNormalizationV9OpShapeHelper>(
+      getOperation(), getX(), getScale(), getB(), getMean(), getVar());
 }
 
 namespace onnx_mlir {
 template struct ONNXNonSpecificOpShapeHelper<
     ONNXBatchNormalizationInferenceModeOp>;
+
+template struct ONNXNonSpecificOpShapeHelper<ONNXBatchNormalizationOp>;
 } // namespace onnx_mlir
 
 //===----------------------------------------------------------------------===//

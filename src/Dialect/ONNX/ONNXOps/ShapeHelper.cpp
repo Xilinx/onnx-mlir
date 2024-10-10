@@ -114,13 +114,13 @@ static void refineDims(Operation *op, DimsExpr &inferredDims, Value output) {
     assert(inferredDims[i].isLiteral() && "isLiteral failed");
     if (existingDims[i] != inferredDims[i].getLiteral()) {
       if (op)
-        llvm::outs() << "Warning for operation " << op->getName()
+        llvm::errs() << "Warning for operation " << op->getName()
                      << ": [Shape inference, dim " << i
                      << "] the inferred dim (" << inferredDims[i].getLiteral()
                      << ") is different from the existing dim ("
                      << existingDims[i] << "). Use the existing dim instead.\n";
       else
-        llvm::outs() << "Warning: [Shape inference, dim " << i
+        llvm::errs() << "Warning: [Shape inference, dim " << i
                      << "] the inferred dim (" << inferredDims[i].getLiteral()
                      << ") is different from the existing dim ("
                      << existingDims[i] << "). Use the existing dim instead.\n";
@@ -219,10 +219,10 @@ LogicalResult ONNXOpShapeHelper::setOutputDimsFromTypeWithConstantShape(
 LogicalResult ONNXOpShapeHelper::computeShapeAndUpdateType(
     Type elementType, Attribute encoding) {
   // Invoke virtual compute shape.
-  if (failed(computeShape()))
-    return op->emitError("Failed to scan parameters successfully");
-  assert((mlir::isa<VectorType>(elementType) ||
-             !mlir::isa<ShapedType>(elementType)) &&
+  if (failed(computeShape())) {
+    return failure();
+  }
+  assert((isa<VectorType>(elementType) || !isa<ShapedType>(elementType)) &&
          "element type cannot be a shaped type other than vector type");
   uint64_t resNum = op->getNumResults();
   for (uint64_t i = 0; i < resNum; ++i) {
