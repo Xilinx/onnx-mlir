@@ -320,6 +320,40 @@ func.func @test_neg_3(%arg0: tensor<3x2xi32>) -> tensor<3x2xi32> {
 
 // -----
 
+// CHECK-LABEL: @test_abs() -> tensor<4x2xbf16>
+func.func @test_abs() -> tensor<4x2xbf16> {
+  // Test Positive, Negative, Zero, -Zero, +Inf, -Inf, NaN, -NaN
+  %0 = onnx.Constant dense<[[12.5, -12.5], [0.0, -0.0], [0x7F80, 0xFF80], [0xFFC0, 0x7FC0]]> : tensor<4x2xbf16>
+  %1 = "onnx.Abs"(%0) : (tensor<4x2xbf16>) -> tensor<4x2xbf16>
+  "onnx.Return"(%1) : (tensor<4x2xbf16>) -> ()
+  // CHECK: onnx.Constant dense<{{.}}[1.250000e+01, 1.250000e+01], [0.000000e+00, 0.000000e+00], [0x7F80, 0x7F80], [0x7FC0, 0x7FC0]]>
+  // CHECK-NOT: "onnx.Abs"
+}
+
+// -----
+
+// CHECK-LABEL: @test_abs2() -> tensor<2x2xi32>
+func.func @test_abs2() -> tensor<2x2xi32> {
+  %0 = onnx.Constant dense<[[12, -12], [0, -1000]]> : tensor<2x2xi32>
+  %1 = "onnx.Abs"(%0) : (tensor<2x2xi32>) -> tensor<2x2xi32>
+  "onnx.Return"(%1) : (tensor<2x2xi32>) -> ()
+  // CHECK: onnx.Constant dense<{{.}}[12, 12], [0, 1000]]>
+  // CHECK-NOT: "onnx.Abs"
+}
+
+// -----
+
+// CHECK-LABEL: @test_abs3() -> tensor<1x2xui64>
+func.func @test_abs3() -> tensor<1x2xui64> {
+  %0 = onnx.Constant dense<[[18446744073709551615, 18446744073709551614]]> : tensor<1x2xui64>
+  %1 = "onnx.Abs"(%0) : (tensor<1x2xui64>) -> tensor<1x2xui64>
+  "onnx.Return"(%1) : (tensor<1x2xui64>) -> ()
+  // CHECK: onnx.Constant dense<{{.}}[18446744073709551615, 18446744073709551614]]>
+  // CHECK-NOT: "onnx.Abs"
+}
+
+// -----
+
 // CHECK-LABEL: @test_ceil() -> tensor<3x2xbf16>
 func.func @test_ceil() -> tensor<3x2xbf16> {
   // Test Positive, Negative, Zero, NaN, +Inf, -Inf
@@ -416,6 +450,17 @@ func.func @test_reciprocal() -> tensor<3x2xbf16> {
   "onnx.Return"(%1) : (tensor<3x2xbf16>) -> ()
   // CHECK: onnx.Constant dense<{{.}}[4.000000e+00, -4.000000e+00], [0x7F80, 0x7FC0], [0.000000e+00, -0.000000e+00]]>
   // CHECK-NOT: "onnx.Reciprocal"
+}
+
+// -----
+
+// CHECK-LABEL: @test_round() -> tensor<5x2xbf16>
+func.func @test_round() -> tensor<5x2xbf16> {
+  %0 = onnx.Constant dense<[[0.9, 2.5], [2.3, 1.5], [-4.5, -3.5], [-2.6, 0x7FC0],[0x7F80, 0xFF80]]> : tensor<5x2xbf16>
+  %1 = "onnx.Round"(%0) : (tensor<5x2xbf16>) -> tensor<5x2xbf16>
+  "onnx.Return"(%1) : (tensor<5x2xbf16>) -> ()
+  // CHECK: onnx.Constant dense<{{.}}[1.000000e+00, 2.000000e+00], [2.000000e+00, 2.000000e+00], [-4.000000e+00, -4.000000e+00], [-3.000000e+00, 0x7FC0], [0x7F80, 0xFF80]]>
+  // CHECK-NOT: "onnx.Round"
 }
 
 // -----
@@ -2393,6 +2438,17 @@ func.func @test_pow() -> tensor<2x2xf32> {
 // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<8.000000e+00> : tensor<2x2xf32>
 // CHECK:           onnx.Return [[VAR_0_]] : tensor<2x2xf32>
 // CHECK:         }
+}
+
+// -----
+
+func.func @test_pow_i32_f32_no_prop(%arg0: tensor<1x2xi32>, %arg1: tensor<f32>) -> tensor<1x2xi32> {
+  %0 = onnx.Constant dense<[[1, 2]]> : tensor<1x2xi32>
+  %1 = onnx.Constant dense<2.0> : tensor<f32>
+  %2 = "onnx.Pow"(%0, %1) : (tensor<1x2xi32>, tensor<f32>) -> tensor<1x2xi32>
+  "onnx.Return"(%2) : (tensor<1x2xi32>) -> ()
+  // CHECK-LABEL: @test_pow_i32_f32_no_prop
+  // CHECK: "onnx.Pow"
 }
 
 //===----------------------------------------------------------------------===//

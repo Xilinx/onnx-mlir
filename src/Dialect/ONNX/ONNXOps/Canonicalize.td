@@ -38,6 +38,21 @@ include "src/Dialect/ONNX/ONNX.td"
 def createDenseElementsAttrFromFloatAttr : NativeCodeCall<
   "onnx_mlir::createDenseElementsAttrFromFloatAttr($_builder, mlir::cast<ShapedType>($0.getType()).getElementType(), $1)">;
 
+// TODO: Currently this will not saturate. We might need/want this for float8
+// types.
+def castWithSameRankDifferentElementType : NativeCodeCall<
+  "onnx_mlir::castTo($_builder, $0, $1.getType().cast<ShapedType>().getElementType(), /*saturate=*/ 0)">;
+
+def createConstantOpWithOneToRankOfExclusive: NativeCodeCall<
+  [{onnx_mlir::createConstantOp($_builder, $0.getLoc(),
+                               // Create an ArrayAttr of IntergerAttr(s) of values in [1, N-2].
+                               onnx_mlir::createArrayAttrOfNToM($_builder, 1, $0.getType().cast<ShapedType>().getRank() - 2))}]>;
+
+def createConstantOpWithOneToRankOf : NativeCodeCall<
+  [{onnx_mlir::createConstantOp($_builder, $0.getLoc(),
+                                // Create an ArrayAttr of IntergerAttr(s) of values in [1, N-1].
+                                onnx_mlir::createArrayAttrOfNToM($_builder, 1, $0.getType().cast<ShapedType>().getRank() - 1))}]>;
+
 // Create a DenseElementsAttr from the shape of the type of a value.
 def createDenseElementsAttrFromShape : NativeCodeCall<
   "onnx_mlir::createDenseElementsAttrFromShape($_builder, $0)">;
@@ -70,10 +85,6 @@ def createDenseElementsAttrOf : NativeCodeCall<
 def createDenseElementsAttrOfOneToRankOf : NativeCodeCall<
   "onnx_mlir::createDenseElementsAttrOfNToM($_builder, 1, mlir::cast<ShapedType>($0.getType()).getRank() - 1)">;
 
-// Create an ArrayAttr of IntergerAttr(s) of values in [1, N-2].
-def createDenseElementsAttrOfOneToRankOfExclusive : NativeCodeCall<
-  "onnx_mlir::createDenseElementsAttrOfNToM($_builder, 1, mlir::cast<ShapedType>($0.getType()).getRank() - 2)">;
-
 // Create an ArrayAttr of IntergerAttr(s) of values in [2, rank - 1].
 def createArrayAttrOfTwoToRankOf : NativeCodeCall<
   "onnx_mlir::createArrayAttrOfNToM($_builder, 2, mlir::cast<ShapedType>($0.getType()).getRank() - 1)">;
@@ -83,7 +94,7 @@ def AttributeIsNotNull :
 
 def IsDenseElementsAttr :
   Constraint<And<[CPred<" ($_self) ">,
-                  CPred<"mlir::isa<DenseElementsAttr>(($_self))">
+                  CPred<" isa<DenseElementsAttr>($_self)">
                  ]>, "Attribute is not a DenseElementsAttr">;
 
 // Intended to check whether there is at least one not-Null the attributes
@@ -188,6 +199,12 @@ def IsStaticShapeTensor:
       "mlir::cast<::mlir::ShapedType>($_self.getType()).hasStaticShape()">,
     "hasStaticShape">;
 
+def HasRank:
+  Constraint<
+    CPred<
+      "$_self.getType().cast<::mlir::ShapedType>().hasRank()">,
+    "is a tensor of static rank">;
+
 def IsNoneValue: Constraint<
    CPred<"onnx_mlir::isNoneValue($_self)">,
           "Is the value none">;
@@ -283,6 +300,15 @@ class IntegerAttrIsOf<int s> : Constraint<
   "IntegerAttr is of the given value"
   >;
 
+def isConstantOpWithNoZeroElements: Constraint<
+  CPred<"onnx_mlir::isConstantOpWithNoZeroElements($0)">,
+  "Checks this constant has no zero elements."
+>;
+
+class ValidAxisConstraints<int axis>: Constraint<
+    CPred<"(" # axis # " >= 0) && ( " # axis #  " < mlir::cast<ShapedType>($_self.getType()).getShape().size())">,
+"Axis is within the valid range of shape dimensions">;
+
 //===----------------------------------------------------------------------===//
 // Pattern-Match and Rewrite
 //===----------------------------------------------------------------------===//
@@ -366,6 +392,7 @@ def FuseAddConvPattern: Pat<
   [(HasShapeAndRank:$res),
    (NotNoneType $b),
    (AttributeIsNotNull:$denseAttr),
+   (ValidAxisConstraints<1>:$y),
    (AllDimsFromAxisToEndAre<1, 1>:$y),
    (RankXMinusRankYIs<1> $res, $y)]
 >;
@@ -668,6 +695,15 @@ def RemoveIdentityReshapePattern2:  Pat<
   // Check that val and out have the same static shape.
   [(IsIdentityReshape $out, $val)]>;
 
+def ReplaceReshapeAllowZeroByReshape:  Pat<
+  // Reshape with allowzero == 1
+  (ONNXReshapeOp:$out $val, $shape, $allowzero),
+  // Replace Reshape (allowzero == 1) with Reshape (allowzero == 0)
+  (ONNXReshapeOp $val, $shape, (GetNullIntegerAttr)),
+  // Check that allowzero == 1, and val and out have static and non zero dimensions.
+  [(IntegerAttrIsOf<1> $allowzero),
+   (isConstantOpWithNoZeroElements $shape)]>;
+
 def GetReturnTypeForMatMulOpND2D: NativeCodeCall<
   "onnx_mlir::getReturnTypeForMatMulOpND2D($0, $1)"
 >;
@@ -821,19 +857,19 @@ def FuseBatchNormInferenceModeConvPattern: Pat<
         $w,
         (ONNXUnsqueezeOp
            (ONNXDivOp:$coefficientW
-              $scale,
+              (castWithSameRankDifferentElementType $scale, $x),
               (ONNXSqrtOp
                  (ONNXAddOp
-                    $var,
+                    (castWithSameRankDifferentElementType $var, $x),
                     (ONNXConstantOpFromDenseAttr
                        (createDenseElementsAttrFromFloatAttr $res, $epsilon))))),
-           (ONNXConstantOpFromDenseAttr (createDenseElementsAttrOfOneToRankOf $w)))),
+           (createConstantOpWithOneToRankOf $w))),
      // b_
      (ONNXAddOp
         $B,
         (ONNXMulOp
            $coefficientW,
-           (subtractOrNeg $res, $b, $mean))),
+           (subtractOrNeg $res, $b, (castWithSameRankDifferentElementType $mean, $x)))),
 
      $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
      [], [], (addBenefit 1)
@@ -864,17 +900,21 @@ def RewriteBatchNormInferenceModeConvPattern1: Pat<
         $x,
         (ONNXUnsqueezeOp
            (ONNXDivOp:$a
-              $scale,
+              (castWithSameRankDifferentElementType $scale, $x),
               (ONNXSqrtOp
                  (ONNXAddOp
-                    $var,
+                    (castWithSameRankDifferentElementType $var, $x),
                     (ONNXConstantOpFromDenseAttr
                        (createDenseElementsAttrFromFloatAttr $res, $epsilon))))),
-           (ONNXConstantOpFromDenseAttr (createDenseElementsAttrOfOneToRankOfExclusive $x)))),
+           (createConstantOpWithOneToRankOfExclusive $x))),
      // b
      (ONNXUnsqueezeOp
-       (ONNXSubOp $bias, (ONNXMulOp $mean, $a)),
-       (ONNXConstantOpFromDenseAttr (createDenseElementsAttrOfOneToRankOfExclusive $x)))),
+       (ONNXSubOp
+          (castWithSameRankDifferentElementType $bias, $x),
+          (ONNXMulOp
+            (castWithSameRankDifferentElementType $mean, $x),
+            $a)),
+       (createConstantOpWithOneToRankOfExclusive $x))),
   [(HasRankGT<2> $x)], [], (addBenefit 0)
 >;
 
@@ -890,14 +930,15 @@ def RewriteBatchNormInferenceModeConvPattern2: Pat<
      (ONNXMulOp
         $x,
         (ONNXDivOp:$a
-           $scale,
+           (castWithSameRankDifferentElementType $scale, $x),
            (ONNXSqrtOp
               (ONNXAddOp
-                 $var,
+                 (castWithSameRankDifferentElementType $var, $x),
                  (ONNXConstantOpFromDenseAttr
                     (createDenseElementsAttrFromFloatAttr $res, $epsilon)))))),
      // b
-     (ONNXSubOp $bias, (ONNXMulOp $mean, $a))),
+     (ONNXSubOp (castWithSameRankDifferentElementType $bias, $x),
+                (ONNXMulOp (castWithSameRankDifferentElementType $mean, $x), $a))),
   [(HasRankOf<1> $x)], [], (addBenefit 0)
 >;
 
@@ -937,7 +978,8 @@ def SizeToConstantPattern: Pat<
 // Rewrite GlobalAveragePool using ReduceMean.
 def GlobalAveragePoolPattern: Pat<
   (ONNXGlobalAveragePoolOp $x),
-  (ONNXReduceMeanV13Op $x, (createArrayAttrOfTwoToRankOf $x), (GetNullAttr))
+  (ONNXReduceMeanV13Op $x, (createArrayAttrOfTwoToRankOf $x), (GetNullAttr)),
+  [(HasRank:$x)]
 >;
 
 // Rewrite GlobalMaxPool using ReduceMax.
@@ -1053,17 +1095,6 @@ def AlwaysFalseWherePattern : Pat<
  (ONNXWhereOp (ONNXEqualOp (ONNXConcatOp $dims, $_), $negative_constant), $true_val, $false_val),
  (replaceWithValue $false_val),
  [(IsNegativeSplatConstant:$negative_constant), (AreAllDimSizes:$dims)]
->;
-
-//===----------------------------------------------------------------------===//
-// Canonicalization for ONNXDequantizeLinear
-//===----------------------------------------------------------------------===//
-
-// Convert QuantizeLinear+DequantizeLinear to Identity.
-def QuantizeDequantizePattern: Pat<
-  (ONNXDequantizeLinearOp (ONNXQuantizeLinearOp $x, $x_scale, $x_zeropoint, $x_axis, $x_saturate),
-                           $y_scale, $y_zeropoint, $y_axis),
-  (replaceWithValue $x)
 >;
 
 #endif // ONNX_REWRITE

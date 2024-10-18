@@ -25,10 +25,19 @@
 #include "mlir/IR/PatternMatch.h"                 // from @llvm-project
 #include "mlir/Interfaces/InferTypeOpInterface.h" // from @llvm-project
 #include "mlir/Support/LLVM.h"                    // from @llvm-project
+#include <src/Dialect/Mlir/IndexExpr.hpp>
 #include <src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp>
 
 namespace onnx_mlir {
 namespace tosa {
+
+// ONNX can use negative indices for axis while TOSA cannot. This functions
+// makes sure the axis is in the right range for TOSA.
+int64_t convertNegativeAxis(int64_t axis, int64_t inputRank);
+
+// Get a vector of indexExpr and extract the Int64 values
+llvm::SmallVector<int64_t> createInt64VectorFromIndexExpr(
+    llvm::ArrayRef<IndexExpr> indexVector);
 
 // Create a RankedTensorType with shape and all elements being 1
 mlir::RankedTensorType reduceAxisToOne(llvm::ArrayRef<int64_t> shape,
@@ -39,6 +48,16 @@ template <typename T>
 T getValueFromTosaConst(mlir::Value &val) {
   return mlir::cast<T>(val.getDefiningOp<mlir::tosa::ConstOp>().getValue());
 }
+
+// Retrieves an ElementsAttr out of a const operator.
+// This function is made to work with both onnx.const and tosa.const
+mlir::ElementsAttr getElementsAttrFromConst(mlir::Value &val);
+
+// Takes a 1-d `tensor` with k elements and reshapes it into an `rank`-d tensor
+// with shape {1, ..., 1, k, 1, ..., 1 }
+// where `k` it at position `axis`.
+mlir::Value expandShape(mlir::PatternRewriter &rewriter, mlir::Location loc,
+    mlir::Value tensor, size_t axis, size_t rank);
 
 // Creates a TOSA operation and performs shape inference on the individual
 // op. This allows shape inference during the framework to TOSA lowering.
@@ -78,6 +97,17 @@ void CreateReplaceOpAndInfer(mlir::PatternRewriter &rewriter,
       CreateOpAndInfer<TosaOp>(rewriter, op->getLoc(), result_ty, args...);
   rewriter.replaceOp(op, result->getResults());
 }
+
+// Create a TOSA rescale op from input framework scaling, zero points and
+// rounding mode
+mlir::Value buildRescale(mlir::PatternRewriter &rewriter, mlir::Operation *op,
+    mlir::ShapedType output_type, mlir::Value input_val, double scale,
+    int64_t input_zp, int64_t output_zp, bool double_round, bool scale32);
+
+// Creates TOSA rescale op with int32 output
+mlir::Value buildRescaleToInt32(mlir::PatternRewriter &rewriter,
+    mlir::Operation *op, mlir::Value input_val, double input_scale,
+    int64_t input_zp);
 
 /// Create a padding tosa::ConstOp from ONNX to Tosa format.
 /// The two formats are:

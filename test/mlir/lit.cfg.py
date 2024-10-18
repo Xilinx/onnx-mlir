@@ -26,6 +26,11 @@ config.test_exec_root = os.path.join(config.onnx_mlir_obj_root, "test", "mlir")
 
 llvm_config.use_default_substitutions()
 
+config.excludes = ["onnx_to_mhlo"]
+
+# Xilinx fork: Don't care about krnl dialect. Simplifies LLVM bumps
+config.excludes += ["onnx_to_krnl", "krnl_to_affine", "krnl_to_llvm"]
+
 # Tweak the PATH to include the tools dir.
 llvm_config.with_environment("PATH", config.llvm_tools_dir, append_path=True)
 
@@ -46,3 +51,6 @@ llvm_config.add_tool_substitutions(tools, tool_dirs)
 # execution based on the available targets
 for arch in config.targets_to_build.split():
     config.available_features.add(arch.lower())
+
+if config.decomp_onnx_convtranspose:
+    config.available_features.add("decomp_onnx_convtranspose")

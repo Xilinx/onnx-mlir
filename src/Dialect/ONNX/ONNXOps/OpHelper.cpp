@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Path.h"
@@ -330,6 +332,18 @@ bool getI64ValuesFromONNXConstantOp(
 }
 
 //===----------------------------------------------------------------------===//
+// Support for BatchNorm
+
+ONNXConstantOp createConstantOp(
+    PatternRewriter &rewriter, Location loc, ArrayAttr values) {
+  return rewriter.create<ONNXConstantOp>(loc, Attribute(),
+      DenseElementsAttr::get(
+          RankedTensorType::get(
+              {static_cast<long>(values.size())}, rewriter.getI64Type()),
+          llvm::ArrayRef(values.getValue())));
+}
+
+//===----------------------------------------------------------------------===//
 // Support for transpose patterns.
 //===----------------------------------------------------------------------===//
 
@@ -454,6 +468,14 @@ DenseElementsAttr createDenseElementsAttrFromFloatAttr(
   return DenseElementsAttr::get(tensorType, {f});
 }
 
+ONNXCastOp castTo(
+    PatternRewriter &rewriter, Value val, Type newElementTy, int64_t saturate) {
+  return rewriter.create<ONNXCastOp>(val.getLoc(),
+      val.getType().cast<RankedTensorType>().clone(newElementTy), val,
+      rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), saturate),
+      TypeAttr::get(newElementTy));
+}
+
 //===----------------------------------------------------------------------===//
 // Support for dim operations.
 //===----------------------------------------------------------------------===//
@@ -560,6 +582,9 @@ RESULT_TYPE getScalarValue(ElementsAttr denseAttr, Type type) {
   } else if (mlir::isa<FloatType>(elementaryType)) {
     auto valueIt = denseAttr.getValues<APFloat>().begin();
     return (RESULT_TYPE)(*valueIt).convertToDouble();
+  } else if (elementaryType.isBF16()) {
+    auto valueIt = denseAttr.getValues<APFloat>().begin();
+    return (RESULT_TYPE)(*valueIt).convertToFloat();
   }
   llvm_unreachable("Unexpected type.");
   return 0;

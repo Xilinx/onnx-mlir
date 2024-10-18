@@ -40,8 +40,10 @@ struct ONNXOpTransformPass : public mlir::PassWrapper<ONNXOpTransformPass,
   Option<bool> onnxOpTransformReport{*this, "onnx-op-transform-report",
       llvm::cl::desc("Report diagnostic info for op transform passes."),
       llvm::cl::init(false)};
+  // NOTE: FlexML changes the default for this flag to false, as we do not want
+  //       to run the CPU specific transformations.
   Option<bool> onnxOpTransformTargetCPU{*this, "onnx-op-transform-target-cpu",
-      llvm::cl::desc("Target CPU op transform passes."), llvm::cl::init(true)};
+      llvm::cl::desc("Target CPU op transform passes."), llvm::cl::init(false)};
   Option<bool> onnxOpTransformEnableSimdDataLayout{*this,
       "onnx-op-transform-simd-data-layout",
       llvm::cl::desc("Enable SIMD data layout opt in op transform passes."),

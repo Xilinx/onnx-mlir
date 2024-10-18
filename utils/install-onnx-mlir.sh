@@ -7,6 +7,7 @@ if [[ -z "$pythonLocation" ]]; then
         -DCMAKE_BUILD_TYPE=Release \
         -DLLVM_ENABLE_ASSERTIONS=ON \
         -DMLIR_DIR=${MLIR_DIR} \
+        $EXTRA_CMAKE_ARGS \
         ..
 else
   cmake -G Ninja \
@@ -15,6 +16,7 @@ else
         -DLLVM_ENABLE_ASSERTIONS=ON \
         -DPython3_ROOT_DIR=$pythonLocation \
         -DMLIR_DIR=${MLIR_DIR} \
+        $EXTRA_CMAKE_ARGS \
         ..
 fi
 cmake --build .

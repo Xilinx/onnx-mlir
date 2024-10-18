@@ -20,13 +20,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/TypeRange.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/DialectConversion.h"
-#include "llvm/Support/Debug.h"
+#include "mlir/Support/LogicalResult.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
+#include "src/Dialect/ONNX/ElementsAttr/ElementsAttrHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
@@ -609,6 +611,200 @@ struct ConcatFusePattern : public OpRewritePattern<ONNXConcatOp> {
   }
 };
 
+// ONNXHardSwishOp(input) can be decomposed as:
+//   input * ONNXHardSigmoid input, with alpha = 1/6 and beta = 0.5.
+struct DecomposeHardSwishPattern : public OpRewritePattern<ONNXHardSwishOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXHardSwishOp hardSwishOp, PatternRewriter &rewriter) const final {
+
+    auto input = hardSwishOp.getX();
+    auto hardSigmoid = rewriter.create<ONNXHardSigmoidOp>(hardSwishOp->getLoc(),
+        hardSwishOp.getType(), input, rewriter.getF32FloatAttr(1.0 / 6.0),
+        rewriter.getF32FloatAttr(0.5));
+    rewriter.replaceOpWithNewOp<ONNXMulOp>(
+        hardSwishOp, hardSwishOp.getType(), hardSigmoid, input);
+    return success();
+  }
+};
+
+/// Decompose BatchNormV9 to BatchNorm
+struct DecomposeBatchNormV9ToBatchNorm
+    : public OpRewritePattern<ONNXBatchNormalizationV9Op> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(ONNXBatchNormalizationV9Op batchNormOpV9,
+      PatternRewriter &rewriter) const final {
+    auto savedMeanRes = batchNormOpV9.getSavedMean();
+    auto savedVarRes = batchNormOpV9.getSavedVar();
+    if (!savedMeanRes.use_empty() || !savedVarRes.use_empty()) {
+      return rewriter.notifyMatchFailure(batchNormOpV9.getLoc(),
+          "saved_mean and saved_variance must have no use.");
+    }
+    auto batchNormOp = rewriter.create<ONNXBatchNormalizationOp>(
+        batchNormOpV9.getLoc(),
+        TypeRange{
+            batchNormOpV9.getY().getType(),
+            batchNormOpV9.getOutMean().getType(),
+            batchNormOpV9.getOutVar().getType(),
+        },
+        batchNormOpV9.getX(), batchNormOpV9.getScale(), batchNormOpV9.getB(),
+        batchNormOpV9.getMean(), batchNormOpV9.getVar(),
+        batchNormOpV9.getEpsilon(), batchNormOpV9.getMomentum());
+    rewriter.replaceOp(batchNormOpV9,
+        {batchNormOp.getY(), batchNormOp.getRunningMean(),
+            batchNormOp.getRunningVar(),
+            rewriter.create<ONNXNoneOp>(batchNormOpV9.getLoc()),
+            rewriter.create<ONNXNoneOp>(batchNormOpV9.getLoc())});
+    return success();
+  }
+};
+
+/// Decompose BatchNorm to BatchNormInferenceMode
+struct DecomposeBatchNormToBatchNormInferenceMode
+    : public OpRewritePattern<ONNXBatchNormalizationOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(ONNXBatchNormalizationOp batchNormOp,
+      PatternRewriter &rewriter) const final {
+
+    auto meanRes = batchNormOp.getRunningMean();
+    auto varianceRes = batchNormOp.getRunningVar();
+    if (!meanRes.use_empty() || !varianceRes.use_empty()) {
+      return rewriter.notifyMatchFailure(
+          batchNormOp.getLoc(), "mean and variance must have no use.");
+    }
+
+    rewriter.replaceOp(batchNormOp,
+        {rewriter.create<ONNXBatchNormalizationInferenceModeOp>(
+             batchNormOp.getLoc(), batchNormOp.getY().getType(),
+             batchNormOp.getX(), batchNormOp.getScale(), batchNormOp.getB(),
+             batchNormOp.getInputMean(), batchNormOp.getInputVar(),
+             batchNormOp.getEpsilon(), batchNormOp.getMomentum()),
+            rewriter.create<ONNXNoneOp>(batchNormOp.getLoc()),
+            rewriter.create<ONNXNoneOp>(batchNormOp.getLoc())});
+    return success();
+  }
+};
+
+// Decompose a pad with negative padding size to slice + pad
+// Only supports static shapes
+struct DecomposeSlicePadPattern : public OpRewritePattern<ONNXPadOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXPadOp padOp, PatternRewriter &rewriter) const final {
+    auto constantPad = padOp.getPads().getDefiningOp<ONNXConstantOp>();
+    if (!constantPad) {
+      return failure();
+    }
+    std::optional<Attribute> padValues;
+    if (auto intAttrs = constantPad.getValueInts()) {
+      padValues = intAttrs;
+    } else if (auto attrs = constantPad.getValue()) {
+      padValues = attrs;
+    }
+    if (!padValues) {
+      return failure();
+    }
+    auto elementsAttr = llvm::dyn_cast<ElementsAttr>(*padValues);
+    if (!elementsAttr) {
+      return failure();
+    }
+    const auto padElements = onnx_mlir::getElementsArray<int64_t>(elementsAttr);
+    const auto padElementsArray = padElements.get();
+    if (llvm::none_of(padElementsArray, [](const auto v) { return v < 0; })) {
+      // No slicing needed
+      return failure();
+    }
+    if (!padOp.getAxes().getDefiningOp<ONNXNoneOp>()) {
+      // This is possible to implement but makes the implementation more
+      // difficult, so skip for now
+      return failure();
+    }
+    const auto inputType = padOp.getData().getType().cast<ShapedType>();
+    if (!inputType.hasStaticShape()) {
+      // We need a static shape to calculate the ends for slice
+      return failure();
+    }
+    auto sliceOp = buildSliceOp(padOp, rewriter, padElementsArray, inputType);
+    auto newPadOp = buildPadOp(padOp, rewriter, padElementsArray, sliceOp);
+    rewriter.replaceOp(padOp, newPadOp);
+    return success();
+  }
+
+private:
+  // Builds ands inserts a pad op, that is guaranteed to only pad and not
+  // slice
+  static Value buildPadOp(ONNXPadOp orignalPadOp, PatternRewriter &rewriter,
+      ArrayRef<int64_t> padElementsArray, ONNXSliceOp sliceOp) {
+    SmallVector<int64_t> pads;
+    for (const auto padElem : padElementsArray) {
+      pads.push_back((padElem < 0) ? 0 : padElem);
+    }
+    if (llvm::any_of(pads, [](const auto p) { return p > 0; })) {
+      auto padsConstOp = onnx_mlir::createConstantOp(
+          rewriter, orignalPadOp->getLoc(), rewriter.getI64ArrayAttr(pads));
+      auto padOp = rewriter.create<ONNXPadOp>(orignalPadOp->getLoc(),
+          orignalPadOp.getType(), sliceOp, padsConstOp,
+          orignalPadOp.getConstantValue(), orignalPadOp.getAxes(),
+          orignalPadOp.getMode());
+      return padOp;
+    }
+    return sliceOp; // No pad needed if we only slice
+  }
+
+  // Builds and inserts a slice op, and its inputs, that handles negative
+  // pads
+  static ONNXSliceOp buildSliceOp(ONNXPadOp padOp, PatternRewriter &rewriter,
+      ArrayRef<int64_t> padElementsArray, ShapedType inputType) {
+    const auto inputShape = inputType.getShape();
+    const size_t dims = padElementsArray.size() / 2;
+
+    assert(inputShape.size() == dims);
+    SmallVector<int64_t> sliceShape;
+    for (size_t i = 0; i < dims; ++i) {
+      auto sliceDimSize = inputShape[i];
+      if (padElementsArray[i] < 0) {
+        sliceDimSize += padElementsArray[i];
+      }
+      if (padElementsArray[i + dims] < 0) {
+        sliceDimSize += padElementsArray[i + dims];
+      }
+      sliceShape.push_back(sliceDimSize);
+    }
+    auto sliceType = inputType.clone(sliceShape);
+
+    SmallVector<int64_t> sliceStarts;
+    for (size_t i = 0; i < dims; ++i) {
+      if (padElementsArray[i] < 0) {
+        sliceStarts.push_back(-padElementsArray[i]);
+      } else {
+        sliceStarts.push_back(0);
+      }
+    }
+    auto startsConstOp = onnx_mlir::createConstantOp(
+        rewriter, padOp->getLoc(), rewriter.getI64ArrayAttr(sliceStarts));
+
+    SmallVector<int64_t> sliceEnds;
+    for (size_t i = 0; i < dims; ++i) {
+      const auto endIdx = inputShape[i];
+      if (padElementsArray[i + dims] < 0) {
+        sliceEnds.push_back(endIdx + padElementsArray[i + dims]);
+      } else {
+        sliceEnds.push_back(endIdx);
+      }
+    }
+    auto endsConstOp = onnx_mlir::createConstantOp(
+        rewriter, padOp->getLoc(), rewriter.getI64ArrayAttr(sliceEnds));
+
+    auto sliceOp = rewriter.create<ONNXSliceOp>(padOp->getLoc(), sliceType,
+        padOp.getData(), startsConstOp, endsConstOp,
+        rewriter.create<ONNXNoneOp>(padOp->getLoc()),
+        rewriter.create<ONNXNoneOp>(padOp->getLoc()));
+    return sliceOp;
+  }
+};
+
 // Decompose the custom op FusedMatMul that is produced by ONNXRuntime.
 // According to FusedMatMul specification, it is the result of fusing MatMul and
 // Transpose:
@@ -783,14 +979,20 @@ struct InstanceNormIntoLayerNormPattern
     : public OpRewritePattern<ONNXInstanceNormalizationOp> {
   using OpRewritePattern<ONNXInstanceNormalizationOp>::OpRewritePattern;
 
+  static bool isDecomposable(ONNXInstanceNormalizationOp instanceNormOp) {
+    return onnx_mlir::hasStaticShape(instanceNormOp.getInput().getType()) &&
+           onnx_mlir::hasStaticShape(instanceNormOp.getOutput().getType());
+  }
+
   LogicalResult matchAndRewrite(ONNXInstanceNormalizationOp instanceNormOp,
       PatternRewriter &rewriter) const final {
     // Match.
-    Value input = instanceNormOp.getInput();
-    if (!onnx_mlir::isRankedShapedType(input.getType()))
+    if (!isDecomposable(instanceNormOp)) {
       return failure();
+    }
 
     // Get info.
+    Value input = instanceNormOp.getInput();
     Value scale = instanceNormOp.getScale();
     Value bias = instanceNormOp.getB();
     ShapedType inputType = mlir::cast<ShapedType>(input.getType());
@@ -835,14 +1037,20 @@ struct GroupNormIntoLayerNormPattern
     : public OpRewritePattern<ONNXGroupNormalizationOp> {
   using OpRewritePattern<ONNXGroupNormalizationOp>::OpRewritePattern;
 
+  static bool isDecomposable(ONNXGroupNormalizationOp groupNormOp) {
+    const Type inputType = groupNormOp.getX().getType();
+    return onnx_mlir::hasStaticShape(inputType) &&
+           onnx_mlir::hasStaticShape(groupNormOp.getResult().getType());
+  }
+
   LogicalResult matchAndRewrite(ONNXGroupNormalizationOp groupNormOp,
       PatternRewriter &rewriter) const final {
     // Match.
-    Value input = groupNormOp.getX();
-    if (!onnx_mlir::isRankedShapedType(input.getType()))
+    if (!isDecomposable(groupNormOp))
       return failure();
 
     // Get info.
+    Value input = groupNormOp.getX();
     Value scale = groupNormOp.getScale();
     Value bias = groupNormOp.getBias();
     ShapedType inputType = mlir::cast<ShapedType>(input.getType());
@@ -990,101 +1198,17 @@ struct DecomposeONNXToONNXPass
 void DecomposeONNXToONNXPass::runOnOperation() {
   func::FuncOp function = getOperation();
   MLIRContext *context = &getContext();
-
-  ConversionTarget target(getContext());
-  target.addLegalDialect<ONNXDialect, arith::ArithDialect, func::FuncDialect>();
-
-  // These ops will be decomposed into other ONNX ops. Hence, they will not be
-  // available after this pass.
-  target.addIllegalOp<ONNXCastLikeOp>();
-  target.addIllegalOp<ONNXClipV11Op>();
-  target.addIllegalOp<ONNXClipV12Op>();
-  target.addIllegalOp<ONNXClipV6Op>();
-  target.addIllegalOp<ONNXConstantOfShapeOp>();
-  target.addIllegalOp<ONNXDFTV17Op>();
-  target.addIllegalOp<ONNXGroupNormalizationOp>();
-  target.addIllegalOp<ONNXInstanceNormalizationOp>();
-  target.addIllegalOp<ONNXLogSoftmaxOp>();
-  target.addIllegalOp<ONNXPadV11Op>();
-  target.addIllegalOp<ONNXPadV13Op>();
-  target.addIllegalOp<ONNXPadV18Op>();
-  target.addIllegalOp<ONNXPadV2Op>();
-  target.addIllegalOp<ONNXReduceL1Op>();
-  target.addIllegalOp<ONNXReduceL1V13Op>();
-  target.addIllegalOp<ONNXReduceL2Op>();
-  target.addIllegalOp<ONNXReduceL2V13Op>();
-  target.addIllegalOp<ONNXReduceLogSumExpOp>();
-  target.addIllegalOp<ONNXReduceLogSumOp>();
-  target.addIllegalOp<ONNXReduceMaxV18Op>();
-  target.addIllegalOp<ONNXReduceMinV18Op>();
-  target.addIllegalOp<ONNXReduceSumSquareOp>();
-  target.addIllegalOp<ONNXResizeV10Op>();
-  target.addIllegalOp<ONNXResizeV11Op>();
-  target.addIllegalOp<ONNXResizeV13Op>();
-  target.addIllegalOp<ONNXResizeV18Op>();
-  target.addIllegalOp<ONNXScalerOp>();
-  target.addIllegalOp<ONNXScatterOp>();
-  target.addIllegalOp<ONNXSequenceConstructOp>();
-  target.addIllegalOp<ONNXSplitV11Op>();
-  target.addIllegalOp<ONNXSplitV13Op>();
-  target.addIllegalOp<ONNXSqueezeV11Op>();
-  target.addIllegalOp<ONNXUnsqueezeV11Op>();
-  target.addIllegalOp<ONNXUpsampleOp>();
-  target.addIllegalOp<ONNXUpsampleV7Op>();
-
-  target.addDynamicallyLegalOp<ONNXEinsumOp>([](ONNXEinsumOp op) {
-    return !onnx_mlir::DecomposeEinsumPattern::isDecomposable(op);
-  });
-
-  target.addDynamicallyLegalOp<ONNXConcatOp>([](ONNXConcatOp op) {
-    ONNXShapeOp shapeOp;
-    ONNXTransposeOp transposeOp;
-    return !isConcatFuseMatched(op, shapeOp, transposeOp);
-  });
-
-  // Rewrite ONNXConstantOp with scalar values into the one using ElementAttrs.
-  target.addDynamicallyLegalOp<ONNXConstantOp>([](ONNXConstantOp op) {
-    return !(op.getValueFloatAttr() || op.getValueFloatsAttr() ||
-             op.getValueIntAttr() || op.getValueIntsAttr() ||
-             op.getValueStringAttr() || op.getValueStringsAttr());
-  });
-
-  // Decompose CustomOp FusedMatMul introduced by onnxruntime:
-  // https://github.com/microsoft/onnxruntime/blob/main/docs/ContribOperators.md#com.microsoft.FusedMatMul
-  target.addDynamicallyLegalOp<ONNXCustomOp>([](ONNXCustomOp op) {
-    int64_t rankA, rankB;
-    FloatAttr alpha;
-    return !CustomOpFuseMatMulPattern::isCustomOpFusedMatMulMatched(
-        op, alpha, rankA, rankB);
-  });
-
-#ifdef ONNX_MLIR_DECOMP_ONNX_CONVTRANSPOSE
-#ifdef ONNX_MLIR_ENABLE_STABLEHLO
-  // ONNXtoStablehlo pass has own rewriting for ConvTranspose Op using
-  // stablehlo ops. To avoid conflict with it, decomposing for ConvTranspose
-  // is disabled when the target is stablehlo.
-  if (this->target != "stablehlo") {
-#endif
-    target.addDynamicallyLegalOp<ONNXConvTransposeOp>(
-        [](ONNXConvTransposeOp op) {
-          return !onnx_mlir::shouldDecomposeConvTransposeOp(op);
-        });
-#ifdef ONNX_MLIR_ENABLE_STABLEHLO
-  }
-#endif
-#endif
-
   RewritePatternSet patterns(context);
   onnx_mlir::getDecomposeONNXToONNXPatterns(patterns);
   patterns.insert<ReplaceCastLikeByCastPattern>(context);
+
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
   if (this->target == "stablehlo") {
     populateDecomposingONNXBeforeStablehloPatterns(patterns, context);
-    target.addIllegalOp<ONNXSoftmaxOp>();
   }
 #endif
 
-  if (failed(applyPartialConversion(function, target, std::move(patterns))))
+  if (failed(applyPatternsAndFoldGreedily(function, std::move(patterns))))
     signalPassFailure();
 }
 
@@ -1096,11 +1220,15 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   populateWithGenerated(patterns);
   patterns.insert<onnx_mlir::DecomposeEinsumPattern>(context);
   patterns.insert<ConcatFusePattern>(context);
+  patterns.insert<DecomposeHardSwishPattern>(context);
   // Decompose CustomOp FusedMatMul introduced by onnxruntime:
   // https://github.com/microsoft/onnxruntime/blob/main/docs/ContribOperators.md#com.microsoft.FusedMatMul
   patterns.insert<CustomOpFuseMatMulPattern>(context);
   patterns.insert<InstanceNormIntoLayerNormPattern>(context);
   patterns.insert<GroupNormIntoLayerNormPattern>(context);
+  patterns.insert<DecomposeBatchNormToBatchNormInferenceMode>(context);
+  patterns.insert<DecomposeBatchNormV9ToBatchNorm>(context);
+  patterns.insert<DecomposeSlicePadPattern>(context);
 
   // TODO: consider whether to include SoftmaxPattern here
 }

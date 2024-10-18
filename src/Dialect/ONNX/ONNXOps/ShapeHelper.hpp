@@ -31,6 +31,7 @@
 #include "src/Dialect/Mlir/IndexExprBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXDimAnalysis.hpp"
 
+#define GET_OP_FWD_DEFINES 1
 #include "src/Dialect/ONNX/ONNXOps.hpp.inc"
 
 // ONNXOpShapeHelper is defined in the interface file below.
@@ -265,6 +266,7 @@ using ONNXLessOrEqualOpShapeHelper = ONNXBroadcastOpShapeHelper;
 using ONNXMaxOpShapeHelper = ONNXBroadcastOpShapeHelper;
 using ONNXMeanOpShapeHelper = ONNXBroadcastOpShapeHelper;
 using ONNXMinOpShapeHelper = ONNXBroadcastOpShapeHelper;
+using ONNXMishOpShapeHelper = ONNXBroadcastOpShapeHelper;
 using ONNXModOpShapeHelper = ONNXBroadcastOpShapeHelper;
 using ONNXMulOpShapeHelper = ONNXBroadcastOpShapeHelper;
 using ONNXOrOpShapeHelper = ONNXBroadcastOpShapeHelper;
@@ -855,6 +857,8 @@ struct ONNXNonSpecificOpShapeHelper : public ONNXOpShapeHelper {
 
 // Ops listed in alphabetical order. Disable formatting for easier sorting.
 // clang-format off
+using ONNXBatchNormalizationOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXBatchNormalizationOp>;
+using ONNXBatchNormalizationV9OpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXBatchNormalizationV9Op>;
 using ONNXBatchNormalizationInferenceModeOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXBatchNormalizationInferenceModeOp>;
 using ONNXCategoryMapperOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXCategoryMapperOp>;
 using ONNXCompressOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXCompressOp>;
@@ -868,6 +872,7 @@ using ONNXDimOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXDimOp>;
 using ONNXDropoutOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXDropoutOp>;
 using ONNXDynamicQuantizeLinearOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXDynamicQuantizeLinearOp>;
 using ONNXEinsumOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXEinsumOp>;
+using ONNXGridSampleOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXGridSampleOp>;
 using ONNXEyeLikeOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXEyeLikeOp>;
 using ONNXFlattenOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXFlattenOp>;
 using ONNXGatherElementsOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXGatherElementsOp>;

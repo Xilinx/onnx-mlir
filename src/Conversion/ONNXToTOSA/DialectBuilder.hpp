@@ -38,6 +38,9 @@ struct TosaBuilder : DialectBuilder {
   TosaBuilder(const DialectBuilder &db) : DialectBuilder(db) {}
   virtual ~TosaBuilder() {}
 
+  std::optional<mlir::Value> gather(mlir::Value resultValue,
+      mlir::Value inputValue, mlir::Value indicesValue, int32_t batchDims,
+      int32_t axis);
   template <typename T>
   mlir::Value binaryOp(mlir::Value &lhs, mlir::Value &rhs);
   mlir::Value mul(mlir::Value &lhs, mlir::Value &rhs, int32_t shift = 0);
@@ -46,19 +49,59 @@ struct TosaBuilder : DialectBuilder {
   mlir::Value transpose(mlir::Value &value, llvm::ArrayRef<int32_t> perm);
   mlir::Value slice(mlir::Value &inputConst, llvm::ArrayRef<int64_t> size,
       llvm::ArrayRef<int64_t> start);
-  mlir::Value reshape(mlir::Value &value, llvm::ArrayRef<int64_t> shape);
-  mlir::Value reciprocal(mlir::Value &input);
+  mlir::Value reshape(mlir::Value value, llvm::ArrayRef<int64_t> shape);
+
+  template <typename T>
+  mlir::Value unaryOp(mlir::Value &input);
+  mlir::Value sqrt(mlir::Value &input);
+
+  template <typename T>
+  mlir::Value compareOp(mlir::PatternRewriter &rewriter, mlir::Location loc,
+      mlir::Value &lhs, mlir::Value &rhs);
+  mlir::Value equal(mlir::Value &lhs, mlir::Value &rhs);
+  mlir::Value greater(mlir::Value &lhs, mlir::Value &rhs);
+  mlir::Value greaterEqual(mlir::Value &lhs, mlir::Value &rhs);
+  mlir::Value less(mlir::Value &lhs, mlir::Value &rhs);
+  mlir::Value lessEqual(mlir::Value &lhs, mlir::Value &rhs);
+
+  mlir::Value select(mlir::Value &cond, mlir::Value &lhs, mlir::Value &rhs);
+  mlir::Value castToNewTensorElementType(mlir::Value in, mlir::Type newElemTy);
+
+  /// When using window based ops like maxpool or conv2d, we sometimes have
+  /// unused values at the end of a spatial dimension. TOSA does not allow that,
+  /// the input can only have values that are actually used. To achieve this we
+  /// have to reduce padding and if this is not enough, we even have to insert a
+  /// slice op.
+  mlir::FailureOr<mlir::Value> resizeWindowBasedOps(mlir::Value &value,
+      llvm::ArrayRef<int64_t> inputShape,
+      llvm::ArrayRef<int64_t> weightSpatialShape,
+      llvm::SmallVectorImpl<int64_t> &padding,
+      llvm::ArrayRef<int64_t> strides = {1, 1},
+      llvm::ArrayRef<int64_t> dilation = {0, 0});
 
   mlir::Value getConst(
       llvm::ArrayRef<int64_t> vec, llvm::ArrayRef<int64_t> shape);
   mlir::Value getConst(
       llvm::ArrayRef<int32_t> vec, llvm::ArrayRef<int64_t> shape);
   mlir::Value getConst(
+      llvm::ArrayRef<int8_t> vec, llvm::ArrayRef<int64_t> shape);
+  mlir::Value getConst(
       llvm::ArrayRef<float> vec, llvm::ArrayRef<int64_t> shape);
-  // Create a 32-bit float constant operator from a float
+  // Create a floating-point constant operator from a float
   // The tensor will have the same rank as shape but all dimensions will
   // have size 1 (differs from tensorflow impl.)
-  mlir::Value getSplattedConst(float val, llvm::ArrayRef<int64_t> shape = {});
+  // If dtype is provided, it also cast the value to the appropriate dtype.
+  mlir::Value getSplattedConst(
+      float val, mlir::Type dtype, llvm::ArrayRef<int64_t> shape = {});
+
+  // Creates a constant of shape <1x1x...x1> of rank `rank` with all values set
+  // to `value`.
+  template <typename T>
+  mlir::Value getSplattedConst(T value, size_t rank) {
+    llvm::SmallVector<int64_t, 4> tmpTensor(rank, 1);
+    std::vector zpVec = std::vector<T>{value};
+    return getConst(zpVec, tmpTensor);
+  }
 
   // Adds reshape ops to expand the rank to the max rank of the values.
   llvm::SmallVector<mlir::Value, 4> equalizeRanks(mlir::ValueRange valueRange);

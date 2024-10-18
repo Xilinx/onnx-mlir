@@ -8,7 +8,8 @@ cmake -G Ninja ../llvm \
    -DLLVM_ENABLE_ASSERTIONS=ON \
    -DLLVM_ENABLE_RTTI=ON \
    -DENABLE_LIBOMPTARGET=OFF \
-   -DLLVM_ENABLE_LIBEDIT=OFF
+   -DLLVM_ENABLE_LIBEDIT=OFF \
+   $EXTRA_CMAKE_ARGS
 
 cmake --build . -- ${MAKEFLAGS}
 cmake --build . --target check-mlir
