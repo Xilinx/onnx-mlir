@@ -66,7 +66,7 @@ list_operation_version = args.list_operation_version
 
 # ==UPDATE_ONNX_VERSION_OPSET==
 # Look for tag above and update all references when upgrading the ONNX support within ONNX-MLIR.
-current_onnx_version = "1.16.2"
+current_onnx_version = "1.17.0"
 
 # Check the version of onnx package being used.
 if (
@@ -542,6 +542,25 @@ custom_builder_broadcast_ops_list = (
 custom_builder_ops_list = (
     custom_builder_unranked_ops_list + custom_builder_broadcast_ops_list
 )
+
+custom_builder_same_operand_and_result_element_types = [
+    x for x in custom_builder_broadcast_to_same_type_ops_list if x != "Pow"
+] + [
+    "Abs",
+    "Exp",
+    "Max",
+    "Min",
+    "Mish",
+    "Mod",
+    "LeakyRelu",
+    "Relu",
+    "Softmax",
+    "Sum",
+    "Tan",
+    "Tanh",
+]
+
+custom_builder_same_operand_element_types = custom_builder_broadcast_to_bool_ops_list
 
 # A dictionary to add any special definition for an operation.
 custom_definition_misc = dict(
@@ -1190,6 +1209,10 @@ def gen_op_def(schema, with_version=False):
         traits.append("DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>")
     if len(regions):
         traits.append('OpInterface<"HasOnnxSubgraphOpInterface">')
+    if opName in custom_builder_same_operand_and_result_element_types:
+        traits.append("SameOperandsAndResultElementType")
+    if opName in custom_builder_same_operand_element_types:
+        traits.append("SameOperandsElementType")
     s += inc_indent(indent) + "[{}]> {{\n".format(join_args(traits))
 
     indent = inc_indent(indent)
