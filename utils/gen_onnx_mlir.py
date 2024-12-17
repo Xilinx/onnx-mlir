@@ -861,8 +861,9 @@ def join_args(args):
 
 def get_operands_or_results(schema, type_str_dict, op_name, is_input):
     value_list = schema.inputs if is_input else schema.outputs
+    element_types = []
     if not value_list:
-        return OrderedDict()
+        return OrderedDict(), tuple()
 
     def any_type_of(types):
         assert isinstance(types, list)
@@ -883,6 +884,8 @@ def get_operands_or_results(schema, type_str_dict, op_name, is_input):
 
         if OpSchema.FormalParameterOption.Optional == value.option:
             types.append("NoneType")
+
+        element_types.append(tuple(types))
 
         if OpSchema.FormalParameterOption.Variadic == value.option:
             if value.is_homogeneous:
@@ -906,7 +909,7 @@ def get_operands_or_results(schema, type_str_dict, op_name, is_input):
             value_name = get_unique_output_name(schema, value.name)
 
         name_to_types[value_name] = any_type_of(types)
-    return name_to_types
+    return name_to_types, tuple(element_types)
 
 
 def get_attrs(schema):
@@ -1209,10 +1212,22 @@ def gen_op_def(schema, with_version=False):
         traits.append("DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>")
     if len(regions):
         traits.append('OpInterface<"HasOnnxSubgraphOpInterface">')
-    if opName in custom_builder_same_operand_and_result_element_types:
-        traits.append("SameOperandsAndResultElementType")
-    if opName in custom_builder_same_operand_element_types:
-        traits.append("SameOperandsElementType")
+
+    # Handle the type constraint for input and output.
+    # Parse type constraint into onnx-mlir type string list.
+    type_str_dict = parse_type_constraints(schema)
+    ins, ins_element_types = get_operands_or_results(
+        schema, type_str_dict, opName, is_input=True
+    )
+    outs, outs_element_types = get_operands_or_results(
+        schema, type_str_dict, opName, is_input=False
+    )
+
+    if len(set(ins_element_types)) == 1:
+        if len(set(ins_element_types) | set(outs_element_types)) == 1:
+            traits.append("SameOperandsAndResultElementType")
+        else:
+            traits.append("SameOperandsElementType")
     s += inc_indent(indent) + "[{}]> {{\n".format(join_args(traits))
 
     indent = inc_indent(indent)
@@ -1239,13 +1254,8 @@ def gen_op_def(schema, with_version=False):
             s += indent + "{}\n".format(escaped_line)
     s += indent + "}];\n"
 
-    # Handle the type constraint for input and output.
-    # Parse type constraint into onnx-mlir type string list.
-    type_str_dict = parse_type_constraints(schema)
-
     ###########################################
     # Generate ins (consisting of operands and attributes).
-    ins = get_operands_or_results(schema, type_str_dict, opName, is_input=True)
     ins.update(get_attrs(schema))
 
     ins_strs = ["{1}:${0}".format(*i) for i in ins.items()]
@@ -1255,7 +1265,6 @@ def gen_op_def(schema, with_version=False):
 
     ###########################################
     # Generate outs (operation results).
-    outs = get_operands_or_results(schema, type_str_dict, opName, is_input=False)
     outs_strs = ["{1}:${0}".format(*i) for i in outs.items()]
     s += indent + "let results = (outs {});\n".format(
         (",\n" + inc_indent(indent)).join(outs_strs)
@@ -1317,7 +1326,7 @@ def gen_op_def(schema, with_version=False):
         # E.g. OpBuilder<(ins "Value":$X, "Value":$Y, "Attribute":$A), [{}]>
         indent = inc_indent(indent)
         s += indent + "OpBuilder<(ins "
-        operands_dict = get_operands_or_results(
+        operands_dict, operand_element_types = get_operands_or_results(
             schema, type_str_dict, opName, is_input=True
         )
         attrs_dict = get_attrs(schema)
