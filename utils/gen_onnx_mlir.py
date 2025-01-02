@@ -86,7 +86,7 @@ if (
 
 version_dict = {
     "Abs": [13],
-    "Acos": [7],
+    "Acos": [22],
     "Acosh": [9],
     "Adagrad": [1],
     "Adam": [1],
@@ -543,24 +543,6 @@ custom_builder_ops_list = (
     custom_builder_unranked_ops_list + custom_builder_broadcast_ops_list
 )
 
-custom_builder_same_operand_and_result_element_types = [
-    x for x in custom_builder_broadcast_to_same_type_ops_list if x != "Pow"
-] + [
-    "Abs",
-    "Exp",
-    "Max",
-    "Min",
-    "Mish",
-    "Mod",
-    "LeakyRelu",
-    "Relu",
-    "Softmax",
-    "Sum",
-    "Tan",
-    "Tanh",
-]
-
-custom_builder_same_operand_element_types = custom_builder_broadcast_to_bool_ops_list
 
 # A dictionary to add any special definition for an operation.
 custom_definition_misc = dict(
@@ -1223,7 +1205,7 @@ def gen_op_def(schema, with_version=False):
         schema, type_str_dict, opName, is_input=False
     )
 
-    if len(set(ins_element_types)) == 1:
+    if len(set(ins_element_types)) == 1 and "Cast" not in opName:
         if len(set(ins_element_types) | set(outs_element_types)) == 1:
             traits.append("SameOperandsAndResultElementType")
         else:

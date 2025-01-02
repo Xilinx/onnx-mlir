@@ -5,7 +5,7 @@
 //********************************************************
 
 op_dialect_version_map_["Abs"] = {13};
-op_dialect_version_map_["Acos"] = {7};
+op_dialect_version_map_["Acos"] = {22};
 op_dialect_version_map_["Acosh"] = {9};
 op_dialect_version_map_["Adagrad"] = {1};
 op_dialect_version_map_["Adam"] = {1};

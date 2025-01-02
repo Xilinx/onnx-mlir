@@ -46,13 +46,13 @@ def ONNXAbsOp:ONNX_Op<"Abs",
 }
 
 def ONNXAcosOp:ONNX_Op<"Acos",
-  [Pure, OpVersionTrait<7>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, SameOperandsAndResultElementType]> {
+  [Pure, OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, SameOperandsAndResultElementType]> {
   let summary = "ONNX Acos operation";
   let description = [{
   Calculates the arccosine (inverse of cosine) of the given input tensor, element-wise.
   }];
-  let arguments = (ins AnyTypeOf<[TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>]>:$input);
-  let results = (outs AnyTypeOf<[TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>]>:$output);
+  let arguments = (ins AnyTypeOf<[TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>]>:$input);
+  let results = (outs AnyTypeOf<[TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>]>:$output);
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
       return 1;
@@ -842,7 +842,7 @@ def ONNXBlackmanWindowOp:ONNX_Op<"BlackmanWindow",
 }
 
 def ONNXCastOp:ONNX_Op<"Cast",
-  [Pure, OpVersionTrait<19>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>, SameOperandsAndResultElementType]> {
+  [Pure, OpVersionTrait<19>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX Cast operation";
   let description = [{
@@ -943,7 +943,7 @@ def ONNXCastOp:ONNX_Op<"Cast",
 }
 
 def ONNXCastLikeOp:ONNX_Op<"CastLike",
-  [Pure, OpVersionTrait<19>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, SameOperandsAndResultElementType]> {
+  [Pure, OpVersionTrait<19>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
   let summary = "ONNX CastLike operation";
   let description = [{
   The operator casts the elements of a given input tensor (the first input) to
@@ -10294,7 +10294,7 @@ def ONNXBinarizerOp:ONNX_Op<"Binarizer",
 }
 
 def ONNXCastMapOp:ONNX_Op<"CastMap",
-  [Pure, OpVersionTrait<1>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, SameOperandsElementType]> {
+  [Pure, OpVersionTrait<1>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
   let summary = "ONNX CastMap operation";
   let description = [{
   Converts a map to a tensor.<br>The map key must be an int64 and the values will be ordered
