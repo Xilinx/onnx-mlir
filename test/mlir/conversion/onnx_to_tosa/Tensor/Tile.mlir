@@ -15,7 +15,7 @@ func.func @test_tile_dynamic_shape(%arg0 : tensor<5x5x?x32xf32>) -> tensor<5x10x
   %tile = "onnx.Tile"(%arg0, %const) : (tensor<5x5x?x32xf32>, tensor<4xi64>) -> tensor<5x10x?x32xf32>
   "func.return"(%tile) : (tensor<5x10x?x32xf32>) -> ()
 // CHECK-LABEL: test_tile_dynamic_shape
-// CHECK: tosa.tile{{.*}} {multiples = array<i64: 1, 2, 30, 1>} : (tensor<5x5x?x32xf32>) -> tensor<5x10x?x32xf32>
+// CHECK-NOT:   tosa.tile
 }
 
 // -----
@@ -25,7 +25,7 @@ func.func @test_tile_input_not_ranked(%arg0 : tensor<*xf32>) -> tensor<*xf32> {
   %tile = "onnx.Tile"(%arg0, %const) : (tensor<*xf32>, tensor<4xi64>) -> tensor<*xf32>
   "func.return"(%tile) : (tensor<*xf32>) -> ()
 // CHECK-LABEL: test_tile_input_not_ranked
-// CHECK-NOT: tosa.tile
+// CHECK-NOT:   tosa.tile
 }
 
 // -----

@@ -74,10 +74,7 @@ func.func @test_relu_dynamic(%arg0 : tensor<?x10xf32>) -> tensor<*xf32> {
   %0 = "onnx.Relu"(%arg0) : (tensor<?x10xf32>) -> tensor<*xf32>
   "func.return"(%0) : (tensor<*xf32>) -> ()
 // CHECK-LABEL:  func @test_relu_dynamic
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x10xf32>) -> tensor<?x10xf32> {
-// CHECK-NEXT:      [[VAR_0_:%.+]] =  tosa.clamp [[PARAM_0_]] {max_fp = 3.40282347E+38 : f32, max_int = 2147483647 : i64, min_fp = 0.000000e+00 : f32, min_int = 0 : i64} : (tensor<?x10xf32>) -> tensor<?x10xf32>
-// CHECK-NEXT:      return [[VAR_0_]] : tensor<?x10xf32>
-// CHECK-NEXT:    }
+// CHECK-NOT:   tosa
 }
 
 // -----
@@ -150,11 +147,7 @@ func.func @test_add_dyn_shape_and_const(%arg0: tensor<?x1xi64>) -> tensor<?x1xi6
   %1 = "onnx.Add"(%arg0, %0) : (tensor<?x1xi64>, tensor<1xi64>) -> tensor<?x1xi64>
   "func.return"(%1) : (tensor<?x1xi64>) -> ()
 // CHECK-LABEL:  test_add_dyn_shape_and_const
-// CHECK:   ([[PARAM_0_:%.+]]: tensor<?x1xi64>) -> tensor<?x1xi64> {
-// CHECK:           [[VAR_0_:%.+]] = "tosa.const"() <{value = dense<8400> : tensor<1xi64>}> : () -> tensor<1xi64>
-// CHECK:           [[VAR_1_:%.+]] = tosa.reshape [[VAR_0_]] {new_shape = array<i64: 1, 1>} : (tensor<1xi64>) -> tensor<1x1xi64>
-// CHECK:           [[VAR_2_:%.+]] = tosa.add [[PARAM_0_]], [[VAR_1_]] : (tensor<?x1xi64>, tensor<1x1xi64>) -> tensor<?x1xi64>
-// CHECK:           return [[VAR_2_]] : tensor<?x1xi64>
+// CHECK-NOT:    tosa.add
 }
 
 // -----
@@ -163,10 +156,7 @@ func.func @test_add_dyn_shape_no_rank(%arg0: tensor<*xi64>) -> tensor<*xi64> {
   %0 = "onnx.Add"(%arg0, %arg0) : (tensor<*xi64>, tensor<*xi64>) -> tensor<*xi64>
   "func.return"(%0) : (tensor<*xi64>) -> ()
 // CHECK-LABEL:  test_add_dyn_shape_no_rank
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<*xi64>) -> tensor<*xi64> {
-// CHECK:           [[VAR_0_:%.+]] = tosa.add [[PARAM_0_]], [[PARAM_0_]] : (tensor<*xi64>, tensor<*xi64>) -> tensor<*xi64>
-// CHECK:           return [[VAR_0_]] : tensor<*xi64>
-// CHECK:         }
+// CHECK-NOT:    tosa
 }
 
 // -----
@@ -947,10 +937,7 @@ func.func @test_sin_dynamic(%arg0 : tensor<?x10xf32>) -> tensor<*xf32> {
   %0 = "onnx.Sin"(%arg0) : (tensor<?x10xf32>) -> tensor<*xf32>
   "func.return"(%0) : (tensor<*xf32>) -> ()
 // CHECK-LABEL:  func @test_sin_dynamic
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x10xf32>) -> tensor<?x10xf32> {
-// CHECK-NEXT:      [[VAR_0_:%.+]] = tosa.sin [[PARAM_0_]]  : (tensor<?x10xf32>) -> tensor<?x10xf32>
-// CHECK-NEXT:      return [[VAR_0_]] : tensor<?x10xf32>
-// CHECK-NEXT:    }
+// CHECK-NOT:    tosa
 }
 
 // -----
@@ -971,10 +958,7 @@ func.func @test_cos_dynamic(%arg0 : tensor<?x10xf32>) -> tensor<*xf32> {
   %0 = "onnx.Cos"(%arg0) : (tensor<?x10xf32>) -> tensor<*xf32>
   "func.return"(%0) : (tensor<*xf32>) -> ()
 // CHECK-LABEL:  func @test_cos_dynamic
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x10xf32>) -> tensor<?x10xf32> {
-// CHECK-NEXT:      [[VAR_0_:%.+]] = tosa.cos [[PARAM_0_]] : (tensor<?x10xf32>) -> tensor<?x10xf32>
-// CHECK-NEXT:      return [[VAR_0_]] : tensor<?x10xf32>
-// CHECK-NEXT:    }
+// CHECK-NOT:   tosa
 }
 
 // -----

@@ -134,6 +134,9 @@ void FrontendToTosaLoweringPass::runOnOperation() {
     return std::nullopt;
   });
   typeConverter.addConversion([&](TensorType type) -> std::optional<Type> {
+    if (!type.hasStaticShape()) {
+      return std::nullopt;
+    }
     if (typeConverter.isLegal(type.getElementType()))
       return type;
     return std::nullopt;
