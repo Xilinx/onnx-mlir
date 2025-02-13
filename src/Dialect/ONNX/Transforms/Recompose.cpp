@@ -94,7 +94,7 @@ struct RecomposeLayerNormFromMulPattern : public OpRewritePattern<ONNXMulOp> {
      y = mul(scale, D / stdDev)
 
 
-  * Secondary pattern associated with RMSLayerNormalization:
+  * Second pattern associated with RMSLayerNormalization:
 
     var = reduceMean(X * X)
     stdDev = sqrt(var + eps)
@@ -106,7 +106,7 @@ struct RecomposeLayerNormFromMulPattern : public OpRewritePattern<ONNXMulOp> {
     invStdDev = pow(var + eps, -0.5)
     Y = mul(X, invStdDev)
 
-  As it can be seen here, the secondary RMS LN pattern matches the traditional
+  As it can be seen here, the second RMS LN pattern matches the traditional
   LN for the bottom 3 statements. In RMS LN, X is the raw input, whereas in the
   traditional LN, the input to the lower 3 statements are D = X - mean(X).
 
@@ -116,6 +116,9 @@ struct RecomposeLayerNormFromMulPattern : public OpRewritePattern<ONNXMulOp> {
      D * (1 / stdDev)
      D * recip(stdDev)
 
+  * About third pattern: In the third pattern, sqrt and div/recip ops are
+  replaced by a single Pow op with exponent as -0.5. Everything other than the
+  last two lines follows a logic common to primary and secondary pattern.
   */
   static bool matchLayerNormPattern(ONNXMulOp LayerNormOp, Value &x,
       Value &scale, int64_t &axis, FloatAttr &epsilonAttr,
