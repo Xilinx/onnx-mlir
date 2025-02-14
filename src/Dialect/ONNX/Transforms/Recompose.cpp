@@ -68,11 +68,20 @@ struct RecomposeLayerNormFromMulPattern : public OpRewritePattern<ONNXMulOp> {
     Value res;
     if (isRMSLayerNorm) {
       if (scale.getImpl() == nullptr) {
-        // set scale to 1 if there is no scale value present in the pattern
+        // set scale to unity if there is no scale value present in the pattern
         // This is required because RMSLayerNorm mandates passing a scale value
-        auto xTensorType =
-            mlir::RankedTensorType::get({}, getElementTypeOrSelf(xType));
-        auto attr = mlir::DenseElementsAttr::get(xTensorType, 1.0f);
+
+        // NOTE: The scale is being passed as a tensor instead of a scalar
+        // because the pass that generates RMSNormAdf templated graph requires
+        // the scale to be a tensor of dimension same as the inner most
+        // dimension of input tensor
+
+        auto xShape = mlir::cast<ShapedType>(xType).getShape();
+        auto xInnerMostDim = xShape[xShape.size() - 1];
+        auto scaleType = mlir::RankedTensorType::get(
+            {xInnerMostDim}, getElementTypeOrSelf(xType));
+        auto scaleVal = SmallVector<float>(xInnerMostDim, 1.0f);
+        auto attr = mlir::DenseElementsAttr::get(scaleType, ArrayRef(scaleVal));
         scale = create.onnx.constant(attr);
       }
       res = create.onnx.RMSLayerNorm(xType, x, scale, noneVal, axis, epsilon);
