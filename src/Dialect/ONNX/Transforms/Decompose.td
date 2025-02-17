@@ -531,6 +531,9 @@ def reverseWeightConvTranspose: NativeCodeCall<
 def getFinalOutputFromFourConvOutput: NativeCodeCall<
   "onnx_mlir::getFinalOutputFromFourConvOutput($_builder, $_loc, $0.getDefiningOp<ONNXConvOp>(),$0,$1,$2,$3)">;
 
+def convOpForConvTranspose: NativeCodeCall<
+  "onnx_mlir::convOpForConvTranspose($_builder, $_loc, $0, $1, $2, $3, $4, $5, $6, $7)">;
+
 def ph1WeightForConv: NativeCodeCall<
   "onnx_mlir::ph1WeightTensor($_builder, $_loc, $0)">;
 
@@ -587,15 +590,14 @@ def ConvTransposeOpAsConv2dPattern1: Pattern<
     (getAttrForPhaseConv:$new_kernel $kernel_shape),
     (getAttrForPhaseConv:$new_pads $pads),
     (getAttrForPhaseConv:$new_strides $strides),
-    (ONNXConvOp:$conv_res1 $x, $ph1_w, $b,
-       (GetNullStringAttr), $dilation, $group, $new_kernel, $new_pads, $new_strides),
-    (ONNXConvOp:$conv_res2 $x, $ph2_w, $b,
-      (GetNullStringAttr), $dilation, $group, $new_kernel, $new_pads, $new_strides),
-    (ONNXConvOp:$conv_res3 $x, $ph3_w, $b,
-      (GetNullStringAttr), $dilation, $group, $new_kernel, $new_pads, $new_strides),
-    (ONNXConvOp:$conv_res4 $x, $ph4_w, $b,
-      (GetNullStringAttr), $dilation, $group, $new_kernel, $new_pads, $new_strides),    
-    (getFinalOutputFromFourConvOutput:$output  $conv_res1, $conv_res2, $conv_res3, $conv_res4),  
+    (convOpForConvTranspose:$conv_res1 $x, $ph1_w, $b,
+        $dilation, $group, $new_kernel, $new_pads, $new_strides),
+    (convOpForConvTranspose:$conv_res2 $x, $ph2_w, $b,$dilation, $group, $new_kernel, $new_pads, $new_strides),
+    (convOpForConvTranspose:$conv_res3 $x, $ph3_w, $b,
+       $dilation, $group, $new_kernel, $new_pads, $new_strides),
+    (convOpForConvTranspose:$conv_res4 $x, $ph4_w, $b,
+      $dilation, $group, $new_kernel, $new_pads, $new_strides),
+    (getFinalOutputFromFourConvOutput:$output  $conv_res1, $conv_res2, $conv_res3, $conv_res4),
    ],
    [(HasRankAndShape:$res), (ShouldDecomposeConvTransposeOpTo4Conv:$res $kernel_shape,$pads,$strides)], [],
    (addBenefit 0)

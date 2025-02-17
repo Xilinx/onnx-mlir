@@ -453,6 +453,29 @@ Value sliceOfWeightTensorForPhase(
       endOnnxConst, axisOnnxConst, stepOnnxConst);
   return sliceOp;
 }
+Value convOpForConvTranspose(PatternRewriter &rewriter, Location loc,
+    Value input, Value weights, Value bias, ArrayAttr dilations,
+    IntegerAttr group, ArrayAttr kernel_shape, ArrayAttr pads,
+    ArrayAttr strides) {
+
+  auto convOp = rewriter.create<ONNXConvOp>(loc, input, weights, bias,
+      mlir::StringAttr(), dilations, group, kernel_shape, pads, strides);
+  ONNXConvOpShapeHelper convShapeHelper(convOp.getOperation(), {});
+  Type elementType = getElementType(input.getType());
+  (void)convShapeHelper.computeShapeAndUpdateType(elementType);
+  int outputRank = convShapeHelper.getOutputDims().size();
+  SmallVector<int64_t, 4> convOutputShape;
+  for (int i = 0; i < outputRank; ++i) {
+    int64_t d = convShapeHelper.getOutputDims()[i].isLiteral()
+                    ? convShapeHelper.getOutputDims()[i].getLiteral()
+                    : ShapedType::kDynamic;
+    convOutputShape.emplace_back(d);
+  }
+  auto outputType = RankedTensorType::get(convOutputShape, elementType);
+
+  return rewriter.create<ONNXConvOp>(loc, outputType, input, weights, bias,
+      mlir::StringAttr(), dilations, group, kernel_shape, pads, strides);
+}
 Value ph1WeightTensor(PatternRewriter &rewriter, Location loc, Value input) {
   return sliceOfWeightTensorForPhase(rewriter, loc, input, 1);
 }
