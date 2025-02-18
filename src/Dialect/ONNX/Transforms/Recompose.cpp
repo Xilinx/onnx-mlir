@@ -25,7 +25,6 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/Support/Debug.h"
-#include <mlir/TableGen/Builder.h>
 
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
@@ -52,8 +51,6 @@ struct RecomposeLayerNormFromMulPattern : public OpRewritePattern<ONNXMulOp> {
     mlir::Value scale;
     if (!isa<ShapedType>(xType))
       return failure();
-    // return {scale, failure(), "Expected Input type to be of type
-    // 'ShapedType', but it is not."};
 
     auto xShape = mlir::cast<ShapedType>(xType).getShape();
     auto xInnerMostDim = xShape[xShape.size() - 1];
@@ -61,8 +58,6 @@ struct RecomposeLayerNormFromMulPattern : public OpRewritePattern<ONNXMulOp> {
     // Inner most dim is required
     if (xInnerMostDim <= 0)
       return failure();
-    // return {scale, failure(), "The inner most dim of input must be known for
-    // this recomposition."};
 
     auto scaleType = mlir::RankedTensorType::get(
         {xInnerMostDim}, getElementTypeOrSelf(xType));
@@ -74,13 +69,10 @@ struct RecomposeLayerNormFromMulPattern : public OpRewritePattern<ONNXMulOp> {
       attr = mlir::DenseElementsAttr::get(scaleType, ArrayRef(scaleVal));
     } else {
       return failure();
-      // return {scale, failure(), "Only type with bit width " +
-      // std::to_string(sizeof(float)) + " supported."};
     }
 
     scale = builder.onnx.constant(attr);
     return success(scale);
-    // return {scale, true, ""};
   }
 
   LogicalResult matchAndRewrite(
