@@ -95,7 +95,7 @@ struct RecomposeLayerNormFromMulPattern : public OpRewritePattern<ONNXMulOp> {
     Value noneVal = create.onnx.none();
     Value res;
     if (isRMSLayerNorm) {
-      if (!scale.getImpl()) {
+      if (!scale) {
         // set scale to unity if there is no scale value present in the pattern
         // This is required because RMSLayerNorm mandates passing a scale value
 
