@@ -41,14 +41,16 @@ mlir::LogicalResult onnx_mlir::DecomposeCumSumPattern::matchAndRewrite(
 
   // ------------ Create slice ops ------------
   // create slice output type
-  llvm::SmallVector<int64_t> sliceOutputShape(inputShape.size());
+  llvm::SmallVector<int64_t> sliceOutputShape(1);
   sliceOutputShape[0] = 1;
   sliceOutputShape.insert(sliceOutputShape.end(), inputShape.begin() + 1, inputShape.end());
+  auto sliceOutputType = mlir::RankedTensorType::get(sliceOutputShape, getElementTypeOrSelf(inputType));
 
   // create slice step val
   auto stepRawVal = llvm::SmallVector<int64_t>(1, 1);
   auto stepVal = onnxOpBuilder.onnx.constantInt64(mlir::ArrayRef(stepRawVal));
-  auto sliceOutputType = mlir::RankedTensorType::get(sliceOutputShape, getElementTypeOrSelf(inputType));
+
+  // create slice vals
   llvm::SmallVector<mlir::Value> sliceVals;
   for (int i=0; i < batchDim; ++i) {
     auto sliceOp = onnxOpBuilder.onnx.slice(sliceOutputType, inputVal, constVals[i], constVals[i+1], axVal, stepVal);
