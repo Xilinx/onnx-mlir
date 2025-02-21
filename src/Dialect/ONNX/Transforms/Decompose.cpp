@@ -42,6 +42,7 @@
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
 #include "src/Dialect/ONNX/Transforms/Decompose.hpp"
 #include "src/Dialect/ONNX/Transforms/DecomposeEinsum.hpp"
+#include "src/Dialect/ONNX/Transforms/DecomposeCumSum.hpp"
 #include "src/Pass/Passes.hpp"
 #include "src/Support/TypeUtilities.hpp"
 
@@ -2123,6 +2124,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   patterns.insert<DecomposeBatchNormV9ToBatchNorm>(context);
   patterns.insert<DecomposeSlicePadPattern>(context);
   patterns.insert<DecomposeScatterNDPattern>(context);
+  patterns.insert<DecomposeCumSumPattern>(context);
   patterns.insert<SoftmaxCrossEntropyPattern>(context);
   patterns.insert<SumToAddPattern>(context);
 

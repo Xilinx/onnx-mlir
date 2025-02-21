@@ -6,8 +6,9 @@
 
 namespace onnx_mlir {
 
-class DecomposeCumSum : public mlir::OpRewritePattern<mlir::ONNXCumSumOp> {
+class DecomposeCumSumPattern : public mlir::OpRewritePattern<mlir::ONNXCumSumOp> {
 public:
+  using mlir::OpRewritePattern<mlir::ONNXEinsumOp>::OpRewritePattern;
   mlir::LogicalResult matchAndRewrite(mlir::ONNXCumSumOp cumsumOp, mlir::PatternRewriter &rewriter) const override;
 };
 }
