@@ -1,7 +1,32 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+//===----------- DecomposeCumSum.cpp - Decompose CumSum op ----------------===//
+//
+// This file implements the decomposition of ONNX CumSum op to simpler ops (i.e.
+// Slice, Add and Concat)
+//
+//===----------------------------------------------------------------------===//
+
 #include "DecomposeCumSum.hpp"
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
 
-mlir::LogicalResult onnx_mlir::DecomposeCumSumPattern::matchAndRewrite(
+namespace onnx_mlir {
+
+// =============================== NOTE ========================================
+//
+// 1. This decomposition works only when the axis provided to CumSum Op is 0.
+// In all other cases the behaviour is undefined.
+//
+// 2. The reason why this decomposition cannot support dynamic axis is due to
+// the use of concat op. Concat Op takes axis as an attribute and not as input.
+// Therefore, the axis value must be fixed at compile time of the model, hence
+// preventing support for dynamic axis.
+//
+// =============================================================================
+
+mlir::LogicalResult DecomposeCumSumPattern::matchAndRewrite(
     mlir::ONNXCumSumOp cumSumOp, mlir::PatternRewriter &rewriter) const {
   // NOTE: This decomposition is valid only for axis input of 0 for CumSum.
   // The behaviour is undefined for any other axis!
@@ -28,14 +53,16 @@ mlir::LogicalResult onnx_mlir::DecomposeCumSumPattern::matchAndRewrite(
   }
 
   // Get dialect builder to create new onnx ops
-  MultiDialectBuilder<OnnxBuilder> onnxOpBuilder(rewriter, rewriter.getFusedLoc(cumSumOp.getLoc()));
+  MultiDialectBuilder<OnnxBuilder> onnxOpBuilder(
+      rewriter, rewriter.getFusedLoc(cumSumOp.getLoc()));
 
   // Create constants for 'starts' and 'ends' input for slice operator
   llvm::SmallVector<mlir::Value> constVals;
-  for (int i=0; i < batchDim + 1; ++i) {
+  for (int i = 0; i < batchDim + 1; ++i) {
     // create const ops for slice start and end input
     auto constRawVal = llvm::SmallVector<int64_t>(1, i);
-    auto constVal = onnxOpBuilder.onnx.constantInt64(mlir::ArrayRef(constRawVal));
+    auto constVal =
+        onnxOpBuilder.onnx.constantInt64(mlir::ArrayRef(constRawVal));
     constVals.push_back(constVal);
   }
 
@@ -43,8 +70,10 @@ mlir::LogicalResult onnx_mlir::DecomposeCumSumPattern::matchAndRewrite(
   // create slice output type
   llvm::SmallVector<int64_t> sliceOutputShape(1);
   sliceOutputShape[0] = 1;
-  sliceOutputShape.insert(sliceOutputShape.end(), inputShape.begin() + 1, inputShape.end());
-  auto sliceOutputType = mlir::RankedTensorType::get(sliceOutputShape, getElementTypeOrSelf(inputType));
+  sliceOutputShape.insert(
+      sliceOutputShape.end(), inputShape.begin() + 1, inputShape.end());
+  auto sliceOutputType = mlir::RankedTensorType::get(
+      sliceOutputShape, getElementTypeOrSelf(inputType));
 
   // create slice step val
   auto stepRawVal = llvm::SmallVector<int64_t>(1, 1);
@@ -52,8 +81,9 @@ mlir::LogicalResult onnx_mlir::DecomposeCumSumPattern::matchAndRewrite(
 
   // create slice vals
   llvm::SmallVector<mlir::Value> sliceVals;
-  for (int i=0; i < batchDim; ++i) {
-    auto sliceOp = onnxOpBuilder.onnx.slice(sliceOutputType, inputVal, constVals[i], constVals[i+1], axVal, stepVal);
+  for (int i = 0; i < batchDim; ++i) {
+    auto sliceOp = onnxOpBuilder.onnx.slice(sliceOutputType, inputVal,
+        constVals[i], constVals[i + 1], axVal, stepVal);
     sliceVals.push_back(sliceOp);
   }
   // -------------------------------------------
@@ -61,8 +91,8 @@ mlir::LogicalResult onnx_mlir::DecomposeCumSumPattern::matchAndRewrite(
   // -------------- Create Add Ops -------------
   llvm::SmallVector<mlir::Value> addVals;
   addVals.push_back(onnxOpBuilder.onnx.add(sliceVals[0], sliceVals[1]));
-  for (int i=1; i<batchDim-1; ++i) {
-    auto addVal = onnxOpBuilder.onnx.add(addVals[i-1], sliceVals[i+1]);
+  for (int i = 1; i < batchDim - 1; ++i) {
+    auto addVal = onnxOpBuilder.onnx.add(addVals[i - 1], sliceVals[i + 1]);
     addVals.push_back(addVal);
   }
   // -------------------------------------------
@@ -77,3 +107,4 @@ mlir::LogicalResult onnx_mlir::DecomposeCumSumPattern::matchAndRewrite(
   rewriter.replaceOp(cumSumOp, concatVal);
   return llvm::success();
 }
+} // namespace onnx_mlir

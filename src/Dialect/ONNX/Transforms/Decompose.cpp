@@ -41,8 +41,8 @@
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
 #include "src/Dialect/ONNX/Transforms/Decompose.hpp"
-#include "src/Dialect/ONNX/Transforms/DecomposeEinsum.hpp"
 #include "src/Dialect/ONNX/Transforms/DecomposeCumSum.hpp"
+#include "src/Dialect/ONNX/Transforms/DecomposeEinsum.hpp"
 #include "src/Pass/Passes.hpp"
 #include "src/Support/TypeUtilities.hpp"
 
