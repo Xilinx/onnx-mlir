@@ -4,7 +4,7 @@
 
 //===----------- DecomposeEinsum.hpp - Decompose Einsum op ----------------===//
 //
-// This file contains declarations for the decomposition for a pattern that
+// This file contains declarations for for a pattern that
 // decomposes onnx CumSum Op into Slice, Add and Concat Ops
 //
 //===----------------------------------------------------------------------===//
