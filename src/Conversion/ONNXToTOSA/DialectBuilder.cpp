@@ -24,6 +24,27 @@ using namespace mlir;
 
 namespace onnx_mlir {
 
+Location TosaBuilder::getDetachedLocation() const {
+  SmallVector<NameLoc, 1> namedLocations;
+  getLoc()->walk([&namedLocations](Location innerLoc) {
+    auto namedLoc = dyn_cast<NameLoc>(innerLoc);
+    if (namedLoc) {
+      namedLocations.push_back(namedLoc);
+    }
+    return WalkResult::advance();
+  });
+  std::string locationString =
+      "Compiler generated ONNX to TOSA data format conversion";
+  if (!namedLocations.empty()) {
+    llvm::raw_string_ostream rso(locationString);
+    rso << " for: '";
+    llvm::interleaveComma(namedLocations, rso,
+        [&rso](NameLoc loc) { rso << loc.getName().strref(); });
+    rso << "'";
+  }
+  return NameLoc::get(rewriter().getStringAttr(locationString));
+}
+
 template <typename T>
 bool TosaBuilder::testNumberOfElementsMatch(
     ArrayRef<T> vec, ArrayRef<int64_t> shape) {
@@ -170,8 +191,9 @@ Value TosaBuilder::transpose(Value &value, llvm::ArrayRef<int32_t> perm) {
       llvm::SmallVector<int64_t, 4>(perm.size(), ShapedType::kDynamic),
       valueType.getElementType());
   // create transpose for value
-  Value newValue = tosa::CreateOpAndInfer<mlir::tosa::TransposeOp>(
-      rewriter(), loc(), newValueType, value, permList);
+  Value newValue = tosa::CreateOpAndInfer<mlir::tosa::TransposeOp>(rewriter(),
+      shouldDetachDataLayoutLocs ? getDetachedLocation() : loc(), newValueType,
+      value, permList);
   return newValue;
 }
 
@@ -200,8 +222,9 @@ Value TosaBuilder::reshape(Value value, llvm::ArrayRef<int64_t> shape) {
   Type newValueType = RankedTensorType::get(
       llvm::SmallVector<int64_t, 4>(shape.size(), ShapedType::kDynamic),
       valueType.getElementType());
-  return tosa::CreateOpAndInfer<mlir::tosa::ReshapeOp>(
-      rewriter(), loc(), newValueType, value, shapeAttr);
+  return tosa::CreateOpAndInfer<mlir::tosa::ReshapeOp>(rewriter(),
+      shouldDetachDataLayoutLocs ? getDetachedLocation() : loc(), newValueType,
+      value, shapeAttr);
 }
 
 Value TosaBuilder::mul(Value &lhs, Value &rhs, int32_t shift) {

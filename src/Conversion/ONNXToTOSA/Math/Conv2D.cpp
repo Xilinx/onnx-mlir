@@ -91,7 +91,7 @@ public:
     auto loc = op->getLoc();
     auto convOp = mlir::cast<ONNXConvOp>(op);
 
-    TosaBuilder tosaBuilder(rewriter, loc);
+    TosaBuilder tosaBuilder(rewriter, loc, /*shouldDetachDataLayoutLocs=*/true);
 
     auto input = adaptor.getX();
     auto weights = adaptor.getW();

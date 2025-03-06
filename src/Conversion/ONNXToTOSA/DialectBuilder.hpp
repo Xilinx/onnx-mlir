@@ -32,10 +32,16 @@ namespace onnx_mlir {
 // =============================================================================
 
 struct TosaBuilder : DialectBuilder {
-  TosaBuilder(mlir::Location loc) : DialectBuilder(loc) {}
-  TosaBuilder(mlir::PatternRewriter &b, mlir::Location loc)
-      : DialectBuilder(b, loc), patternRewriter(&b) {}
-  TosaBuilder(const DialectBuilder &db) : DialectBuilder(db) {}
+  TosaBuilder(mlir::Location loc, bool shouldDetachDataLayoutLocs = false)
+      : DialectBuilder(loc),
+        shouldDetachDataLayoutLocs(shouldDetachDataLayoutLocs) {}
+  TosaBuilder(mlir::PatternRewriter &b, mlir::Location loc,
+      bool shouldDetachDataLayoutLocs = false)
+      : DialectBuilder(b, loc), patternRewriter(&b),
+        shouldDetachDataLayoutLocs(shouldDetachDataLayoutLocs) {}
+  TosaBuilder(const DialectBuilder &db, bool shouldDetachDataLayoutLocs = false)
+      : DialectBuilder(db),
+        shouldDetachDataLayoutLocs(shouldDetachDataLayoutLocs) {}
   virtual ~TosaBuilder() {}
 
   std::optional<mlir::Value> gather(mlir::Value resultValue,
@@ -132,7 +138,9 @@ protected:
   }
 
 private:
+  [[nodiscard]] mlir::Location getDetachedLocation() const;
   mlir::PatternRewriter *patternRewriter;
+  const bool shouldDetachDataLayoutLocs;
 };
 
 // =============================================================================
