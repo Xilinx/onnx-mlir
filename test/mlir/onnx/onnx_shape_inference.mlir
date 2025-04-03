@@ -4076,14 +4076,13 @@ func.func @test_grid_sample_dim_shape3(%arg0: tensor<?x?x?x?xf32>, %arg1: tensor
 
 // Test STFT
 // Test case 1, with static shapes and onesided = 1
-func.func @test_stft_static_1(%arg0: tensor<1x32x1xf32>) -> tensor<*xf32> {
-  %arg1 = onnx.Constant dense<1> : tensor<i64>
-  %arg2 = onnx.Constant dense<[0.5, 0.5, 0.5, 0.5]> : tensor<4xf32>
-  %arg3 = onnx.Constant dense<4> : tensor<i64>
-  %0 = "onnx.STFT"(%arg0, %arg1, %arg2, %arg3) : (tensor<1x32x1xf32>, tensor<i64>, tensor<4xf32>, tensor<i64>) -> tensor<*xf32>
+func.func @test_stft_static_1(%signal: tensor<1x32x1xf32>) -> tensor<*xf32> {
+  %frame_step = onnx.Constant dense<1> : tensor<i64>
+  %window = onnx.Constant dense<[0.5, 0.5, 0.5, 0.5]> : tensor<4xf32>
+  %frame_length = onnx.Constant dense<4> : tensor<i64>
+  %0 = "onnx.STFT"(%signal, %frame_step, %window, %frame_length) : (tensor<1x32x1xf32>, tensor<i64>, tensor<4xf32>, tensor<i64>) -> tensor<*xf32>
   return %0 : tensor<*xf32>
 }
-// mlir2FileCheck.py
 // CHECK-LABEL:  func.func @test_stft_static_1
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x32x1xf32>) -> tensor<1x29x3x2xf32> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1> : tensor<i64>
@@ -4094,14 +4093,13 @@ func.func @test_stft_static_1(%arg0: tensor<1x32x1xf32>) -> tensor<*xf32> {
 // CHECK:           return [[VAR_3_]] : tensor<1x29x3x2xf32>
 
 // Test case 2, with static shapes and onesided = 1
-func.func @test_stft_static_2(%arg0: tensor<1x32x1xf32>) -> tensor<*xf32> {
-  %arg1 = onnx.Constant dense<3> : tensor<i64>
-  %arg2 = onnx.Constant dense<[0.5, 0.5, 0.5, 0.5]> : tensor<4xf32>
-  %arg3 = onnx.Constant dense<4> : tensor<i64>
-  %0 = "onnx.STFT"(%arg0, %arg1, %arg2, %arg3) : (tensor<1x32x1xf32>, tensor<i64>, tensor<4xf32>, tensor<i64>) -> tensor<*xf32>
+func.func @test_stft_static_2(%signal: tensor<1x32x1xf32>) -> tensor<*xf32> {
+  %frame_step = onnx.Constant dense<3> : tensor<i64>
+  %window = onnx.Constant dense<[0.5, 0.5, 0.5, 0.5]> : tensor<4xf32>
+  %frame_length = onnx.Constant dense<4> : tensor<i64>
+  %0 = "onnx.STFT"(%signal, %frame_step, %window, %frame_length) : (tensor<1x32x1xf32>, tensor<i64>, tensor<4xf32>, tensor<i64>) -> tensor<*xf32>
   return %0 : tensor<*xf32>
 }
-// mlir2FileCheck.py
 // CHECK-LABEL:  func.func @test_stft_static_2
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x32x1xf32>) -> tensor<1x10x3x2xf32> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<3> : tensor<i64>
@@ -4113,14 +4111,13 @@ func.func @test_stft_static_2(%arg0: tensor<1x32x1xf32>) -> tensor<*xf32> {
 
 
 // Test case 3, with static shape and onesided = 0
-func.func @test_stft_static_onesided_0(%arg0: tensor<1x32x1xf32>) -> tensor<*xf32> {
-  %arg1 = onnx.Constant dense<3> : tensor<i64>
-  %arg2 = onnx.Constant dense<[0.5, 0.5, 0.5, 0.5]> : tensor<4xf32>
-  %arg3 = onnx.Constant dense<4> : tensor<i64>
-  %0 = "onnx.STFT"(%arg0, %arg1, %arg2, %arg3) {onesided = 0 : si64} : (tensor<1x32x1xf32>, tensor<i64>, tensor<4xf32>, tensor<i64>) -> tensor<*xf32>
+func.func @test_stft_static_onesided_0(%signal: tensor<1x32x1xf32>) -> tensor<*xf32> {
+  %frame_step = onnx.Constant dense<3> : tensor<i64>
+  %window = onnx.Constant dense<[0.5, 0.5, 0.5, 0.5]> : tensor<4xf32>
+  %frame_length = onnx.Constant dense<4> : tensor<i64>
+  %0 = "onnx.STFT"(%signal, %frame_step, %window, %frame_length) {onesided = 0 : si64} : (tensor<1x32x1xf32>, tensor<i64>, tensor<4xf32>, tensor<i64>) -> tensor<*xf32>
   return %0 : tensor<*xf32>
 }
-// mlir2FileCheck.py
 // CHECK-LABEL:  func.func @test_stft_static_onesided_0
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x32x1xf32>) -> tensor<1x10x4x2xf32> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<3> : tensor<i64>
@@ -4133,13 +4130,46 @@ func.func @test_stft_static_onesided_0(%arg0: tensor<1x32x1xf32>) -> tensor<*xf3
 
 
 // Test case 4, with dynamic shape and onesided = 0
-func.func @test_stft_dyn(%arg0: tensor<1x8x1xf32>, %arg1: tensor<i64>, %arg2: tensor<4xf32>, %arg3: tensor<i64>) -> tensor<*xf32> {
-  %0 = "onnx.STFT"(%arg0, %arg1, %arg2, %arg3) : (tensor<1x8x1xf32>, tensor<i64>, tensor<4xf32>, tensor<i64>) -> tensor<*xf32>
+func.func @test_stft_dyn(%signal: tensor<1x8x1xf32>, %frame_step: tensor<i64>, %window: tensor<4xf32>, %frame_length: tensor<i64>) -> tensor<*xf32> {
+  %0 = "onnx.STFT"(%signal, %frame_step, %window, %frame_length) : (tensor<1x8x1xf32>, tensor<i64>, tensor<4xf32>, tensor<i64>) -> tensor<*xf32>
   return %0 : tensor<*xf32>
 }
-// mlir2FileCheck.py
 // CHECK-LABEL:  func.func @test_stft_dyn
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x8x1xf32>, [[PARAM_1_:%.+]]: tensor<i64>, [[PARAM_2_:%.+]]: tensor<4xf32>, [[PARAM_3_:%.+]]: tensor<i64>) -> tensor<1x?x?x2xf32> {
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x8x1xf32>, [[PARAM_1_:%.+]]: tensor<i64>, [[PARAM_2_:%.+]]: tensor<4xf32>, [[PARAM_3_:%.+]]: tensor<i64>) -> tensor<1x?x3x2xf32> {
 // CHECK:           [[VAR_0_:%.+]] = "onnx.STFT"([[PARAM_0_]], [[PARAM_1_]], [[PARAM_2_]], [[PARAM_3_]])
-// CHECK-SAME: : (tensor<1x8x1xf32>, tensor<i64>, tensor<4xf32>, tensor<i64>) -> tensor<1x?x?x2xf32>
-// CHECK:           return [[VAR_0_]] : tensor<1x?x?x2xf32>
+// CHECK-SAME: : (tensor<1x8x1xf32>, tensor<i64>, tensor<4xf32>, tensor<i64>) -> tensor<1x?x3x2xf32>
+// CHECK:           return [[VAR_0_]] : tensor<1x?x3x2xf32>
+
+// Test case 5, when window is not given and frame length is given
+func.func @test_stft_no_window(%signal: tensor<1x32x1xf32>) -> tensor<*xf32> {
+  %frame_step = onnx.Constant dense<3> : tensor<i64>
+  %window = "onnx.NoValue"() {value} : () -> none
+  %frame_length = onnx.Constant dense<4> : tensor<i64>
+  %0 = "onnx.STFT"(%signal, %frame_step, %window, %frame_length) : (tensor<1x32x1xf32>, tensor<i64>, none, tensor<i64>) -> tensor<*xf32>
+  return %0 : tensor<*xf32>
+}
+// CHECK-LABEL:  func.func @test_stft_no_window
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x32x1xf32>) -> tensor<1x10x3x2xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<3> : tensor<i64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.NoValue"() {value} : () -> none
+// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<4> : tensor<i64>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.STFT"([[PARAM_0_]], [[VAR_0_]], [[VAR_1_]], [[VAR_2_]])
+// CHECK-SAME: : (tensor<1x32x1xf32>, tensor<i64>, none, tensor<i64>) -> tensor<1x10x3x2xf32>
+// CHECK:           return [[VAR_3_]] : tensor<1x10x3x2xf32>
+
+// Test case 6, when frame length is not given but window is given
+func.func @test_stft_no_frame_length(%signal: tensor<1x32x1xf32>) -> tensor<*xf32> {
+  %frame_step = onnx.Constant dense<3> : tensor<i64>
+  %window = onnx.Constant dense<[0.5, 0.5, 0.5, 0.5]> : tensor<4xf32>
+  %frame_length = "onnx.NoValue"() {value} : () -> none
+  %0 = "onnx.STFT"(%signal, %frame_step, %window, %frame_length) : (tensor<1x32x1xf32>, tensor<i64>, tensor<4xf32>, none) -> tensor<*xf32>
+  return %0 : tensor<*xf32>
+}
+// CHECK-LABEL:  func.func @test_stft_no_frame_length
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x32x1xf32>) -> tensor<1x10x3x2xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<3> : tensor<i64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<5.000000e-01> : tensor<4xf32>
+// CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.NoValue"() {value} : () -> none
+// CHECK:           [[VAR_3_:%.+]] = "onnx.STFT"([[PARAM_0_]], [[VAR_0_]], [[VAR_1_]], [[VAR_2_]])
+// CHECK-SAME: : (tensor<1x32x1xf32>, tensor<i64>, tensor<4xf32>, none) -> tensor<1x10x3x2xf32>
+// CHECK:           return [[VAR_3_]] : tensor<1x10x3x2xf32>
