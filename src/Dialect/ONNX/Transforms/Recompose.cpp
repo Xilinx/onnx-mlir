@@ -512,6 +512,8 @@ struct RecomposeGeluFromMulPattern : public OpRewritePattern<ONNXMulOp> {
     //
     // - for approximate gelu
     // gelu(x) = 0.5 * x * (1 + tanh[0.797884583 * (x + 0.044715 * x^3)])
+    // OR
+    // gelu(x) = 0.5 * x * (1 + tanh[0.797884583 * (x + 0.044715 * x*x*x)])
     // where 0.797884583 is sqrt(2/pi).
     Value x;
     bool isExactGelu = false;
@@ -539,6 +541,8 @@ struct RecomposeGeluFromMulPattern : public OpRewritePattern<ONNXMulOp> {
     //
     // - for approximate gelu
     // gelu(x) = 0.5 * x * (1 + tanh[0.797884583 * (x + 0.044715 * x^3)])
+    // OR
+    // gelu(x) = 0.5 * x * (1 + tanh[0.797884583 * (x + 0.044715 * x*x*x)])
     // where 0.797884583 is sqrt(2/pi).
     //
     // Associcative and communitative properties are handled.
@@ -641,6 +645,9 @@ struct RecomposeGeluFromMulPattern : public OpRewritePattern<ONNXMulOp> {
 
     // Approximate gelu.
     // gelu(x) = 0.5 * x * (1 + tanh[0.797884583 * (x + 0.044715 * x^3)])
+    // OR
+    // gelu(x) = 0.5 * x * (1 + tanh[0.797884583 * (x + 0.044715 * x*x*x)])
+
     // Match 1 + tanh()
     bool foundTanh = false;
     ONNXTanhOp tanhOp;
