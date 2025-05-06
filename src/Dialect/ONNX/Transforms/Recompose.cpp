@@ -679,17 +679,38 @@ struct RecomposeGeluFromMulPattern : public OpRewritePattern<ONNXMulOp> {
             add2Op.getOperand(0), add2Op.getOperand(1), x, mul2Op))
       return reportFailure("[Approximate] missing mul op for 0.044715 * x^3");
 
-    // Match 0.044715 * x^3
+    // Match 0.044715 * x^3 OR 0.044715 * x * x * x
     ONNXPowOp powOp;
-    if (!matchConstAndOp<ONNXPowOp>(
-            mul2Op.getOperand(0), mul2Op.getOperand(1), 0.044715, powOp))
-      return reportFailure("[Approximate] missing 0.044715 and/or pow op");
+    ONNXMulOp mul3Op;
 
-    // Match x^3
-    lhs = powOp.getOperand(0);
-    rhs = powOp.getOperand(1);
-    if (lhs == x && constOf(rhs, 3.0))
+    // Try to match 0.044715 * x^3
+    if (matchConstAndOp<ONNXPowOp>(
+            mul2Op.getOperand(0), mul2Op.getOperand(1), 0.044715, powOp)) {
+      if (!powOp) {
+        return reportFailure("[Approximate] missing 0.044715 and/or pow op");
+      }
+      lhs = powOp.getOperand(0);
+      rhs = powOp.getOperand(1);
+      if (lhs == x && constOf(rhs, 3.0))
+        return true;
+      // try to match 0.044715 * x * x * x
+    } else if (matchConstAndOp<ONNXMulOp>(mul2Op.getOperand(0),
+                   mul2Op.getOperand(1), 0.044715, mul3Op)) {
+      if (!mul3Op) {
+        return reportFailure("[Approximate] missing 0.044715 and/or mul op");
+      }
+      ONNXMulOp mul4Op;
+      if (!matchValueAndOp(
+              mul3Op.getOperand(0), mul3Op.getOperand(1), x, mul4Op)) {
+        return reportFailure(
+            "[Approximate] missing pattern input and/or mul op");
+      }
+      if (!(mul4Op.getOperand(0) == x && mul4Op.getOperand(1) == x)) {
+        return reportFailure("[Approximate] missing pattern input as operands "
+                             "to topmost mul op");
+      }
       return true;
+    }
 
     return reportFailure("subgraph not found");
   }
