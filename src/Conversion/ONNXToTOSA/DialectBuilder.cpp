@@ -15,6 +15,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
+#include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "src/Conversion/ONNXToTOSA/DialectBuilder.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
@@ -284,6 +285,8 @@ template Value TosaBuilder::unaryOp<mlir::tosa::LogOp>(mlir::Value &input);
 template Value TosaBuilder::unaryOp<mlir::tosa::RsqrtOp>(mlir::Value &input);
 template Value TosaBuilder::unaryOp<mlir::tosa::FloorOp>(mlir::Value &input);
 template Value TosaBuilder::unaryOp<mlir::tosa::CeilOp>(mlir::Value &input);
+template Value TosaBuilder::unaryOp<mlir::tosa::ErfOp>(mlir::Value &input);
+template Value TosaBuilder::unaryOp<mlir::tosa::TanhOp>(mlir::Value &input);
 
 template <typename T>
 Value TosaBuilder::compareOp(mlir::PatternRewriter &rewriter,

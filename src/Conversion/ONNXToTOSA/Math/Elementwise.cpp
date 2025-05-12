@@ -12,6 +12,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/Dialect/Tosa/IR/TosaOps.h"
+#include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
@@ -20,7 +23,11 @@
 #include "mlir/Support/LogicalResult.h"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
+#include "src/Dialect/ONNX/ONNXOps.hpp"
+#include <cmath>
 #include <src/Conversion/ONNXToTOSA/DialectBuilder.hpp>
+
+#define _USE_MATH_DEFINES
 
 using namespace mlir;
 
@@ -662,6 +669,59 @@ public:
   }
 };
 
+class ONNXGeluOpLoweringToTOSA : public OpConversionPattern<ONNXGeluOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(ONNXGeluOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+
+    auto approx = op.getApproximateAttr();
+    TosaBuilder tb(rewriter, op.getLoc());
+    mlir::Value input = adaptor.getX();
+
+    if (!approx) {
+      return rewriter.notifyMatchFailure(
+          op, "Attribute 'approximate' doesn't exist");
+    } else if (approx == "tanh") {
+      // lower to tanh approximation
+      // 0.5∗x∗(1+Tanh[sqrt(2/pi)∗(x+0.044715∗x^3)])
+      auto inputRank = cast<TensorType>(input.getType()).getRank();
+      auto pointZeroFour = tb.getSplattedConst(0.044715f, inputRank);
+      auto sqrtTwoOverPi = static_cast<float>(std::sqrt(M_2_PI));
+      auto xSquared = tb.mul(input, input);
+      auto xCubed = tb.mul(xSquared, input);
+      auto mul1Op = tb.mul(pointZeroFour, xCubed);
+      auto add1Op = tb.binaryOp<mlir::tosa::AddOp>(mul1Op, input);
+      auto sqrtTwoOverPiConst = tb.getSplattedConst(sqrtTwoOverPi, inputRank);
+      auto mul2Op = tb.mul(sqrtTwoOverPiConst, add1Op);
+      auto tanhOp = tb.unaryOp<mlir::tosa::TanhOp>(mul2Op);
+      auto oneConst = tb.getSplattedConst(1.0f, inputRank);
+      auto add2Op = tb.binaryOp<mlir::tosa::AddOp>(oneConst, tanhOp);
+      auto mul3Op = tb.mul(input, add2Op);
+      auto halfConst = tb.getSplattedConst(0.5f, inputRank);
+      auto output = tb.mul(halfConst, mul3Op);
+      rewriter.replaceOp(op, output);
+      return llvm::success();
+    } else {
+      // lower to exact gelu
+      // 0.5*x*(1 + erf[x/sqrt(2)])
+      auto inputRank = cast<TensorType>(input.getType()).getRank();
+      auto oneOverSqrt2 = 1.0f / std::sqrt(2.0f);
+      auto mul1Const = tb.getSplattedConst(oneOverSqrt2, inputRank);
+      auto addConst = tb.getSplattedConst(1.0f, inputRank);
+      auto mul3Const = tb.getSplattedConst(0.5f, inputRank);
+      auto mul1Op = tb.mul(input, mul1Const);
+      auto erf = tb.unaryOp<mlir::tosa::ErfOp>(mul1Op);
+      auto add1Op = tb.binaryOp<mlir::tosa::AddOp>(erf, addConst);
+      auto mul2Op = tb.mul(add1Op, input);
+      auto output = tb.mul(mul2Op, mul3Const);
+
+      rewriter.replaceOp(op, output);
+      return llvm::success();
+    }
+  }
+};
+
 static void populateLoweringONNXElementwiseBinaryTemplateOpToTOSAPattern(
     RewritePatternSet &patterns, TypeConverter &typeConverter,
     MLIRContext *ctx) {
@@ -735,7 +795,8 @@ void populateLoweringONNXElementwiseOpToTOSAPattern(ConversionTarget &target,
       ONNXComparisonOpLoweringToTOSA<ONNXGreaterOrEqualOp>,
       ONNXComparisonOpLoweringToTOSA<ONNXGreaterOp>,
       ONNXComparisonOpLoweringToTOSA<ONNXLessOrEqualOp>,
-      ONNXComparisonOpLoweringToTOSA<ONNXLessOp>>(typeConverter, ctx);
+      ONNXComparisonOpLoweringToTOSA<ONNXLessOp>, ONNXGeluOpLoweringToTOSA>(
+      typeConverter, ctx);
 
   populateLoweringONNXElementwiseBinaryTemplateOpToTOSAPattern(
       patterns, typeConverter, ctx);
