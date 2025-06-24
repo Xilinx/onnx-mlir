@@ -695,7 +695,7 @@ bool hasNoActivationConsumer(Value convTransposeResult) {
   return true;
 }
 
-inline bool isTwoFourOrFive(int n) { return n == 2 || n == 4 || n == 5; }
+inline bool isTwoOrFour(int n) { return n == 2 || n == 4; }
 
 // This decomposition currently do not support all possible convtranspose
 // operations. Below are the supported usecases.
@@ -733,10 +733,12 @@ bool ShouldDecomposeConvTransposeOp1dToPhasedConvs(Value convTransposeResult,
   RankedTensorType outputType =
       mlir::cast<RankedTensorType>(convTransposeResult.getType());
   auto outputShape = outputType.getShape();
-  // Checking to ensure only convtranspose with 1D spatial dims and stride 2, 4
-  // or 5 are supported.
+  // Checking to ensure only convtranspose with 1D spatial dims and stride 2 or
+  // 4 are supported.
+  // NOTE: Changing the filter to not decompose stride 5.
+
   if ((outputShape.size() != 3) || (stridesShape.size() != 1) ||
-      (padsShape.size() != 2) || !isTwoFourOrFive(stridesShape[0]))
+      (padsShape.size() != 2) || !isTwoOrFour(stridesShape[0]))
     return false;
   // number of conv phases equals to the stride.
   int numberOfPhases = stridesShape[0];
