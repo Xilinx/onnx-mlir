@@ -36,8 +36,9 @@ return %1 : tensor<2x5xf32>
 // CHECK-SAME:                                          %[[VAL_0:.*]]: tensor<2x5x9x11xf32>) -> tensor<2x5xf32> {
 // CHECK:           %[[VAL_1:.*]] = tosa.reduce_prod %[[VAL_0]] {axis = 2 : i32} : (tensor<2x5x9x11xf32>) -> tensor<2x5x1x11xf32>
 // CHECK:           %[[VAL_2:.*]] = tosa.reduce_prod %[[VAL_1]] {axis = 3 : i32} : (tensor<2x5x1x11xf32>) -> tensor<2x5x1x1xf32>
-// CHECK:           %[[VAL_3:.*]] = tosa.reshape %[[VAL_2]] {new_shape = array<i64: 2, 5>} : (tensor<2x5x1x1xf32>) -> tensor<2x5xf32>
-// CHECK:           return %[[VAL_3]] : tensor<2x5xf32>
+// CHECK-DAG:       [[VAR_2_:%.+]] = tosa.const_shape  {value = dense<[2, 5]> : tensor<2xindex>} : () -> !tosa.shape<2>
+// CHECK:           [[VAR_3_:%.+]] = tosa.reshape %[[VAL_2]], [[VAR_2_]] : (tensor<2x5x1x1xf32>, !tosa.shape<2>) -> tensor<2x5xf32>
+// CHECK:           return [[VAR_3_]] : tensor<2x5xf32>
 }
 
 // -----
@@ -84,7 +85,8 @@ func.func @test_reduceprodV13_keep_dims_false(%arg0: tensor<1x32x112x112xf32>) -
 // CHECK-LABEL:  func.func @test_reduceprodV13_keep_dims_false
 // CHECK:           [[VAR_0_:%.+]] = tosa.reduce_prod %arg0 {axis = 2 : i32}
 // CHECK-DAG:       [[VAR_1_:%.+]] = tosa.reduce_prod [[VAR_0_]] {axis = 3 : i32}
-// CHECK-DAG:       [[VAR_2_:%.+]] = tosa.reshape [[VAR_1_]] {new_shape = array<i64: 1, 32>}
-// CHECK:           return [[VAR_2_]] : tensor<1x32xf32>
+// CHECK-DAG:       [[VAR_2_:%.+]] = tosa.const_shape  {value = dense<[1, 32]> : tensor<2xindex>} : () -> !tosa.shape<2>
+// CHECK:           [[VAR_3_:%.+]] = tosa.reshape [[VAR_1_]], [[VAR_2_]] : (tensor<1x32x1x1xf32>, !tosa.shape<2>) -> tensor<1x32xf32>
+// CHECK:           return [[VAR_3_]] : tensor<1x32xf32>
 }
 

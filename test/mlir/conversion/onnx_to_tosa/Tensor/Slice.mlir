@@ -8,8 +8,12 @@ func.func @test_slice_constant_default_steps(%arg0 : tensor<2x4xf32>) -> tensor<
   %steps = "onnx.NoValue"() {value} : () -> none
   %1 = "onnx.Slice"(%arg0, %starts, %ends, %axes, %steps) : (tensor<2x4xf32>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>, none) -> tensor<1x3xf32>
   "func.return"(%1) : (tensor<1x3xf32>) -> ()
-// CHECK-LABEL: func @test_slice_constant_default_steps
-// CHECK: %0 = tosa.slice %arg0 {size = array<i64: 1, 3>, start = array<i64: 1, 0>} : (tensor<2x4xf32>) -> tensor<1x3xf32>
+// CHECK-LABEL:  func.func @test_slice_constant_default_steps
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x4xf32>) -> tensor<1x3xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = tosa.const_shape  {value = dense<[1, 0]> : tensor<2xindex>} : () -> !tosa.shape<2>
+// CHECK-DAG:       [[VAR_1_:%.+]] = tosa.const_shape  {value = dense<[1, 3]> : tensor<2xindex>} : () -> !tosa.shape<2>
+// CHECK:           [[VAR_2_:%.+]] = tosa.slice [[PARAM_0_]], [[VAR_0_]], [[VAR_1_]] : (tensor<2x4xf32>, !tosa.shape<2>, !tosa.shape<2>) -> tensor<1x3xf32>
+// CHECK:           return [[VAR_2_]] : tensor<1x3xf32>
 }
 
 func.func @test_slice_all_constant_negative(%arg0 : tensor<2x4xf32>) -> tensor<1x3xf32> {
@@ -19,8 +23,12 @@ func.func @test_slice_all_constant_negative(%arg0 : tensor<2x4xf32>) -> tensor<1
   %steps = "onnx.Constant"() {value = dense<[1, 1]> : tensor<2xi64> } : () -> tensor<2xi64>
   %1 = "onnx.Slice"(%arg0, %starts, %ends, %axes, %steps) : (tensor<2x4xf32>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>) -> tensor<1x3xf32>
   "func.return"(%1) : (tensor<1x3xf32>) -> ()
-// CHECK-LABEL: func @test_slice_all_constant_negative
-// CHECK: %0 = tosa.slice %arg0 {size = array<i64: 1, 3>, start = array<i64: 1, 0>} : (tensor<2x4xf32>) -> tensor<1x3xf32>
+// CHECK-LABEL:  func.func @test_slice_all_constant_negative
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x4xf32>) -> tensor<1x3xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = tosa.const_shape  {value = dense<[1, 0]> : tensor<2xindex>} : () -> !tosa.shape<2>
+// CHECK-DAG:       [[VAR_1_:%.+]] = tosa.const_shape  {value = dense<[1, 3]> : tensor<2xindex>} : () -> !tosa.shape<2>
+// CHECK:           [[VAR_2_:%.+]] = tosa.slice [[PARAM_0_]], [[VAR_0_]], [[VAR_1_]] : (tensor<2x4xf32>, !tosa.shape<2>, !tosa.shape<2>) -> tensor<1x3xf32>
+// CHECK:           return [[VAR_2_]] : tensor<1x3xf32>
 }
 
 func.func @test_slice_all_constant_end_outofbound(%arg0 : tensor<2x4xf32>) -> tensor<1x3xf32> {
@@ -30,8 +38,12 @@ func.func @test_slice_all_constant_end_outofbound(%arg0 : tensor<2x4xf32>) -> te
   %steps = "onnx.Constant"() {value = dense<[1, 1]> : tensor<2xi64> } : () -> tensor<2xi64>
   %1 = "onnx.Slice"(%arg0, %starts, %ends, %axes, %steps) : (tensor<2x4xf32>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>) -> tensor<1x3xf32>
   "func.return"(%1) : (tensor<1x3xf32>) -> ()
-// CHECK-LABEL: func @test_slice_all_constant_end_outofbound
-// CHECK: %0 = tosa.slice %arg0 {size = array<i64: 1, 3>, start = array<i64: 1, 0>} : (tensor<2x4xf32>) -> tensor<1x3xf32>
+// CHECK-LABEL:  func.func @test_slice_all_constant_end_outofbound
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x4xf32>) -> tensor<1x3xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = tosa.const_shape  {value = dense<[1, 0]> : tensor<2xindex>} : () -> !tosa.shape<2>
+// CHECK-DAG:       [[VAR_1_:%.+]] = tosa.const_shape  {value = dense<[1, 3]> : tensor<2xindex>} : () -> !tosa.shape<2>
+// CHECK:           [[VAR_2_:%.+]] = tosa.slice [[PARAM_0_]], [[VAR_0_]], [[VAR_1_]] : (tensor<2x4xf32>, !tosa.shape<2>, !tosa.shape<2>) -> tensor<1x3xf32>
+// CHECK:           return [[VAR_2_]] : tensor<1x3xf32>
 }
 
 // -----

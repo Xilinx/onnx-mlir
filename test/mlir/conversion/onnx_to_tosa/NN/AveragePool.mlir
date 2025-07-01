@@ -75,12 +75,14 @@ func.func @test_default_averagepool_strides_nonunifpad(%arg0 : tensor<5x5x30x32x
 // CHECK-LABEL:  func.func @test_default_averagepool_strides_nonunifpad
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<5x5x30x32xf32>) -> tensor<5x5x15x16xf32> {
 // CHECK:           [[VAR_0_:%.+]] = "tosa.const"() <{value = dense<[0, 2, 3, 1]> : tensor<4xi32>}> : () -> tensor<4xi32>
-// CHECK:           [[VAR_1_:%.+]] = tosa.transpose [[PARAM_0_]], [[VAR_0_]] : (tensor<5x5x30x32xf32>, tensor<4xi32>) -> tensor<5x30x32x5xf32>
-// CHECK:           [[SLICE:%.+]] = tosa.slice [[VAR_1_]] {size = array<i64: 5, 29, 32, 5>, start = array<i64: 0, 0, 0, 0>} : (tensor<5x30x32x5xf32>) -> tensor<5x29x32x5xf32>
-// CHECK-DAG:       [[VAR_2_:%.+]] = tosa.avg_pool2d [[SLICE]] {acc_type = f32, kernel = array<i64: 2, 2>, pad = array<i64: 1, 0, 0, 0>, stride = array<i64: 2, 2>} : (tensor<5x29x32x5xf32>) -> tensor<5x15x16x5xf32>
-// CHECK-DAG:       [[VAR_3_:%.+]] = "tosa.const"() <{value = dense<[0, 3, 1, 2]> : tensor<4xi32>}> : () -> tensor<4xi32>
-// CHECK:           [[VAR_4_:%.+]] = tosa.transpose [[VAR_2_]], [[VAR_3_]] : (tensor<5x15x16x5xf32>, tensor<4xi32>) -> tensor<5x5x15x16xf32>
-// CHECK:           return [[VAR_4_]] : tensor<5x5x15x16xf32>
+// CHECK-DAG:       [[VAR_1_:%.+]] = tosa.transpose [[PARAM_0_]], [[VAR_0_]] : (tensor<5x5x30x32xf32>, tensor<4xi32>) -> tensor<5x30x32x5xf32>
+// CHECK-DAG:       [[VAR_2_:%.+]] = tosa.const_shape  {value = dense<0> : tensor<4xindex>} : () -> !tosa.shape<4>
+// CHECK-DAG:       [[VAR_3_:%.+]] = tosa.const_shape  {value = dense<[5, 29, 32, 5]> : tensor<4xindex>} : () -> !tosa.shape<4>
+// CHECK:           [[VAR_4_:%.+]] = tosa.slice [[VAR_1_]], [[VAR_2_]], [[VAR_3_]] : (tensor<5x30x32x5xf32>, !tosa.shape<4>, !tosa.shape<4>) -> tensor<5x29x32x5xf32>
+// CHECK-DAG:       [[VAR_5_:%.+]] = tosa.avg_pool2d [[VAR_4_]] {acc_type = f32, kernel = array<i64: 2, 2>, pad = array<i64: 1, 0, 0, 0>, stride = array<i64: 2, 2>} : (tensor<5x29x32x5xf32>) -> tensor<5x15x16x5xf32>
+// CHECK-DAG:       [[VAR_6_:%.+]] = "tosa.const"() <{value = dense<[0, 3, 1, 2]> : tensor<4xi32>}> : () -> tensor<4xi32>
+// CHECK:           [[VAR_7_:%.+]] = tosa.transpose [[VAR_5_]], [[VAR_6_]] : (tensor<5x15x16x5xf32>, tensor<4xi32>) -> tensor<5x5x15x16xf32>
+// CHECK:           return [[VAR_7_]] : tensor<5x5x15x16xf32>
 // CHECK:         }
 
 // -----

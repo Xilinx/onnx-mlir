@@ -62,7 +62,7 @@ public:
 
     // Get memRefDescriptor, the new memref descriptor.
     MemRefDescriptor memRefDescriptor =
-        MemRefDescriptor::undef(rewriter, loc, targetStructType);
+        MemRefDescriptor::poison(rewriter, loc, targetStructType);
     auto targetElementPtrType = memRefDescriptor.getElementPtrType();
 
     // Set the new memref to the same buffer as the source memref.
