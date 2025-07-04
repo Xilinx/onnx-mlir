@@ -55,11 +55,10 @@ func.func @test_beta(%arg0: tensor<3x6xf32>, %arg1: tensor<6x6xf32>, %arg2: tens
 // CHECK:           [[VAR_0_:%.+]] = tosa.reshape [[PARAM_0_]], [[SHAPE_0]] : (tensor<3x6xf32>, !tosa.shape<3>) -> tensor<1x3x6xf32>
 // CHECK-DAG:       [[SHAPE_1:%.+]] = tosa.const_shape {value = dense<[1, 6, 6]> : tensor<3xindex>} : () -> !tosa.shape<3>
 // CHECK:           [[VAR_1_:%.+]] = tosa.reshape [[PARAM_1_]], [[SHAPE_1]] : (tensor<6x6xf32>, !tosa.shape<3>) -> tensor<1x6x6xf32>
-// CHECK:           [[VAR_2_:%.+]] = "tosa.const"() <{value = dense<1.349000e+00> : tensor<1x1x1xf32>}> : () -> tensor<1x1x1xf32>
+// CHECK-DAG:       [[VAR_2_:%.+]] = "tosa.const"() <{value = dense<1.349000e+00> : tensor<1x1x1xf32>}> : () -> tensor<1x1x1xf32>
 // CHECK-DAG:       [[SHAPE_2:%.+]] = tosa.const_shape {value = dense<[1, 3, 6]> : tensor<3xindex>} : () -> !tosa.shape<3>
-// CHECK:           [[VAR_3_:%.+]] = tosa.reshape [[PARAM_2_]], [[SHAPE_2]] : (tensor<3x6xf32>, !tosa.shape<3>) -> tensor<1x3x6xf32>
-// CHECK-NOT: separator of consecutive DAGs
-// CHECK:           [[ZERO:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
+// CHECK-DAG:       [[VAR_3_:%.+]] = tosa.reshape [[PARAM_2_]], [[SHAPE_2]] : (tensor<3x6xf32>, !tosa.shape<3>) -> tensor<1x3x6xf32>
+// CHECK-DAG:       [[ZERO:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
 // CHECK:           [[VAR_4_:%.+]] = tosa.mul [[VAR_2_]], [[VAR_3_]], [[ZERO]] : (tensor<1x1x1xf32>, tensor<1x3x6xf32>, tensor<1xi8>) -> tensor<1x3x6xf32>
 // CHECK:           [[VAR_5_:%.+]] = tosa.matmul [[VAR_0_]], [[VAR_1_]] : (tensor<1x3x6xf32>, tensor<1x6x6xf32>) -> tensor<1x3x6xf32>
 // CHECK:           [[VAR_6_:%.+]] = tosa.add [[VAR_5_]], [[VAR_4_]] : (tensor<1x3x6xf32>, tensor<1x3x6xf32>) -> tensor<1x3x6xf32>
@@ -185,11 +184,10 @@ func.func @test_mixed(%arg0: tensor<11x5xf32>, %arg1: tensor<3x11xf32>, %arg2: t
 // CHECK-DAG:       [[ZERO_0:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
 // CHECK-NOT: separator of consecutive DAGs
 // CHECK:           [[VAR_7_:%.+]] = tosa.mul [[VAR_6_]], [[VAR_3_]], [[ZERO_0]] : (tensor<1x1x1xf32>, tensor<1x5x11xf32>, tensor<1xi8>) -> tensor<1x5x11xf32>
-// CHECK:           [[VAR_8_:%.+]] = "tosa.const"() <{value = dense<1.998000e+00> : tensor<1x1x1xf32>}> : () -> tensor<1x1x1xf32>
-// CHECK:           [[SHAPE_2:%.+]] = tosa.const_shape {value = dense<[1, 5, 3]> : tensor<3xindex>} : () -> !tosa.shape<3>
-// CHECK:           [[VAR_9_:%.+]] = tosa.reshape [[PARAM_2_]], [[SHAPE_2]] : (tensor<5x3xf32>, !tosa.shape<3>) -> tensor<1x5x3xf32>
-// CHECK-NOT: separator of consecutive DAGs
-// CHECK:           [[ZERO_1:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
+// CHECK-DAG:       [[VAR_8_:%.+]] = "tosa.const"() <{value = dense<1.998000e+00> : tensor<1x1x1xf32>}> : () -> tensor<1x1x1xf32>
+// CHECK-DAG:       [[SHAPE_2:%.+]] = tosa.const_shape {value = dense<[1, 5, 3]> : tensor<3xindex>} : () -> !tosa.shape<3>
+// CHECK-DAG:       [[VAR_9_:%.+]] = tosa.reshape [[PARAM_2_]], [[SHAPE_2]] : (tensor<5x3xf32>, !tosa.shape<3>) -> tensor<1x5x3xf32>
+// CHECK-DAG:       [[ZERO_1:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
 // CHECK:           [[VAR_10_:%.+]] = tosa.mul [[VAR_8_]], [[VAR_9_]], [[ZERO_1]] : (tensor<1x1x1xf32>, tensor<1x5x3xf32>, tensor<1xi8>) -> tensor<1x5x3xf32>
 // CHECK:           [[VAR_11_:%.+]] = tosa.matmul [[VAR_7_]], [[VAR_5_]] : (tensor<1x5x11xf32>, tensor<1x11x3xf32>) -> tensor<1x5x3xf32>
 // CHECK:           [[VAR_12_:%.+]] = tosa.add [[VAR_11_]], [[VAR_10_]] : (tensor<1x5x3xf32>, tensor<1x5x3xf32>) -> tensor<1x5x3xf32>

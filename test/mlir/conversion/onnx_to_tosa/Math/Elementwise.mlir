@@ -266,7 +266,7 @@ func.func @test_mul_rank_broadcast(%arg0: tensor<13x21x1xf32>, %arg1: tensor<21x
   "func.return"(%0) : (tensor<13x21x1xf32>) -> ()
 // CHECK-LABEL:  func.func @test_mul_rank_broadcast
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<13x21x1xf32>, [[PARAM_1_:%.+]]: tensor<21x1xf32>) -> tensor<13x21x1xf32> {
-// CHECK:           [[VAR_0_:%.+]] = tosa.const_shape  {value = dense<[1, 21, 1]> : tensor<3xindex>} : () -> !tosa.shape<3>
+// CHECK-DAG:       [[VAR_0_:%.+]] = tosa.const_shape  {value = dense<[1, 21, 1]> : tensor<3xindex>} : () -> !tosa.shape<3>
 // CHECK-DAG:       [[VAR_1_:%.+]] = tosa.reshape [[PARAM_1_]], [[VAR_0_]] : (tensor<21x1xf32>, !tosa.shape<3>) -> tensor<1x21x1xf32>
 // CHECK-DAG:       [[VAR_2_:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
 // CHECK:           [[VAR_3_:%.+]] = tosa.mul [[PARAM_0_]], [[VAR_1_]], [[VAR_2_]] : (tensor<13x21x1xf32>, tensor<1x21x1xf32>, tensor<1xi8>) -> tensor<13x21x1xf32>
@@ -280,7 +280,7 @@ func.func @test_mul_rank_broadcast2(%arg0: tensor<21x1xf32>, %arg1: tensor<13x21
   "func.return"(%0) : (tensor<13x21x1xf32>) -> ()
 // CHECK-LABEL:  func.func @test_mul_rank_broadcast2
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<21x1xf32>, [[PARAM_1_:%.+]]: tensor<13x21x1xf32>) -> tensor<13x21x1xf32> {
-// CHECK:           [[VAR_0_:%.+]] = tosa.const_shape  {value = dense<[1, 21, 1]> : tensor<3xindex>} : () -> !tosa.shape<3>
+// CHECK-DAG:       [[VAR_0_:%.+]] = tosa.const_shape  {value = dense<[1, 21, 1]> : tensor<3xindex>} : () -> !tosa.shape<3>
 // CHECK-DAG:       [[VAR_1_:%.+]] = tosa.reshape [[PARAM_0_]], [[VAR_0_]] : (tensor<21x1xf32>, !tosa.shape<3>) -> tensor<1x21x1xf32>
 // CHECK-DAG:       [[VAR_2_:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
 // CHECK:           [[VAR_3_:%.+]] = tosa.mul [[VAR_1_]], [[PARAM_1_]], [[VAR_2_]] : (tensor<1x21x1xf32>, tensor<13x21x1xf32>, tensor<1xi8>) -> tensor<13x21x1xf32>
@@ -731,9 +731,9 @@ func.func @test_div_decomposed_broadcast(%arg0: tensor<13x21x1xf32>, %arg1: tens
 // CHECK-LABEL:  func @test_div_decomposed_broadcast
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<13x21x1xf32>, [[PARAM_1_:%.+]]: tensor<1xf32>) -> tensor<13x21x1xf32> {
 // CHECK-NEXT:      [[VAR_0_:%.+]] = tosa.reciprocal [[PARAM_1_]] : (tensor<1xf32>) -> tensor<1xf32>
-// CHECK-NEXT:      [[SHAPE:%.+]] = tosa.const_shape {value = dense<1> : tensor<3xindex>} : () -> !tosa.shape<3>
-// CHECK-NEXT:      [[VAR_1_:%.+]] = tosa.reshape [[VAR_0_]], [[SHAPE]] : (tensor<1xf32>, !tosa.shape<3>) -> tensor<1x1x1xf32>
-// CHECK-NEXT:      [[ZERO:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
+// CHECK-DAG:       [[SHAPE:%.+]] = tosa.const_shape {value = dense<1> : tensor<3xindex>} : () -> !tosa.shape<3>
+// CHECK-DAG:       [[VAR_1_:%.+]] = tosa.reshape [[VAR_0_]], [[SHAPE]] : (tensor<1xf32>, !tosa.shape<3>) -> tensor<1x1x1xf32>
+// CHECK-DAG:       [[ZERO:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
 // CHECK-NEXT:      [[VAR_2_:%.+]] = tosa.mul [[PARAM_0_]], [[VAR_1_]], [[ZERO]] : (tensor<13x21x1xf32>, tensor<1x1x1xf32>, tensor<1xi8>) -> tensor<13x21x1xf32>
 }
 
