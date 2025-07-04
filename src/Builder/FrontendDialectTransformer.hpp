@@ -22,6 +22,7 @@
 #include "llvm/ADT/StringRef.h"
 
 #include "src/Builder/FrontendDialectHelper.hpp"
+#include "src/Support/ErrorHandling.hpp"
 
 namespace mlir {
 class MLIRContext;
@@ -47,6 +48,10 @@ struct ImportOptions {
   bool invokeOnnxVersionConverter = false;
   bool allowSorting = true;
   bool useOutputNameAsLocation = false;
+
+  // Allow missing output types and use type inference to determine them.
+  bool allowMissingOutputTypes = false;
+
   // Custom shape information for the graph inputs.
   // Its format is 'input_id:dim,dim,dim|input_id:dim,dim,dim'
   // E.g. An ONNX model has two dynamic inputs
@@ -81,30 +86,30 @@ struct ImportOptions {
  *  @param onnxBuffer buffer containing onnx model protobuf.
  *  @param bufferSize size of buffer containing onnx model protobuf.
  *  @param MLIR::module generated for the ONNX model.
- *  @return 0 on success, error number of failure.
  */
-int ImportFrontendModelArray(const void *onnxBuffer, int bufferSize,
-    mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module,
-    std::string *errorMessage, ImportOptions options = ImportOptions());
+[[nodiscard]] std::error_code ImportFrontendModelArray(const void *onnxBuffer,
+    int bufferSize, mlir::MLIRContext &context,
+    mlir::OwningOpRef<mlir::ModuleOp> &module, std::string &errorMessage,
+    ImportOptions options = ImportOptions());
 
 /*!
  *  Import an ONNX model file into the ONNX Dialect.
  *  @param model_fname file name pointing to the onnx model protobuf.
  *  @param MLIR::module generated for the ONNX model.
- *  @return 0 on success, error number of failure.
  */
-int ImportFrontendModelFile(llvm::StringRef model_fname,
-    mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module,
-    std::string *errorMessage, ImportOptions options = ImportOptions());
+[[nodiscard]] std::error_code ImportFrontendModelFile(
+    llvm::StringRef model_fname, mlir::MLIRContext &context,
+    mlir::OwningOpRef<mlir::ModuleOp> &module, std::string &errorMessage,
+    ImportOptions options = ImportOptions());
 
 /*!
  *  Import an ONNX model proto into the ONNX Dialect.
  *  @param model the onnx model protobuf.
- *  @return MLIR::module generated for the ONNX model.
+ *  @param MLIR::module generated for the ONNX model.
  */
-void ImportFrontendModel(const onnx::ModelProto &model,
+[[nodiscard]] std::error_code ImportFrontendModel(const onnx::ModelProto &model,
     mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module,
-    ImportOptions options = ImportOptions());
+    std::string &errorMessage, ImportOptions options = ImportOptions());
 
 /*!
  *  TODO: Import models into other extension dialects that cover the
