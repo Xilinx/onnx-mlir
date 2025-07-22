@@ -1365,15 +1365,16 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     ONNXConvTransposeOp op, Value convTransposeResult, Value input,
     Value weights, Value bias, ArrayAttr dilations, IntegerAttr group,
     ArrayAttr kernel_shape, ArrayAttr pads, ArrayAttr strides, FloatAttr alpha,
-    Value ctDq, Value ctQ, Value wtsDq) {
+    Value convtDeQuant, Value convtQuant, Value wtsDequant) {
 
-  auto wtsDqOp = wtsDq.getDefiningOp<ONNXDequantizeLinearOp>();
+  auto wtsDequantOp = wtsDequant.getDefiningOp<ONNXDequantizeLinearOp>();
 
-  auto ctDqOp = ctDq.getDefiningOp<ONNXDequantizeLinearOp>();
-  auto ctQOp = ctQ.getDefiningOp<ONNXQuantizeLinearOp>();
-  bool addQDQBetweenConvAndActivation = (ctDqOp != nullptr && ctQOp != nullptr);
+  auto convtDequantOp = convtDeQuant.getDefiningOp<ONNXDequantizeLinearOp>();
+  auto convtQuantOp = convtQuant.getDefiningOp<ONNXQuantizeLinearOp>();
+  bool addQDQBetweenConvAndActivation =
+      (convtDequantOp != nullptr && convtQuantOp != nullptr);
 
-  bool addDequantizeNodeForWts = (wtsDqOp != nullptr);
+  bool addDequantizeNodeForWts = (wtsDequantOp != nullptr);
 
   RankedTensorType weightsType =
       mlir::cast<RankedTensorType>(weights.getType());
@@ -1429,29 +1430,33 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
 
     // Properties from the ONNXQuantizeLinearOp Node taking input from
     // ConvTranspose.
-    auto q_y_scale = ctQOp.getYScale();
-    auto q_y_zero_point = ctQOp.getYZeroPoint();
-    auto q_y_axis = ctQOp.getAxis();
-    auto q_y_saturate = ctQOp.getSaturate();
+    auto convtQuantScale = convtQuantOp.getYScale();
+    auto convtQuantZeroPoint = convtQuantOp.getYZeroPoint();
+    auto convtQuantAxis = convtQuantOp.getAxis();
+    auto convtQuantSaturate = convtQuantOp.getSaturate();
+    auto convtQuantLoc = convtQuantOp->getLoc();
 
     // Properties from the ONNXDequantizeLinearOp Node taking input from Q node
     // which inturn taking input from ConvTranspose Node.
-    auto dq_x_scale = ctDqOp.getXScale();
-    auto dq_x_zero_point = ctDqOp.getXZeroPoint();
-    auto dq_x_axis = ctDqOp.getAxis();
+    auto convtDequantScale = convtDequantOp.getXScale();
+    auto convtDequantZeroPoint = convtDequantOp.getXZeroPoint();
+    auto convtDequantAxis = convtDequantOp.getAxis();
+    auto convtDequantLoc = convtDequantOp.getLoc();
 
-    RankedTensorType dQOutputType =
-        mlir::cast<RankedTensorType>(ctDqOp.getType());
+    RankedTensorType dequantOutputType =
+        mlir::cast<RankedTensorType>(convtDequantOp.getType());
 
     RankedTensorType qOutputType =
-        mlir::cast<RankedTensorType>(ctQOp.getType());
+        mlir::cast<RankedTensorType>(convtQuantOp.getType());
 
-    auto qNode = rewriter.create<ONNXQuantizeLinearOp>(loc, qOutputType, conv,
-        q_y_scale, q_y_zero_point, q_y_axis, q_y_saturate);
+    auto quantNode = rewriter.create<ONNXQuantizeLinearOp>(convtQuantLoc,
+        qOutputType, conv, convtQuantScale, convtQuantZeroPoint, convtQuantAxis,
+        convtQuantSaturate);
 
-    auto dqNode = rewriter.create<ONNXDequantizeLinearOp>(
-        loc, dQOutputType, qNode, dq_x_scale, dq_x_zero_point, dq_x_axis);
-    return dqNode;
+    auto dequantNode = rewriter.create<ONNXDequantizeLinearOp>(convtDequantLoc,
+        dequantOutputType, quantNode, convtDequantScale, convtDequantZeroPoint,
+        convtDequantAxis);
+    return dequantNode;
   };
 
   auto getActivationAppliedToConv = [&](Value conv, Type convOutputType) {
@@ -1469,9 +1474,9 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     if (!addDequantizeNodeForWts)
       return constantValue;
 
-    auto x_scale = wtsDqOp.getXScale();
-    auto x_zero_point = wtsDqOp.getXZeroPoint();
-    auto x_axis = wtsDqOp.getAxis();
+    auto wtsDqScale = wtsDequantOp.getXScale();
+    auto wtsDqZeroPoint = wtsDequantOp.getXZeroPoint();
+    auto wtsDqAxis = wtsDequantOp.getAxis();
 
     RankedTensorType constantType =
         mlir::cast<RankedTensorType>(constantValue.getType());
@@ -1480,7 +1485,7 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
         RankedTensorType::get(constantType.getShape(), elementType);
 
     return rewriter.create<ONNXDequantizeLinearOp>(
-        loc, dqOuputType, constantValue, x_scale, x_zero_point, x_axis);
+        loc, dqOuputType, constantValue, wtsDqScale, wtsDqZeroPoint, wtsDqAxis);
   };
   if (numPhases == 1) {
     const std::array<int64_t, 4> convPadsShape = {
