@@ -21,7 +21,6 @@
 //===----------------------------------------------------------------------===//
 
 #include <cmath>
-#include <iostream>
 #include <numeric>
 
 #include "mlir/IR/Attributes.h"
@@ -1366,10 +1365,15 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     ONNXConvTransposeOp op, Value convTransposeResult, Value input,
     Value weights, Value bias, ArrayAttr dilations, IntegerAttr group,
     ArrayAttr kernel_shape, ArrayAttr pads, ArrayAttr strides, FloatAttr alpha,
-    Value x_scale, Value x_zero_point, IntegerAttr x_axis) {
+    Value ctDq, Value ctQ, Value wtsDq) {
 
-  bool addDequantizeNode =
-      isScalarConstantTensor(x_scale) && isScalarConstantTensor(x_zero_point);
+  auto wtsDqOp = wtsDq.getDefiningOp<ONNXDequantizeLinearOp>();
+
+  auto ctDqOp = ctDq.getDefiningOp<ONNXDequantizeLinearOp>();
+  auto ctQOp = ctQ.getDefiningOp<ONNXQuantizeLinearOp>();
+  bool addQDQBetweenConvAndActivation = (ctDqOp != nullptr && ctQOp != nullptr);
+
+  bool addDequantizeNodeForWts = (wtsDqOp != nullptr);
 
   RankedTensorType weightsType =
       mlir::cast<RankedTensorType>(weights.getType());
@@ -1385,6 +1389,71 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
                                 : SmallVector<int64_t>({1, 1});
 
   int numPhases = stridesShape[0] * stridesShape[1];
+
+  //   +---------------+
+  //   |               |
+  //   |ConvTranspose  |
+  //   |               |
+  //   +--------+------+
+  //            |
+  //            v
+  // +-----------------------+
+  // |                       |
+  // |ONNXQuantizeLinearOp   |
+  // |                       |
+  // +--------+--------------+
+  //          |
+  //          v
+  // +--------------------------+
+  // |                          |
+  // |ONNXDequantizeLinearOp    |
+  // |                          |
+  // +----------+---------------+
+  //            |
+  //            v
+  // +--------------------------+
+  // |                          |
+  // |Activation ( RELU / LRELU)|
+  // |                          |
+  // +--------------------------+
+  //
+
+  // This function helps to create the Q and DQ nodes for the activation from
+  // the values matched in the pattern ConvTransposeOp -> Q -> DQ -> Relu The
+  // result will be Conv->Q->DQ->Activation Between the Conv and Activation the
+  // same Q and DQ nodes will be added
+
+  auto addQDQNodesForActivationIfNeeded = [&](Value conv) -> Value {
+    if (!addQDQBetweenConvAndActivation)
+      return conv;
+
+    // Properties from the ONNXQuantizeLinearOp Node taking input from
+    // ConvTranspose.
+    auto q_y_scale = ctQOp.getYScale();
+    auto q_y_zero_point = ctQOp.getYZeroPoint();
+    auto q_y_axis = ctQOp.getAxis();
+    auto q_y_saturate = ctQOp.getSaturate();
+
+    // Properties from the ONNXDequantizeLinearOp Node taking input from Q node
+    // which inturn taking input from ConvTranspose Node.
+    auto dq_x_scale = ctDqOp.getXScale();
+    auto dq_x_zero_point = ctDqOp.getXZeroPoint();
+    auto dq_x_axis = ctDqOp.getAxis();
+
+    RankedTensorType dQOutputType =
+        mlir::cast<RankedTensorType>(ctDqOp.getType());
+
+    RankedTensorType qOutputType =
+        mlir::cast<RankedTensorType>(ctQOp.getType());
+
+    auto qNode = rewriter.create<ONNXQuantizeLinearOp>(loc, qOutputType, conv,
+        q_y_scale, q_y_zero_point, q_y_axis, q_y_saturate);
+
+    auto dqNode = rewriter.create<ONNXDequantizeLinearOp>(
+        loc, dQOutputType, qNode, dq_x_scale, dq_x_zero_point, dq_x_axis);
+    return dqNode;
+  };
+
   auto getActivationAppliedToConv = [&](Value conv, Type convOutputType) {
     if (!alpha)
       return conv;
@@ -1397,8 +1466,13 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
   };
 
   auto addDequantizeNodeIfNeeded = [&](Value constantValue) -> Value {
-    if (!addDequantizeNode)
+    if (!addDequantizeNodeForWts)
       return constantValue;
+
+    auto x_scale = wtsDqOp.getXScale();
+    auto x_zero_point = wtsDqOp.getXZeroPoint();
+    auto x_axis = wtsDqOp.getAxis();
+
     RankedTensorType constantType =
         mlir::cast<RankedTensorType>(constantValue.getType());
 
@@ -1418,9 +1492,10 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     auto convPadsArrayAttr = rewriter.getI64ArrayAttr(convPadsShape);
 
     return getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, op.getY().getType(), input,
-            addDequantizeNodeIfNeeded(weights), bias, mlir::StringAttr(),
-            dilations, group, kernel_shape, convPadsArrayAttr, strides),
+        addQDQNodesForActivationIfNeeded(
+            rewriter.create<ONNXConvOp>(loc, op.getY().getType(), input,
+                addDequantizeNodeIfNeeded(weights), bias, mlir::StringAttr(),
+                dilations, group, kernel_shape, convPadsArrayAttr, strides)),
         op.getY().getType());
   }
 
@@ -1543,32 +1618,36 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     auto stridesArrayAttr = rewriter.getI64ArrayAttr({1, 1});
 
     Value conv1 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[3]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            getPadsArrayAttr(kernelShape[0], 1, needWeightsPadding),
-            stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(
+            rewriter.create<ONNXConvOp>(loc, convOutputType, input,
+                addDequantizeNodeIfNeeded(weightSlices[3]), bias,
+                mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
+                getPadsArrayAttr(kernelShape[0], 1, needWeightsPadding),
+                stridesArrayAttr)),
         convOutputType);
     Value conv2 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[0]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            getPadsArrayAttr(kernelShape[0], 2, needWeightsPadding),
-            stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(
+            rewriter.create<ONNXConvOp>(loc, convOutputType, input,
+                addDequantizeNodeIfNeeded(weightSlices[0]), bias,
+                mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
+                getPadsArrayAttr(kernelShape[0], 2, needWeightsPadding),
+                stridesArrayAttr)),
         convOutputType);
     Value conv3 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[1]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            getPadsArrayAttr(kernelShape[0], 3, needWeightsPadding),
-            stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(
+            rewriter.create<ONNXConvOp>(loc, convOutputType, input,
+                addDequantizeNodeIfNeeded(weightSlices[1]), bias,
+                mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
+                getPadsArrayAttr(kernelShape[0], 3, needWeightsPadding),
+                stridesArrayAttr)),
         convOutputType);
     Value conv4 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[2]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            getPadsArrayAttr(kernelShape[0], 4, needWeightsPadding),
-            stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(
+            rewriter.create<ONNXConvOp>(loc, convOutputType, input,
+                addDequantizeNodeIfNeeded(weightSlices[2]), bias,
+                mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
+                getPadsArrayAttr(kernelShape[0], 4, needWeightsPadding),
+                stridesArrayAttr)),
         convOutputType);
     // Need to remove excess the ofm  when weights are padded.
     if (needWeightsPadding) {
@@ -1721,58 +1800,58 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     auto stridesArrayAttr = rewriter.getI64ArrayAttr({1, 1});
 
     auto conv1 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[8]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            padsArrayAttr, stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
+            convOutputType, input, addDequantizeNodeIfNeeded(weightSlices[8]),
+            bias, mlir::StringAttr(), dilations, group,
+            convKernelShapeArrayAttr, padsArrayAttr, stridesArrayAttr)),
         convOutputType);
     auto conv2 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[5]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            padsArrayAttr, stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
+            convOutputType, input, addDequantizeNodeIfNeeded(weightSlices[5]),
+            bias, mlir::StringAttr(), dilations, group,
+            convKernelShapeArrayAttr, padsArrayAttr, stridesArrayAttr)),
         convOutputType);
     auto conv3 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[6]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            padsArrayAttr, stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
+            convOutputType, input, addDequantizeNodeIfNeeded(weightSlices[6]),
+            bias, mlir::StringAttr(), dilations, group,
+            convKernelShapeArrayAttr, padsArrayAttr, stridesArrayAttr)),
         convOutputType);
     auto conv4 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[7]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            padsArrayAttr, stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
+            convOutputType, input, addDequantizeNodeIfNeeded(weightSlices[7]),
+            bias, mlir::StringAttr(), dilations, group,
+            convKernelShapeArrayAttr, padsArrayAttr, stridesArrayAttr)),
         convOutputType);
     auto conv5 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[4]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            padsArrayAttr, stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
+            convOutputType, input, addDequantizeNodeIfNeeded(weightSlices[4]),
+            bias, mlir::StringAttr(), dilations, group,
+            convKernelShapeArrayAttr, padsArrayAttr, stridesArrayAttr)),
         convOutputType);
     auto conv6 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[1]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            padsArrayAttr, stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
+            convOutputType, input, addDequantizeNodeIfNeeded(weightSlices[1]),
+            bias, mlir::StringAttr(), dilations, group,
+            convKernelShapeArrayAttr, padsArrayAttr, stridesArrayAttr)),
         convOutputType);
     auto conv7 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[2]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            padsArrayAttr, stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
+            convOutputType, input, addDequantizeNodeIfNeeded(weightSlices[2]),
+            bias, mlir::StringAttr(), dilations, group,
+            convKernelShapeArrayAttr, padsArrayAttr, stridesArrayAttr)),
         convOutputType);
     auto conv8 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[3]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            padsArrayAttr, stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
+            convOutputType, input, addDequantizeNodeIfNeeded(weightSlices[3]),
+            bias, mlir::StringAttr(), dilations, group,
+            convKernelShapeArrayAttr, padsArrayAttr, stridesArrayAttr)),
         convOutputType);
     auto conv9 = getActivationAppliedToConv(
-        rewriter.create<ONNXConvOp>(loc, convOutputType, input,
-            addDequantizeNodeIfNeeded(weightSlices[0]), bias,
-            mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
-            padsArrayAttr, stridesArrayAttr),
+        addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
+            convOutputType, input, addDequantizeNodeIfNeeded(weightSlices[0]),
+            bias, mlir::StringAttr(), dilations, group,
+            convKernelShapeArrayAttr, padsArrayAttr, stridesArrayAttr)),
         convOutputType);
 
     // The nine convOutputs are adjusted to add an extra dimension at the
