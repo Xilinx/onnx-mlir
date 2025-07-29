@@ -150,9 +150,6 @@ LogicalResult ONNXPadOp::verify() {
     // Check that the constant has the same element type as the input
     ShapedType shapedConstTy = mlir::cast<ShapedType>(constTy);
     if (dataTy.getElementType() != shapedConstTy.getElementType()) {
-
-      getLoc()->dump();
-
       return emitOpError("Pad with constant_value that doesn't match the "
                          "element type of the input.");
     }
