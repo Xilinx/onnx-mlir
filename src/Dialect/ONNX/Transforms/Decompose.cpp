@@ -1544,8 +1544,8 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
         getONNXConstOpFromVector(rewriter, loc, weightsPadValue);
     auto weightsElementType = weightsType.getElementType();
     RankedTensorType scalarTy = RankedTensorType::get({}, weightsElementType);
-    Value onnxPaddingConstantZero = create.onnx.constant(
-        DenseElementsAttr::get(scalarTy, rewriter.getZeroAttr(weightsElementType)));
+    Value onnxPaddingConstantZero = create.onnx.constant(DenseElementsAttr::get(
+        scalarTy, rewriter.getZeroAttr(weightsElementType)));
 
     auto onnxAxisValueConstantNone = create.onnx.none();
     auto wts_shape = weightsType.getShape();
