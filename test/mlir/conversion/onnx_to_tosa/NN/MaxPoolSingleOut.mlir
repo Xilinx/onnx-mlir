@@ -67,7 +67,9 @@ func.func @test_default_maxpoolsingleout_strides_nonunifpad(%arg0 : tensor<5x5x3
 // CHECK-LABEL:   func.func @test_default_maxpoolsingleout_strides_nonunifpad(%arg0: tensor<5x5x30x32xf32>) -> tensor<5x5x15x16xf32> {
 // CHECK-DAG:     %[[TRANS_CONST_1:.*]] = "tosa.const"() <{value = dense<[0, 2, 3, 1]> : tensor<4xi32>}> : () -> tensor<4xi32>
 // CHECK-DAG:     %[[TRANS_ARG:.*]] = tosa.transpose %arg0, %[[TRANS_CONST_1]] : (tensor<5x5x30x32xf32>, tensor<4xi32>) -> tensor<5x30x32x5xf32>
-// CHECK-DAG:     %[[SLICE:.+]] = tosa.slice %[[TRANS_ARG]] {size = array<i64: 5, 29, 32, 5>, start = array<i64: 0, 0, 0, 0>} : (tensor<5x30x32x5xf32>) -> tensor<5x29x32x5xf32>
+// CHECK-DAG:      [[VAR_2_:%.+]] = tosa.const_shape  {value = dense<0> : tensor<4xindex>} : () -> !tosa.shape<4>
+// CHECK-DAG:      [[VAR_3_:%.+]] = tosa.const_shape  {value = dense<[5, 29, 32, 5]> : tensor<4xindex>} : () -> !tosa.shape<4>
+// CHECK-DAG:     %[[SLICE:.+]] = tosa.slice %[[TRANS_ARG]], [[VAR_2_]], [[VAR_3_]] : (tensor<5x30x32x5xf32>, !tosa.shape<4>, !tosa.shape<4>) -> tensor<5x29x32x5xf32>
 // CHECK-DAG:     %[[MPOOL_RES:.*]] = tosa.max_pool2d %[[SLICE]] {kernel = array<i64: 2, 2>, pad = array<i64: 1, 0, 0, 0>, stride = array<i64: 2, 2>} : (tensor<5x29x32x5xf32>) -> tensor<5x15x16x5xf32>
 // CHECK-DAG:     %[[TRANS_CONST_2:.*]] = "tosa.const"() <{value = dense<[0, 3, 1, 2]> : tensor<4xi32>}> : () -> tensor<4xi32>
 // CHECK-DAG:     %[[TRANS_MPOOL_RES:.*]] = tosa.transpose %[[MPOOL_RES]], %[[TRANS_CONST_2]] : (tensor<5x15x16x5xf32>, tensor<4xi32>) -> tensor<5x5x15x16xf32>

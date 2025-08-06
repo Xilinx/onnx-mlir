@@ -95,9 +95,8 @@ public:
         rewriter, loc, adaptor.getXScale(), axis, resultType.getRank());
     Value scaleFactorCast =
         tosaBuilder.castToNewTensorElementType(scaleFactorConst, arithType);
-    Value mulOp = tosa::CreateOpAndInfer<mlir::tosa::MulOp>(
-        rewriter, loc, casted.getType(), casted, scaleFactorCast, 0)
-                      .getResult();
+
+    Value mulOp = tosaBuilder.mul(casted, scaleFactorCast);
     Value castOp = tosaBuilder.castToNewTensorElementType(
         mulOp, resultType.getElementType());
 

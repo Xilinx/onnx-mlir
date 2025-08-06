@@ -6,8 +6,9 @@ func.func @test_squeeze(%arg0 : tensor<16x1x32x1x64xf32>) -> tensor<16x32x64xf32
   "func.return"(%1) : (tensor<16x32x64xf32>) -> ()
 // CHECK-LABEL:  func.func @test_squeeze
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<16x1x32x1x64xf32>) -> tensor<16x32x64xf32> {
-// CHECK:           [[VAR_0_:%.+]] = tosa.reshape [[PARAM_0_]] {new_shape = array<i64: 16, 32, 64>} : (tensor<16x1x32x1x64xf32>) -> tensor<16x32x64xf32>
-// CHECK:           return [[VAR_0_]] : tensor<16x32x64xf32>
+// CHECK:           [[VAR_0_:%.+]] = tosa.const_shape  {value = dense<[16, 32, 64]> : tensor<3xindex>} : () -> !tosa.shape<3>
+// CHECK:           [[VAR_1_:%.+]] = tosa.reshape [[PARAM_0_]], [[VAR_0_]] : (tensor<16x1x32x1x64xf32>, !tosa.shape<3>) -> tensor<16x32x64xf32>
+// CHECK:           return [[VAR_1_]] : tensor<16x32x64xf32>
 // CHECK:         }
 }
 
@@ -17,8 +18,9 @@ func.func @test_squeeze_unknown_dimensions(%arg0 : tensor<1x1x32x1x64xf32>) -> t
   "func.return"(%1) : (tensor<32x64xf32>) -> ()
 // CHECK-LABEL:  func.func @test_squeeze_unknown_dimensions
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x1x32x1x64xf32>) -> tensor<32x64xf32> {
-// CHECK:           [[VAR_0_:%.+]] = tosa.reshape [[PARAM_0_]] {new_shape = array<i64: 32, 64>} : (tensor<1x1x32x1x64xf32>) -> tensor<32x64xf32>
-// CHECK:           return [[VAR_0_]] : tensor<32x64xf32>
+// CHECK:           [[VAR_0_:%.+]] = tosa.const_shape  {value = dense<[32, 64]> : tensor<2xindex>} : () -> !tosa.shape<2>
+// CHECK:           [[VAR_1_:%.+]] = tosa.reshape [[PARAM_0_]], [[VAR_0_]] : (tensor<1x1x32x1x64xf32>, !tosa.shape<2>) -> tensor<32x64xf32>
+// CHECK:           return [[VAR_1_]] : tensor<32x64xf32>
 // CHECK:         }
 }
 
@@ -27,8 +29,12 @@ func.func @test_squeeze_unknown_dimensions(%arg0 : tensor<1x1x32x1x64xf32>) -> t
 func.func @squeeze_runtime(%arg0: tensor<1x3x4x5xf32> , %arg1: tensor<1xi64> ) -> tensor<3x4x5xf32> {
   %0 = "onnx.Squeeze"(%arg0, %arg1) : (tensor<1x3x4x5xf32>, tensor<1xi64>) -> tensor<3x4x5xf32>
   return %0 : tensor<3x4x5xf32>
-// CHECK-LABEL: squeeze_runtime
-// CHECK: tosa.reshape {{.*}} {new_shape = array<i64: 3, 4, 5>} : (tensor<1x3x4x5xf32>) -> tensor<3x4x5xf32>
+// CHECK-LABEL:  func.func @squeeze_runtime
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x4x5xf32>, [[PARAM_1_:%.+]]: tensor<1xi64>) -> tensor<3x4x5xf32> {
+// CHECK:           [[VAR_0_:%.+]] = tosa.const_shape  {value = dense<[3, 4, 5]> : tensor<3xindex>} : () -> !tosa.shape<3>
+// CHECK:           [[VAR_1_:%.+]] = tosa.reshape [[PARAM_0_]], [[VAR_0_]] : (tensor<1x3x4x5xf32>, !tosa.shape<3>) -> tensor<3x4x5xf32>
+// CHECK:           return [[VAR_1_]] : tensor<3x4x5xf32>
+// CHECK:         }
 }
 
 // -----

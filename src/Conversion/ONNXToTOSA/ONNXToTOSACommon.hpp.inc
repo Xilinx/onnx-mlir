@@ -75,7 +75,7 @@ std::optional<mlir::Value> convertReduceOpCommon(mlir::PatternRewriter &rewriter
     if (!keepDims) {
       auto reshapeOp =
           CreateOpAndInfer<mlir::tosa::ReshapeOp>(rewriter, op->getLoc(),
-              outputType, val, rewriter.getDenseI64ArrayAttr(outputShape));
+              outputType, val,  mlir::tosa::getTosaConstShape(rewriter, op->getLoc(), outputShape));
       val = reshapeOp.getResult();
     }
   }

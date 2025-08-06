@@ -35,6 +35,7 @@ public:
   LogicalResult matchAndRewrite(ONNXQuantizeLinearOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    TosaBuilder tosaBuilder(rewriter, op->getLoc());
     auto resultType = dyn_cast_if_present<ShapedType>(
         getTypeConverter()->convertType(op.getResult().getType()));
     if (!resultType || !resultType.hasStaticShape()) {
@@ -91,9 +92,7 @@ public:
     Value recOp = tosa::CreateOpAndInfer<mlir::tosa::ReciprocalOp>(rewriter,
         loc, expandedScaleFactorConst.getType(), expandedScaleFactorConst)
                       .getResult();
-    Value scaledResult = tosa::CreateOpAndInfer<mlir::tosa::MulOp>(
-        rewriter, loc, xType, x, recOp, 0)
-                             .getResult();
+    Value scaledResult = tosaBuilder.mul(x, recOp);
 
     // Quantization to i4/i8/16/ is particular since the intermediate result of
     // (x / y_scale) must round to the nearest even. This is particularly

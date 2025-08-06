@@ -139,14 +139,14 @@ mlir::Value expandShape(mlir::PatternRewriter &rewriter, mlir::Location loc,
     llvm::SmallVector<int64_t> newShape;
     return rewriter.createOrFold<mlir::tosa::ReshapeOp>(loc,
         RankedTensorType::get(newShape, inTy.getElementType()), tensor,
-        newShape);
+        mlir::tosa::getTosaConstShape(rewriter, loc, newShape));
   }
   llvm::SmallVector<int64_t> newShape(rank, 1);
   newShape[axis] = inTy.getNumElements();
   auto resultTy = RankedTensorType::get(newShape, inTy.getElementType());
 
-  return rewriter.createOrFold<mlir::tosa::ReshapeOp>(
-      loc, resultTy, tensor, newShape);
+  return rewriter.createOrFold<mlir::tosa::ReshapeOp>(loc, resultTy, tensor,
+      mlir::tosa::getTosaConstShape(rewriter, loc, newShape));
 }
 
 } // namespace tosa
