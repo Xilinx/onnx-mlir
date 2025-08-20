@@ -93,132 +93,6 @@ std::optional<T> getScalarOrSplatConstant(Value value) {
   return getScalarOrSplatValue<T>(constOp);
 }
 
-static LogicalResult match_qdq(ONNXDequantizeLinearOp dq1,
-    ONNXDequantizeLinearOp dq2, double &kValue,
-    ONNXDequantizeLinearOp &activationDqOp, mlir::Type &scaleDtype,
-    mlir::Type &zpDtype) {
-
-  ONNXDequantizeLinearOp constantDqOp = nullptr;
-  ONNXConstantOp constantSourceOp = nullptr;
-
-  // Case 1: Direct ConstantOp as input to the DQ.
-  if (auto constOp = dq1.getX().getDefiningOp<ONNXConstantOp>()) {
-    constantDqOp = dq1;
-    activationDqOp = dq2;
-    constantSourceOp = constOp;
-  } else if (auto constOp = dq2.getX().getDefiningOp<ONNXConstantOp>()) {
-    constantDqOp = dq2;
-    activationDqOp = dq1;
-    constantSourceOp = constOp;
-  }
-  // Case 2: The input to the DQ op comes from a chain whose input is a
-  // constant.
-  else if (auto intermediateOp = dq1.getX().getDefiningOp()) {
-    if (auto constOp =
-            intermediateOp->getOperand(0).getDefiningOp<ONNXConstantOp>()) {
-      constantDqOp = dq1;
-      activationDqOp = dq2;
-      constantSourceOp = constOp;
-    }
-  } else if (auto intermediateOp = dq2.getX().getDefiningOp()) {
-    if (auto constOp =
-            intermediateOp->getOperand(0).getDefiningOp<ONNXConstantOp>()) {
-      constantDqOp = dq2;
-      activationDqOp = dq1;
-      constantSourceOp = constOp;
-    }
-  }
-
-  if (!constantDqOp) {
-    return failure();
-  }
-
-  // Use the templated helper to get the scalar value of the constant source.
-  auto scalar_value_opt = getScalarOrSplatValue<int64_t>(constantSourceOp);
-  if (!scalar_value_opt) {
-    return failure();
-  }
-  int64_t scalar_value = *scalar_value_opt;
-
-  // Use the templated helper to get the scale and zero-point values.
-  Value scaleVal = constantDqOp.getXScale();
-  Value zpVal = constantDqOp.getXZeroPoint();
-  auto scale_value_opt = getScalarOrSplatConstant<double>(scaleVal);
-  auto zp_value_opt = getScalarOrSplatConstant<int64_t>(zpVal);
-  if (!scale_value_opt || !zp_value_opt) {
-    return failure();
-  }
-  double scale_value = *scale_value_opt;
-  int64_t zp_value = *zp_value_opt;
-
-  // Store the data types.
-  scaleDtype = scaleVal.getType().cast<TensorType>().getElementType();
-  zpDtype = zpVal.getType().cast<TensorType>().getElementType();
-
-  // Calculate kValue.
-  kValue = (scalar_value - zp_value) * scale_value;
-
-  return success();
-}
-
-template <typename BinOp>
-static LogicalResult match_binary_op(BinOp binaryOp,
-    ONNXDequantizeLinearOp &dequantActivationOp, ONNXConstantOp &constantOp,
-    double &kValue, mlir::Type &scaleDtype, mlir::Type &zpDtype) {
-
-  Value lhs = binaryOp.getOperand(0);
-  Value rhs = binaryOp.getOperand(1);
-
-  // -------- Case A: lhs is DQ, rhs is Constant --------
-  if (auto dqOp = lhs.getDefiningOp<ONNXDequantizeLinearOp>()) {
-    if (auto constOp = rhs.getDefiningOp<ONNXConstantOp>()) {
-      dequantActivationOp = dqOp;
-      constantOp = constOp;
-    }
-  }
-  // -------- Case A reversed --------
-  else if (auto dqOp = rhs.getDefiningOp<ONNXDequantizeLinearOp>()) {
-    if (auto constOp = lhs.getDefiningOp<ONNXConstantOp>()) {
-      dequantActivationOp = dqOp;
-      constantOp = constOp;
-    }
-  }
-
-  // -------- Fill kValue --------
-  if (dequantActivationOp && constantOp) {
-    // if (!isScalarOrSplat(constantOp, kValue))
-    //   return failure();
-    auto kValueOpt = getScalarOrSplatValue<double>(constantOp);
-    if (!kValueOpt.has_value()) {
-      return failure();
-    }
-    double kValue = kValueOpt.value();
-
-    // Debug - To be removed
-    llvm::outs() << "A - SUCCESS\n";
-    printOnnxNodeName(binaryOp, "[RemoveBinary] matched");
-    return success();
-  }
-
-  // -------- Case B: both inputs are DQ --------
-  auto dqOp1 = lhs.getDefiningOp<ONNXDequantizeLinearOp>();
-  auto dqOp2 = rhs.getDefiningOp<ONNXDequantizeLinearOp>();
-
-  if (dqOp1 && dqOp2) {
-    if (failed(match_qdq(
-            dqOp1, dqOp2, kValue, dequantActivationOp, scaleDtype, zpDtype)))
-      return failure();
-
-    // Debug - To be removed
-    llvm::outs() << "B. SUCCESS\n";
-    llvm::outs() << "kValue = " << kValue << "\n";
-    printOnnxNodeName(binaryOp, "[RemoveBinary] matched");
-    return success();
-  }
-
-  return failure();
-}
-
 //===----------------------------------------------------------------------===//
 // Pattern to (eventually) fold DQ->Binary->Q when quantization parameters
 //===----------------------------------------------------------------------===//
@@ -226,9 +100,144 @@ static LogicalResult match_binary_op(BinOp binaryOp,
 template <typename BinOp>
 struct FoldBinaryThroughQDQ : public OpRewritePattern<BinOp> {
   using OpRewritePattern<BinOp>::OpRewritePattern;
+
+private:
+  // ** State variables are now encapsulated in this private struct. **
+  struct MatchState {
+    ONNXDequantizeLinearOp dequantActivationOp = nullptr;
+    ONNXConstantOp constantOp = nullptr;
+    mlir::Type dstScaleDtype;
+    mlir::Type dstZeroPointDtype;
+    double kValue = 0.0;
+    double dstScale;
+    int64_t dstZeroPoint;
+  };
+
+  // ** Helper methods are now private members of the class. **
+  // They operate on the MatchState struct to populate it.
+
+  LogicalResult match_qdq(MatchState &state, ONNXDequantizeLinearOp dq1,
+      ONNXDequantizeLinearOp dq2) const {
+
+    ONNXDequantizeLinearOp constantDqOp = nullptr;
+    ONNXConstantOp constantSourceOp = nullptr;
+
+    // Case 1: Direct ConstantOp as input to the DQ.
+    if (auto constOp = dq1.getX().getDefiningOp<ONNXConstantOp>()) {
+      constantDqOp = dq1;
+      state.dequantActivationOp = dq2;
+      constantSourceOp = constOp;
+    } else if (auto constOp = dq2.getX().getDefiningOp<ONNXConstantOp>()) {
+      constantDqOp = dq2;
+      state.dequantActivationOp = dq1;
+      constantSourceOp = constOp;
+    }
+    // Case 2: The input to the DQ op comes from a chain whose input is a
+    // constant.
+    else if (auto intermediateOp = dq1.getX().getDefiningOp()) {
+      if (auto constOp =
+              intermediateOp->getOperand(0).getDefiningOp<ONNXConstantOp>()) {
+        constantDqOp = dq1;
+        state.dequantActivationOp = dq2;
+        constantSourceOp = constOp;
+      }
+    } else if (auto intermediateOp = dq2.getX().getDefiningOp()) {
+      if (auto constOp =
+              intermediateOp->getOperand(0).getDefiningOp<ONNXConstantOp>()) {
+        constantDqOp = dq2;
+        state.dequantActivationOp = dq1;
+        constantSourceOp = constOp;
+      }
+    }
+
+    if (!constantDqOp) {
+      return failure();
+    }
+
+    // Use the templated helper to get the scalar value of the constant source.
+    auto scalar_value_opt = getScalarOrSplatValue<int64_t>(constantSourceOp);
+    if (!scalar_value_opt) {
+      return failure();
+    }
+    int64_t scalar_value = *scalar_value_opt;
+
+    // Use the templated helper to get the scale and zero-point values.
+    Value scaleVal = constantDqOp.getXScale();
+    Value zpVal = constantDqOp.getXZeroPoint();
+    auto scale_value_opt = getScalarOrSplatConstant<double>(scaleVal);
+    auto zp_value_opt = getScalarOrSplatConstant<int64_t>(zpVal);
+    if (!scale_value_opt || !zp_value_opt) {
+      return failure();
+    }
+    double scale_value = *scale_value_opt;
+    int64_t zp_value = *zp_value_opt;
+
+    // Store the data types.
+    state.dstScaleDtype =
+        scaleVal.getType().cast<TensorType>().getElementType();
+    state.dstZeroPointDtype =
+        zpVal.getType().cast<TensorType>().getElementType();
+
+    // Calculate and store kValue.
+    state.kValue = (scalar_value - zp_value) * scale_value;
+
+    return success();
+  }
+
+  LogicalResult match_binary_op(MatchState &state, BinOp binaryOp) const {
+    Value lhs = binaryOp.getOperand(0);
+    Value rhs = binaryOp.getOperand(1);
+
+    // -------- Case A: lhs is DQ, rhs is Constant --------
+    if (auto dqOp = lhs.getDefiningOp<ONNXDequantizeLinearOp>()) {
+      if (auto constOp = rhs.getDefiningOp<ONNXConstantOp>()) {
+        state.dequantActivationOp = dqOp;
+        state.constantOp = constOp;
+      }
+    }
+    // -------- Case A reversed --------
+    else if (auto dqOp = rhs.getDefiningOp<ONNXDequantizeLinearOp>()) {
+      if (auto constOp = lhs.getDefiningOp<ONNXConstantOp>()) {
+        state.dequantActivationOp = dqOp;
+        state.constantOp = constOp;
+      }
+    }
+
+    // -------- Fill kValue for Case A --------
+    if (state.dequantActivationOp && state.constantOp) {
+      auto kValueOpt = getScalarOrSplatValue<double>(state.constantOp);
+      if (!kValueOpt.has_value()) {
+        return failure();
+      }
+      state.kValue = kValueOpt.value();
+
+      // Debug - To be removed
+      llvm::outs() << "A - SUCCESS\n";
+      printOnnxNodeName(binaryOp, "[RemoveBinary] matched");
+      return success();
+    }
+
+    // -------- Case B: both inputs are DQ --------
+    auto dqOp1 = lhs.getDefiningOp<ONNXDequantizeLinearOp>();
+    auto dqOp2 = rhs.getDefiningOp<ONNXDequantizeLinearOp>();
+
+    if (dqOp1 && dqOp2) {
+      if (failed(match_qdq(state, dqOp1, dqOp2)))
+        return failure();
+
+      // Debug - To be removed
+      llvm::outs() << "B. SUCCESS\n";
+      llvm::outs() << "kValue = " << state.kValue << "\n";
+      printOnnxNodeName(binaryOp, "[RemoveBinary] matched");
+      return success();
+    }
+
+    return failure();
+  }
+
+public:
   LogicalResult matchAndRewrite(
       BinOp op, PatternRewriter &rewriter) const override {
-
     // STEP 1: Find the Quantize op after the binary op.
     ONNXQuantizeLinearOp quantOutputOp = nullptr;
     for (Value res : op->getResults()) {
@@ -244,21 +253,25 @@ struct FoldBinaryThroughQDQ : public OpRewritePattern<BinOp> {
     if (!quantOutputOp)
       return failure();
 
-    // STEP 2: Match the binary op's inputs.
-    ONNXDequantizeLinearOp dequantActivationOp = nullptr;
-    ONNXConstantOp constantOp = nullptr;
-    double kValue = 0.0;
-    mlir::Type scaleDtype, zeroPointDtype;
+    // ** Instantiate the state struct for this match attempt. **
+    MatchState state;
 
-    if (failed(match_binary_op<BinOp>(op, dequantActivationOp, constantOp,
-            kValue, scaleDtype, zeroPointDtype)))
+    // STEP 2: Match the binary op's inputs, populating the state.
+    if (failed(match_binary_op(state, op)))
       return failure();
 
-    llvm::outs() << "kValue OUT " << kValue << "\n";
-    llvm::outs() << "scaleDtype OUT " << scaleDtype << "\n";
-    llvm::outs() << "zeroPointDtype OUT " << zeroPointDtype << "\n";
-    llvm::outs() << "dequantActivationOp " << *dequantActivationOp << "\n";
+    // ** Access the matched values via the state object. **
+    llvm::outs() << "kValue OUT " << state.kValue << "\n";
+    llvm::outs() << "dstScaleDtype OUT " << state.dstScaleDtype << "\n";
+    llvm::outs() << "dstZeroPointDtype OUT " << state.dstZeroPointDtype << "\n";
+    llvm::outs() << "dequantActivationOp " << *state.dequantActivationOp
+                 << "\n";
     llvm::outs() << "\n";
+
+    // STEP 3: Check_needed_values
+    // if(failed(check_needed_values<BinOp>(state.kValue, ...)))
+    // std::optional<FusionDestination> dstOpt;
+    // bool branchOnDequantActivation = false;
 
     return failure(); // TODO: replace with SUCCESS LATER
   }
