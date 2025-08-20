@@ -56,6 +56,7 @@ void configureConstPropONNXToONNXPass(bool roundFPToInt, int expansionBound,
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass();
 
 std::unique_ptr<mlir::Pass> createQDQOptONNXToONNXPass();
+std::unique_ptr<mlir::Pass> createFoldDQBinaryQPass();
 
 /// Pass for instrument the ops in specific stage.
 std::unique_ptr<mlir::Pass> createInstrumentPass();

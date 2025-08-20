@@ -144,6 +144,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // Passes for removing redundant concat, slice and cast QDQ Ops
   if (opts.enableRemoveDqQOp)
     pm.addPass(createQDQOptONNXToONNXPass());
+  if (opts.enableRemoveBinary)
+    pm.addPass(createFoldDQBinaryQPass());
 
   // One more call to ONNX shape inference/canonicalization/... to update
   // shape if possible.
