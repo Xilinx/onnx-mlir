@@ -33,7 +33,7 @@
 
 #include "src/Compiler/CompilerOptions.hpp"
 #include "src/Compiler/CompilerPasses.hpp"
-#include "src/Compiler/DisposableGarbageCollector.hpp"
+#include "src/Compiler/OnnxToMlirPasses.hpp"
 #include "src/Conversion/KrnlToLLVM/ConvertKrnlToLLVM.hpp"
 #include "src/Dialect/Mlir/VectorMachineSupport.hpp"
 #include "src/Dialect/ONNX/ONNXDialect.hpp"
@@ -65,6 +65,7 @@ void configurePasses() {
       enableParallel, parallelizeOps, optReport == OptReport::Simd,
       !disableSimdOption);
 }
+
 
 void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     bool donotScrubDisposableElementsAttr, OnnxToMlirOptions opts) {
@@ -198,6 +199,7 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createInstrumentONNXSignaturePass(
         instrumentSignatures, instrumentOnnxNode));
 }
+
 
 void addONNXToKrnlPasses(mlir::PassManager &pm, int optLevel, bool enableCSE,
     std::string ONNXOpsStatFormat) {
@@ -361,6 +363,21 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
         enableConvTransposeDecomposeToPhasedConv;
     opts.enableConvTranspose1dDecomposeToPhasedConv =
         enableConvTranspose1dDecomposeToPhasedConv;
+    opts.disableRecomposeOption = disableRecomposeOption;
+    opts.enableONNXHybridPass = enableONNXHybridPass;
+    opts.enableConvOptPass = enableConvOptPass;
+    opts.enableSimdDataLayout = enableSimdDataLayout;
+    opts.disableSimdOption = disableSimdOption;
+    opts.onnxOpTransformThreshold = onnxOpTransformThreshold;
+    opts.onnxOpTransformReport = onnxOpTransformReport;
+    opts.repeatOnnxTransform = repeatOnnxTransform;
+    opts.instrumentControlBits = instrumentControlBits;
+    opts.instrumentOps = instrumentOps;
+    opts.instrumentSignatures = instrumentSignatures;
+    opts.instrumentOnnxNode = instrumentOnnxNode;
+    opts.profileIR = profileIR;
+    opts.instrumentStage = instrumentStage;
+
     addONNXToMLIRPasses(pm, /*target CPU*/ false,
         /*donotScrubDisposableElementsAttr=*/false, opts);
   }

@@ -25,6 +25,7 @@ namespace onnx_mlir {
 // Configures passes up front based on command line options.
 void configurePasses();
 
+
 struct OnnxToMlirOptions {
   bool enableQuarkQuantizedLegalization = false;
   bool enableConvTransposeDecompose = false;
@@ -36,6 +37,7 @@ struct OnnxToMlirOptions {
 
 void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     bool donotScrubDisposableElementsAttr = false, OnnxToMlirOptions opts = {});
+
 void addONNXToKrnlPasses(mlir::PassManager &pm, int optLevel, bool enableCSE,
     std::string ONNXOpsStatFilename);
 void addKrnlToAffinePasses(mlir::PassManager &pm);
