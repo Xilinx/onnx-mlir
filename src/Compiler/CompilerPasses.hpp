@@ -30,8 +30,8 @@ struct OnnxToMlirOptions {
   bool enableConvTransposeDecompose = false;
   bool enableConvTransposeDecomposeToPhasedConv = false;
   bool enableConvTranspose1dDecomposeToPhasedConv = false;
-  bool enableRemoveDqQOp = true;
-  bool enableRemoveBinary = true;
+  bool enableRemoveDqQOp = false;
+  bool enableRemoveBinary = false;
 };
 
 void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
