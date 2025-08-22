@@ -33,6 +33,7 @@
 
 #include "src/Compiler/CompilerOptions.hpp"
 #include "src/Compiler/CompilerPasses.hpp"
+#include "src/Compiler/DisposableGarbageCollector.hpp"
 #include "src/Compiler/OnnxToMlirPasses.hpp"
 #include "src/Conversion/KrnlToLLVM/ConvertKrnlToLLVM.hpp"
 #include "src/Dialect/Mlir/VectorMachineSupport.hpp"
@@ -65,7 +66,6 @@ void configurePasses() {
       enableParallel, parallelizeOps, optReport == OptReport::Simd,
       !disableSimdOption);
 }
-
 
 void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     bool donotScrubDisposableElementsAttr, OnnxToMlirOptions opts) {
@@ -199,7 +199,6 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createInstrumentONNXSignaturePass(
         instrumentSignatures, instrumentOnnxNode));
 }
-
 
 void addONNXToKrnlPasses(mlir::PassManager &pm, int optLevel, bool enableCSE,
     std::string ONNXOpsStatFormat) {
