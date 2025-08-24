@@ -35,37 +35,79 @@ static ElementsAttr getElementAttributeFromConstant(Value val) {
   return nullptr;
 }
 
+// Equivalent to Python's NoMatch exception: here Nullopt indicates failure.
 template <typename T>
-std::optional<T> getScalarOrSplatValue(ONNXConstantOp constOp) {
+std::optional<T> get_scalar_tensor_value(ONNXConstantOp constOp) {
   auto elementsAttr = dyn_cast_or_null<ElementsAttr>(constOp.getValueAttr());
-  if (!elementsAttr || !elementsAttr.isSplat()) {
+  if (!elementsAttr)
     return std::nullopt;
-  }
-  mlir::Type elementType = elementsAttr.getElementType();
-  // Case 1: Floating-point types (f32, f64).
-  if (elementType.isF32() || elementType.isF64()) {
-    if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
-      // APFloat can handle both f32 and f64.
-      APFloat splatValue = elementsAttr.getSplatValue<APFloat>();
-      return static_cast<T>(splatValue.convertToDouble());
-    }
-  }
-  // Case 2: Integer types (i8, ui16, etc.).
-  if (auto intType = elementType.dyn_cast<IntegerType>()) {
-    if constexpr (std::is_integral_v<T>) {
-      APInt splatValue = elementsAttr.getSplatValue<APInt>();
-      if (intType.isUnsigned()) {
-        return static_cast<T>(splatValue.getZExtValue());
-      } else {
-        return static_cast<T>(splatValue.getSExtValue());
+
+  Type elementType = elementsAttr.getElementType();
+
+  // Fast path: splat
+  if (elementsAttr.isSplat()) {
+    if (elementType.isa<FloatType>()) {
+      if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
+        APFloat splatValue = elementsAttr.getSplatValue<APFloat>();
+        return static_cast<T>(splatValue.convertToDouble());
       }
     }
+    if (auto intType = elementType.dyn_cast<IntegerType>()) {
+      if constexpr (std::is_integral_v<T>) {
+        APInt splatValue = elementsAttr.getSplatValue<APInt>();
+        if (intType.isUnsigned())
+          return static_cast<T>(splatValue.getZExtValue());
+        else
+          return static_cast<T>(splatValue.getSExtValue());
+      }
+    }
+    return std::nullopt;
   }
-  return std::nullopt;
+
+  // Non‑splat case: check rank
+  auto shapedTy = elementsAttr.getType().dyn_cast<ShapedType>();
+  if (!shapedTy || !shapedTy.hasStaticShape())
+    return std::nullopt;
+
+  // Case: rank 0 → scalar element directly
+  if (shapedTy.getRank() == 0) {
+    auto firstAttr = *elementsAttr.getValues<Attribute>().begin();
+    if (auto fAttr = firstAttr.dyn_cast<FloatAttr>()) {
+      if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>)
+        return static_cast<T>(fAttr.getValueAsDouble());
+    }
+    if (auto iAttr = firstAttr.dyn_cast<IntegerAttr>()) {
+      if constexpr (std::is_integral_v<T>)
+        return static_cast<T>(iAttr.getInt()); // signed ok
+    }
+    return std::nullopt;
+  }
+
+  // Case: rank >= 1 → flatten & check all the same
+  std::set<double> flattenedFP;
+  std::set<int64_t> flattenedInt;
+
+  if (elementType.isa<FloatType>()) {
+    if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
+      for (auto a : elementsAttr.getValues<FloatAttr>())
+        flattenedFP.insert(a.getValueAsDouble());
+      if (flattenedFP.size() == 1)
+        return static_cast<T>(*flattenedFP.begin());
+    }
+  } else if (auto intType = elementType.dyn_cast<IntegerType>()) {
+    if constexpr (std::is_integral_v<T>) {
+      for (auto a : elementsAttr.getValues<IntegerAttr>())
+        flattenedInt.insert(intType.isUnsigned() ? a.getUInt() : a.getInt());
+      if (flattenedInt.size() == 1)
+        return static_cast<T>(*flattenedInt.begin());
+    }
+  }
+
+  return std::nullopt; // mismatch or more than one unique value
 }
 
 template <typename T>
-std::optional<T> getScalarOrSplatConstant(Value value) {
+std::optional<T> get_scalar_tensor_value_from_val(Value value) {
   if (!value) {
     return std::nullopt;
   }
@@ -73,52 +115,43 @@ std::optional<T> getScalarOrSplatConstant(Value value) {
   if (!constOp) {
     return std::nullopt;
   }
-  return getScalarOrSplatValue<T>(constOp);
+  return get_scalar_tensor_value<T>(constOp);
 }
 
-static mlir::DenseElementsAttr buildScalarDEA(
+// Build a 1-element DenseElementsAttr matching `likeTy`.
+static mlir::DenseElementsAttr makeScalarDEA(
     mlir::ShapedType likeTy, double d) {
   using namespace mlir;
   auto ranked = likeTy.dyn_cast<RankedTensorType>();
   if (!ranked || !ranked.hasStaticShape() || ranked.getNumElements() != 1)
-    return DenseElementsAttr();
+    return {};
+
   Type et = ranked.getElementType();
-  // Floats: let MLIR handle semantics (f8/f16/bf16/f32/f64, etc).
-  if (auto ft = et.dyn_cast<FloatType>()) {
-    auto fa = FloatAttr::get(ft, d);
-    return DenseElementsAttr::get(ranked, fa);
-  }
-  // Integers: round & clamp, then use IntegerAttr.
+  if (auto ft = et.dyn_cast<FloatType>())
+    return DenseElementsAttr::get(ranked, FloatAttr::get(ft, d));
+
   if (auto it = et.dyn_cast<IntegerType>()) {
     int64_t iv = static_cast<int64_t>(std::llround(d));
     const unsigned bw = it.getWidth();
     const bool isSigned = it.isSigned();
-    int64_t minV = isSigned ? (-(int64_t(1) << (bw - 1))) : 0;
-    int64_t maxV =
+    const int64_t minV = isSigned ? (-(int64_t(1) << (bw - 1))) : 0;
+    const int64_t maxV =
         isSigned ? ((int64_t(1) << (bw - 1)) - 1) : ((int64_t(1) << bw) - 1);
     iv = std::min<int64_t>(std::max<int64_t>(iv, minV), maxV);
-    auto ia = IntegerAttr::get(it, iv);
-    return DenseElementsAttr::get(ranked, ia);
+    return DenseElementsAttr::get(ranked, IntegerAttr::get(it, iv));
   }
-  return DenseElementsAttr();
-}
-
-static bool hasSingleUseBy(mlir::Value v, mlir::Operation *who) {
-  bool seen = false;
-  for (mlir::OpOperand &use : v.getUses()) {
-    if (use.getOwner() == who && !seen) {
-      seen = true;
-      continue;
-    }
-    return false;
-  }
-  return seen;
+  return {};
 }
 
 static void updateInitializerScalar(mlir::PatternRewriter &rewriter,
     mlir::Operation *targetOp, mlir::Value oldInit, double newScalar) {
   using namespace mlir;
-  auto oldCst = oldInit.getDefiningOp<ONNXConstantOp>();
+
+  if (!targetOp || !oldInit)
+    return;
+
+  // NOTE: ONNXConstantOp is in the mlir namespace.
+  auto oldCst = oldInit.getDefiningOp<mlir::ONNXConstantOp>();
   if (!oldCst)
     return;
 
@@ -126,12 +159,20 @@ static void updateInitializerScalar(mlir::PatternRewriter &rewriter,
   if (!likeTy || !likeTy.hasStaticShape() || likeTy.getNumElements() != 1)
     return;
 
-  DenseElementsAttr payload = buildScalarDEA(likeTy, newScalar);
+  DenseElementsAttr payload = makeScalarDEA(likeTy, newScalar);
   if (!payload)
     return;
 
-  // Case A: mutate in place iff the *only* use is by targetOp.
-  if (hasSingleUseBy(oldInit, targetOp)) {
+  auto singleUseByTarget = [&]() -> bool {
+    auto it = oldInit.use_begin(), e = oldInit.use_end();
+    if (it == e)
+      return false;
+    auto *owner = it->getOwner();
+    ++it;
+    return (it == e) && (owner == targetOp);
+  };
+
+  if (singleUseByTarget()) {
     rewriter.modifyOpInPlace(oldCst, [&] {
       oldCst->setAttr("value", payload);
       oldCst->removeAttr("sparse_value");
@@ -145,24 +186,24 @@ static void updateInitializerScalar(mlir::PatternRewriter &rewriter,
     return;
   }
 
-  // Case B: multi-use → clone a fresh Constant with the same result type.
+  // Multiple users: create a fresh mlir::ONNXConstantOp and retarget only this
+  // use.
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(targetOp);
 
-  OperationState st(targetOp->getLoc(), ONNXConstantOp::getOperationName());
+  OperationState st(
+      targetOp->getLoc(), mlir::ONNXConstantOp::getOperationName());
   st.addTypes(likeTy);
   st.addAttribute("value", payload);
+
   Operation *raw = Operation::create(st);
   rewriter.insert(raw);
-  auto newCst = llvm::dyn_cast<ONNXConstantOp>(raw);
+  auto newCst = mlir::dyn_cast<mlir::ONNXConstantOp>(raw);
   if (!newCst)
     return;
-  // Replace exactly this operand
-  for (unsigned i = 0, e = targetOp->getNumOperands(); i < e; ++i)
-    if (targetOp->getOperand(i) == oldInit) {
-      targetOp->setOperand(i, newCst.getOutput());
-      break;
-    }
+
+  rewriter.replaceUsesWithIf(oldInit, newCst.getOutput(),
+      [&](OpOperand &use) { return use.getOwner() == targetOp; });
 }
 
 static LogicalResult tryRemoveQThenDQChain(
@@ -230,7 +271,6 @@ struct FoldBinaryThroughQDQ : public OpRewritePattern<BinOp> {
 private:
   struct MatchState {
     ONNXDequantizeLinearOp dequantActivationOp = nullptr;
-    ONNXConstantOp constantOp = nullptr;
     mlir::Type dstScaleDtype;
     mlir::Type dstZeroPointDtype;
     double kValue = 0.0;
@@ -239,7 +279,29 @@ private:
     double newScale = 0.0;
     int64_t newZp = 0;
   };
+  LogicalResult populateState(MatchState &state) const {
 
+    // The user's original logic, now inside a dedicated function.
+    Value scaleVal = state.dequantActivationOp.getXScale();
+    Value zpVal = state.dequantActivationOp.getXZeroPoint();
+    auto scale_value_opt = get_scalar_tensor_value_from_val<double>(scaleVal);
+    auto zp_value_opt = get_scalar_tensor_value_from_val<int64_t>(zpVal);
+
+    if (!scale_value_opt || !zp_value_opt) {
+      return failure();
+    }
+
+    state.dstScale = scale_value_opt.value();
+    state.dstZeroPoint = zp_value_opt.value();
+
+    // Store the data types using the modern `mlir::cast`.
+    state.dstScaleDtype =
+        mlir::cast<ShapedType>(scaleVal.getType()).getElementType();
+    state.dstZeroPointDtype =
+        mlir::cast<ShapedType>(zpVal.getType()).getElementType();
+
+    return success();
+  }
   LogicalResult match_qdq(MatchState &state, ONNXDequantizeLinearOp dq1,
       ONNXDequantizeLinearOp dq2) const {
 
@@ -274,48 +336,36 @@ private:
       }
     }
 
-    if (!constantDqOp) {
+    if (!constantDqOp || !constantSourceOp || !state.dequantActivationOp) {
       return failure();
     }
 
-    // Use the templated helper to get the scalar value of the constant source.
     {
-      auto scalar_value_opt = getScalarOrSplatValue<int64_t>(constantSourceOp);
+      auto scalar_value_opt =
+          get_scalar_tensor_value<int64_t>(constantSourceOp);
       if (!scalar_value_opt) {
         return failure();
       }
       // Use the templated helper to get the scale and zero-point values.
       Value scaleVal = constantDqOp.getXScale();
       Value zpVal = constantDqOp.getXZeroPoint();
-      auto scale_value_opt = getScalarOrSplatConstant<double>(scaleVal);
-      auto zp_value_opt = getScalarOrSplatConstant<int64_t>(zpVal);
+      auto scale_value_opt = get_scalar_tensor_value_from_val<double>(scaleVal);
+      auto zp_value_opt = get_scalar_tensor_value_from_val<int64_t>(zpVal);
       if (!scale_value_opt || !zp_value_opt) {
         return failure();
       }
       // Calculate and store kValue.
       state.kValue = (*scalar_value_opt - *zp_value_opt) * *scale_value_opt;
     }
-    {
-      // Use the templated helper to get the scale and zero-point values.
-      Value scaleVal = state.dequantActivationOp.getXScale();
-      Value zpVal = state.dequantActivationOp.getXZeroPoint();
-      auto scale_value_opt = getScalarOrSplatConstant<double>(scaleVal);
-      auto zp_value_opt = getScalarOrSplatConstant<int64_t>(zpVal);
-      if (!scale_value_opt || !zp_value_opt) {
-        return failure();
-      }
-      state.dstScale = *scale_value_opt;
-      state.dstZeroPoint = *zp_value_opt;
-      // Store the data types.
-      state.dstScaleDtype =
-          scaleVal.getType().cast<TensorType>().getElementType();
-      state.dstZeroPointDtype =
-          zpVal.getType().cast<TensorType>().getElementType();
+    if (failed(populateState(state))) {
+      return failure();
     }
     return success();
   }
 
   LogicalResult match_binary_op(MatchState &state, BinOp binaryOp) const {
+    ONNXConstantOp constantOp = nullptr;
+
     Value lhs = binaryOp.getOperand(0);
     Value rhs = binaryOp.getOperand(1);
 
@@ -323,24 +373,27 @@ private:
     if (auto dqOp = lhs.getDefiningOp<ONNXDequantizeLinearOp>()) {
       if (auto constOp = rhs.getDefiningOp<ONNXConstantOp>()) {
         state.dequantActivationOp = dqOp;
-        state.constantOp = constOp;
+        constantOp = constOp;
       }
     }
     // -------- Case A reversed --------
     else if (auto dqOp = rhs.getDefiningOp<ONNXDequantizeLinearOp>()) {
       if (auto constOp = lhs.getDefiningOp<ONNXConstantOp>()) {
         state.dequantActivationOp = dqOp;
-        state.constantOp = constOp;
+        constantOp = constOp;
       }
     }
 
-    // -------- Fill kValue for Case A --------
-    if (state.dequantActivationOp && state.constantOp) {
-      auto kValueOpt = getScalarOrSplatValue<double>(state.constantOp);
-      if (!kValueOpt.has_value()) {
+    // -------- Fill state values for Case A and Case A reversed --------
+    if (state.dequantActivationOp && constantOp) {
+      auto kValueOpt = get_scalar_tensor_value<double>(constantOp);
+      if (!kValueOpt) {
         return failure();
       }
       state.kValue = kValueOpt.value();
+      if (failed(populateState(state))) {
+        return failure();
+      }
       return success();
     }
 
