@@ -18,6 +18,15 @@ add_onnx_mlir_library(OMBuilder
   onnx
   )
 
+  if(WIN32 AND NOT MINGW)
+    target_compile_definitions(OMBuilder PRIVATE
+                                 # Don't check the msvcprt iterator debug levels
+                                 # as we will define the iterator types; libc++
+                                 # uses a different macro to identify the debug
+                                 # level.
+                                 _ALLOW_ITERATOR_DEBUG_LEVEL_MISMATCH)
+  endif()
+
 configure_file(OpBuildTable.inc.dc.in
   ${CMAKE_CURRENT_BINARY_DIR}/OpBuildTable.inc.dc
   @ONLY
