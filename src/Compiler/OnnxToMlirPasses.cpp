@@ -96,6 +96,9 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // Passes for removing redundant concat, slice and cast QDQ Ops
   if (opts.enableRemoveDqQOp)
     pm.addPass(createQDQOptONNXToONNXPass());
+  //Pass to convert conv with bias to onnx.QLinearConv
+  if (opts.enableQConvLinear)
+    pm.addPass(createConvToQLinearConvPass());  
 
   // One more call to ONNX shape inference/canonicalization/... to update
   // shape if possible.
