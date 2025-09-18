@@ -1,4 +1,4 @@
-//===- foldDqBinaryQPattern.cpp - Remove DQ-Binary-Q chains -----*- C++ -*-===//
+
 // (c) Copyright 2022 - 2025 Advanced Micro Devices, Inc. All Rights Reserved.
 //
 //===----------------------------------------------------------------------===//
