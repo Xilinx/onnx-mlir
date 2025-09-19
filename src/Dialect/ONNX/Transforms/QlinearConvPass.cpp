@@ -110,7 +110,6 @@ struct ConvToQLinearConvPattern : public OpRewritePattern<ONNXConvOp> {
   LogicalResult matchAndRewrite(
       ONNXConvOp convOp, PatternRewriter &rewriter) const override {
     Location loc = convOp.getLoc();
-
     // Conv has bias B and its defining op is DequantizeLinear
     Value biasVal = convOp.getB();
     if (!biasVal || isa<ONNXNoneOp>(biasVal.getDefiningOp()))
@@ -120,13 +119,8 @@ struct ConvToQLinearConvPattern : public OpRewritePattern<ONNXConvOp> {
     if (!dqBiasOp) {
       return failure();
     }
-
-    // QuantizeLinear that produces the quantized bias (input to DQ)
     auto qBiasOp =
         dyn_cast<ONNXQuantizeLinearOp>(dqBiasOp.getX().getDefiningOp());
-    if (!qBiasOp) {
-      return failure();
-    }
 
     // Conv input X must come from DequantizeLinear ----
     auto dqInputOp =
@@ -145,6 +139,7 @@ struct ConvToQLinearConvPattern : public OpRewritePattern<ONNXConvOp> {
     if (!dqWeightOp) {
       return failure();
     }
+
     Value qWeight = dqWeightOp.getX();
     Value wScale = dqWeightOp.getXScale();
     Value wZp = dqWeightOp.getXZeroPoint();
@@ -156,19 +151,8 @@ struct ConvToQLinearConvPattern : public OpRewritePattern<ONNXConvOp> {
     auto qOutOp = dyn_cast<ONNXQuantizeLinearOp>(firstUser);
     if (!qOutOp)
       return failure();
-
     Value yScale = qOutOp.getYScale();
     Value yZp = qOutOp.getYZeroPoint();
-    // ---- Extract float bias values from qBiasOp.getX() (which points to the
-    // float constant) ----
-    Value biasFloatValue = qBiasOp.getX();
-    auto biasFloatDefOp = biasFloatValue.getDefiningOp();
-    if (!biasFloatDefOp)
-      return failure();
-
-    auto constBiasOp = dyn_cast<ONNXConstantOp>(biasFloatDefOp);
-    if (!constBiasOp)
-      return failure();
 
     Value biasQ = dqBiasOp.getX();
     auto biasQType = biasQ.getType().dyn_cast<mlir::RankedTensorType>();
@@ -182,13 +166,25 @@ struct ConvToQLinearConvPattern : public OpRewritePattern<ONNXConvOp> {
       biasInt32Val = biasQ;
     } else {
       // Case 2: Bias is int8. float32 → quantize -----------------
+      if (!qBiasOp) {
+        return failure();
+      }
+      // ---- Extract float bias values from qBiasOp.getX() (which points to the
+      // float constant) ----
+      Value biasFloatValue = qBiasOp.getX();
+      auto biasFloatDefOp = biasFloatValue.getDefiningOp();
+      if (!biasFloatDefOp)
+        return failure();
+
+      auto constBiasOp = dyn_cast<ONNXConstantOp>(biasFloatDefOp);
+      if (!constBiasOp)
+        return failure();
 
       // Try to get the ElementsAttr
       auto denseBiasF = extractDenseFloatFromConst(constBiasOp, biasFloatValue);
 
       if (!denseBiasF)
         return failure();
-
       float xScaleS = 0.0f;
       if (!extractScalarFloatFromConst(xScale, xScaleS))
         return failure();
