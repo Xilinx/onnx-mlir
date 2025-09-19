@@ -414,15 +414,13 @@ private:
 
   std::optional<ErrorOr<Type>> ConvertOnnxType(
       const std::string &onnx_name, std::string &errorMessage) {
-    if (options_.useOnnxModelTypes) {
-      if (const onnx::TypeProto *onnxTypePtr =
-              onnx_type_map.GetByOnnxName(onnx_name)) {
-        ErrorOr<Type> importedType = ImportType(*onnxTypePtr, errorMessage);
-        if (auto ec = importedType.getError()) {
-          return ec;
-        }
-        return *importedType;
+    if (const onnx::TypeProto *onnxTypePtr =
+            onnx_type_map.GetByOnnxName(onnx_name)) {
+      ErrorOr<Type> importedType = ImportType(*onnxTypePtr, errorMessage);
+      if (auto ec = importedType.getError()) {
+        return ec;
       }
+      return *importedType;
     }
     return std::nullopt;
   }
@@ -827,7 +825,8 @@ private:
       const onnx::NodeProto &node, std::vector<Value> inputs,
       int expectedNumOperands, int expectedNumResults,
       const std::vector<NamedAttribute> &attributes, std::string &errorMessage,
-      std::vector<Type> givenOutputTypes = std::vector<Type>()) {
+      std::vector<Type> givenOutputTypes = std::vector<Type>(),
+      bool isCustomOp = false) {
     bool variadicIn = expectedNumOperands == -1;
     bool variadicOut = expectedNumResults == -1;
 
@@ -854,20 +853,24 @@ private:
       if (node.output()[i].empty()) {
         outputTypes.emplace_back(builder_.getNoneType());
       } else {
-        auto onnxModelType = ConvertOnnxType(node.output(i), errorMessage);
-        if (onnxModelType) {
-          const auto ec = onnxModelType->getError();
-          if (!ec) {
-            outputTypes.emplace_back(*onnxModelType.value());
-            continue;
+        if (options_.useOnnxModelTypes ||
+            (isCustomOp && options_.useOnnxModelTypesForCustomOps)) {
+          auto onnxModelType = ConvertOnnxType(node.output(i), errorMessage);
+          if (onnxModelType) {
+            const auto ec = onnxModelType->getError();
+            if (!ec) {
+              outputTypes.emplace_back(*onnxModelType.value());
+              continue;
+            }
+            if (!options_.allowMissingOutputTypes || ec != InvalidOnnxFormat) {
+              errorMessage +=
+                  "Failed to get type for '" + node.output(i) + "\n";
+              return ec;
+            }
+            llvm::errs() << "Warning: "
+                         << "Failed to get type type for '" << node.output(i)
+                         << "', falling back to onnx-mlir based mapping.\n";
           }
-          if (!options_.allowMissingOutputTypes || ec != InvalidOnnxFormat) {
-            errorMessage += "Failed to get type for '" + node.output(i) + "\n";
-            return ec;
-          }
-          llvm::errs() << "Warning: "
-                       << "Failed to get type type for '" << node.output(i)
-                       << "', falling back to onnx-mlir based mapping.\n";
         }
         unsigned int j = i;
         // Variadic output is a single ODS result.
@@ -931,6 +934,8 @@ private:
         }
       }
     }
+    // Note: ResultTypeInferenceOpInterface only infers the type of the result,
+    // not the shape
     if (auto opWithTypeInference =
             mlir::dyn_cast<ResultTypeInferenceOpInterface>(op.getOperation())) {
       auto outTypes = opWithTypeInference.resultTypeInference();
@@ -1291,7 +1296,7 @@ private:
     // To determine the opset version for a node/op:
     // 1: Determine the latest valid opset version. This is the newest version
     // in this opset-version-map that is older or equal to the current graph
-    // opset. 2:_ Select the newest version from the versions supported by
+    // opset. 2: Select the newest version from the versions supported by
     // onnx-mlir that is equal or newer to the latest valid opset version. This
     // allows it to skip over opset versions, that have a newer backwards
     // compatible version.
@@ -1307,9 +1312,15 @@ private:
     // Get the newest opset version for the op that is older or equal to the
     // model opset version. Use the oldest version as fallback
     int newestValidOpsetVersion = opset_list_it->second.back();
-    for (int opset : opset_list_it->second) {
-      if (opset <= current_opset) {
-        newestValidOpsetVersion = opset;
+    int upperRangeOfNewestValidOpsetVersion = current_opset;
+    for (auto opsetIter = opset_list_it->second.begin();
+         opsetIter != opset_list_it->second.end(); ++opsetIter) {
+      if (*opsetIter <= current_opset) {
+        if (opsetIter != opset_list_it->second.begin()) {
+          upperRangeOfNewestValidOpsetVersion = std::max(
+              upperRangeOfNewestValidOpsetVersion, *(opsetIter - 1) - 1);
+        }
+        newestValidOpsetVersion = *opsetIter;
         break;
       }
     }
@@ -1319,11 +1330,11 @@ private:
     // A new opset is added to onnx-mlir when it becomes incompatible.
     // All opset newest than the last opset should use the last opset(version)
     if (isDefaultDomain(node.domain()) &&
-        newestValidOpsetVersion < supported_opset_list.back() &&
-        newestValidOpsetVersion < MINIMUM_SUPPORTED_OPSET)
+        upperRangeOfNewestValidOpsetVersion < supported_opset_list.back() &&
+        upperRangeOfNewestValidOpsetVersion < MINIMUM_SUPPORTED_OPSET)
       llvm::errs() << "\nWarning: ONNX " << node.op_type()
                    << " in your model is using Opset "
-                   << newestValidOpsetVersion
+                   << upperRangeOfNewestValidOpsetVersion
                    << ", which is quite old. Please consider regenerating your "
                       "model with a newer Opset.\n\n";
 
@@ -1456,7 +1467,8 @@ private:
           onnx::OpSchemaRegistry::Instance(),
           /*options=*/{}, in_model_functions_);
     } catch (const std::exception &e) {
-      llvm::errs() << "Warning: Caught exception running onnx shape inference: "
+      llvm::errs() << "Warning: Caught exception running onnx shape inference "
+                      "to populate graph.value_info: "
                    << e.what() << "\n";
     }
 
@@ -1566,7 +1578,7 @@ private:
       } else if (opName == "QuantizeLinear") {
         outElementType =
             cast<ShapedType>(inputs.at(2).getType()).getElementType();
-      } else if (opName == "Gelu") {
+      } else if (opName == "Gelu" || opName == "QuickGelu") {
         outElementType =
             cast<ShapedType>(inputs.at(0).getType()).getElementType();
       }
@@ -1584,8 +1596,8 @@ private:
 
     // ToFix: The type inference may go wrong if the element type of the output
     // of CustomOp is not the same as the first input.
-    return buildOutputAndOperation<ONNXCustomOp>(
-        node, inputs, nIn, nOut, attributes, errorMessage, givenOutputTypes);
+    return buildOutputAndOperation<ONNXCustomOp>(node, inputs, nIn, nOut,
+        attributes, errorMessage, givenOutputTypes, /*isCustomOp*/ true);
   }
 
   [[nodiscard]] std::error_code ImportNode(
@@ -1806,7 +1818,7 @@ private:
       originVersion < CURRENT_ONNX_OPSET) {
     onnx::ModelProto convertModel =
         onnx::version_conversion::ConvertVersion(model, CURRENT_ONNX_OPSET);
-    if (options.useOnnxModelTypes) {
+    if (options.runOnnxShapeInference) {
       try {
         onnx::shape_inference::InferShapes(convertModel);
       } catch (const std::exception &e) {
@@ -1818,7 +1830,7 @@ private:
     return ImportFrontendModel(
         convertModel, context, module, errorMessage, options);
   } else {
-    if (options.useOnnxModelTypes) {
+    if (options.runOnnxShapeInference) {
       try {
         onnx::shape_inference::InferShapes(model);
       } catch (const std::exception &e) {
