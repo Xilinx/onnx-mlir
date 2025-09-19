@@ -83,7 +83,7 @@ struct AddQDQAroundOp : public PassWrapper<AddQDQAroundOp, OperationPass<func::F
     Type zpEleType = extractZeroPointType(builder, func);
     RankedTensorType zpType = RankedTensorType::get({}, zpEleType);
     DenseElementsAttr zpAttr;
-    if (zpEleType.isa<IntegerType>()){
+    if (isa<IntegerType>(zpEleType)){
         auto intType = mlir::dyn_cast<IntegerType>(zpEleType);
         unsigned width = intType.getWidth();
         bool isSigned = intType.isSignedInteger();
@@ -164,14 +164,20 @@ struct AddQDQAroundOp : public PassWrapper<AddQDQAroundOp, OperationPass<func::F
             ShapedType inShaped = llvm::dyn_cast<ShapedType>(operand.getType());
 
             Type qResultType = operand.getType();
-            if (inShaped)
-                qResultType = RankedTensorType::get(inShaped.getShape(), zpEleType);
+            if (isa<FloatType>(operand.getType()) || (inShaped && isa<FloatType>(inShaped.getElementType()))){
+                if (inShaped)
+                    qResultType = RankedTensorType::get(inShaped.getShape(), zpEleType);
+                else
+                    qResultType = RankedTensorType::get({}, zpEleType);     
 
-            auto q = builder.create<ONNXQuantizeLinearOp>(loc, qResultType, operand, scaleVal, zpVal);
-            auto dq = builder.create<ONNXDequantizeLinearOp>(loc, operand.getType(), q.getResult(), scaleVal, zpVal);
+                auto q = builder.create<ONNXQuantizeLinearOp>(loc, qResultType, operand, scaleVal, zpVal);
+                auto dq = builder.create<ONNXDequantizeLinearOp>(loc, operand.getType(), q.getResult(), scaleVal, zpVal);
+                
+                producerToDQ.try_emplace(operand, dq.getResult());
+                op->replaceUsesOfWith(operand, dq.getResult());  
+
+            }
             
-            producerToDQ.try_emplace(operand, dq.getResult());
-            op->replaceUsesOfWith(operand, dq.getResult());
         }
     } 
     }
