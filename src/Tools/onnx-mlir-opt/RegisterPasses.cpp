@@ -82,10 +82,10 @@ void registerOMPasses(int optLevel) {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createFoldDQBinaryQPass();
   });
-  
+
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createMissingQDQAroundOpOptONNXToONNXPass();
-  });  
+  });
 
   mlir::registerPass(
       []() -> std::unique_ptr<mlir::Pass> { return createInstrumentPass(); });

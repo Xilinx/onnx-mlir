@@ -98,7 +98,7 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     pm.addPass(createQDQOptONNXToONNXPass());
 
   if (opts.enableAddQDQOp)
-    pm.addPass(createMissingQDQAroundOpOptONNXToONNXPass());  
+    pm.addPass(createMissingQDQAroundOpOptONNXToONNXPass());
 
   // One more call to ONNX shape inference/canonicalization/... to update
   // shape if possible.
