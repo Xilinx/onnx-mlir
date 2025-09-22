@@ -22,6 +22,45 @@ using namespace onnx_mlir;
 
 namespace {
 
+// ---- Helper: check scale is scalar f32 ----
+static bool isScalarF32(Value v) {
+  auto ty = v.getType().dyn_cast<RankedTensorType>();
+  if (!ty)
+    return false;
+  if (!ty.getElementType().isF32())
+    return false;
+  // Must be scalar (rank-0) or single element tensor (rank-1 with size=1)
+  if (ty.getRank() == 0)
+    return true;
+  if (ty.getRank() == 1 && ty.getDimSize(0) == 1)
+    return true;
+  return false;
+}
+
+// ---- Helper: check zero point is scalar int8/uint8 ----
+static bool isScalarI8OrU8(Value v) {
+  auto ty = v.getType().dyn_cast<RankedTensorType>();
+  if (!ty)
+    return false;
+  auto elemTy = ty.getElementType();
+  if (!(elemTy.isInteger(8) || elemTy.isUnsignedInteger(8)))
+    return false;
+  if (ty.getRank() == 0)
+    return true;
+  if (ty.getRank() == 1 && ty.getDimSize(0) == 1)
+    return true;
+  return false;
+}
+
+// ---- Helper: check tensor is int8/uint8 ----
+static bool isTensorI8OrU8(Value v) {
+  auto ty = v.getType().dyn_cast<RankedTensorType>();
+  if (!ty)
+    return false;
+  auto elemTy = ty.getElementType();
+  return elemTy.isInteger(8) || elemTy.isUnsignedInteger(8);
+}
+
 static bool extractScalarFloatFromConst(mlir::Value v, float &out) {
   auto def = v.getDefiningOp<ONNXConstantOp>();
   if (!def)
@@ -110,17 +149,6 @@ struct ConvToQLinearConvPattern : public OpRewritePattern<ONNXConvOp> {
   LogicalResult matchAndRewrite(
       ONNXConvOp convOp, PatternRewriter &rewriter) const override {
     Location loc = convOp.getLoc();
-    // Conv has bias B and its defining op is DequantizeLinear
-    Value biasVal = convOp.getB();
-    if (!biasVal || isa<ONNXNoneOp>(biasVal.getDefiningOp()))
-      return failure();
-
-    auto dqBiasOp = dyn_cast<ONNXDequantizeLinearOp>(biasVal.getDefiningOp());
-    if (!dqBiasOp) {
-      return failure();
-    }
-    auto qBiasOp =
-        dyn_cast<ONNXQuantizeLinearOp>(dqBiasOp.getX().getDefiningOp());
 
     // Conv input X must come from DequantizeLinear ----
     auto dqInputOp =
@@ -133,6 +161,10 @@ struct ConvToQLinearConvPattern : public OpRewritePattern<ONNXConvOp> {
     Value xScale = dqInputOp.getXScale();
     Value xZp = dqInputOp.getXZeroPoint();
 
+    // ---- Check input type ----
+    if (!isTensorI8OrU8(qInput))
+      return failure();
+
     // Conv weight W must come from DequantizeLinear ----
     auto dqWeightOp =
         dyn_cast_or_null<ONNXDequantizeLinearOp>(convOp.getW().getDefiningOp());
@@ -144,9 +176,13 @@ struct ConvToQLinearConvPattern : public OpRewritePattern<ONNXConvOp> {
     Value wScale = dqWeightOp.getXScale();
     Value wZp = dqWeightOp.getXZeroPoint();
 
-    // Conv output consumed by QuantizeLinear (qOutOp) ----
-    if (convOp->getUsers().empty())
+    if (!isTensorI8OrU8(qWeight))
       return failure();
+
+    // Conv output consumed by QuantizeLinear (qOutOp) ----
+    if (convOp->getUsers().empty() && convOp->getNumResults() != 1)
+      return failure();
+
     Operation *firstUser = *convOp->getUsers().begin();
     auto qOutOp = dyn_cast<ONNXQuantizeLinearOp>(firstUser);
     if (!qOutOp)
@@ -154,68 +190,93 @@ struct ConvToQLinearConvPattern : public OpRewritePattern<ONNXConvOp> {
     Value yScale = qOutOp.getYScale();
     Value yZp = qOutOp.getYZeroPoint();
 
-    Value biasQ = dqBiasOp.getX();
-    auto biasQType = biasQ.getType().dyn_cast<mlir::RankedTensorType>();
-    if (!biasQType)
+    if (!isScalarF32(xScale) || !isScalarF32(wScale) || !isScalarF32(yScale)) {
       return failure();
+    }
+
+    if (!isScalarI8OrU8(xZp) || !isScalarI8OrU8(wZp) || !isScalarI8OrU8(yZp)) {
+      return failure();
+    }
+
+    Value biasVal = convOp.getB();
 
     Value biasInt32Val;
-
-    // Case 1: Bias is already int32 -----------------------
-    if (biasQType.getElementType().isInteger(32)) {
-      biasInt32Val = biasQ;
+    if (!biasVal || isa<ONNXNoneOp>(biasVal.getDefiningOp())) {
+      // Case 0: No bias at all
+      biasInt32Val = Value();
     } else {
-      // Case 2: Bias is int8. float32 → quantize -----------------
-      if (!qBiasOp) {
-        return failure();
-      }
-      // ---- Extract float bias values from qBiasOp.getX() (which points to the
-      // float constant) ----
-      Value biasFloatValue = qBiasOp.getX();
-      auto biasFloatDefOp = biasFloatValue.getDefiningOp();
-      if (!biasFloatDefOp)
-        return failure();
 
-      auto constBiasOp = dyn_cast<ONNXConstantOp>(biasFloatDefOp);
-      if (!constBiasOp)
-        return failure();
-
-      // Try to get the ElementsAttr
-      auto denseBiasF = extractDenseFloatFromConst(constBiasOp, biasFloatValue);
-
-      if (!denseBiasF)
-        return failure();
-      float xScaleS = 0.0f;
-      if (!extractScalarFloatFromConst(xScale, xScaleS))
-        return failure();
-
-      float wScaleS = 0.0f;
-      if (!extractScalarFloatFromConst(wScale, wScaleS))
-        return failure();
-
-      auto biasI32Attrs =
-          createBiasI32Attrs(denseBiasF, xScaleS, wScaleS, rewriter);
-      if (biasI32Attrs.empty()) {
+      // Conv has bias B and its defining op is DequantizeLinear
+      auto dqBiasOp = dyn_cast<ONNXDequantizeLinearOp>(biasVal.getDefiningOp());
+      if (!dqBiasOp) {
         return failure();
       }
 
-      // ---- Build tensor type for i32 bias with same shape as denseBiasF ----
-      auto biasTensorTy = denseBiasF.getType().cast<mlir::RankedTensorType>();
-      auto biasTypeI32 = mlir::RankedTensorType::get(
-          biasTensorTy.getShape(), rewriter.getIntegerType(32));
+      Value biasQ = dqBiasOp.getX();
+      auto biasQType = biasQ.getType().dyn_cast<mlir::RankedTensorType>();
+      if (!biasQType)
+        return failure();
 
-      // Build DenseElementsAttr<i32> from integer attrs
-      auto denseAttrI32 =
-          mlir::DenseElementsAttr::get(biasTypeI32, biasI32Attrs);
+      // Case 1: Bias is already int32 -----------------------
+      if (biasQType.getElementType().isInteger(32)) {
+        biasInt32Val = biasQ;
+      } else {
+        // Case 2: Bias is int8. float32 → quantize -----------------
+        auto qBiasOp =
+            dyn_cast<ONNXQuantizeLinearOp>(dqBiasOp.getX().getDefiningOp());
+        if (!qBiasOp) {
+          return failure();
+        }
+        // ---- Extract float bias values from qBiasOp.getX() (which points to
+        // the float constant) ----
+        Value biasFloatValue = qBiasOp.getX();
+        auto biasFloatDefOp = biasFloatValue.getDefiningOp();
+        if (!biasFloatDefOp)
+          return failure();
 
-      // ---- Create ONNXConstantOp for i32 bias (pass the full argument list as
-      // required) ----
-      auto biasConstI32 = rewriter.create<ONNXConstantOp>(loc, biasTypeI32,
-          mlir::Attribute(), denseAttrI32, mlir::FloatAttr(), mlir::ArrayAttr(),
-          mlir::IntegerAttr(), mlir::ArrayAttr(), mlir::StringAttr(),
-          mlir::ArrayAttr());
+        auto constBiasOp = dyn_cast<ONNXConstantOp>(biasFloatDefOp);
+        if (!constBiasOp)
+          return failure();
 
-      biasInt32Val = biasConstI32.getResult();
+        // Try to get the ElementsAttr
+        auto denseBiasF =
+            extractDenseFloatFromConst(constBiasOp, biasFloatValue);
+
+        if (!denseBiasF)
+          return failure();
+        float xScaleS = 0.0f;
+        if (!extractScalarFloatFromConst(xScale, xScaleS))
+          return failure();
+
+        float wScaleS = 0.0f;
+        if (!extractScalarFloatFromConst(wScale, wScaleS))
+          return failure();
+
+        auto biasI32Attrs =
+            createBiasI32Attrs(denseBiasF, xScaleS, wScaleS, rewriter);
+        if (biasI32Attrs.empty()) {
+          return failure();
+        }
+
+        // ---- Build tensor type for i32 bias with same shape as denseBiasF
+        // ----
+        auto biasTensorTy = denseBiasF.getType().cast<mlir::RankedTensorType>();
+        auto biasTypeI32 = mlir::RankedTensorType::get(
+            biasTensorTy.getShape(), rewriter.getIntegerType(32));
+
+        // Build DenseElementsAttr<i32> from integer attrs
+        auto denseAttrI32 =
+            mlir::DenseElementsAttr::get(biasTypeI32, biasI32Attrs);
+
+        // ---- Create ONNXConstantOp for i32 bias (pass the full argument list
+        // as required) ----
+        auto biasConstI32 = rewriter.create<ONNXConstantOp>(loc, biasTypeI32,
+            mlir::Attribute(), denseAttrI32, mlir::FloatAttr(),
+            mlir::ArrayAttr(), mlir::IntegerAttr(), mlir::ArrayAttr(),
+            mlir::StringAttr(), mlir::ArrayAttr());
+
+        biasInt32Val = biasConstI32.getResult();
+      }
     }
 
     // ---- Create QLinearConv: operand order:
@@ -230,18 +291,6 @@ struct ConvToQLinearConvPattern : public OpRewritePattern<ONNXConvOp> {
 
     // Replace the QuantizeLinear (qOutOp) result with qconv result
     rewriter.replaceOp(qOutOp, qconv.getResult());
-
-    // Erase dead ops
-    if (dqBiasOp->use_empty())
-      rewriter.eraseOp(dqBiasOp);
-    if (qBiasOp && qBiasOp->use_empty())
-      rewriter.eraseOp(qBiasOp);
-    if (dqInputOp && dqInputOp->use_empty())
-      rewriter.eraseOp(dqInputOp);
-    if (dqWeightOp && dqWeightOp->use_empty())
-      rewriter.eraseOp(dqWeightOp);
-    if (convOp->use_empty())
-      rewriter.eraseOp(convOp);
 
     return success();
   }
