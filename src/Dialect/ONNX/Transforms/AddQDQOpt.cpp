@@ -62,6 +62,15 @@ struct AddQDQAroundOp
     return zpElemType;
   }
 
+  bool isDMAOp(Operation *op) {
+    return isa<ONNXReshapeOp, ONNXFlattenOp, ONNXSqueezeOp, ONNXUnsqueezeOp,
+        ONNXExpandOp, ONNXTransposeOp, ONNXIdentityOp, ONNXSliceOp,
+        ONNXConcatOp, ONNXSplitOp, ONNXGatherOp, ONNXGatherElementsOp,
+        ONNXGatherNDOp, ONNXScatterOp, ONNXScatterElementsOp, ONNXScatterNDOp,
+        ONNXPadOp, ONNXCastOp, ONNXShapeOp, ONNXConstantOfShapeOp, ONNXTileOp,
+        ONNXDepthToSpaceOp, ONNXSpaceToDepthOp, ONNXResizeOp>(op);
+  }
+
   void runOnOperation() override {
     func::FuncOp func = getOperation();
     MLIRContext *ctx = &getContext();
@@ -127,7 +136,9 @@ struct AddQDQAroundOp
     for (Operation &opRef : llvm::make_early_inc_range(func.getOps())) {
       Operation *op = &opRef;
 
-      if (isa<ONNXConstantOp, ONNXQuantizeLinearOp, ONNXDequantizeLinearOp>(op))
+      if ((isa<ONNXConstantOp, ONNXQuantizeLinearOp, ONNXDequantizeLinearOp>(
+              op)) ||
+          !(isDMAOp(op)))
         continue;
 
       Location loc = op->getLoc();
