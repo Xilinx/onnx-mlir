@@ -43,7 +43,7 @@ LogicalResult ONNXSliceOpShapeHelper::computeShape() {
     createIE->getIntFromArrayAsSymbols(axes, axesSymbol);
     for (IndexExpr val : axesSymbol) {
       if (!val.isLiteral())
-        return op->emitError("Axes must be known at compile time");
+        return success();
       int64_t axis = val.getLiteral();
       if (axis < 0)
         axis += dataRank;
@@ -160,7 +160,7 @@ LogicalResult ONNXSliceOp::inferShapes(
 
   // Cannot infer shape if axes is not a constant. It can be a constant after
   // several rounds of shape-inference and constant propagation.
-  if (!isNoneValue(axes) && !getONNXConstantOp(axes))
+  if (!isNoneValue(axes) && !isConstLikeValue(axes))
     return success();
 
   const auto startsType =
