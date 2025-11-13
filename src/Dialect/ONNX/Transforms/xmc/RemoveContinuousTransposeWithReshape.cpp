@@ -200,11 +200,11 @@ struct RemoveContinuousTransposeWithReshapePattern
 
       // Use the simple 2-argument build: (sparse_value, value)
       auto shapeConstOp =
-          rewriter.create<mlir::ONNXConstantOp>(transpose1.getLoc(),
+          mlir::ONNXConstantOp::create(rewriter, transpose1.getLoc(),
               /*sparse_value=*/Attribute(),
               /*value=*/shapeAttr);
 
-      auto newReshape = rewriter.create<mlir::ONNXReshapeOp>(
+      auto newReshape = mlir::ONNXReshapeOp::create(rewriter,
           transpose1.getLoc(), transpose1.getResult().getType(), originalInput,
           shapeConstOp.getResult());
 

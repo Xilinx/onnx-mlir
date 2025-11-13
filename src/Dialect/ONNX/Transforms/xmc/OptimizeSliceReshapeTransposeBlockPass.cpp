@@ -65,7 +65,7 @@ Value createConstantI64Array(
   auto tensorType = RankedTensorType::get(
       {static_cast<int64_t>(values.size())}, IntegerType::get(ctx, 64));
   auto denseAttr = DenseIntElementsAttr::get(tensorType, values);
-  return rewriter.create<ONNXConstantOp>(loc, Attribute(), denseAttr);
+  return ONNXConstantOp::create(rewriter, loc, Attribute(), denseAttr);
 }
 
 /// Reshape output layout: axis 0=N, 1=S, 2=H, 3=D. ONNX Transpose: output dim i
@@ -359,8 +359,8 @@ public:
         createConstantI64Array(rewriter, loc, newReshapeShape);
 
     // Create the new reshape op
-    auto newReshapeOp = rewriter.create<ONNXReshapeOp>(
-        loc, newReshapeType, pattern.commonInput, newReshapeShapeConst);
+    auto newReshapeOp = ONNXReshapeOp::create(rewriter, loc, newReshapeType,
+        pattern.commonInput, newReshapeShapeConst);
 
     // Create new transpose with order {0, 2, 1, 3}
     SmallVector<int64_t> newTransposeShape = {newReshapeShape[0],
@@ -369,7 +369,7 @@ public:
         RankedTensorType::get(newTransposeShape, elementType);
 
     auto newTransposeOp =
-        rewriter.create<ONNXTransposeOp>(loc, newTransposeType,
+        ONNXTransposeOp::create(rewriter, loc, newTransposeType,
             newReshapeOp.getResult(), rewriter.getI64ArrayAttr({0, 2, 1, 3}));
 
     // Calculate slice parameters for the 3 slices
@@ -400,7 +400,7 @@ public:
       auto newSliceType = RankedTensorType::get(sliceVals, elementType);
 
       // Create new slice op
-      auto newSliceOp = rewriter.create<ONNXSliceOp>(loc, newSliceType,
+      auto newSliceOp = ONNXSliceOp::create(rewriter, loc, newSliceType,
           newTransposeOp.getResult(), startsConst, endsConst, axesConst,
           stepsConst);
 
@@ -410,8 +410,8 @@ public:
       if (pattern.needsSwapSdOnOutput[i]) {
         sliceVals.assign({nDim, numHeadsPerSlice, dDim, sDim});
         auto swappedType = RankedTensorType::get(sliceVals, elementType);
-        repl = rewriter.create<ONNXTransposeOp>(
-            loc, swappedType, repl, rewriter.getI64ArrayAttr({0, 1, 3, 2}));
+        repl = ONNXTransposeOp::create(rewriter, loc, swappedType, repl,
+            rewriter.getI64ArrayAttr({0, 1, 3, 2}));
       }
 
       newSliceResults.push_back(repl);

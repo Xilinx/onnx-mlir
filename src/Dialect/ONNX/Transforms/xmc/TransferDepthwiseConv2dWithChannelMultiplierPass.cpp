@@ -181,7 +181,7 @@ Value createConstant(PatternRewriter &rewriter, Location loc,
     attr = DenseIntElementsAttr::get(storageTensorType, values);
   }
 
-  return rewriter.create<ONNXConstantOp>(loc, resultTensorType, Attribute(),
+  return ONNXConstantOp::create(rewriter, loc, resultTensorType, Attribute(),
       attr, FloatAttr(), ArrayAttr(), IntegerAttr(), ArrayAttr(), StringAttr(),
       ArrayAttr());
 }
@@ -414,7 +414,7 @@ struct SplitDepthwiseConvPattern : public OpRewritePattern<ONNXConvOp> {
 
       // Create split depthwise conv with channel_multiplier = 1
       // group stays the same (= inputChannels)
-      auto splitConvOp = rewriter.create<ONNXConvOp>(loc, splitOutputType,
+      auto splitConvOp = ONNXConvOp::create(rewriter, loc, splitOutputType,
           convOp.getX(), splitWeight, splitBias, convOp.getAutoPadAttr(),
           convOp.getDilationsAttr(), convOp.getGroupAttr(),
           convOp.getKernelShapeAttr(), convOp.getPadsAttr(),
@@ -433,8 +433,8 @@ struct SplitDepthwiseConvPattern : public OpRewritePattern<ONNXConvOp> {
     // NCHW) Create signed i64 type for ONNX attributes (si64)
     auto si64Type =
         IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed);
-    auto concatOp = rewriter.create<ONNXConcatOp>(
-        loc, outputType, concatInputs, IntegerAttr::get(si64Type, 1));
+    auto concatOp = ONNXConcatOp::create(
+        rewriter, loc, outputType, concatInputs, IntegerAttr::get(si64Type, 1));
 
     rewriter.replaceOp(convOp, concatOp.getResult());
 
@@ -581,7 +581,7 @@ struct SplitXFEDepthwiseConvPattern : public OpRewritePattern<XFEConvOp> {
       }
 
       // Create split XFE depthwise conv
-      auto splitConvOp = rewriter.create<XFEConvOp>(loc, splitOutputType,
+      auto splitConvOp = XFEConvOp::create(rewriter, loc, splitOutputType,
           convOp.getX(), splitWeight, splitBias, convOp.getActivationAttr(),
           convOp.getDilationsAttr(), convOp.getGroupAttr(),
           convOp.getLeakyreluAlphaAttr(), convOp.getPadsAttr(),
@@ -601,8 +601,8 @@ struct SplitXFEDepthwiseConvPattern : public OpRewritePattern<XFEConvOp> {
     // NHWC) Create signed i64 type for ONNX attributes (si64)
     auto si64Type =
         IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed);
-    auto concatOp = rewriter.create<ONNXConcatOp>(
-        loc, outputType, concatInputs, IntegerAttr::get(si64Type, 3));
+    auto concatOp = ONNXConcatOp::create(
+        rewriter, loc, outputType, concatInputs, IntegerAttr::get(si64Type, 3));
 
     rewriter.replaceOp(convOp, concatOp.getResult());
 

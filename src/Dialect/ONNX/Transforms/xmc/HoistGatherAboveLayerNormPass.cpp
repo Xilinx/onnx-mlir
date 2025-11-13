@@ -315,7 +315,7 @@ struct HoistGatherAboveLayerNormPattern
 
     // Gather -> [dq0] -> LayerNorm -> [q0 -> dq1] -> [q1]
     auto newGather =
-        rewriter.create<ONNXGatherOp>(gatherOp.getLoc(), newGatherOutTy,
+        ONNXGatherOp::create(rewriter, gatherOp.getLoc(), newGatherOutTy,
             preGather, gatherOp.getIndices(), gatherOp.getAxisAttr());
     if (failed(inferShapesForOp(newGather.getOperation())))
       return failure();

@@ -77,13 +77,13 @@ Value createConvInGroups(PatternRewriter &rewriter, Operation *op,
     slicesWithAct.reserve(sliceValues.size());
     if (auto relu = dyn_cast<ONNXReluOp>(activation)) {
       for (Value nonGroupedConv : sliceValues) {
-        auto newRelu = rewriter.create<ONNXReluOp>(
-            activation->getLoc(), nonGroupedConv.getType(), nonGroupedConv);
+        auto newRelu = ONNXReluOp::create(rewriter, activation->getLoc(),
+            nonGroupedConv.getType(), nonGroupedConv);
         slicesWithAct.push_back(newRelu.getY());
       }
     } else if (auto lrelu = dyn_cast<ONNXLeakyReluOp>(activation)) {
       for (Value nonGroupedConv : sliceValues) {
-        auto newLRelu = rewriter.create<ONNXLeakyReluOp>(activation->getLoc(),
+        auto newLRelu = ONNXLeakyReluOp::create(rewriter, activation->getLoc(),
             nonGroupedConv.getType(), nonGroupedConv, lrelu.getAlphaAttr());
         slicesWithAct.push_back(newLRelu.getY());
       }

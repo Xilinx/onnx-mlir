@@ -57,7 +57,7 @@ struct AddRequantForOutputConvPattern
     ArrayAttr yZp = aZp;
 
     rewriter.setInsertionPoint(scast);
-    auto rq = rewriter.create<XCOMPILERRequantizeOp>(producer->getLoc(),
+    auto rq = XCOMPILERRequantizeOp::create(rewriter, producer->getLoc(),
         scast.getResult().getType(), producerQuantVal, aScale, aZp, yScale,
         yZp);
 

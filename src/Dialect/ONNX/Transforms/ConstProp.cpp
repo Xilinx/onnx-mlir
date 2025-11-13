@@ -642,8 +642,8 @@ Value createNegOfConstantExpression(
     return ConstPropElementwiseUnary<ONNXNegOp>(
         rewriter, replacingValue, input);
 
-  return rewriter.create<ONNXNegOp>(
-      input.getLoc(), replacingValue.getType(), input);
+  return ONNXNegOp::create(
+      rewriter, input.getLoc(), replacingValue.getType(), input);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2200,12 +2200,12 @@ public:
       return (strRef == "onnx_node_name" || strRef == "ResultNames");
     });
 
-    auto newShapeOp = rewriter.create<ONNXOp>(
-        op.getLoc(), newShapeOpType, newShapeOperands, shapeAttrs);
+    auto newShapeOp = ONNXOp::create(
+        rewriter, op.getLoc(), newShapeOpType, newShapeOperands, shapeAttrs);
 
     // Rebuild the DequantizeLinear on the new (still-integer) ShapeOp result.
     auto newDqOp =
-        rewriter.create<ONNXDequantizeLinearOp>(dqOp.getLoc(), opResultType,
+        ONNXDequantizeLinearOp::create(rewriter, dqOp.getLoc(), opResultType,
             newShapeOp.getResult(), dqOp.getXScale(), dqOp.getXZeroPoint());
     for (auto namedAttr : dqOp->getAttrs()) {
       auto name = namedAttr.getName().strref();
@@ -2682,7 +2682,7 @@ public:
     // Const directly. The user's result type (f32 tensor, same shape) is
     // unchanged.
     for (ONNXDequantizeLinearOp userDQ : userDQs) {
-      auto newUserDQ = rewriter.create<ONNXDequantizeLinearOp>(userDQ.getLoc(),
+      auto newUserDQ = ONNXDequantizeLinearOp::create(rewriter, userDQ.getLoc(),
           userDQ.getY().getType(), constOp.getResult(), dqInner.getXScale(),
           dqInner.getXZeroPoint());
       for (NamedAttribute attr : dqInner->getAttrs()) {

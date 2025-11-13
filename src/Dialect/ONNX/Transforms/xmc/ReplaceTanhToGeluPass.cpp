@@ -248,8 +248,8 @@ struct ReplaceTanhGeluPattern : public OpRewritePattern<ONNXTanhOp> {
     // --- Build onnx.Gelu(x, approximate="tanh") ---
     Location loc = tanhOp.getLoc();
     Type resultType = finalMul.getResult().getType();
-    auto geluOp = rewriter.create<ONNXGeluOp>(
-        loc, resultType, x, rewriter.getStringAttr("tanh"));
+    auto geluOp = ONNXGeluOp::create(
+        rewriter, loc, resultType, x, rewriter.getStringAttr("tanh"));
     rewriter.replaceOp(finalMul, geluOp.getResult());
     return success();
   }

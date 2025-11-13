@@ -97,9 +97,10 @@ public:
 
     Location loc = dqOp.getLoc();
     auto newScaleOp =
-        rewriter.create<ONNXConstantOp>(loc, Attribute(), newScaleAttr);
-    auto newXOp = rewriter.create<ONNXConstantOp>(loc, Attribute(), newXAttr);
-    auto newZpOp = rewriter.create<ONNXConstantOp>(loc, Attribute(), newZpAttr);
+        ONNXConstantOp::create(rewriter, loc, Attribute(), newScaleAttr);
+    auto newXOp = ONNXConstantOp::create(rewriter, loc, Attribute(), newXAttr);
+    auto newZpOp =
+        ONNXConstantOp::create(rewriter, loc, Attribute(), newZpAttr);
 
     rewriter.replaceOpWithNewOp<ONNXDequantizeLinearOp>(dqOp, dqOp.getType(),
         newXOp.getResult(), newScaleOp.getResult(), newZpOp.getResult(),

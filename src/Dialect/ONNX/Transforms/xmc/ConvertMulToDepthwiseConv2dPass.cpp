@@ -70,7 +70,7 @@ Value expandScalarWeight(PatternRewriter &rewriter, Location loc, Value weight,
     auto resultType = RankedTensorType::get(convWeightShape, elementType);
     auto valueNamedAttr = rewriter.getNamedAttr("value", expandedAttr);
     auto newConst =
-        rewriter.create<ONNXConstantOp>(loc, resultType, mlir::ValueRange{},
+        ONNXConstantOp::create(rewriter, loc, resultType, mlir::ValueRange{},
             mlir::ArrayRef<mlir::NamedAttribute>{valueNamedAttr});
     return newConst.getResult();
   }
@@ -203,8 +203,8 @@ struct MulToDepthwiseConvPattern : public OpRewritePattern<ONNXMulOp> {
       auto newWeightType =
           RankedTensorType::get(newWeightShape, weightType.getElementType());
       auto shapeConst = createShapeConstant(rewriter, loc, newWeightShape);
-      newWeight = rewriter.create<ONNXReshapeOp>(
-          loc, newWeightType, weight, shapeConst);
+      newWeight = ONNXReshapeOp::create(
+          rewriter, loc, newWeightType, weight, shapeConst);
     }
 
     // Create DepthwiseConv attributes
@@ -225,7 +225,7 @@ struct MulToDepthwiseConvPattern : public OpRewritePattern<ONNXMulOp> {
         RankedTensorType::get(inputShape, inputType.getElementType());
 
     // Create Conv op (DepthwiseConv is Conv with group=channels)
-    auto convOp = rewriter.create<ONNXConvOp>(loc, convOutputType, input,
+    auto convOp = ONNXConvOp::create(rewriter, loc, convOutputType, input,
         newWeight, noneBias,
         /*auto_pad=*/rewriter.getStringAttr("NOTSET"),
         /*dilations=*/dilations,
@@ -322,8 +322,8 @@ struct MulAddToDepthwiseConvPattern : public OpRewritePattern<ONNXAddOp> {
       auto newWeightType =
           RankedTensorType::get(newWeightShape, weightType.getElementType());
       auto shapeConst = createShapeConstant(rewriter, loc, newWeightShape);
-      newWeight = rewriter.create<ONNXReshapeOp>(
-          loc, newWeightType, weight, shapeConst);
+      newWeight = ONNXReshapeOp::create(
+          rewriter, loc, newWeightType, weight, shapeConst);
     }
 
     // Create DepthwiseConv attributes
@@ -365,12 +365,11 @@ struct MulAddToDepthwiseConvPattern : public OpRewritePattern<ONNXAddOp> {
             flatStorageType, denseAttr.getSplatValue<Attribute>());
         auto flatResultType =
             RankedTensorType::get({inputChannel}, biasType.getElementType());
-        convBias =
-            rewriter
-                .create<ONNXConstantOp>(loc, flatResultType, mlir::ValueRange{},
-                    mlir::ArrayRef<mlir::NamedAttribute>{
-                        rewriter.getNamedAttr("value", flatAttr)})
-                .getResult();
+        convBias = ONNXConstantOp::create(rewriter, loc, flatResultType,
+            mlir::ValueRange{},
+            mlir::ArrayRef<mlir::NamedAttribute>{
+                rewriter.getNamedAttr("value", flatAttr)})
+                       .getResult();
       } else {
         // [1,C,1,1] or other -> reshape dense attr to [C]
         auto flatStorageType =
@@ -378,17 +377,16 @@ struct MulAddToDepthwiseConvPattern : public OpRewritePattern<ONNXAddOp> {
         auto flatAttr = denseAttr.reshape(flatStorageType);
         auto flatResultType =
             RankedTensorType::get({inputChannel}, biasType.getElementType());
-        convBias =
-            rewriter
-                .create<ONNXConstantOp>(loc, flatResultType, mlir::ValueRange{},
-                    mlir::ArrayRef<mlir::NamedAttribute>{
-                        rewriter.getNamedAttr("value", flatAttr)})
-                .getResult();
+        convBias = ONNXConstantOp::create(rewriter, loc, flatResultType,
+            mlir::ValueRange{},
+            mlir::ArrayRef<mlir::NamedAttribute>{
+                rewriter.getNamedAttr("value", flatAttr)})
+                       .getResult();
       }
     }
 
     // Create Conv op with bias
-    auto convOp = rewriter.create<ONNXConvOp>(loc, convOutputType, input,
+    auto convOp = ONNXConvOp::create(rewriter, loc, convOutputType, input,
         newWeight, /*bias=*/convBias,
         /*auto_pad=*/rewriter.getStringAttr("NOTSET"),
         /*dilations=*/dilations,
@@ -464,8 +462,8 @@ struct MulReluToDepthwiseConvPattern : public OpRewritePattern<ONNXReluOp> {
       auto newWeightType =
           RankedTensorType::get(newWeightShape, weightType.getElementType());
       auto shapeConst = createShapeConstant(rewriter, loc, newWeightShape);
-      newWeight = rewriter.create<ONNXReshapeOp>(
-          loc, newWeightType, weight, shapeConst);
+      newWeight = ONNXReshapeOp::create(
+          rewriter, loc, newWeightType, weight, shapeConst);
     }
 
     // Create DepthwiseConv
@@ -484,7 +482,7 @@ struct MulReluToDepthwiseConvPattern : public OpRewritePattern<ONNXReluOp> {
     // Conv output will be in NCHW format (same as input)
     auto convOutputType =
         RankedTensorType::get(inputShape, inputType.getElementType());
-    auto convOp = rewriter.create<ONNXConvOp>(loc, convOutputType, input,
+    auto convOp = ONNXConvOp::create(rewriter, loc, convOutputType, input,
         newWeight, noneBias,
         /*auto_pad=*/rewriter.getStringAttr("NOTSET"),
         /*dilations=*/dilations,
@@ -494,8 +492,8 @@ struct MulReluToDepthwiseConvPattern : public OpRewritePattern<ONNXReluOp> {
         /*strides=*/strides);
 
     // Create new Relu
-    auto newReluOp = rewriter.create<ONNXReluOp>(
-        loc, reluOp.getResult().getType(), convOp.getResult());
+    auto newReluOp = ONNXReluOp::create(
+        rewriter, loc, reluOp.getResult().getType(), convOp.getResult());
 
     rewriter.replaceOp(reluOp, newReluOp.getResult());
     return success();

@@ -151,7 +151,7 @@ mlir::Value createMulShiftConst(
   auto shiftType = RankedTensorType::get({1}, rewriter.getI8Type());
   auto shiftAttr = DenseElementsAttr::get<int8_t>(
       shiftType, llvm::ArrayRef<int8_t>{static_cast<int8_t>(shift)});
-  return rewriter.create<mlir::tosa::ConstOp>(loc, shiftType, shiftAttr);
+  return mlir::tosa::ConstOp::create(rewriter, loc, shiftType, shiftAttr);
 }
 
 } // namespace tosa

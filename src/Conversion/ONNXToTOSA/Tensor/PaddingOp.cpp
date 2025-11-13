@@ -106,8 +106,8 @@ public:
 
       rewriter.replaceOpWithNewOp<mlir::tosa::PadOp>(op, resultType, data,
           padsList1,
-          rewriter.create<mlir::tosa::ConstOp>(
-              op->getLoc(), constType, constAttr));
+          mlir::tosa::ConstOp::create(
+              rewriter, op->getLoc(), constType, constAttr));
     } else {
       MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(rewriter, loc);
       Value reshapeToSplattedConst = create.onnx.reshape(constValue, {});

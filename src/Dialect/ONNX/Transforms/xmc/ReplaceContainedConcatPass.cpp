@@ -157,8 +157,8 @@ struct ReplaceContainedConcatPattern : public OpRewritePattern<ONNXConcatOp> {
       auto si64Type =
           IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed);
       auto axisAttr = IntegerAttr::get(si64Type, innerAxis);
-      auto newConcatOp = rewriter.create<ONNXConcatOp>(
-          outerConcatOp.getLoc(), outerConcatOp.getType(), newInputs, axisAttr);
+      auto newConcatOp = ONNXConcatOp::create(rewriter, outerConcatOp.getLoc(),
+          outerConcatOp.getType(), newInputs, axisAttr);
 
       rewriter.replaceOp(outerConcatOp, newConcatOp.getResult());
       return success();

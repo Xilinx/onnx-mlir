@@ -138,9 +138,8 @@ static Value create1DBiasFromConstant(
       onnx_mlir::ElementsAttrBuilder::toDenseElementsAttr(reshaped);
 
   auto valueAttr = rewriter.getNamedAttr("value", denseNew);
-  return rewriter
-      .create<ONNXConstantOp>(loc, newResultType, mlir::ValueRange{},
-          mlir::ArrayRef<mlir::NamedAttribute>{valueAttr})
+  return ONNXConstantOp::create(rewriter, loc, newResultType,
+      mlir::ValueRange{}, mlir::ArrayRef<mlir::NamedAttribute>{valueAttr})
       .getResult();
 }
 
@@ -183,7 +182,7 @@ static LogicalResult tryFuseMatMulBias(
   Value bias1D = create1DBiasFromConstant(rewriter, biasConstant, loc, nOut);
 
   auto fused =
-      rewriter.create<XFEMatMulBiasOp>(loc, addLikeOp->getResult(0).getType(),
+      XFEMatMulBiasOp::create(rewriter, loc, addLikeOp->getResult(0).getType(),
           matmulOp.getA(), matmulOp.getB(), bias1D);
 
   rewriter.replaceOp(addLikeOp, fused.getY());

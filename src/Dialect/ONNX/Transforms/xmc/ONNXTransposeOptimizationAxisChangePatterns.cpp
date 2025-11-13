@@ -89,7 +89,7 @@ LogicalResult transformReductionAttributes(
   auto newAxesAttr =
       DenseElementsAttr::get(axesType, ArrayRef<int64_t>(newAxes));
   auto newAxesConst =
-      rewriter.create<ONNXConstantOp>(op->getLoc(), axesType, Attribute(),
+      ONNXConstantOp::create(rewriter, op->getLoc(), axesType, Attribute(),
           newAxesAttr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 
   op->setOperand(1, newAxesConst.getResult());
@@ -196,7 +196,7 @@ LogicalResult AxisAttributeTransformer<ONNXPadOp>::transformAttributes(
   auto newPadsAttr =
       DenseElementsAttr::get(padsType, ArrayRef<int64_t>(newPads));
   auto newPadsConst =
-      rewriter.create<ONNXConstantOp>(op.getLoc(), padsType, Attribute(),
+      ONNXConstantOp::create(rewriter, op.getLoc(), padsType, Attribute(),
           newPadsAttr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 
   op.getPadsMutable().assign(newPadsConst.getResult());
@@ -328,9 +328,8 @@ LogicalResult AxisAttributeTransformer<ONNXSliceOp>::transformAttributes(
     auto newType = RankedTensorType::get(
         {static_cast<int64_t>(values.size())}, rewriter.getI64Type());
     auto newAttr = DenseElementsAttr::get(newType, values);
-    return rewriter
-        .create<ONNXConstantOp>(op.getLoc(), newType, Attribute(), newAttr,
-            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr)
+    return ONNXConstantOp::create(rewriter, op.getLoc(), newType, Attribute(),
+        newAttr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr)
         .getResult();
   };
 
@@ -455,7 +454,7 @@ LogicalResult AxisAttributeTransformer<ONNXExpandOp>::transformAttributes(
   auto newShapeAttr =
       DenseElementsAttr::get(shapeType, ArrayRef<int64_t>(newShape));
   auto newShapeConst =
-      rewriter.create<ONNXConstantOp>(op.getLoc(), shapeType, Attribute(),
+      ONNXConstantOp::create(rewriter, op.getLoc(), shapeType, Attribute(),
           newShapeAttr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 
   op.getShapeMutable().assign(newShapeConst.getResult());
@@ -494,7 +493,7 @@ LogicalResult AxisAttributeTransformer<ONNXTileOp>::transformAttributes(
   auto newRepeatsAttr =
       DenseElementsAttr::get(repeatsType, ArrayRef<int64_t>(newRepeats));
   auto newRepeatsConst =
-      rewriter.create<ONNXConstantOp>(op.getLoc(), repeatsType, Attribute(),
+      ONNXConstantOp::create(rewriter, op.getLoc(), repeatsType, Attribute(),
           newRepeatsAttr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 
   op.getRepeatsMutable().assign(newRepeatsConst.getResult());
@@ -548,7 +547,7 @@ LogicalResult AxisAttributeTransformer<ONNXSqueezeOp>::transformAttributes(
   auto newAxesAttr =
       DenseElementsAttr::get(axesType, ArrayRef<int64_t>(newAxes));
   auto newAxesConst =
-      rewriter.create<ONNXConstantOp>(op.getLoc(), axesType, Attribute(),
+      ONNXConstantOp::create(rewriter, op.getLoc(), axesType, Attribute(),
           newAxesAttr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
 
   op.getAxesMutable().assign(newAxesConst.getResult());

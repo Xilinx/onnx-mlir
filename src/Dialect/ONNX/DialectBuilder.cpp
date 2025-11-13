@@ -62,7 +62,7 @@ Value OnnxBuilder::cast(Type outputType, Value input, IntegerAttr saturate,
     return createTypedOpAndInferShapes<ONNXCastOp>(
         outputType, input, saturate, to);
   else
-    return b().create<ONNXCastOp>(loc(), outputType, input, saturate, to);
+    return ONNXCastOp::create(b(), loc(), outputType, input, saturate, to);
 }
 
 Value OnnxBuilder::cast(Value input, IntegerAttr saturate, TypeAttr to) const {
@@ -107,7 +107,7 @@ Value OnnxBuilder::ceil(Value input) const {
 Value OnnxBuilder::clip(
     Value input, Value min, Value max, bool scalarType) const {
   if (scalarType)
-    return b().create<ONNXClipOp>(loc(), input.getType(), input, min, max);
+    return ONNXClipOp::create(b(), loc(), input.getType(), input, min, max);
   else
     return createOpAndInferShapes<ONNXClipOp>(toTensor(input.getType()),
         toTensor(input), toTensor(min), toTensor(max));
@@ -168,7 +168,7 @@ void OnnxBuilder::dimGroup(Value input, int axis, int groupID) const {
   IntegerAttr axisAttr = getSignedInt64Attr(axis);
   IntegerAttr groupIDAttr = getSignedInt64Attr(groupID);
   // No shape needed for this one I believe.
-  b().create<ONNXDimGroupOp>(loc(), input, axisAttr, groupIDAttr);
+  ONNXDimGroupOp::create(b(), loc(), input, axisAttr, groupIDAttr);
 }
 
 Value OnnxBuilder::dequantizeLinear(
@@ -293,7 +293,7 @@ Value OnnxBuilder::mul(Type resultType, Value A, Value B) const {
       resultType, toTensor(A), toTensor(B));
 }
 
-Value OnnxBuilder::none() const { return b().create<ONNXNoneOp>(loc()); }
+Value OnnxBuilder::none() const { return ONNXNoneOp::create(b(), loc()); }
 
 Value OnnxBuilder::pad(
     Value input, Value pads, Value constantValue, std::string mode) const {
@@ -308,7 +308,7 @@ Value OnnxBuilder::pad(
 }
 
 Value OnnxBuilder::padZero(Value input, Value pads) const {
-  return pad(input, pads, b().create<ONNXNoneOp>(loc()), "constant");
+  return pad(input, pads, ONNXNoneOp::create(b(), loc()), "constant");
 }
 
 Value OnnxBuilder::reduceMax(Type outputType, Value data, Value axes,
@@ -392,7 +392,7 @@ Value OnnxBuilder::rotaryEmbedding(Type outputType, Value X, Value cosCache,
 
 Value OnnxBuilder::round(Value input, bool scalarType) const {
   if (scalarType)
-    return b().create<ONNXRoundOp>(loc(), input.getType(), input);
+    return ONNXRoundOp::create(b(), loc(), input.getType(), input);
   else
     return createOpAndInferShapes<ONNXRoundOp>(
         toTensor(input.getType()), toTensor(input));
@@ -603,8 +603,7 @@ Value OnnxBuilder::toTensor(Value input) const {
          "expect RankedMemref type when not a TensorType");
   auto aTensorTy = toTensor(input.getType());
   // No shape inference for this op.
-  return b()
-      .create<UnrealizedConversionCastOp>(loc(), aTensorTy, input)
+  return UnrealizedConversionCastOp::create(b(), loc(), aTensorTy, input)
       .getResult(0);
 }
 
@@ -647,8 +646,7 @@ Value OnnxBuilder::toMemref(Value input) const {
   auto aTy = mlir::cast<ShapedType>(input.getType());
   auto aTensorTy = MemRefType::get(aTy.getShape(), aTy.getElementType());
   // No shape inference for this op.
-  return b()
-      .create<UnrealizedConversionCastOp>(loc(), aTensorTy, input)
+  return UnrealizedConversionCastOp::create(b(), loc(), aTensorTy, input)
       .getResult(0);
 }
 
@@ -771,9 +769,8 @@ Value OnnxBuilder::foldOrEmitONNXSqueezeOp(ConversionPatternRewriter &rewriter,
     DenseElementsAttr squeezedElements = inputElements.reshape(tensorType);
     return create.onnx.constant(squeezedElements);
   } else {
-    return rewriter
-        .create<ONNXSqueezeOp>(loc, tensorType, create.onnx.toTensor(input),
-            create.onnx.constantInt64({axis}))
+    return ONNXSqueezeOp::create(rewriter, loc, tensorType,
+        create.onnx.toTensor(input), create.onnx.constantInt64({axis}))
         .getResult();
   }
 }
@@ -791,9 +788,8 @@ Value OnnxBuilder::foldOrEmitONNXSqueezeV11Op(
     DenseElementsAttr squeezedElements = inputElements.reshape(tensorType);
     return create.onnx.constant(squeezedElements);
   } else {
-    return rewriter
-        .create<ONNXSqueezeV11Op>(loc, tensorType, create.onnx.toTensor(input),
-            rewriter.getI64ArrayAttr(axis))
+    return ONNXSqueezeV11Op::create(rewriter, loc, tensorType,
+        create.onnx.toTensor(input), rewriter.getI64ArrayAttr(axis))
         .getResult();
   }
 }
@@ -811,9 +807,8 @@ Value OnnxBuilder::foldOrEmitONNXUnsqueezeOp(
     DenseElementsAttr unsqueezedElements = inputElements.reshape(tensorType);
     return create.onnx.constant(unsqueezedElements);
   } else {
-    return rewriter
-        .create<ONNXUnsqueezeOp>(loc, tensorType, create.onnx.toTensor(input),
-            create.onnx.constantInt64({axis}))
+    return ONNXUnsqueezeOp::create(rewriter, loc, tensorType,
+        create.onnx.toTensor(input), create.onnx.constantInt64({axis}))
         .getResult();
   }
 }
@@ -831,9 +826,8 @@ Value OnnxBuilder::foldOrEmitONNXUnsqueezeV11Op(
     DenseElementsAttr unsqueezedElements = inputElements.reshape(tensorType);
     return create.onnx.constant(unsqueezedElements);
   } else {
-    return rewriter
-        .create<ONNXUnsqueezeV11Op>(loc, tensorType,
-            create.onnx.toTensor(input), rewriter.getI64ArrayAttr(axis))
+    return ONNXUnsqueezeV11Op::create(rewriter, loc, tensorType,
+        create.onnx.toTensor(input), rewriter.getI64ArrayAttr(axis))
         .getResult();
   }
 }
@@ -873,7 +867,7 @@ std::vector<Value> OnnxBuilder::foldOrEmitONNXSplitOp(
       splitSizesI64.emplace_back(mlir::cast<ShapedType>(t).getShape()[axis]);
     }
     Value splitSizes = create.onnx.constantInt64(splitSizesI64);
-    ONNXSplitOp split = rewriter.create<ONNXSplitOp>(loc, convertedTypes,
+    ONNXSplitOp split = ONNXSplitOp::create(rewriter, loc, convertedTypes,
         create.onnx.toTensor(input), splitSizes,
         /*axis=*/axis, nullptr);
     for (int i = 0; i < outputNum; ++i)
@@ -916,7 +910,7 @@ std::vector<Value> OnnxBuilder::foldOrEmitONNXSplitV11Op(
     for (auto t : resultTypes) {
       convertedTypes.emplace_back(create.onnx.toTensor(t));
     }
-    ONNXSplitV11Op split = rewriter.create<ONNXSplitV11Op>(loc, convertedTypes,
+    ONNXSplitV11Op split = ONNXSplitV11Op::create(rewriter, loc, convertedTypes,
         create.onnx.toTensor(input),
         /*axis=*/axis, nullptr);
     for (int i = 0; i < outputNum; ++i)
@@ -946,9 +940,8 @@ Value OnnxBuilder::foldOrEmitONNXTransposeOp(
         elementsBuilder.toDenseElementsAttr(transposedElements);
     return create.onnx.constant(denseTransposedElements);
   } else {
-    return rewriter
-        .create<ONNXTransposeOp>(loc, create.onnx.toTensor(resultType),
-            create.onnx.toTensor(input), permAttr)
+    return ONNXTransposeOp::create(rewriter, loc,
+        create.onnx.toTensor(resultType), create.onnx.toTensor(input), permAttr)
         .getResult();
   }
 }

@@ -107,7 +107,7 @@ mlir::Value createInt64Const1D(mlir::PatternRewriter &rewriter,
   auto tensorType = mlir::RankedTensorType::get(
       {static_cast<int64_t>(values.size())}, rewriter.getI64Type());
   auto attr = mlir::DenseIntElementsAttr::get(tensorType, values);
-  return rewriter.create<mlir::ONNXConstantOp>(loc, tensorType,
+  return mlir::ONNXConstantOp::create(rewriter, loc, tensorType,
       mlir::ValueRange{},
       mlir::ArrayRef<mlir::NamedAttribute>{
           rewriter.getNamedAttr("value", attr)});
@@ -121,8 +121,8 @@ mlir::Value createReshape(mlir::PatternRewriter &rewriter, mlir::Location loc,
   auto outputType =
       mlir::RankedTensorType::get(targetShape, inputType.getElementType());
   mlir::Value shapeConst = createInt64Const1D(rewriter, loc, targetShape);
-  return rewriter.create<mlir::ONNXReshapeOp>(
-      loc, outputType, input, shapeConst, /*allowzero=*/0);
+  return mlir::ONNXReshapeOp::create(
+      rewriter, loc, outputType, input, shapeConst, /*allowzero=*/0);
 }
 
 /// Per-op wiring for constant axes extraction and for re-emitting the reduce.
@@ -139,8 +139,8 @@ struct ReduceReshape4DTraits {
     auto trueKeepdims = mlir::IntegerAttr::get(
         rewriter.getIntegerType(64, /*isSigned=*/true), 1);
     auto newReduce =
-        rewriter.create<OpTy>(loc, newReduceOutType, newReduceInput, newAxesVal,
-            trueKeepdims, op.getNoopWithEmptyAxesAttr());
+        OpTy::create(rewriter, loc, newReduceOutType, newReduceInput,
+            newAxesVal, trueKeepdims, op.getNoopWithEmptyAxesAttr());
     return newReduce.getReduced();
   }
 };
@@ -160,8 +160,8 @@ struct ReduceReshape4DTraits<mlir::ONNXReduceMaxV13Op> {
     mlir::ArrayAttr axesAttr = rewriter.getI64ArrayAttr(newAxes);
     auto trueKeepdims = mlir::IntegerAttr::get(
         rewriter.getIntegerType(64, /*isSigned=*/true), 1);
-    auto newReduce = rewriter.create<mlir::ONNXReduceMaxV13Op>(
-        loc, newReduceOutType, newReduceInput, axesAttr, trueKeepdims);
+    auto newReduce = mlir::ONNXReduceMaxV13Op::create(rewriter, loc,
+        newReduceOutType, newReduceInput, axesAttr, trueKeepdims);
     return newReduce.getReduced();
   }
 };

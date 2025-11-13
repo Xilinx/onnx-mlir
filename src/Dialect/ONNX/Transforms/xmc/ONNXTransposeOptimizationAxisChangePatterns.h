@@ -444,7 +444,7 @@ struct PushTransposeThroughAxisOp : public OpRewritePattern<OpType> {
 
     // The final transpose should produce the exact same output as the original
     // operation Use the original output type directly
-    auto newTransposeOp = rewriter.create<ONNXTransposeOp>(op.getLoc(),
+    auto newTransposeOp = ONNXTransposeOp::create(rewriter, op.getLoc(),
         outputType, // Use original output type - transformation is semantically
                     // equivalent
         newOp.getResult(), rewriter.getI64ArrayAttr(newPerm));
@@ -575,11 +575,11 @@ struct PushTransposeThroughConcat : public OpRewritePattern<ONNXConcatOp> {
 
     // Create new concat operation
     rewriter.setInsertionPoint(concatOp);
-    auto newConcatOp = rewriter.create<ONNXConcatOp>(
-        concatOp.getLoc(), newConcatType, newInputs, newAxisAttr);
+    auto newConcatOp = ONNXConcatOp::create(
+        rewriter, concatOp.getLoc(), newConcatType, newInputs, newAxisAttr);
 
     // Create transpose after concat
-    auto newTransposeOp = rewriter.create<ONNXTransposeOp>(concatOp.getLoc(),
+    auto newTransposeOp = ONNXTransposeOp::create(rewriter, concatOp.getLoc(),
         originalConcatOutputType, newConcatOp.getResult(),
         rewriter.getI64ArrayAttr(firstPerm));
 
@@ -721,7 +721,7 @@ struct PushTransposeThroughConcatWithConst
               inTensorType.getElementType())) {
         auto quantResultType = RankedTensorType::get(
             transposedElements.getShapedType().getShape(), qType);
-        auto newQConst = rewriter.create<ONNXConstantOp>(concatOp.getLoc(),
+        auto newQConst = ONNXConstantOp::create(rewriter, concatOp.getLoc(),
             quantResultType, /*sparse_value=*/Attribute(),
             /*value=*/transposedElements,
             /*value_floats=*/nullptr, /*value_float=*/nullptr,
@@ -765,10 +765,10 @@ struct PushTransposeThroughConcatWithConst
         rewriter.getIntegerType(64, /*isSigned=*/true), newAxis);
 
     rewriter.setInsertionPoint(concatOp);
-    auto newConcatOp = rewriter.create<ONNXConcatOp>(
-        concatOp.getLoc(), newConcatType, newInputs, newAxisAttr);
+    auto newConcatOp = ONNXConcatOp::create(
+        rewriter, concatOp.getLoc(), newConcatType, newInputs, newAxisAttr);
 
-    auto newTransposeOp = rewriter.create<ONNXTransposeOp>(concatOp.getLoc(),
+    auto newTransposeOp = ONNXTransposeOp::create(rewriter, concatOp.getLoc(),
         originalConcatOutputType, newConcatOp.getResult(),
         rewriter.getI64ArrayAttr(firstPerm));
 

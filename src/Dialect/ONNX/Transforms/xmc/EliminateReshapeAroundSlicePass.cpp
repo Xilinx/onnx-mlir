@@ -79,10 +79,9 @@ static Value createI64ConstantOp(PatternRewriter &rewriter, Location loc,
     const std::vector<int64_t> &values) {
   MLIRContext *ctx = rewriter.getContext();
   auto attr = createDenseI64Attr(ctx, values);
-  return rewriter
-      .create<ONNXConstantOp>(loc, attr.getType(), Attribute(), attr,
-          FloatAttr(), ArrayAttr(), IntegerAttr(), ArrayAttr(), StringAttr(),
-          ArrayAttr())
+  return ONNXConstantOp::create(rewriter, loc, attr.getType(), Attribute(),
+      attr, FloatAttr(), ArrayAttr(), IntegerAttr(), ArrayAttr(), StringAttr(),
+      ArrayAttr())
       .getResult();
 }
 
@@ -170,18 +169,18 @@ static Value recreateEltwiseOp(Operation *origOp, ValueRange newOperands,
   Location loc = origOp->getLoc();
 
   if (isa<ONNXAddOp>(origOp)) {
-    return rewriter
-        .create<ONNXAddOp>(loc, newOutputType, newOperands[0], newOperands[1])
+    return ONNXAddOp::create(
+        rewriter, loc, newOutputType, newOperands[0], newOperands[1])
         .getResult();
   }
   if (isa<ONNXMulOp>(origOp)) {
-    return rewriter
-        .create<ONNXMulOp>(loc, newOutputType, newOperands[0], newOperands[1])
+    return ONNXMulOp::create(
+        rewriter, loc, newOutputType, newOperands[0], newOperands[1])
         .getResult();
   }
   if (isa<ONNXSubOp>(origOp)) {
-    return rewriter
-        .create<ONNXSubOp>(loc, newOutputType, newOperands[0], newOperands[1])
+    return ONNXSubOp::create(
+        rewriter, loc, newOutputType, newOperands[0], newOperands[1])
         .getResult();
   }
 
@@ -208,10 +207,9 @@ static Value createReshapedConstant(ONNXConstantOp origConst, size_t inPos,
   auto newResultType = RankedTensorType::get(shuffledShape,
       cast<RankedTensorType>(origConst.getResult().getType()).getElementType());
 
-  return rewriter
-      .create<ONNXConstantOp>(origConst.getLoc(), newResultType, Attribute(),
-          newConstAttr, FloatAttr(), ArrayAttr(), IntegerAttr(), ArrayAttr(),
-          StringAttr(), ArrayAttr())
+  return ONNXConstantOp::create(rewriter, origConst.getLoc(), newResultType,
+      Attribute(), newConstAttr, FloatAttr(), ArrayAttr(), IntegerAttr(),
+      ArrayAttr(), StringAttr(), ArrayAttr())
       .getResult();
 }
 
@@ -242,8 +240,8 @@ static Value transformBranch(Branch &branch, Value originalInput,
   // Create new slice - preserve element type from original input
   auto newSliceType = RankedTensorType::get(newSliceOutputShape,
       cast<RankedTensorType>(originalInput.getType()).getElementType());
-  auto newSlice = rewriter.create<ONNXSliceOp>(loc, newSliceType, originalInput,
-      createI64ConstantOp(rewriter, loc, newStarts),
+  auto newSlice = ONNXSliceOp::create(rewriter, loc, newSliceType,
+      originalInput, createI64ConstantOp(rewriter, loc, newStarts),
       createI64ConstantOp(rewriter, loc, newEnds),
       createI64ConstantOp(rewriter, loc, axes),
       createI64ConstantOp(rewriter, loc, steps));

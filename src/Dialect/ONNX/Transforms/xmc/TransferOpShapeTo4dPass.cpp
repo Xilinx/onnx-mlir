@@ -56,7 +56,7 @@ Value createConstantI64Array(
   auto tensorType = RankedTensorType::get(
       {static_cast<int64_t>(values.size())}, IntegerType::get(ctx, 64));
   auto denseAttr = DenseIntElementsAttr::get(tensorType, values);
-  return rewriter.create<ONNXConstantOp>(loc, Attribute(), denseAttr);
+  return ONNXConstantOp::create(rewriter, loc, Attribute(), denseAttr);
 }
 
 /// Multiply all dimensions except those specified in excludeDims
@@ -346,8 +346,8 @@ public:
               RankedTensorType::get(inputShape4D, inputElementType);
           Value shapeConst =
               createConstantI64Array(rewriter, loc, inputShape4D);
-          auto reshapeOp = rewriter.create<ONNXReshapeOp>(
-              loc, inputReshapeType, input, shapeConst);
+          auto reshapeOp = ONNXReshapeOp::create(
+              rewriter, loc, inputReshapeType, input, shapeConst);
           reshapedInputs.push_back(reshapeOp.getResult());
         }
         continue;
@@ -377,21 +377,21 @@ public:
       auto inputReshapeType =
           RankedTensorType::get(inputShape4D, inputElementType);
       Value shapeConst = createConstantI64Array(rewriter, loc, inputShape4D);
-      auto reshapeOp = rewriter.create<ONNXReshapeOp>(
-          loc, inputReshapeType, input, shapeConst);
+      auto reshapeOp = ONNXReshapeOp::create(
+          rewriter, loc, inputReshapeType, input, shapeConst);
       reshapedInputs.push_back(reshapeOp.getResult());
     }
 
     // Create new element-wise op with 4D inputs
     auto newOutputType = RankedTensorType::get(outputShape4D, elementType);
     Operation *newOp =
-        rewriter.create<OpTy>(loc, newOutputType, reshapedInputs);
+        OpTy::create(rewriter, loc, newOutputType, reshapedInputs);
 
     // Reshape output back to original shape
     auto outputReshapeType = RankedTensorType::get(outputShape, elementType);
     Value outputShapeConst = createConstantI64Array(rewriter, loc, outputShape);
-    auto outputReshapeOp = rewriter.create<ONNXReshapeOp>(
-        loc, outputReshapeType, newOp->getResult(0), outputShapeConst);
+    auto outputReshapeOp = ONNXReshapeOp::create(rewriter, loc,
+        outputReshapeType, newOp->getResult(0), outputShapeConst);
 
     rewriter.replaceOp(op, outputReshapeOp.getResult());
     LLVM_DEBUG(

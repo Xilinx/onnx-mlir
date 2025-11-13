@@ -370,7 +370,7 @@ static void maybeWidenNarrowConstOperand(PatternRewriter &rewriter,
     auto wideDense = DenseElementsAttr::get(
         wideStorageTensorTy, llvm::ArrayRef<llvm::APInt>(widened));
     auto wideValueAttr = rewriter.getNamedAttr("value", wideDense);
-    auto wideConstOp = rewriter.create<ONNXConstantOp>(loc, wideTensorTy,
+    auto wideConstOp = ONNXConstantOp::create(rewriter, loc, wideTensorTy,
         ValueRange{}, llvm::ArrayRef<NamedAttribute>{wideValueAttr});
     wideResult = wideConstOp.getResult();
   }
@@ -519,7 +519,7 @@ struct FuseQuantizedEltwiseWithoutActivation
 
     // Only create IR (e.g. onnx.NoValue) after we know we will rewrite.
     if (isUnary)
-      b = rewriter.create<ONNXNoneOp>(eltwiseOp.getLoc()).getResult();
+      b = ONNXNoneOp::create(rewriter, eltwiseOp.getLoc()).getResult();
 
     auto [mappedOpType, leakyAlpha, preluIn, preluShift] =
         computeActivationMapping(eltwiseOp.getOperation(), rewriter);
@@ -538,7 +538,7 @@ struct FuseQuantizedEltwiseWithoutActivation
     if constexpr (std::is_same_v<EltwiseOp, ONNXGeluOp>)
       approximateAttr = rewriter.getStringAttr(eltwiseOp.getApproximate());
 
-    auto fusedOp = rewriter.create<XCOMPILERFusedEltwiseOp>(eltwiseOp.getLoc(),
+    auto fusedOp = XCOMPILERFusedEltwiseOp::create(rewriter, eltwiseOp.getLoc(),
         resultType, a, b,
         /*approximate=*/approximateAttr,
         /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),
@@ -593,9 +593,9 @@ struct FuseQuantizedClipWithoutActivation
       return rewriter.notifyMatchFailure(
           clipOp, "no constant clip bounds to materialize");
 
-    Value noneB = rewriter.create<ONNXNoneOp>(clipOp.getLoc()).getResult();
+    Value noneB = ONNXNoneOp::create(rewriter, clipOp.getLoc()).getResult();
 
-    auto fusedOp = rewriter.create<XCOMPILERFusedEltwiseOp>(clipOp.getLoc(),
+    auto fusedOp = XCOMPILERFusedEltwiseOp::create(rewriter, clipOp.getLoc(),
         clipOp.getType(), // result type (quantized)
         clipOp.getInput(), noneB,
         /*approximate=*/StringAttr(),
@@ -760,9 +760,9 @@ struct FuseQuantizedEltwiseActivation : public OpRewritePattern<ActivationOp> {
     // any activation (nonlinear="NONE"), effectively dropping the ReLU.
     if (isReluNoOp(activationOp.getOperation())) {
       if (isUnary)
-        b = rewriter.create<ONNXNoneOp>(eltwiseOp.getLoc()).getResult();
+        b = ONNXNoneOp::create(rewriter, eltwiseOp.getLoc()).getResult();
       maybeWidenNarrowConstOperand(rewriter, eltwiseOp.getLoc(), opType, a, b);
-      auto fusedOp = rewriter.create<XCOMPILERFusedEltwiseOp>(
+      auto fusedOp = XCOMPILERFusedEltwiseOp::create(rewriter,
           eltwiseOp.getLoc(), activationOp.getType(), a, b,
           /*approximate=*/StringAttr(),
           /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),
@@ -808,11 +808,11 @@ struct FuseQuantizedEltwiseActivation : public OpRewritePattern<ActivationOp> {
 
     // Only create IR (e.g. onnx.NoValue) after we know we will rewrite.
     if (isUnary)
-      b = rewriter.create<ONNXNoneOp>(eltwiseOp.getLoc()).getResult();
+      b = ONNXNoneOp::create(rewriter, eltwiseOp.getLoc()).getResult();
 
     maybeWidenNarrowConstOperand(rewriter, eltwiseOp.getLoc(), opType, a, b);
 
-    auto fusedOp = rewriter.create<XCOMPILERFusedEltwiseOp>(eltwiseOp.getLoc(),
+    auto fusedOp = XCOMPILERFusedEltwiseOp::create(rewriter, eltwiseOp.getLoc(),
         activationOp.getType(), // Result type (quantized)
         a, b,
         /*approximate=*/StringAttr(),
@@ -886,7 +886,7 @@ struct FuseBF16IntermediateActivation : public OpRewritePattern<ActivationOp> {
 
     // Create optimized path: eltwise with f32, then activation with quantized
     // output
-    auto newEltwiseOp = rewriter.create<EltwiseOp>(eltwiseOp.getLoc(),
+    auto newEltwiseOp = EltwiseOp::create(rewriter, eltwiseOp.getLoc(),
         // Use f32 intermediate instead of BF16
         RankedTensorType::get(
             mlir::cast<RankedTensorType>(eltwiseResultType).getShape(),
@@ -902,10 +902,10 @@ struct FuseBF16IntermediateActivation : public OpRewritePattern<ActivationOp> {
     Operation *newActivationOp;
     if (std::is_same<ActivationOp, ONNXPReluOp>::value) {
       auto preluOp = mlir::cast<ONNXPReluOp>(activationOp.getOperation());
-      newActivationOp = rewriter.create<ONNXPReluOp>(activationOp.getLoc(),
+      newActivationOp = ONNXPReluOp::create(rewriter, activationOp.getLoc(),
           activationOp.getType(), newEltwiseOp.getResult(), preluOp.getSlope());
     } else {
-      newActivationOp = rewriter.create<ActivationOp>(activationOp.getLoc(),
+      newActivationOp = ActivationOp::create(rewriter, activationOp.getLoc(),
           activationOp.getType(), newEltwiseOp.getResult());
     }
 
@@ -1031,11 +1031,11 @@ struct ReplaceExpandWithEltwise : public OpRewritePattern<ONNXExpandOp> {
 
     auto constResultType = RankedTensorType::get(outputShape, constElemType);
     auto valueNamedAttr = rewriter.getNamedAttr("value", zeroAttr);
-    auto zeroConst = rewriter.create<ONNXConstantOp>(expandOp.getLoc(),
+    auto zeroConst = ONNXConstantOp::create(rewriter, expandOp.getLoc(),
         constResultType, mlir::ValueRange{},
         mlir::ArrayRef<mlir::NamedAttribute>{valueNamedAttr});
 
-    auto fusedOp = rewriter.create<XCOMPILERFusedEltwiseOp>(expandOp.getLoc(),
+    auto fusedOp = XCOMPILERFusedEltwiseOp::create(rewriter, expandOp.getLoc(),
         resultType, input, zeroConst.getResult(),
         /*approximate=*/StringAttr(),
         /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),

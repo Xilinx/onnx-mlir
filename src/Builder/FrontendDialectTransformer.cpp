@@ -284,7 +284,7 @@ private:
   }
 
   Value createNoneValue() {
-    return builder_.create<ONNXNoneOp>(UnknownLoc()).getResult();
+    return ONNXNoneOp::create(builder_, UnknownLoc()).getResult();
   }
 
   Value createConstantValue(ElementsAttr value, Location loc) {
@@ -1111,9 +1111,9 @@ private:
       return ec;
 
     if (useReturn)
-      builder_.create<ONNXReturnOp>(UnknownLoc(), retVals);
+      ONNXReturnOp::create(builder_, UnknownLoc(), retVals);
     else
-      builder_.create<ONNXYieldOp>(UnknownLoc(), retVals);
+      ONNXYieldOp::create(builder_, UnknownLoc(), retVals);
 
     setGraphOpAttributes(
         op, inputNames, outputNames, inputDimParams, outputDimParams);
@@ -1362,7 +1362,8 @@ private:
         outputTypes.emplace_back(builder_.getNoneType());
 
     // TODO: Handle optional inputs.
-    T op = builder_.create<T>(ImportLoc(node), outputTypes, inputs, attributes);
+    T op =
+        T::create(builder_, ImportLoc(node), outputTypes, inputs, attributes);
     // Type inference for results.
     for (const auto &attr : node.attribute()) {
       if (attr.type() == onnx::AttributeProto_AttributeType_GRAPH) {

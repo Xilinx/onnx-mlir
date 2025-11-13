@@ -520,8 +520,8 @@ public:
       OwningOpRef<ModuleOp> module(ModuleOp::create(loc));
       OpBuilder b(ctx);
       b.setInsertionPointToStart(module->getBody());
-      auto packedOp = b.create<ONNXConstantOp>(loc, Attribute(), packed);
-      auto plainOp = b.create<ONNXConstantOp>(loc, Attribute(), plain);
+      auto packedOp = ONNXConstantOp::create(b, loc, Attribute(), packed);
+      auto plainOp = ONNXConstantOp::create(b, loc, Attribute(), plain);
 
       DisposablePool::get<ONNXDialect>(ctx)->scrub(*module,
           {{ONNXConstantOp::getOperationName(), "value"}}, c.minElements);
@@ -557,8 +557,8 @@ public:
       OwningOpRef<ModuleOp> module(ModuleOp::create(loc));
       OpBuilder b(ctx);
       b.setInsertionPointToStart(module->getBody());
-      auto smallOp = b.create<ONNXConstantOp>(loc, Attribute(), small);
-      auto largeOp = b.create<ONNXConstantOp>(loc, Attribute(), large);
+      auto smallOp = ONNXConstantOp::create(b, loc, Attribute(), small);
+      auto largeOp = ONNXConstantOp::create(b, loc, Attribute(), large);
 
       DisposablePool::get<ONNXDialect>(ctx)->scrub(*module,
           {{ONNXConstantOp::getOperationName(), "value"}}, /*packedMin=*/-1,
@@ -584,8 +584,8 @@ public:
       OwningOpRef<ModuleOp> module(ModuleOp::create(loc));
       OpBuilder b(ctx);
       b.setInsertionPointToStart(module->getBody());
-      auto first = b.create<ONNXConstantOp>(loc, Attribute(), shared);
-      auto second = b.create<ONNXConstantOp>(loc, Attribute(), shared);
+      auto first = ONNXConstantOp::create(b, loc, Attribute(), shared);
+      auto second = ONNXConstantOp::create(b, loc, Attribute(), shared);
 
       Operation *firstOp = first.getOperation();
       DisposablePool::get<ONNXDialect>(ctx)->scrub(*module,

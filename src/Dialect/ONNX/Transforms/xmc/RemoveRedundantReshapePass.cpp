@@ -106,11 +106,11 @@ struct RemoveReshapeAroundSigmoid : public OpRewritePattern<ONNXReshapeOp> {
     Location loc = reshape2.getLoc();
 
     // Create new Sigmoid with original input (bypassing first reshape)
-    auto newSigmoid = rewriter.create<ONNXSigmoidOp>(
-        sigmoidOp.getLoc(), reshape1.getData().getType(), reshape1.getData());
+    auto newSigmoid = ONNXSigmoidOp::create(rewriter, sigmoidOp.getLoc(),
+        reshape1.getData().getType(), reshape1.getData());
 
     // Create new reshape with Sigmoid output
-    auto newReshape = rewriter.create<ONNXReshapeOp>(loc, reshape2.getType(),
+    auto newReshape = ONNXReshapeOp::create(rewriter, loc, reshape2.getType(),
         newSigmoid.getResult(), reshape2.getShape(),
         reshape2.getAllowzeroAttr());
 
@@ -183,11 +183,11 @@ struct RemoveReshapeAroundBinaryOp : public OpRewritePattern<ONNXReshapeOp> {
         origLhsType.getShape(), binaryOutputType.getElementType());
 
     // Create new binary op with original inputs (bypassing reshapes)
-    auto newBinaryOp = rewriter.create<BinaryOpTy>(
-        binaryOp.getLoc(), newBinaryType, origLhs, origRhs);
+    auto newBinaryOp = BinaryOpTy::create(
+        rewriter, binaryOp.getLoc(), newBinaryType, origLhs, origRhs);
 
     // Create new reshape with binary op output
-    auto newReshape = rewriter.create<ONNXReshapeOp>(loc, reshape3.getType(),
+    auto newReshape = ONNXReshapeOp::create(rewriter, loc, reshape3.getType(),
         newBinaryOp.getResult(), reshape3.getShape(),
         reshape3.getAllowzeroAttr());
 

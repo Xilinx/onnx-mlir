@@ -168,7 +168,7 @@ struct RemoveDilationConv : public OpRewritePattern<ONNXConvOp> {
         originalShape[0], originalShape[1], new_kernel, new_kernel};
     auto newWeightsResultType =
         RankedTensorType::get(expandedShape, weightsType.getElementType());
-    auto newWeightsConst = rewriter.create<ONNXConstantOp>(loc,
+    auto newWeightsConst = ONNXConstantOp::create(rewriter, loc,
         newWeightsResultType, mlir::ValueRange{},
         mlir::ArrayRef<mlir::NamedAttribute>{valueAttr});
 

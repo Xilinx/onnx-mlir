@@ -120,7 +120,7 @@ struct MergeNestedConcatPattern : public OpRewritePattern<ONNXConcatOp> {
     }
 
     rewriter.setInsertionPoint(concatOp);
-    auto newConcatOp = rewriter.create<ONNXConcatOp>(concatOp.getLoc(),
+    auto newConcatOp = ONNXConcatOp::create(rewriter, concatOp.getLoc(),
         concatOp.getType(), flattenedInputs, concatOp.getAxisAttr());
 
     rewriter.replaceOp(concatOp, newConcatOp.getResult());

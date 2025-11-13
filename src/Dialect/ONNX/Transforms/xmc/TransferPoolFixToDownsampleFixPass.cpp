@@ -127,9 +127,9 @@ Value createSizesConstant(
       {static_cast<int64_t>(outputShape.size())}, rewriter.getI64Type());
   auto sizesAttr = DenseElementsAttr::get(sizesType, outputShape);
 
-  return rewriter.create<ONNXConstantOp>(loc, sizesType, Attribute(), sizesAttr,
-      FloatAttr(), ArrayAttr(), IntegerAttr(), ArrayAttr(), StringAttr(),
-      ArrayAttr());
+  return ONNXConstantOp::create(rewriter, loc, sizesType, Attribute(),
+      sizesAttr, FloatAttr(), ArrayAttr(), IntegerAttr(), ArrayAttr(),
+      StringAttr(), ArrayAttr());
 }
 
 //===----------------------------------------------------------------------===//
@@ -191,9 +191,9 @@ struct TransferPoolToDownsamplePattern : public OpRewritePattern<PoolOpT> {
     // Use none for both roi and scales - roi is unused in sizes-mode and
     // ConvertToChannelLastPass's Resize pattern only matches when roi is none
     // (an empty 0-element ROI Constant blocks layout conversion downstream).
-    Value roiNone = rewriter.create<ONNXNoneOp>(loc).getResult();
+    Value roiNone = ONNXNoneOp::create(rewriter, loc).getResult();
     // Use none for scales - we specify sizes instead (cannot have both)
-    Value scalesNone = rewriter.create<ONNXNoneOp>(loc).getResult();
+    Value scalesNone = ONNXNoneOp::create(rewriter, loc).getResult();
     Value sizesConst = createSizesConstant(rewriter, loc, expectedOutputShape);
 
     // Create signed i64 type for ONNX attributes (si64)
@@ -202,7 +202,7 @@ struct TransferPoolToDownsamplePattern : public OpRewritePattern<PoolOpT> {
 
     // Create resize op with mode "nearest"
     auto resizeOp =
-        rewriter.create<ONNXResizeOp>(loc, outputType, poolOp.getX(),
+        ONNXResizeOp::create(rewriter, loc, outputType, poolOp.getX(),
             /*roi=*/roiNone,
             /*scales=*/scalesNone,
             /*sizes=*/sizesConst,
@@ -293,9 +293,9 @@ struct TransferONNXXFEPoolToDownsamplePattern
     // Use none for both roi and scales - roi is unused in sizes-mode and
     // ConvertToChannelLastPass's Resize pattern only matches when roi is none
     // (an empty 0-element ROI Constant blocks layout conversion downstream).
-    Value roiNone = rewriter.create<ONNXNoneOp>(loc).getResult();
+    Value roiNone = ONNXNoneOp::create(rewriter, loc).getResult();
     // Use none for scales - we specify sizes instead
-    Value scalesNone = rewriter.create<ONNXNoneOp>(loc).getResult();
+    Value scalesNone = ONNXNoneOp::create(rewriter, loc).getResult();
     // Create sizes constant
     Value sizesConst = createSizesConstant(rewriter, loc, expectedOutputShape);
 
@@ -304,20 +304,21 @@ struct TransferONNXXFEPoolToDownsamplePattern
         IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed);
 
     // Create XFE resize op with mode "nearest"
-    auto resizeOp = rewriter.create<XFEResizeOp>(loc, outputType, poolOp.getX(),
-        /*roi=*/roiNone,
-        /*scales=*/scalesNone,
-        /*sizes=*/sizesConst,
-        /*antialias=*/IntegerAttr::get(si64Type, 0),
-        /*axes=*/nullptr,
-        /*coordinate_transformation_mode=*/
-        rewriter.getStringAttr("asymmetric"),
-        /*cubic_coeff_a=*/rewriter.getF32FloatAttr(-0.75f),
-        /*exclude_outside=*/IntegerAttr::get(si64Type, 0),
-        /*extrapolation_value=*/rewriter.getF32FloatAttr(0.0f),
-        /*keep_aspect_ratio_policy=*/rewriter.getStringAttr("stretch"),
-        /*mode=*/rewriter.getStringAttr("nearest"),
-        /*nearest_mode=*/rewriter.getStringAttr("floor"));
+    auto resizeOp =
+        XFEResizeOp::create(rewriter, loc, outputType, poolOp.getX(),
+            /*roi=*/roiNone,
+            /*scales=*/scalesNone,
+            /*sizes=*/sizesConst,
+            /*antialias=*/IntegerAttr::get(si64Type, 0),
+            /*axes=*/nullptr,
+            /*coordinate_transformation_mode=*/
+            rewriter.getStringAttr("asymmetric"),
+            /*cubic_coeff_a=*/rewriter.getF32FloatAttr(-0.75f),
+            /*exclude_outside=*/IntegerAttr::get(si64Type, 0),
+            /*extrapolation_value=*/rewriter.getF32FloatAttr(0.0f),
+            /*keep_aspect_ratio_policy=*/rewriter.getStringAttr("stretch"),
+            /*mode=*/rewriter.getStringAttr("nearest"),
+            /*nearest_mode=*/rewriter.getStringAttr("floor"));
 
     rewriter.replaceOp(poolOp, resizeOp.getY());
 

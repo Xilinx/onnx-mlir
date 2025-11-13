@@ -60,7 +60,7 @@ Operation *createOpWithNewType(PatternRewriter &rewriter, Operation *op,
     auto inputValue = operands.back();
     auto onnxCastTy = cast<mlir::TensorType>(inputValue.getType());
     auto newOnnxCastTy = onnxCastTy.clone(toFloatType);
-    return rewriter.create<mlir::ONNXCastOp>(fusedLoc, newOnnxCastTy,
+    return mlir::ONNXCastOp::create(rewriter, fusedLoc, newOnnxCastTy,
         operands.back(), onnxCastOp.getSaturate(), toFloatType);
   }
 
@@ -145,7 +145,7 @@ mlir::Value createNewConstantOp(PatternRewriter &rewriter,
         bf16Semantics, toShapedTy, valueElements);
   }
 
-  auto constantValue = rewriter.create<mlir::ONNXConstantOp>(loc, toShapedTy,
+  auto constantValue = mlir::ONNXConstantOp::create(rewriter, loc, toShapedTy,
       Attribute(), newValueAttr, mlir::FloatAttr(), mlir::ArrayAttr(),
       mlir::IntegerAttr(), mlir::ArrayAttr(), mlir::StringAttr(),
       mlir::ArrayAttr());
@@ -465,7 +465,7 @@ public:
     }
 
     auto newOnnxCastTy = inputCastOperandTy.clone(castTy.getElementType());
-    auto newONNXCastOp = rewriter.create<mlir::ONNXCastOp>(
+    auto newONNXCastOp = mlir::ONNXCastOp::create(rewriter,
         FusedLoc::get(
             castOp->getContext(), {inputCastOp->getLoc(), castOp->getLoc()}),
         newOnnxCastTy, inputCastOp.getInput(), inputCastOp.getSaturate(),
