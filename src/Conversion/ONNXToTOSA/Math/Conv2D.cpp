@@ -120,18 +120,11 @@ public:
     // the conv has multiple users that are activations (which could
     // *theoretically* happen).
     Operation *activation = nullptr;
-    for (Operation *user : convOp.getResult().getUsers()) {
-      if (isa<ONNXReluOp, ONNXLeakyReluOp>(user)) {
-        if (activation != nullptr) {
-          // Multiple users that are activations
-          activation = nullptr;
-          break;
-        }
-        activation = user;
-      } else {
-        // Non activation user
-        activation = nullptr;
-        break;
+    if (convOp->getResult(0).hasOneUse()) {
+      Operation *firstConvUser = *convOp->getResult(0).getUsers().begin();
+      if (isa<ONNXReluOp>(firstConvUser) ||
+          isa<ONNXLeakyReluOp>(firstConvUser)) {
+        activation = firstConvUser;
       }
     }
 
