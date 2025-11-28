@@ -128,6 +128,11 @@ struct ONNXHybridTransformPass
       llvm::cl::desc("Enable decomposition of Split to Slice"),
       ::llvm::cl::init(false)};
 
+  Option<bool> enableScatterNDDecompose{*this,
+      "enable-scatternd-decompose",
+      llvm::cl::desc("Enable decomposition of ScatterND"),
+      ::llvm::cl::init(true)};
+
   FrozenRewritePatternSet patterns;
 
   ONNXHybridTransformPass(bool enableRecomposition,
@@ -136,7 +141,7 @@ struct ONNXHybridTransformPass
       bool enableConvTransposeDecomposeToPhasedConv,
       bool enableConvTranspose1dDecomposeToPhasedConv,
       bool recomposeLayernormByTranspose, bool enableInstanceNormDecompose,
-      bool enableSplitToSliceDecompose) {
+      bool enableSplitToSliceDecompose, bool enableScatterNDDecompose) {
     this->recomposition = enableRecomposition;
     this->quarkQuantizedOpsLegalization = enableQuarkQuantizedOpsLegalization;
     this->enableConvTransposeDecompose = enableConvTransposeDecompose;
@@ -147,6 +152,7 @@ struct ONNXHybridTransformPass
     this->recomposeLayernormByTranspose = recomposeLayernormByTranspose;
     this->enableInstanceNormDecompose = enableInstanceNormDecompose;
     this->enableSplitToSliceDecompose = enableSplitToSliceDecompose;
+    this->enableScatterNDDecompose = enableScatterNDDecompose;
   }
 
   ONNXHybridTransformPass(const ONNXHybridTransformPass &pass)
@@ -190,7 +196,8 @@ struct ONNXHybridTransformPass
           enableConvTransposeDecompose,
           enableConvTransposeDecomposeToPhasedConv,
           enableConvTranspose1dDecomposeToPhasedConv,
-          enableInstanceNormDecompose, enableSplitToSliceDecompose);
+          enableInstanceNormDecompose, enableSplitToSliceDecompose,
+          enableScatterNDDecompose);
     }
 
     if (recomposition) {
@@ -236,11 +243,11 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createONNXHybridTransformPass(
     bool enableConvTransposeDecomposeToPhasedConv,
     bool enableConvTranspose1dDecomposeToPhasedConv,
     bool enableRecomposeLayernormByTranspose, bool enableInstanceNormDecompose,
-    bool enableSplitToSliceDecompose) {
+    bool enableSplitToSliceDecompose, bool enableScatterNDDecompose) {
   return std::make_unique<ONNXHybridTransformPass>(enableRecomposition,
       enableQuarkQuantizedOpsLegalization, enableConvTransposeDecompose,
       enableConvTransposeDecomposeToPhasedConv,
       enableConvTranspose1dDecomposeToPhasedConv,
       enableRecomposeLayernormByTranspose, enableInstanceNormDecompose,
-      enableSplitToSliceDecompose);
+      enableSplitToSliceDecompose, enableScatterNDDecompose);
 }

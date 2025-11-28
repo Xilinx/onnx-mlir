@@ -3758,7 +3758,8 @@ struct DecomposeONNXToONNXPass
       bool enableConvTransposeDecomposeToPhasedConv = false,
       bool enableConvTranspose1dDecomposeToPhasedConv = false,
       bool enableInstanceNormDecompose = true,
-      bool enableSplitToSliceDecompose = false) {
+      bool enableSplitToSliceDecompose = false,
+      bool enableScatterNDDecompose = true) {
     this->target = target;
     this->enableConvTransposeDecompose = enableConvTransposeDecompose;
     this->enableConvTransposeDecomposeToPhasedConv =
@@ -3767,6 +3768,7 @@ struct DecomposeONNXToONNXPass
         enableConvTranspose1dDecomposeToPhasedConv;
     this->enableInstanceNormDecompose = enableInstanceNormDecompose;
     this->enableSplitToSliceDecompose = enableSplitToSliceDecompose;
+    this->enableScatterNDDecompose = enableScatterNDDecompose;
   }
 
   DecomposeONNXToONNXPass(const DecomposeONNXToONNXPass &pass)
@@ -3781,6 +3783,8 @@ struct DecomposeONNXToONNXPass
         pass.enableInstanceNormDecompose.getValue();
     this->enableSplitToSliceDecompose =
         pass.enableSplitToSliceDecompose.getValue();
+    this->enableScatterNDDecompose =
+        pass.enableScatterNDDecompose.getValue();
   }
 
   StringRef getArgument() const override { return "decompose-onnx"; }
@@ -3820,6 +3824,11 @@ struct DecomposeONNXToONNXPass
       llvm::cl::desc("Enable decomposition of Split to Slice operations"),
       ::llvm::cl::init(false)};
 
+  Option<bool> enableScatterNDDecompose{*this,
+      "enable-scatternd-decompose",
+      llvm::cl::desc("Enable decomposition of ScatterND"),
+      ::llvm::cl::init(true)};
+
   void runOnOperation() final;
 
   typedef PassWrapper<DecomposeONNXToONNXPass, OperationPass<func::FuncOp>>
@@ -3833,7 +3842,7 @@ void DecomposeONNXToONNXPass::runOnOperation() {
   onnx_mlir::getDecomposeONNXToONNXPatterns(patterns,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
       enableConvTranspose1dDecomposeToPhasedConv, enableInstanceNormDecompose,
-      enableSplitToSliceDecompose);
+      enableSplitToSliceDecompose, enableScatterNDDecompose);
   patterns.insert<ReplaceCastLikeByCastPattern>(context);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
@@ -3852,7 +3861,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns, bool enableConvTransposeDecompose,
     bool enableConvTransposeDecomposeToPhasedConv,
     bool enableConvTranspose1dDecomposeToPhasedConv,
-    bool enableInstanceNormDecompose, bool enableSplitToSliceDecompose) {
+    bool enableInstanceNormDecompose, bool enableSplitToSliceDecompose,
+    bool enableScatterNDDecompose) {
   MLIRContext *context = patterns.getContext();
   populateWithGenerated(patterns);
   if (enableConvTransposeDecompose)
@@ -3882,7 +3892,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   patterns.insert<SimplifiedLayerNorm>(context);
   patterns.insert<MicrosoftSkipSimplifiedLayerNorm>(context);
   patterns.insert<DecomposeSlicePadPattern>(context);
-  patterns.insert<DecomposeScatterNDPattern>(context);
+  if (enableScatterNDDecompose)
+    patterns.insert<DecomposeScatterNDPattern>(context);
   patterns.insert<SoftmaxCrossEntropyPattern>(context);
   patterns.insert<SumToAddPattern>(context);
   if (enableSplitToSliceDecompose)
@@ -3905,9 +3916,10 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createDecomposeONNXToONNXPass(
     const std::string &target, bool enableConvTransposeDecompose,
     bool enableConvTransposeDecomposeToPhasedConv,
     bool enableConvTranspose1dDecomposeToPhasedConv,
-    bool enableInstanceNormDecompose, bool enableSplitToSliceDecompose) {
+    bool enableInstanceNormDecompose, bool enableSplitToSliceDecompose,
+    bool enableScatterNDDecompose) {
   return std::make_unique<DecomposeONNXToONNXPass>(target,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
       enableConvTranspose1dDecomposeToPhasedConv, enableInstanceNormDecompose,
-      enableSplitToSliceDecompose);
+      enableSplitToSliceDecompose, enableScatterNDDecompose);
 }

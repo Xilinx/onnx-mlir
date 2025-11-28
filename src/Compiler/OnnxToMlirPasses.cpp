@@ -31,7 +31,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
       /*target=*/"", opts.enableConvTransposeDecompose,
       opts.enableConvTransposeDecomposeToPhasedConv,
       opts.enableConvTranspose1dDecomposeToPhasedConv,
-      opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose));
+      opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose,
+      opts.enableScatterNDDecompose));
   if (!opts.disableRecomposeOption)
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createRecomposeONNXToONNXPass(
         /*target=*/"", opts.enableRecomposeLayernormByTranspose));
@@ -43,7 +44,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
         opts.enableConvTransposeDecomposeToPhasedConv,
         opts.enableConvTranspose1dDecomposeToPhasedConv,
         opts.enableRecomposeLayernormByTranspose,
-        opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose));
+        opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose,
+        opts.enableScatterNDDecompose));
     // Convolution Optimization for CPU: enable when there are no accelerators.
     if (targetCPU && opts.enableConvOptPass) {
       pm.addNestedPass<func::FuncOp>(onnx_mlir::createConvOptONNXToONNXPass(
@@ -55,7 +57,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
           opts.enableConvTransposeDecomposeToPhasedConv,
           opts.enableConvTranspose1dDecomposeToPhasedConv,
           opts.enableRecomposeLayernormByTranspose,
-          opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose));
+          opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose,
+          opts.enableScatterNDDecompose));
     }
   } else {
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
@@ -113,7 +116,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
         opts.enableConvTransposeDecomposeToPhasedConv,
         opts.enableConvTranspose1dDecomposeToPhasedConv,
         opts.enableRecomposeLayernormByTranspose,
-        opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose));
+        opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose,
+        opts.enableScatterNDDecompose));
   } else {
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
     pm.addPass(mlir::createCanonicalizerPass());

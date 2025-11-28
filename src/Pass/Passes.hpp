@@ -42,7 +42,8 @@ std::unique_ptr<mlir::Pass> createDecomposeONNXToONNXPass(
     bool enableConvTransposeDecomposeToPhasedConv = false,
     bool enableConvTranspose1dDecomposeToPhasedConv = false,
     bool enableInstanceNormDecompose = true,
-    bool enableSplitToSliceDecompose = false);
+    bool enableSplitToSliceDecompose = false,
+    bool enableScatterNDDecompose = true);
 std::unique_ptr<mlir::Pass> createRecomposeONNXToONNXPass(
     const std::string &target = "",
     const bool &recomposeLayernormByTranspose = false);
@@ -90,7 +91,8 @@ std::unique_ptr<mlir::Pass> createONNXHybridTransformPass(
     bool enableConvTranspose1dDecomposeToPhasedConv = false,
     bool enableRecomposeLayernormByTranspose = false,
     bool enableInstanceNormDecompose = true,
-    bool enableSplitToSliceDecompose = false);
+    bool enableSplitToSliceDecompose = false,
+    bool enableScatterNDDecompose = true);
 
 /// Pass for analyzing unknown dimension in ONNX operations.
 std::unique_ptr<mlir::Pass> createONNXDimAnalysisPass();
