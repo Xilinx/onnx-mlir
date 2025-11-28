@@ -128,8 +128,7 @@ struct ONNXHybridTransformPass
       llvm::cl::desc("Enable decomposition of Split to Slice"),
       ::llvm::cl::init(false)};
 
-  Option<bool> enableScatterNDDecompose{*this,
-      "enable-scatternd-decompose",
+  Option<bool> enableScatterNDDecompose{*this, "enable-scatternd-decompose",
       llvm::cl::desc("Enable decomposition of ScatterND"),
       ::llvm::cl::init(true)};
 

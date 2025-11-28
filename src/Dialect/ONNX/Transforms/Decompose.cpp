@@ -3783,8 +3783,7 @@ struct DecomposeONNXToONNXPass
         pass.enableInstanceNormDecompose.getValue();
     this->enableSplitToSliceDecompose =
         pass.enableSplitToSliceDecompose.getValue();
-    this->enableScatterNDDecompose =
-        pass.enableScatterNDDecompose.getValue();
+    this->enableScatterNDDecompose = pass.enableScatterNDDecompose.getValue();
   }
 
   StringRef getArgument() const override { return "decompose-onnx"; }
@@ -3824,8 +3823,7 @@ struct DecomposeONNXToONNXPass
       llvm::cl::desc("Enable decomposition of Split to Slice operations"),
       ::llvm::cl::init(false)};
 
-  Option<bool> enableScatterNDDecompose{*this,
-      "enable-scatternd-decompose",
+  Option<bool> enableScatterNDDecompose{*this, "enable-scatternd-decompose",
       llvm::cl::desc("Enable decomposition of ScatterND"),
       ::llvm::cl::init(true)};
 

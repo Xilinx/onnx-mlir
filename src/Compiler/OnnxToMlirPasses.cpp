@@ -50,15 +50,15 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     if (targetCPU && opts.enableConvOptPass) {
       pm.addNestedPass<func::FuncOp>(onnx_mlir::createConvOptONNXToONNXPass(
           opts.enableSimdDataLayout && !opts.disableSimdOption));
-      pm.addNestedPass<func::FuncOp>(onnx_mlir::createONNXHybridTransformPass(
-          !opts.disableRecomposeOption,
-          /*enableQuarkQuantizedOpsLegalization=*/false,
-          opts.enableConvTransposeDecompose,
-          opts.enableConvTransposeDecomposeToPhasedConv,
-          opts.enableConvTranspose1dDecomposeToPhasedConv,
-          opts.enableRecomposeLayernormByTranspose,
-          opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose,
-          opts.enableScatterNDDecompose));
+      pm.addNestedPass<func::FuncOp>(
+          onnx_mlir::createONNXHybridTransformPass(!opts.disableRecomposeOption,
+              /*enableQuarkQuantizedOpsLegalization=*/false,
+              opts.enableConvTransposeDecompose,
+              opts.enableConvTransposeDecomposeToPhasedConv,
+              opts.enableConvTranspose1dDecomposeToPhasedConv,
+              opts.enableRecomposeLayernormByTranspose,
+              opts.enableInstanceNormDecompose,
+              opts.enableSplitToSliceDecompose, opts.enableScatterNDDecompose));
     }
   } else {
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
