@@ -2539,6 +2539,12 @@ struct FuseBackToBackMaxpools
           lowerMaxpool.getLoc(), "Defining op is not a maxpool");
     }
 
+    // Check that the upper maxpool has only one user
+    if (!upperMaxpool->hasOneUse()) {
+      return rewriter.notifyMatchFailure(lowerMaxpool->getLoc(),
+          "Optimization only works when upper maxpool has one user");
+    }
+
     auto upperMaxpoolKernelSizeArr = upperMaxpool.getKernelShape().getValue();
     auto lowerMaxpoolKernelSizeArr = lowerMaxpool.getKernelShape().getValue();
 
