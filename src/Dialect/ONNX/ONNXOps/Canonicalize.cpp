@@ -2533,7 +2533,27 @@ struct FuseBackToBackMaxpools
       return rewriter.notifyMatchFailure(lowerMaxpool->getLoc(),
           "Cannot get defining op for the lower maxpool");
     }
-    auto upperMaxpool = dyn_cast<ONNXMaxPoolSingleOutOp>(upperOp);
+
+    if (!isa<ONNXDequantizeLinearOp>(upperOp) &&
+        !isa<ONNXMaxPoolSingleOutOp>(upperOp)) {
+      return rewriter.notifyMatchFailure(
+          lowerMaxpool.getLoc(), "Defining op isn't a maxpool or a dequantize");
+    }
+
+    ONNXMaxPoolSingleOutOp upperMaxpool = nullptr;
+    auto upperDequant = dyn_cast<ONNXDequantizeLinearOp>(upperOp);
+
+    if (upperDequant) {
+      auto *quant = upperDequant->getOperand(0).getDefiningOp();
+      if (!quant || !isa<ONNXQuantizeLinearOp>(quant))
+        return rewriter.notifyMatchFailure(
+            lowerMaxpool->getLoc(), "No Q->Dq chain between the maxpools");
+      upperMaxpool = dyn_cast<ONNXMaxPoolSingleOutOp>(
+          quant->getOperand(0).getDefiningOp());
+    } else {
+      upperMaxpool = dyn_cast<ONNXMaxPoolSingleOutOp>(upperOp);
+    }
+
     if (!upperMaxpool) {
       return rewriter.notifyMatchFailure(
           lowerMaxpool.getLoc(), "Defining op is not a maxpool");
