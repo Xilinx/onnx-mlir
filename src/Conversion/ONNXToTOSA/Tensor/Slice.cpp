@@ -78,13 +78,8 @@ public:
     llvm::SmallVector<int64_t, 4> steps;
     IndexExpr::getLiteral(shapeHelper.steps, steps);
 
-    size_t nbSlicedDims = 0;
-    for (auto [in, out] : llvm::zip(inShape, outShape)) {
-      if (out != in)
-        nbSlicedDims++;
-    }
     // TODO: remove the check nbSlicedDims == 1 when possible
-    if (convertSliceOnlyWhenStepOne && nbSlicedDims == 1 &&
+    if (convertSliceOnlyWhenStepOne &&
         llvm::any_of(steps, [](int64_t step) { return step > 1; })) {
       return rewriter.notifyMatchFailure(op, "step > 1 are not supported.");
     }
