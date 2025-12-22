@@ -2897,40 +2897,29 @@ func.func @maxpool_k5_p1_s1_maxpool_k3_p1_s1(%arg0: tensor<1x3x224x224xf32>) -> 
 // CHECK:           return %[[VAL_1]] : tensor<1x3x222x222xf32>
 
 // -----
-func.func @maxpool_k5_p2_s3_maxpool_k5_p1_s3(%arg0: tensor<1x3x224x224xf32>) -> (tensor<1x3x25x25xf32>) {
-  %0 = "onnx.MaxPoolSingleOut"(%arg0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [5, 5], pads = [2, 2, 2, 2], storage_order = 0 : si64, strides = [3, 3]} : (tensor<1x3x224x224xf32>) -> tensor<1x3x75x75xf32>
-  %1 = "onnx.MaxPoolSingleOut"(%0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [5, 5], pads = [1, 1, 1, 1], storage_order = 0 : si64, strides = [3, 3]} : (tensor<1x3x75x75xf32>) -> tensor<1x3x25x25xf32>
-  return %1 : tensor<1x3x25x25xf32>
-}
-
-// CHECK-LABEL:   func.func @maxpool_k5_p2_s3_maxpool_k5_p1_s3(
-// CHECK-SAME:                                                 %[[VAL_0:.*]]: tensor<1x3x224x224xf32>) -> tensor<1x3x25x25xf32> {
-// CHECK:           %[[VAL_1:.*]] = "onnx.MaxPoolSingleOut"(%[[VAL_0]]) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [17, 17], pads = [5, 5, 5, 5], storage_order = 0 : si64, strides = [9, 9]} : (tensor<1x3x224x224xf32>) -> tensor<1x3x25x25xf32>
-// CHECK:           return %[[VAL_1]] : tensor<1x3x25x25xf32>
-
-// -----
-func.func @maxpool1d_k3_p1_s3_maxpool1d_k3_p1_s3(%arg0: tensor<1x1x12xf32>) -> tensor<1x1x2xf32> {
+func.func @maxpool_upper_input_not_fully_covered(%arg0: tensor<1x1x12xf32>) -> tensor<1x1x2xf32> {
   %0 = "onnx.MaxPoolSingleOut"(%arg0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [3], pads = [1, 1], storage_order = 0 : si64, strides = [3]} : (tensor<1x1x12xf32>) -> tensor<1x1x4xf32>
   %1 = "onnx.MaxPoolSingleOut"(%0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [3], pads = [1, 1], storage_order = 0 : si64, strides = [3]} : (tensor<1x1x4xf32>) -> tensor<1x1x2xf32>
   return %1 : tensor<1x1x2xf32>
 }
 
-// CHECK-LABEL:   func.func @maxpool1d_k3_p1_s3_maxpool1d_k3_p1_s3(
+// CHECK-LABEL:   func.func @maxpool_upper_input_not_fully_covered(
 // CHECK-SAME:                                                     %[[VAL_0:.*]]: tensor<1x1x12xf32>) -> tensor<1x1x2xf32> {
-// CHECK:           %[[VAL_1:.*]] = "onnx.MaxPoolSingleOut"(%[[VAL_0]]) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [9], pads = [4, 4], storage_order = 0 : si64, strides = [9]} : (tensor<1x1x12xf32>) -> tensor<1x1x2xf32>
-// CHECK:           return %[[VAL_1]] : tensor<1x1x2xf32>
+// CHECK:           %[[VAL_1:.*]] = "onnx.MaxPoolSingleOut"(%[[VAL_0]]) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [3], pads = [1, 1], storage_order = 0 : si64, strides = [3]} : (tensor<1x1x12xf32>) -> tensor<1x1x4xf32>
+// CHECK:           %[[VAL_2:.*]] = "onnx.MaxPoolSingleOut"(%[[VAL_1]]) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [3], pads = [1, 1], storage_order = 0 : si64, strides = [3]} : (tensor<1x1x4xf32>) -> tensor<1x1x2xf32>
+// CHECK:           return %[[VAL_2]] : tensor<1x1x2xf32>
 
 // -----
-func.func @maxpool3d_k5_p2_s3_maxpool3d_k3_p1_s2(%arg0: tensor<1x1x224x224x224xf32>) -> tensor<1x1x38x38x38xf32> {
-  %0 = "onnx.MaxPoolSingleOut"(%arg0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [5, 5, 5], pads = [2, 2, 2, 2, 2, 2], storage_order = 0 : si64, strides = [3, 3, 3]} : (tensor<1x1x224x224x224xf32>) -> tensor<1x1x75x75x75xf32>
-  %1 = "onnx.MaxPoolSingleOut"(%0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [3, 3, 3], pads = [1, 1, 1, 1, 1, 1], storage_order = 0 : si64, strides = [2, 2, 2]} : (tensor<1x1x75x75x75xf32>) -> tensor<1x1x38x38x38xf32>
-  return %1 : tensor<1x1x38x38x38xf32>
+func.func @maxpool3d_k5_p2_s3_maxpool3d_k3_p1_s2(%arg0: tensor<1x1x226x226x226xf32>) -> tensor<1x1x40x40x40xf32> {
+  %0 = "onnx.MaxPoolSingleOut"(%arg0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [5, 5, 5], pads = [2, 2, 2, 2, 2, 2], storage_order = 0 : si64, strides = [3, 3, 3]} : (tensor<1x1x226x226x226xf32>) -> tensor<1x1x77x77x77xf32>
+  %1 = "onnx.MaxPoolSingleOut"(%0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [3, 3, 3], pads = [1, 1, 1, 1, 1, 1], storage_order = 0 : si64, strides = [2, 2, 2]} : (tensor<1x1x77x77x77xf32>) -> tensor<1x1x40x40x40xf32>
+  return %1 : tensor<1x1x40x40x40xf32>
 }
 
 // CHECK-LABEL:   func.func @maxpool3d_k5_p2_s3_maxpool3d_k3_p1_s2(
-// CHECK-SAME:                                                     %[[VAL_0:.*]]: tensor<1x1x224x224x224xf32>) -> tensor<1x1x38x38x38xf32> {
-// CHECK:           %[[VAL_1:.*]] = "onnx.MaxPoolSingleOut"(%[[VAL_0]]) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [11, 11, 11], pads = [5, 5, 5, 5, 5, 5], storage_order = 0 : si64, strides = [6, 6, 6]} : (tensor<1x1x224x224x224xf32>) -> tensor<1x1x38x38x38xf32>
-// CHECK:           return %[[VAL_1]] : tensor<1x1x38x38x38xf32>
+// CHECK-SAME:                                                     %[[VAL_0:.*]]: tensor<1x1x226x226x226xf32>) -> tensor<1x1x40x40x40xf32> {
+// CHECK:           %[[VAL_1:.*]] = "onnx.MaxPoolSingleOut"(%[[VAL_0]]) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [11, 11, 11], pads = [5, 5, 5, 5, 5, 5], storage_order = 0 : si64, strides = [6, 6, 6]} : (tensor<1x1x226x226x226xf32>) -> tensor<1x1x40x40x40xf32>
+// CHECK:           return %[[VAL_1]] : tensor<1x1x40x40x40xf32>
 
 // -----
 func.func @maxpool_back_to_back_k1_smaller_than_s1(%arg0: tensor<1x1x224x224xf32>) -> (tensor<1x1x45x45xf32>) {

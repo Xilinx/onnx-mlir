@@ -2628,7 +2628,14 @@ struct FuseBackToBackMaxpools
           "Transformation only supports explicit padding");
     }
 
-    // Finally, check kernel size >= stride for the upper maxpool
+    // Make sure both maxpools have the same storage order
+    if (lowerMaxpool.getStorageOrder() != upperMaxpool.getStorageOrder()) {
+      return rewriter.notifyMatchFailure(lowerMaxpool->getLoc(),
+          "Transformation applies only when both "
+          "maxpools have the same storage order");
+    }
+
+    // Check kernel size >= stride for the upper maxpool
     auto upperMaxpoolKernelSize =
         cast<IntegerAttr>(upperMaxpoolKernelSizeArr[0]).getInt();
     auto upperMaxpoolStride =
@@ -2637,6 +2644,21 @@ struct FuseBackToBackMaxpools
       return rewriter.notifyMatchFailure(lowerMaxpool->getLoc(),
           "Transformation applies only when kernel "
           "size >= stride for the upper maxpool");
+    }
+
+    // Finally check that the upper maxpool covers the input completely
+    auto upperMaxpoolPad = cast<IntegerAttr>(upperMaxpoolPads[0]).getInt();
+    auto inputShape =
+        cast<RankedTensorType>(upperMaxpool.getX().getType()).getShape();
+
+    for (uint64_t pooledDimIdx = 2; pooledDimIdx < inputShape.size();
+        pooledDimIdx++) {
+      auto effectiveInputDim = inputShape[pooledDimIdx] + 2 * upperMaxpoolPad;
+      if ((effectiveInputDim - upperMaxpoolKernelSize) % upperMaxpoolStride !=
+          0) {
+        return rewriter.notifyMatchFailure(lowerMaxpool.getLoc(),
+            "Upper maxpool doesn't completely cover the input");
+      }
     }
 
     // New ceil-mode:
@@ -2683,9 +2705,10 @@ struct FuseBackToBackMaxpools
             lowerMaxpool->getResultTypes()[0], upperMaxpool.getX(),
             /*autopad = */ rewriter.getStringAttr("NOTSET"), newCeilMode,
             /*dilations = */ nullptr, newKernelSize, newPadding,
-            /*storage_mode = */
+            /*storage_order = */
             rewriter.getIntegerAttr(
-                rewriter.getIntegerType(64, /*isSigned=*/true), 0),
+                rewriter.getIntegerType(64, /*isSigned=*/true),
+                lowerMaxpool.getStorageOrder()),
             newStride);
 
     rewriter.replaceOp(lowerMaxpool, newMaxpool);
