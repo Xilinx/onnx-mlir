@@ -2648,8 +2648,13 @@ struct FuseBackToBackMaxpools
 
     // Finally check that the upper maxpool covers the input completely
     auto upperMaxpoolPad = cast<IntegerAttr>(upperMaxpoolPads[0]).getInt();
-    auto inputShape =
-        cast<RankedTensorType>(upperMaxpool.getX().getType()).getShape();
+    auto inputType =
+        cast<RankedTensorType>(upperMaxpool.getX().getType());
+    if(!inputType.hasStaticShape()){
+      return rewriter.notifyMatchFailure(lowerMaxpool->getLoc(), "Upper maxpool has inputs with dynamic shapes");
+    }
+
+    auto inputShape = inputType.getShape();
 
     for (uint64_t pooledDimIdx = 2; pooledDimIdx < inputShape.size();
          pooledDimIdx++) {
