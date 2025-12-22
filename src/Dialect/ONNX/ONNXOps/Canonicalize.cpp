@@ -2652,7 +2652,7 @@ struct FuseBackToBackMaxpools
         cast<RankedTensorType>(upperMaxpool.getX().getType()).getShape();
 
     for (uint64_t pooledDimIdx = 2; pooledDimIdx < inputShape.size();
-        pooledDimIdx++) {
+         pooledDimIdx++) {
       auto effectiveInputDim = inputShape[pooledDimIdx] + 2 * upperMaxpoolPad;
       if ((effectiveInputDim - upperMaxpoolKernelSize) % upperMaxpoolStride !=
           0) {
