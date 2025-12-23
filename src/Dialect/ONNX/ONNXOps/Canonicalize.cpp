@@ -2548,8 +2548,11 @@ struct FuseBackToBackMaxpools
       if (!quant || !isa<ONNXQuantizeLinearOp>(quant))
         return rewriter.notifyMatchFailure(
             lowerMaxpool->getLoc(), "No Q->Dq chain between the maxpools");
-      upperMaxpool = dyn_cast<ONNXMaxPoolSingleOutOp>(
-          quant->getOperand(0).getDefiningOp());
+      Operation *quantInputDef = quant->getOperand(0).getDefiningOp();
+      if (!quantInputDef)
+        return rewriter.notifyMatchFailure(lowerMaxpool->getLoc(),
+            "QuantizeLinear input is not produced by a MaxPool");
+      upperMaxpool = dyn_cast<ONNXMaxPoolSingleOutOp>(quantInputDef);
     } else {
       upperMaxpool = dyn_cast<ONNXMaxPoolSingleOutOp>(upperOp);
     }
