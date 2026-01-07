@@ -57,10 +57,9 @@ void configureConstPropONNXToONNXPass(bool roundFPToInt, int expansionBound,
     llvm::ArrayRef<std::string> disabledPatterns, bool constantPropIsDisabled);
 
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass();
-std::unique_ptr<mlir::Pass> createQDQAroundOpOptONNXToONNXPass();
 
-std::unique_ptr<mlir::Pass> createQDQOptONNXToONNXPass();
-std::unique_ptr<mlir::Pass> createFoldDQBinaryQPass();
+std::unique_ptr<mlir::Pass> createQDQCanonicalizePass(
+    bool removeBinary = false, bool removeQDQAroundOps = false);
 
 std::unique_ptr<mlir::Pass> createQuantTypesPass();
 
@@ -99,6 +98,11 @@ std::unique_ptr<mlir::Pass> createONNXDimAnalysisPass();
 
 /// Pass for setting onnx_node_name attribute if absent.
 std::unique_ptr<mlir::Pass> createSetONNXNodeNamePass();
+
+/// Pass for converting ONNX operations to ChannelLast variants with transposes.
+/// Supports: Conv, AveragePool, MaxPool, GlobalAveragePool, GlobalMaxPool,
+/// InstanceNormalization, DepthToSpace, SpaceToDepth
+std::unique_ptr<mlir::Pass> createConvertToChannelLastPass();
 
 /// Pass for verifying Onnx ops before lowering to Krnl
 std::unique_ptr<mlir::Pass> createONNXPreKrnlVerifyPass();

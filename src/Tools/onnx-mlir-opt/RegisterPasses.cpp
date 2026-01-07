@@ -56,6 +56,10 @@ void registerOMPasses(int optLevel) {
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createConvertToChannelLastPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createONNXHybridTransformPass(/*recompose ops*/ true);
   });
 
@@ -68,19 +72,7 @@ void registerOMPasses(int optLevel) {
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createQDQOptONNXToONNXPass();
-  });
-
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createQDQAroundOpOptONNXToONNXPass();
-  });
-
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createQDQOptONNXToONNXPass();
-  });
-
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createFoldDQBinaryQPass();
+    return createQDQCanonicalizePass();
   });
 
   mlir::registerPass(

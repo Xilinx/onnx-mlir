@@ -44,6 +44,7 @@
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
 #include "src/Dialect/ONNX/Transforms/Decompose.hpp"
 #include "src/Dialect/ONNX/Transforms/DecomposeEinsum.hpp"
+#include "src/Dialect/ONNX/Transforms/ResultNamesUpdater.hpp"
 #include "src/Pass/Passes.hpp"
 #include "src/Support/TypeUtilities.hpp"
 #include "llvm/ADT/ArrayRef.h"
@@ -3618,6 +3619,10 @@ struct SoftmaxCrossEntropyPattern
     auto weights = sceOp.getWeights();
     auto scoresTy = cast<ShapedType>(scores.getType());
     auto labelsTy = cast<ShapedType>(labels.getType());
+    if (!scoresTy.hasRank() || !labelsTy.hasRank()) {
+      return rewriter.notifyMatchFailure(
+          sceOp, "Unranked operands not supported");
+    }
     SmallVector<int64_t> newLabelsShape(labelsTy.getShape());
     newLabelsShape.insert(newLabelsShape.begin() + 1, scoresTy.getShape()[1]);
     auto none = rewriter.create<ONNXNoneOp>(loc);
@@ -3854,8 +3859,6 @@ struct SplitToSlicePattern : public OpRewritePattern<ONNXSplitOp> {
     // Normalize negative axis
     if (axis < 0)
       axis += rank;
-
-    int64_t inputDimSize = inputType.getDimSize(axis);
 
     // Determine split sizes
     SmallVector<int64_t, 4> splitSizes;
@@ -4095,7 +4098,9 @@ void DecomposeONNXToONNXPass::runOnOperation() {
   }
 #endif
 
-  if (failed(applyPatternsGreedily(function, std::move(patterns))))
+  onnx_mlir::ResultNamesUpdater rnUpdater;
+  if (failed(applyPatternsGreedily(function, std::move(patterns),
+          GreedyRewriteConfig{.listener = &rnUpdater})))
     signalPassFailure();
 }
 
