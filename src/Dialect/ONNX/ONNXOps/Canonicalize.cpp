@@ -2730,7 +2730,7 @@ void ONNXTransposeOp::getCanonicalizationPatterns(
   result.insert<FuseTransposeAndTanPattern>(context);
   result.insert<FuseTransposeAndTanhPattern>(context);
   result.insert<RemoveIdentityTransposePattern>(context);
-  result.insert<SwapTransposeConcatPattern>(context);
+  // result.insert<SwapTransposeConcatPattern>(context);
 }
 
 /// on the ONNXUnsqueezeOp.
