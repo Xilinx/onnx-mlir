@@ -457,9 +457,10 @@ def FuseMulConvNullBiasPattern: Pat<
    (IsFromONNXConstantOp $w),
    (HaveSameElementType $w, $y),       // multiplier and Conv weight must have the same element type.
    (HasRankGT<1> $w),                  // rank of $w must be at least 2.
-   (RankXMinusRankYGreaterThanOrEqual<0> $w, $y),  // rank($y) must be less than or equal to rank($w).
-   (isNumOfElementsInTensorYEqualToTensorXDim<0> $w, $y),  // Number of elements in $y must be equal to the value in the first dimension of $w.
-   (HasRankGT<0> $y)]                  // constant cannot be a scalar.
+   (RankXMinusRankYIs<1> $w, $y),      // rank($y) must be equal to rank($w)-1.
+   (HaveSameDim<0> $w, $y),            // the first dimension of $w and $y must be equal.
+   (HasRankGT<0> $y),                  // constant cannot be a scalar.
+   (AllDimsFromAxisToEndAre<1, 1>:$y)] // all dimensions of $y must be 1 except for the first one.
 >;
 
 // Quantized version: Fuse Mul into Conv when surrounded by QuantizeLinear/DequantizeLinear
