@@ -3006,15 +3006,19 @@ func.func @fold_mul_into_conv(%arg0: tensor<1x3x800x800xf32>) -> tensor<1x64x400
 // CHECK-DAG: %[[W_Q:.*]] = onnx.Constant dense<34> : tensor<64x3x7x7xi8>
 // CHECK-DAG: %[[Y_Q:.*]] = onnx.Constant dense<{{.*}}> : tensor<1x64x1x1xi8>
 // CHECK-DAG: %[[SCALE:.*]] = onnx.Constant dense<7.812500e-03> : tensor<f32>
+// CHECK-DAG: %[[ZP:.*]] = onnx.Constant dense<0> : tensor<i8>
 // CHECK-DAG: %[[RESHAPED_Y:.*]] = "onnx.Reshape"(%[[Y_Q]], %[[RESHAPE_SHAPE]]) {allowzero = 0 : si64} : (tensor<1x64x1x1xi8>, tensor<1xi64>) -> tensor<64xi8>
 // CHECK-DAG: %[[UNSQUEEZED_Y:.*]] = "onnx.Unsqueeze"(%[[RESHAPED_Y]], %[[AXES123]]) : (tensor<64xi8>, tensor<3xi64>) -> tensor<64x1x1x1xi8>
-// CHECK-DAG: %[[FUSED_W_Q:.*]] = "onnx.Mul"(%[[UNSQUEEZED_Y]], %[[W_Q]]) : (tensor<64x1x1x1xi8>, tensor<64x3x7x7xi8>) -> tensor<64x3x7x7xi8>
+// CHECK-DAG: %[[W_DQ_FOR_MUL:.*]] = "onnx.DequantizeLinear"(%[[W_Q]], %[[SCALE]], %[[ZP]]) {axis = 1 : si64, block_size = 0 : si64} : (tensor<64x3x7x7xi8>, tensor<f32>, tensor<i8>) -> tensor<64x3x7x7xf32>
+// CHECK-DAG: %[[Y_DQ_FOR_MUL:.*]] = "onnx.DequantizeLinear"(%[[UNSQUEEZED_Y]], %[[SCALE]], %[[ZP]]) {axis = 1 : si64, block_size = 0 : si64} : (tensor<64x1x1x1xi8>, tensor<f32>, tensor<i8>) -> tensor<64x1x1x1xf32>
+// CHECK-DAG: %[[MUL_FLOAT:.*]] = "onnx.Mul"(%[[W_DQ_FOR_MUL]], %[[Y_DQ_FOR_MUL]]) : (tensor<64x3x7x7xf32>, tensor<64x1x1x1xf32>) -> tensor<64x3x7x7xf32>
+// CHECK-DAG: %[[MUL_Q_SCALE:.*]] = onnx.Constant dense<1.562500e-02> : tensor<f32>
+// CHECK-DAG: %[[FUSED_W_Q:.*]] = "onnx.QuantizeLinear"(%[[MUL_FLOAT]], %[[MUL_Q_SCALE]], %[[ZP]]) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<64x3x7x7xf32>, tensor<f32>, tensor<i8>) -> tensor<64x3x7x7xi8>
 // CHECK-DAG: %[[EXPANDED_SCALE:.*]] = "onnx.Unsqueeze"(%[[SCALE]], %[[AXIS0]]) : (tensor<f32>, tensor<1xi64>) -> tensor<1xf32>
 // CHECK-DAG: %[[FUSED_SCALE:.*]] = "onnx.Mul"(%[[EXPANDED_SCALE]], %[[SCALE]]) : (tensor<1xf32>, tensor<f32>) -> tensor<1xf32>
-// CHECK-DAG: %[[ZP:.*]] = onnx.Constant dense<0> : tensor<i8>
 // CHECK-DAG: %[[W_DQ:.*]] = "onnx.DequantizeLinear"(%[[FUSED_W_Q]], %[[FUSED_SCALE]], %[[ZP]]) {axis = 1 : si64, block_size = 0 : si64} : (tensor<64x3x7x7xi8>, tensor<1xf32>, tensor<i8>) -> tensor<64x3x7x7xf32>
-// CHECK-DAG: %[[CONV:.*]] = "onnx.Conv"(%{{.*}}, %[[W_DQ]], %{{.*}}) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [7, 7], pads = [3, 3, 3, 3], strides = [2, 2]} : (tensor<1x3x800x800xf32>, tensor<64x3x7x7xf32>, none) -> tensor<1x64x400x400xf32>
-// CHECK-NOT: "onnx.Mul"(%[[CONV]]
-// CHECK-DAG: %[[QL:.*]] = "onnx.QuantizeLinear"(%[[CONV]], %{{.*}}, %[[ZP]]) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x64x400x400xf32>, tensor<f32>, tensor<i8>) -> tensor<1x64x400x400xi8>
-// CHECK: return %[[QL]] : tensor<1x64x400x400xi8>
+// CHECK: %[[CONV:.*]] = "onnx.Conv"(%{{.*}}, %[[W_DQ]], %{{.*}}) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [7, 7], pads = [3, 3, 3, 3], strides = [2, 2]} : (tensor<1x3x800x800xf32>, tensor<64x3x7x7xf32>, none) -> tensor<1x64x400x400xf32>
+// CHECK-NOT: "onnx.Mul"
+// CHECK: %[[QL:.*]] = "onnx.QuantizeLinear"(%[[CONV]], %{{.*}}, %[[ZP]]) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x64x400x400xf32>, tensor<f32>, tensor<i8>) -> tensor<1x64x400x400xi8>
+// CHECK: return %[[QL]]
 }

@@ -478,42 +478,74 @@ def FuseMulConvNullBiasPattern: Pat<
 //                                                        = (w_q * w_scale) * (y_q * y_scale)
 //                                                        = w_dequant * y_dequant
 def FuseMulConvNullBiasQuantizedPattern: Pat<
-  (ONNXMulOp:$mul_op
-    (ONNXDequantizeLinearOp:$dequant_after_conv
-      (ONNXQuantizeLinearOp:$quant_after_conv
-        (ONNXConvOp:$conv_op
-          $x,
-          (ONNXDequantizeLinearOp:$w_dequant
-            $w_quantized, $w_scale, $w_zero_point, $w_axis, $w_block_size),
-          $b, $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
-        $conv_q_scale, $conv_q_zero_point, $conv_q_axis, $conv_q_block_size, $conv_q_output_dtype, $conv_q_saturate),
-      $conv_dq_scale, $conv_dq_zero_point, $conv_dq_axis, $conv_dq_block_size),
-    (ONNXDequantizeLinearOp:$y_dequant
-      (ONNXConstantOp:$y_quantized $_, $y_denseAttr, $_, $_, $_, $_, $_, $_),
-      $y_scale, $y_zero_point, $y_axis, $y_block_size)),
-  (ONNXConvOp
-    $x,
-    // new_w: DequantizeLinear(Mul(w_quantized, y_quantized), w_scale * y_scale, w_zero_point)
-    (ONNXDequantizeLinearOp
+  (ONNXQuantizeLinearOp:$quant_after_mul
+    (ONNXMulOp:$mul_op
+      (ONNXDequantizeLinearOp:$dequant_after_conv
+        (ONNXQuantizeLinearOp:$quant_after_conv
+          (ONNXConvOp:$conv_op
+            $x,
+            (ONNXDequantizeLinearOp:$w_dequant
+              $w_quantized, $w_scale, $w_zero_point, $w_axis, $w_block_size
+            ),
+            $b, $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides
+          ),
+          $conv_q_scale, $conv_q_zero_point, $conv_q_axis, $conv_q_block_size, $conv_q_output_dtype, $conv_q_saturate
+        ),
+        $conv_dq_scale, $conv_dq_zero_point, $conv_dq_axis, $conv_dq_block_size
+      ),
+      (ONNXDequantizeLinearOp:$y_dequant
+        (ONNXConstantOp:$y_quantized $_, $y_denseAttr, $_, $_, $_, $_, $_, $_),
+        $y_scale, $y_zero_point, $y_axis, $y_block_size
+      )
+    ),
+    $mul_q_scale, $mul_q_zero_point, $mul_q_axis, $mul_q_block_size, $mul_q_output_dtype, $mul_q_saturate
+  ),
+  (ONNXQuantizeLinearOp
+    (ONNXConvOp
+      $x,
+      // new_w: DequantizeLinear(Mul(w_quantized, y_quantized), w_scale * y_scale, w_zero_point)
+      (ONNXDequantizeLinearOp
       // Multiply quantized values (integer multiplication, will be constant folded)
-      (ONNXMulOp
-        $w_quantized,
-        (ONNXUnsqueezeOp
-          (ONNXReshapeOp $y_quantized,
-            (ONNXConstantOpFromDenseAttr (createDenseElementsAttrFromShapeAtIndex $w_quantized, (GetZeroI64IntegerAttr))),
-            (GetNullIntegerAttr),
-            (returnType (getRank1TensorTypeFromDim $w_quantized, (GetZeroI64IntegerAttr), $y_quantized))),
-          (createConstantOpWithOneToRankOf $w_quantized))),
-      // New scale = w_scale * y_scale
-      (ONNXMulOp
-        $w_scale,
-        (ONNXUnsqueezeOp $y_scale,
-          (ONNXConstantOpFromDenseAttr (createDenseElementsAttrOf(getRankOf $y_scale))))),
-      $w_zero_point,   // Keep original zero point
-      $w_axis,         // Keep original axis
-      $w_block_size),  // Keep original block_size
-    // unchanged operands and attributes.
-    $b, $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
+        (ONNXQuantizeLinearOp
+          (ONNXMulOp
+            (ONNXDequantizeLinearOp $w_quantized,
+              $w_scale,
+              $w_zero_point,
+              $w_axis,
+              $w_block_size
+            ),
+            (ONNXDequantizeLinearOp 
+              (ONNXUnsqueezeOp
+                (ONNXReshapeOp $y_quantized,
+                  (ONNXConstantOpFromDenseAttr (createDenseElementsAttrFromShapeAtIndex $w_quantized, (GetZeroI64IntegerAttr))),
+                  (GetNullIntegerAttr),
+                  (returnType (getRank1TensorTypeFromDim $w_quantized, (GetZeroI64IntegerAttr), $y_quantized))
+                ),
+                (createConstantOpWithOneToRankOf $w_quantized)
+              ),
+              $y_scale,
+              $y_zero_point,
+              $y_axis,
+              $y_block_size
+            )
+          ),
+          $mul_q_scale, $mul_q_zero_point, $mul_q_axis, $mul_q_block_size, $mul_q_output_dtype, $mul_q_saturate,
+          (returnType $w_quantized)
+        ),
+        // New scale = w_scale * y_scale
+        (ONNXMulOp
+          $w_scale,
+          (ONNXUnsqueezeOp $y_scale,
+            (ONNXConstantOpFromDenseAttr (createDenseElementsAttrOf(getRankOf $y_scale)))
+          )
+        ),
+        $w_zero_point,   // Keep original zero point
+        $w_axis,         // Keep original axis
+        $w_block_size    // Keep original block_size
+      ),
+      // unchanged operands and attributes.
+      $b, $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
+    $mul_q_scale, $mul_q_zero_point, $mul_q_axis, $mul_q_block_size, $mul_q_output_dtype, $mul_q_saturate),
   [(HasNoneType $b),
    (AttributeIsNotNull:$y_denseAttr),
    (IsFromONNXConstantOp $w_quantized),  // quantized weight must be constant
