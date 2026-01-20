@@ -1994,6 +1994,18 @@ def ONNXDequantizeLinearOp:ONNX_Op<"DequantizeLinear",
     DefaultValuedAttr<SI64Attr, "1">:$axis,
     DefaultValuedAttr<SI64Attr, "0">:$block_size);
   let results = (outs AnyTypeOf<[TensorOf<[F32]>, TensorOf<[F16]>, TensorOf<[BF16]>]>:$y);
+  let builders = [
+    OpBuilder<(ins "Value":$x, "Value":$x_scale, "Value":$x_zero_point, "IntegerAttr":$axis, "IntegerAttr":$block_size), [{
+      auto resultType = UnrankedTensorType::get(
+          mlir::cast<ShapedType>(x_scale.getType()).getElementType());
+      build($_builder, $_state, resultType, x, x_scale, x_zero_point, axis, block_size);
+    }]>,
+    OpBuilder<(ins "ValueRange":$operands, "ArrayRef<NamedAttribute>":$attributes), [{
+      auto resultType = UnrankedTensorType::get(
+          mlir::cast<ShapedType>(operands[1].getType()).getElementType());
+      build($_builder, $_state, {resultType}, operands, attributes);
+    }]>
+  ];
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
       return 3;
@@ -6278,6 +6290,16 @@ def ONNXQuantizeLinearOp:ONNX_Op<"QuantizeLinear",
     DefaultValuedAttr<SI64Attr, "0">:$output_dtype,
     DefaultValuedAttr<SI64Attr, "1">:$saturate);
   let results = (outs AnyTypeOf<[TensorOf<[I8]>, TensorOf<[UI8]>, TensorOf<[I16]>, TensorOf<[UI16]>, TensorOf<[F8E4M3FN]>, TensorOf<[F8E4M3FNUZ]>, TensorOf<[F8E5M2]>, TensorOf<[F8E5M2FNUZ]>, TensorOf<[UI<4>]>, TensorOf<[I<4>]>, TensorOf<[quant_QuantizedType]>]>:$y);
+  let builders = [
+    OpBuilder<(ins "Value":$x, "Value":$y_scale, "Value":$y_zero_point, "IntegerAttr":$axis, "IntegerAttr":$block_size, "IntegerAttr":$output_dtype, "IntegerAttr":$saturate), [{
+      auto resultType = UnrankedTensorType::get(mlir::cast<ShapedType>(x.getType()).getElementType());
+      build($_builder, $_state, resultType, x, y_scale, y_zero_point, axis, block_size, output_dtype, saturate);
+    }]>,
+    OpBuilder<(ins "ValueRange":$operands, "ArrayRef<NamedAttribute>":$attributes), [{
+      auto resultType = UnrankedTensorType::get(mlir::cast<ShapedType>(operands[0].getType()).getElementType());
+      build($_builder, $_state, {resultType}, operands, attributes);
+    }]>
+  ];
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
       return 3;
@@ -11753,4 +11775,3 @@ def ONNXMomentumOp:ONNX_Op<"Momentum",
     }
   }];
 }
-

@@ -725,10 +725,12 @@ FloatTypes = {"TensorOf<[F32]>", "TensorOf<[F16]>", "TensorOf<[BF16]>"}
 custom_builder_unranked_ops_list = [
     "Abs",
     "Conv",
+    "DequantizeLinear",
     "Exp",
     "Identity",
     "Neg",
     "Pad",
+    "QuantizeLinear",
     "ReduceLogSum",
     "ReduceMaxV13",
     "ReduceMaxV18",

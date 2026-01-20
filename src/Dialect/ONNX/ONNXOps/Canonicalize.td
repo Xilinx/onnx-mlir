@@ -61,6 +61,11 @@ def createDenseElementsAttrFromShape : NativeCodeCall<
 def createDenseElementsAttrFromShapeAtIndex: NativeCodeCall<
   "onnx_mlir::createDenseElementsAttrFromShapeAtIndex($_builder, $0, $1)">;
 
+// Create a ranked tensor type with a single dimension taken from a chosen
+// dimension of `$0` and the element type of `$2`.
+def getRank1TensorTypeFromDim : NativeCodeCall<
+  "mlir::RankedTensorType::get({mlir::cast<mlir::ShapedType>($0.getType()).getShape()[mlir::cast<mlir::IntegerAttr>($1).getInt()]}, mlir::cast<mlir::ShapedType>($2.getType()).getElementType())">;
+
 def createDenseElementsAttrFromShapeResult : NativeCodeCall<
   "onnx_mlir::createDenseElementsAttrFromShapeOp($_builder, $0.getDefiningOp())">;
 
@@ -105,6 +110,8 @@ def GetNullFloatAttr : NativeCodeCall<"FloatAttr()">;
 
 def GetNullIntegerAttr : NativeCodeCall<"IntegerAttr()">;
 
+def GetZeroI64IntegerAttr : NativeCodeCall<"$_builder.getI64IntegerAttr(0)">;
+
 def GetNullStringAttr : NativeCodeCall<"StringAttr()">;
 
 def GetNullArrayAttr :  NativeCodeCall<"ArrayAttr()">;
@@ -139,6 +146,21 @@ class HaveSameDim<int dim>: Constraint<
         "(mlir::cast<RankedTensorType>($0.getType()).getShape()[" # dim # "] =="
         "mlir::cast<RankedTensorType>($1.getType()).getShape()[" # dim # "])">,
   "Two tensors have the same specified dimension">;
+
+class isNumOfElementsInTensorYEqualToTensorXDim<int axis>: Constraint<
+  CPred<"onnx_mlir::hasShapeAndRank($0) && onnx_mlir::hasShapeAndRank($1) && "
+        "!mlir::cast<RankedTensorType>($0.getType()).isDynamicDim(" # axis # ") && "
+        "(mlir::cast<RankedTensorType>($0.getType()).getShape()[" # axis # "]) == "
+        "mlir::cast<RankedTensorType>($1.getType()).getNumElements()">,
+  "The number of elements in second tensor must be equal to the value in the specified dimension of first tensor">;
+
+class HaveSameDimOfXInY<int dim>: Constraint<
+  CPred<"onnx_mlir::hasShapeAndRank($0) && onnx_mlir::hasShapeAndRank($1) && "
+        "!mlir::cast<RankedTensorType>($0.getType()).isDynamicDim(" # dim # ") && "
+        "llvm::any_of("
+            "ArrayRef<int64_t>(mlir::cast<RankedTensorType>($1.getType()).getShape()),"
+            "[&](int64_t val) { return (val == mlir::cast<RankedTensorType>($0.getType()).getShape()[" # dim # "]);})">,
+  "Two tensors have don't have a matching dimension">;
 
 def HaveSameShapedType: Constraint<
     CPred<"(isa<ShapedType>($0.getType()) &&"
@@ -256,6 +278,11 @@ class RankXMinusRankYIs<int diff>: Constraint<
           " - mlir::cast<ShapedType>($1.getType()).getRank() == " # diff # ")">,
     "X' rank is greater than Y's rank diff units">;
 
+class RankXMinusRankYGreaterThanOrEqual<int diff>: Constraint<
+    CPred<"(mlir::cast<ShapedType>($0.getType()).getRank() "
+          " - mlir::cast<ShapedType>($1.getType()).getRank() >= " # diff # ")">,
+    "X' rank is greater than or equal to Y's rank diff units">;
+
 def TransposeVariadicInput: NativeCodeCall<
   "onnx_mlir::transposeVariadicInput($_builder, $_loc, $0, $1)">;
 
@@ -362,7 +389,6 @@ def FuseAddConvNullBiasPattern: Pat<
    (AttributeIsNotNull:$denseAttr),
    (RankXMinusRankYIs<1> $res, $y),
    (HasRankGT<0> $y),
-   (AllDimsFromAxisToEndAre<1, 1>:$y),
    ]
 >;
 
@@ -435,6 +461,106 @@ def FuseMulConvNullBiasPattern: Pat<
    (HaveSameDim<0> $w, $y),            // the first dimension of $w and $y must be equal.
    (HasRankGT<0> $y),                  // constant cannot be a scalar.
    (AllDimsFromAxisToEndAre<1, 1>:$y)] // all dimensions of $y must be 1 except for the first one.
+>;
+
+// Quantized version: Fuse Mul into Conv when surrounded by QuantizeLinear/DequantizeLinear
+// Pattern: QuantizeLinear(
+//            Mul(
+//              DequantizeLinear(QuantizeLinear(Conv(x, DequantizeLinear(w_q, w_scale, w_zp), None))),
+//              DequantizeLinear(y_q, y_scale, y_zp)
+//            )
+//          )
+// The multiplication is fused by multiplying the quantized weights and the quantized constant,
+// then adjusting the scale factor:
+//   new_w_q = w_q * y_q  (integer multiplication)
+//   new_scale = w_scale * y_scale
+// Math: DequantizeLinear(w_q * y_q, w_scale * y_scale) = (w_q * y_q) * (w_scale * y_scale)
+//                                                        = (w_q * w_scale) * (y_q * y_scale)
+//                                                        = w_dequant * y_dequant
+def FuseMulConvNullBiasQuantizedPattern: Pat<
+  (ONNXQuantizeLinearOp:$quant_after_mul
+    (ONNXMulOp:$mul_op
+      (ONNXDequantizeLinearOp:$dequant_after_conv
+        (ONNXQuantizeLinearOp:$quant_after_conv
+          (ONNXConvOp:$conv_op
+            $x,
+            (ONNXDequantizeLinearOp:$w_dequant
+              $w_quantized, $w_scale, $w_zero_point, $w_axis, $w_block_size
+            ),
+            $b, $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides
+          ),
+          $conv_q_scale, $conv_q_zero_point, $conv_q_axis, $conv_q_block_size, $conv_q_output_dtype, $conv_q_saturate
+        ),
+        $conv_dq_scale, $conv_dq_zero_point, $conv_dq_axis, $conv_dq_block_size
+      ),
+      (ONNXDequantizeLinearOp:$y_dequant
+        (ONNXConstantOp:$y_quantized $_, $y_denseAttr, $_, $_, $_, $_, $_, $_),
+        $y_scale, $y_zero_point, $y_axis, $y_block_size
+      )
+    ),
+    $mul_q_scale, $mul_q_zero_point, $mul_q_axis, $mul_q_block_size, $mul_q_output_dtype, $mul_q_saturate
+  ),
+  (ONNXQuantizeLinearOp
+    (ONNXConvOp
+      $x,
+      // new_w: DequantizeLinear(Mul(w_quantized, y_quantized), w_scale * y_scale, w_zero_point)
+      (ONNXDequantizeLinearOp
+      // Multiply quantized values (integer multiplication, will be constant folded)
+        (ONNXQuantizeLinearOp
+          (ONNXMulOp
+            (ONNXDequantizeLinearOp $w_quantized,
+              $w_scale,
+              $w_zero_point,
+              $w_axis,
+              $w_block_size
+            ),
+            (ONNXDequantizeLinearOp 
+              (ONNXUnsqueezeOp
+                (ONNXReshapeOp $y_quantized,
+                  (ONNXConstantOpFromDenseAttr (createDenseElementsAttrFromShapeAtIndex $w_quantized, (GetZeroI64IntegerAttr))),
+                  (GetNullIntegerAttr),
+                  (returnType (getRank1TensorTypeFromDim $w_quantized, (GetZeroI64IntegerAttr), $y_quantized))
+                ),
+                (createConstantOpWithOneToRankOf $w_quantized)
+              ),
+              $y_scale,
+              $y_zero_point,
+              $y_axis,
+              $y_block_size
+            )
+          ),
+          $mul_q_scale, $mul_q_zero_point, $mul_q_axis, $mul_q_block_size, $mul_q_output_dtype, $mul_q_saturate,
+          (returnType $w_quantized)
+        ),
+        // New scale = w_scale * y_scale
+        (ONNXMulOp
+          $w_scale,
+          (ONNXUnsqueezeOp $y_scale,
+            (ONNXConstantOpFromDenseAttr (createDenseElementsAttrOf(getRankOf $y_scale)))
+          )
+        ),
+        $w_zero_point,   // Keep original zero point
+        $w_axis,         // Keep original axis
+        $w_block_size    // Keep original block_size
+      ),
+      // unchanged operands and attributes.
+      $b, $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
+    $mul_q_scale, $mul_q_zero_point, $mul_q_axis, $mul_q_block_size, $mul_q_output_dtype, $mul_q_saturate),
+  [(HasNoneType $b),
+   (AttributeIsNotNull:$y_denseAttr),
+   (IsFromONNXConstantOp $w_quantized),  // quantized weight must be constant
+   (IsFromONNXConstantOp $w_scale),      // weight scale must be constant
+   (IsFromONNXConstantOp $y_quantized),  // quantized constant must be constant
+   (IsFromONNXConstantOp $y_scale),      // multiplier scale must be constant
+   (HasRankGT<1> $w_quantized),          // rank of $w_quantized must be at least 2.
+   (RankXMinusRankYGreaterThanOrEqual<0> $w_quantized, $y_quantized),  // rank($y) must be less than or equal to rank($w).
+   (HasRankGT<0> $y_quantized),                        // constant cannot be a scalar.
+   (isNumOfElementsInTensorYEqualToTensorXDim<0> $w_quantized, $y_quantized),  // Number of elements in $y must be equal to the value in the first dimension of $w.
+   (HasOneUse $w_dequant),               // Ensure weight dequantize has only one use.
+   (HasOneUse $y_dequant),               // Ensure constant dequantize has only one use.
+   (HasOneUse $quant_after_conv),        // Ensure quantize after conv has only one use.
+   (HasOneUse $dequant_after_conv),      // Ensure dequantize after conv has only one use.
+   (HasOneUse $mul_op)]                  // Ensure mul has only one use.
 >;
 
 // TODO add pattern for non-null bias with constraints:

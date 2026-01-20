@@ -2980,3 +2980,45 @@ func.func @maxpool_k5_p1_s1_maxpool_k3_p1_s1_quant_int8(%arg0: tensor<1x3x224x22
 // CHECK:           %[[VAL_4:.*]] = "onnx.MaxPoolSingleOut"(%[[VAL_3]]) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [7, 7], pads = [2, 2, 2, 2], storage_order = 0 : si64, strides = [1, 1]} : (tensor<1x3x224x224xf32>) -> tensor<1x3x222x222xf32>
 // CHECK:           %[[VAL_5:.*]] = "onnx.QuantizeLinear"(%[[VAL_4]], %[[VAL_1]], %[[VAL_2]]) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x3x222x222xf32>, tensor<f32>, tensor<i8>) -> tensor<1x3x222x222xi8>
 // CHECK:           return %[[VAL_5]] : tensor<1x3x222x222xi8>
+
+func.func @fold_mul_into_conv(%arg0: tensor<1x3x800x800xf32>) -> tensor<1x64x400x400xi8> {
+    %0 = "onnx.NoValue"() {value} : () -> none
+    %1 = onnx.Constant dense<0> : tensor<i8>
+    %2 = onnx.Constant dense<3.125000e-02> : tensor<f32>
+    %3 = onnx.Constant dense<1.562500e-02> : tensor<f32>
+    %4 = onnx.Constant dense<7.812500e-03> : tensor<f32>
+    %5 = onnx.Constant dense<34> : tensor<64x3x7x7xi8>
+    %6 = onnx.Constant dense<[[[[29]], [[19]], [[18]], [[15]], [[36]], [[15]], [[35]], [[37]], [[41]], [[17]], [[40]], [[24]], [[43]], [[0]], [[56]], [[38]], [[25]], [[38]], [[58]], [[14]], [[50]], [[37]], [[47]], [[18]], [[31]], [[19]], [[36]], [[34]], [[67]], [[17]], [[25]], [[50]], [[15]], [[81]], [[12]], [[12]], [[16]], [[19]], [[31]], [[32]], [[15]], [[56]], [[27]], [[19]], [[21]], [[37]], [[39]], [[22]], [[40]], [[47]], [[39]], [[25]], [[30]], [[36]], [[33]], [[24]], [[27]], [[37]], [[26]], [[34]], [[28]], [[28]], [[16]], [[56]]]]> : tensor<1x64x1x1xi8>
+    %7 = "onnx.DequantizeLinear"(%6, %4, %1) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x64x1x1xi8>, tensor<f32>, tensor<i8>) -> tensor<1x64x1x1xf32>
+    %8 = "onnx.DequantizeLinear"(%5, %4, %1) {axis = 1 : si64, block_size = 0 : si64} : (tensor<64x3x7x7xi8>, tensor<f32>, tensor<i8>) -> tensor<64x3x7x7xf32>
+    %9 = "onnx.QuantizeLinear"(%arg0, %4, %1) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x3x800x800xf32>, tensor<f32>, tensor<i8>) -> tensor<1x3x800x800xi8>
+    %10 = "onnx.DequantizeLinear"(%9, %4, %1) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x3x800x800xi8>, tensor<f32>, tensor<i8>) -> tensor<1x3x800x800xf32>
+    %11 = "onnx.Conv"(%10, %8, %0) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [7, 7], pads = [3, 3, 3, 3], strides = [2, 2]} : (tensor<1x3x800x800xf32>, tensor<64x3x7x7xf32>, none) -> tensor<1x64x400x400xf32>
+    %12 = "onnx.QuantizeLinear"(%11, %2, %1) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x64x400x400xf32>, tensor<f32>, tensor<i8>) -> tensor<1x64x400x400xi8>
+    %13 = "onnx.DequantizeLinear"(%12, %2, %1) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x64x400x400xi8>, tensor<f32>, tensor<i8>) -> tensor<1x64x400x400xf32>
+    %14 = "onnx.Mul"(%13, %7) : (tensor<1x64x400x400xf32>, tensor<1x64x1x1xf32>) -> tensor<1x64x400x400xf32>
+    %15 = "onnx.QuantizeLinear"(%14, %3, %1) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x64x400x400xf32>, tensor<f32>, tensor<i8>) -> tensor<1x64x400x400xi8>
+    return %15 : tensor<1x64x400x400xi8>
+// CHECK-LABEL: func.func @fold_mul_into_conv
+// CHECK-DAG: %[[AXIS0:.*]] = onnx.Constant dense<0> : tensor<1xi64>
+// CHECK-DAG: %[[AXES123:.*]] = onnx.Constant dense<[1, 2, 3]> : tensor<3xi64>
+// CHECK-DAG: %[[RESHAPE_SHAPE:.*]] = onnx.Constant dense<64> : tensor<1xi64>
+// CHECK-DAG: %[[W_Q:.*]] = onnx.Constant dense<34> : tensor<64x3x7x7xi8>
+// CHECK-DAG: %[[Y_Q:.*]] = onnx.Constant dense<{{.*}}> : tensor<1x64x1x1xi8>
+// CHECK-DAG: %[[SCALE:.*]] = onnx.Constant dense<7.812500e-03> : tensor<f32>
+// CHECK-DAG: %[[ZP:.*]] = onnx.Constant dense<0> : tensor<i8>
+// CHECK-DAG: %[[RESHAPED_Y:.*]] = "onnx.Reshape"(%[[Y_Q]], %[[RESHAPE_SHAPE]]) {allowzero = 0 : si64} : (tensor<1x64x1x1xi8>, tensor<1xi64>) -> tensor<64xi8>
+// CHECK-DAG: %[[UNSQUEEZED_Y:.*]] = "onnx.Unsqueeze"(%[[RESHAPED_Y]], %[[AXES123]]) : (tensor<64xi8>, tensor<3xi64>) -> tensor<64x1x1x1xi8>
+// CHECK-DAG: %[[W_DQ_FOR_MUL:.*]] = "onnx.DequantizeLinear"(%[[W_Q]], %[[SCALE]], %[[ZP]]) {axis = 1 : si64, block_size = 0 : si64} : (tensor<64x3x7x7xi8>, tensor<f32>, tensor<i8>) -> tensor<64x3x7x7xf32>
+// CHECK-DAG: %[[Y_DQ_FOR_MUL:.*]] = "onnx.DequantizeLinear"(%[[UNSQUEEZED_Y]], %[[SCALE]], %[[ZP]]) {axis = 1 : si64, block_size = 0 : si64} : (tensor<64x1x1x1xi8>, tensor<f32>, tensor<i8>) -> tensor<64x1x1x1xf32>
+// CHECK-DAG: %[[MUL_FLOAT:.*]] = "onnx.Mul"(%[[W_DQ_FOR_MUL]], %[[Y_DQ_FOR_MUL]]) : (tensor<64x3x7x7xf32>, tensor<64x1x1x1xf32>) -> tensor<64x3x7x7xf32>
+// CHECK-DAG: %[[MUL_Q_SCALE:.*]] = onnx.Constant dense<1.562500e-02> : tensor<f32>
+// CHECK-DAG: %[[FUSED_W_Q:.*]] = "onnx.QuantizeLinear"(%[[MUL_FLOAT]], %[[MUL_Q_SCALE]], %[[ZP]]) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<64x3x7x7xf32>, tensor<f32>, tensor<i8>) -> tensor<64x3x7x7xi8>
+// CHECK-DAG: %[[EXPANDED_SCALE:.*]] = "onnx.Unsqueeze"(%[[SCALE]], %[[AXIS0]]) : (tensor<f32>, tensor<1xi64>) -> tensor<1xf32>
+// CHECK-DAG: %[[FUSED_SCALE:.*]] = "onnx.Mul"(%[[EXPANDED_SCALE]], %[[SCALE]]) : (tensor<1xf32>, tensor<f32>) -> tensor<1xf32>
+// CHECK-DAG: %[[W_DQ:.*]] = "onnx.DequantizeLinear"(%[[FUSED_W_Q]], %[[FUSED_SCALE]], %[[ZP]]) {axis = 1 : si64, block_size = 0 : si64} : (tensor<64x3x7x7xi8>, tensor<1xf32>, tensor<i8>) -> tensor<64x3x7x7xf32>
+// CHECK: %[[CONV:.*]] = "onnx.Conv"(%{{.*}}, %[[W_DQ]], %{{.*}}) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [7, 7], pads = [3, 3, 3, 3], strides = [2, 2]} : (tensor<1x3x800x800xf32>, tensor<64x3x7x7xf32>, none) -> tensor<1x64x400x400xf32>
+// CHECK-NOT: "onnx.Mul"
+// CHECK: %[[QL:.*]] = "onnx.QuantizeLinear"(%[[CONV]], %{{.*}}, %[[ZP]]) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x64x400x400xf32>, tensor<f32>, tensor<i8>) -> tensor<1x64x400x400xi8>
+// CHECK: return %[[QL]]
+}
