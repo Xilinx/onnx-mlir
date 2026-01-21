@@ -59,7 +59,7 @@ void configureConstPropONNXToONNXPass(bool roundFPToInt, int expansionBound,
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass();
 
 std::unique_ptr<mlir::Pass> createQDQCanonicalizePass(
-    bool removeBinary = false, bool removeQDQAroundOps = false);
+    bool removeBinary = false);
 
 std::unique_ptr<mlir::Pass> createQuantTypesPass();
 

@@ -42,7 +42,6 @@ add_onnx_mlir_library(OMInstrumentONNX
 
 add_onnx_mlir_library(OMONNXRewrite
   ConstProp.cpp
-  QDQAroundOpOpt.cpp    
   DQBinaryQOpt.cpp  
   QDQCanonicalize.cpp
   ConvOpt.cpp

@@ -103,7 +103,7 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
 
   // Canonicalizing Q-DQ related ops
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createQDQCanonicalizePass(
-      opts.enableRemoveBinary, opts.enableRemoveDqQAroundOp));
+      opts.enableRemoveBinary));
 
   // One more call to ONNX shape inference/canonicalization/... to update
   // shape if possible.

@@ -17,7 +17,6 @@ struct OnnxToMlirOptions {
   bool enableConvTransposeDecomposeToPhasedConv = false;
   bool enableConvTranspose1dDecomposeToPhasedConv = false;
   bool enableInstanceNormDecompose = true;
-  bool enableRemoveDqQAroundOp = false;
   bool enableRemoveBinary = false;
   bool enableFusePadIntoAvgpool = false;
   bool enableRecomposeLayernormByTranspose = false;

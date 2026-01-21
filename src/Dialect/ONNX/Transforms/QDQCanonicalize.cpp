@@ -36,21 +36,15 @@ struct FoldQDQPattern : public OpRewritePattern<ONNXQuantizeLinearOp> {
 
 void getDQBinaryQPatterns(RewritePatternSet &patterns, MLIRContext *context);
 
-void getRemoveQDQAroundOpPatterns(
-    RewritePatternSet &patterns, MLIRContext *context);
-
 class QDQCanonicalizePass
     : public PassWrapper<QDQCanonicalizePass, OperationPass<func::FuncOp>> {
 public:
   Option<bool> removeBinary{*this, "remove-binary", llvm::cl::init(false)};
-  Option<bool> removeQDQAroundOps{
-      *this, "remove-qdq-around-ops", llvm::cl::init(false)};
 
   StringRef getArgument() const override { return "qdq-canonicalize"; }
 
-  QDQCanonicalizePass(bool removeBinary, bool removeQDQAroundOps) {
+  QDQCanonicalizePass(bool removeBinary) {
     this->removeBinary = removeBinary;
-    this->removeQDQAroundOps = removeQDQAroundOps;
   }
 
   QDQCanonicalizePass(const QDQCanonicalizePass &pass)
@@ -62,8 +56,6 @@ public:
     mlir::RewritePatternSet patterns(context);
     if (removeBinary)
       getDQBinaryQPatterns(patterns, context);
-    if (removeQDQAroundOps)
-      getRemoveQDQAroundOpPatterns(patterns, context);
     patterns.add<FoldQDQPattern>(context);
     frozenPatterns = std::move(patterns);
     return success();
@@ -81,9 +73,9 @@ private:
 };
 
 std::unique_ptr<mlir::Pass> createQDQCanonicalizePass(
-    bool removeBinary, bool removeQDQAroundOps) {
+    bool removeBinary) {
   return std::make_unique<QDQCanonicalizePass>(
-      removeBinary, removeQDQAroundOps);
+      removeBinary);
 }
 
 } // namespace onnx_mlir
