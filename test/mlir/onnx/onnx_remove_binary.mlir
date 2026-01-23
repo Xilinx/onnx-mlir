@@ -924,3 +924,57 @@ func.func @div_by_zero_fold_into_dq(%arg0: tensor<1x4xf32>) -> tensor<1x4xf32> {
 // CHECK: "onnx.Div"
 // CHECK: "onnx.QuantizeLinear"
 
+// -----
+
+// ============================================================================
+// DQ DUPLICATION: DQ with multiple users (Sigmoid + Mul)
+// When Mul is folded into DQ, DQ must be duplicated to preserve correctness
+// Original DQ keeps original scale for Sigmoid, duplicated DQ gets updated scale for Mul
+// ============================================================================
+
+func.func @dq_duplication_multiple_users(%arg0: tensor<1x4xf32>) -> (tensor<1x4xf32>, tensor<1x4xf32>) {
+  // Setup: Q->DQ for activation (this DQ will have multiple users)
+  %s_act = onnx.Constant dense<2.000000e+00> : tensor<f32>
+  %zp_act = onnx.Constant dense<0> : tensor<i8>
+  %q_act = "onnx.QuantizeLinear"(%arg0, %s_act, %zp_act) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x4xf32>, tensor<f32>, tensor<i8>) -> tensor<1x4xi8>
+  %dq_shared = "onnx.DequantizeLinear"(%q_act, %s_act, %zp_act) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x4xi8>, tensor<f32>, tensor<i8>) -> tensor<1x4xf32>
+  
+  // Sigmoid uses dq_shared (first user - should keep original DQ)
+  %sigmoid = "onnx.Sigmoid"(%dq_shared) : (tensor<1x4xf32>) -> tensor<1x4xf32>
+  
+  // Constant DQ for Mul (k_value = (5 - 0) * 1.0 = 5.0)
+  %const_q = onnx.Constant dense<5> : tensor<i8>
+  %s_const = onnx.Constant dense<1.000000e+00> : tensor<f32>
+  %zp_const = onnx.Constant dense<0> : tensor<i8>
+  %dq_const = "onnx.DequantizeLinear"(%const_q, %s_const, %zp_const) {axis = 1 : si64, block_size = 0 : si64} : (tensor<i8>, tensor<f32>, tensor<i8>) -> tensor<f32>
+  
+  // Mul uses dq_shared (second user - should trigger DQ duplication)
+  // When folded: new_scale = original_scale * k_value = 2.0 * 5.0 = 10.0
+  %mul = "onnx.Mul"(%dq_shared, %dq_const) : (tensor<1x4xf32>, tensor<f32>) -> tensor<1x4xf32>
+  
+  // Output Q->DQ
+  %s_out = onnx.Constant dense<1.000000e+00> : tensor<f32>
+  %zp_out = onnx.Constant dense<0> : tensor<i8>
+  %q_out = "onnx.QuantizeLinear"(%mul, %s_out, %zp_out) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x4xf32>, tensor<f32>, tensor<i8>) -> tensor<1x4xi8>
+  %dq_out = "onnx.DequantizeLinear"(%q_out, %s_out, %zp_out) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x4xi8>, tensor<f32>, tensor<i8>) -> tensor<1x4xf32>
+  
+  // Return both outputs to ensure both DQ operations are preserved
+  return %sigmoid, %dq_out : tensor<1x4xf32>, tensor<1x4xf32>
+}
+
+// CHECK-LABEL: func.func @dq_duplication_multiple_users
+// CHECK-SAME: (%arg0: tensor<1x4xf32>) -> (tensor<1x4xf32>, tensor<1x4xf32>)
+// CHECK: %[[NEW_SCALE:.*]] = onnx.Constant dense<1.000000e+01> : tensor<f32>
+// CHECK: %[[ORIG_SCALE:.*]] = onnx.Constant dense<2.000000e+00> : tensor<f32>
+// CHECK: %[[ZP:.*]] = onnx.Constant dense<0> : tensor<i8>
+// CHECK: %[[Q_ACT:.*]] = "onnx.QuantizeLinear"(%arg0, %[[ORIG_SCALE]], %[[ZP]])
+// CHECK-SAME: : (tensor<1x4xf32>, tensor<f32>, tensor<i8>) -> tensor<1x4xi8>
+// CHECK: %[[ORIG_DQ:.*]] = "onnx.DequantizeLinear"(%[[Q_ACT]], %[[ORIG_SCALE]], %[[ZP]])
+// CHECK-SAME: : (tensor<1x4xi8>, tensor<f32>, tensor<i8>) -> tensor<1x4xf32>
+// CHECK: %[[NEW_DQ:.*]] = "onnx.DequantizeLinear"(%[[Q_ACT]], %[[NEW_SCALE]], %[[ZP]])
+// CHECK-SAME: : (tensor<1x4xi8>, tensor<f32>, tensor<i8>) -> tensor<1x4xf32>
+// CHECK: %[[SIGMOID:.*]] = "onnx.Sigmoid"(%[[ORIG_DQ]])
+// CHECK-SAME: : (tensor<1x4xf32>) -> tensor<1x4xf32>
+// CHECK-NOT: "onnx.Mul"
+// CHECK: return %[[SIGMOID]], %[[NEW_DQ]] : tensor<1x4xf32>, tensor<1x4xf32>
+
