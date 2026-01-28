@@ -104,6 +104,9 @@ std::unique_ptr<mlir::Pass> createSetONNXNodeNamePass();
 /// InstanceNormalization, DepthToSpace, SpaceToDepth
 std::unique_ptr<mlir::Pass> createConvertToChannelLastPass();
 
+/// Pass for converting XFE (channel-last) operations to standard ONNX (channel-first).
+std::unique_ptr<mlir::Pass> createConvertXFEToStandardONNXPass();
+
 /// Pass for verifying Onnx ops before lowering to Krnl
 std::unique_ptr<mlir::Pass> createONNXPreKrnlVerifyPass();
 
