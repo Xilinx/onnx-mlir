@@ -125,6 +125,9 @@ std::unique_ptr<mlir::Pass> createTransferResizeLinearToDwConv();
 /// Pass for fusing Add(Conv(A, X, none), constant) -> Conv(A, X, bias).
 std::unique_ptr<mlir::Pass> createConvWithBiasPass();
 
+/// Pass for converting XFEConv to XCOMPILERDepthwiseConv when group == input_channels.
+std::unique_ptr<mlir::Pass> createConvertXFEConvToDepthwiseConvPass();
+
 /// Pass for removing redundant reshape operations around element-wise ops.
 std::unique_ptr<mlir::Pass> createRemoveRedundantReshapePass();
 
