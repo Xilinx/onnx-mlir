@@ -68,6 +68,7 @@ static std::vector<XmcPassEntry> getXmcPassEntries() {
   add("merge-strided-slice-concat-conv",                onnx_mlir::createMergeStridedSliceConcatConvPass);
   add("transfer-conv-slice-to-conv",                    onnx_mlir::createTransferConvSliceToConvPass);
   add("transfer-op1d-to-op2d",                          onnx_mlir::createTransferOp1dToOp2dPass);
+  add("transfer-scale-to-dw-conv2d",                    onnx_mlir::createTransferScaleToDwConv2dPass);
   add("convert-to-channel-last",                        onnx_mlir::createConvertToChannelLastPass);
   add("convert-matmul-to-xfe-conv",                     onnx_mlir::createConvertMatMulToXFEConvPass);
   add("onnx-transpose-optimization",                    onnx_mlir::createONNXTransposeOptimizationPass);
@@ -83,6 +84,10 @@ static std::vector<XmcPassEntry> getXmcPassEntries() {
   add("transfer-5d-strided-slice-to-4d",                onnx_mlir::createTransfer5dStridedSliceTo4d);
   add("transfer-op-shape-to-4d",                        onnx_mlir::createTransferOpShapeTo4dPass);
   add("batch-reduction-to-reshape-reduction",           onnx_mlir::createBatchReductionToReshapeReductionPass);
+  add("replace-adjacent-op",                            onnx_mlir::createReplaceAdjacentOpPass);
+  add("remove-pairs-and-move-down-reshape",             onnx_mlir::createRemovePairsAndMoveDownReshapePass);
+  add("replace-contained-concat",                       onnx_mlir::createReplaceContainedConcatPass);
+  add("optimize-sibling-concat",                        onnx_mlir::createOptimizeSiblingConcatPass);
   add("canonicalize",                                   []() -> std::unique_ptr<Pass> { return mlir::createCanonicalizerPass(); });
   add("replace-hsigmoid-hswish",                        onnx_mlir::createReplaceHsigmoidAndHswishPass);
   add("convert-xfe-conv-to-depthwise-conv",             onnx_mlir::createConvertXFEConvToDepthwiseConvPass);
