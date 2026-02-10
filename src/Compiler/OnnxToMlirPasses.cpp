@@ -110,8 +110,13 @@ static void dumpMLIR(mlir::ModuleOp module, const std::string &passName,
                  << outputDir << "': " << mkdirEc.message() << "\n";
   }
 
-  std::string filename = outputDir + "/xmc_pass_" +
-                         std::to_string(passIndex) + "_" + passName + ".mlir";
+  // Build the filename using llvm path utilities for cross-platform compat.
+  llvm::SmallString<512> filepath(outputDir);
+  std::string basename =
+      "xmc_pass_" + std::to_string(passIndex) + "_" + passName + ".mlir";
+  llvm::sys::path::append(filepath, basename);
+
+  std::string filename = std::string(filepath);
   std::error_code ec;
   llvm::raw_fd_ostream file(filename, ec);
   if (!ec) {
@@ -203,7 +208,10 @@ public:
   }
 
   void runAfterPass(Pass *pass, Operation *op) override {
-    if (!isTrackedPass)
+    // Re-check pass name (isTrackedPass can be stale from nested passes
+    // when OpToOpPassAdaptor wraps multiple nested XMC passes).
+    std::string name = pass->getName().str();
+    if (xmcPassNames.count(name) == 0)
       return;
 
     auto endTime = std::chrono::high_resolution_clock::now();
@@ -222,7 +230,6 @@ public:
     bool modified = (hashBefore != hashAfter);
 
     // Use the human-readable CLI name for logging and dump filenames.
-    std::string name = pass->getName().str();
     auto it = passDisplayNames.find(name);
     std::string displayName = (it != passDisplayNames.end()) ? it->second : name;
 
@@ -238,9 +245,11 @@ public:
   }
 
   void runAfterPassFailed(Pass *pass, Operation *op) override {
-    if (!isTrackedPass)
-      return;
+    // Re-check pass name (same stale-flag guard as runAfterPass).
     std::string name = pass->getName().str();
+    if (xmcPassNames.count(name) == 0)
+      return;
+
     auto it = passDisplayNames.find(name);
     std::string displayName = (it != passDisplayNames.end()) ? it->second : name;
     llvm::errs() << "  [XMC-DEBUG] Pass [" << passIndex << "] '"
