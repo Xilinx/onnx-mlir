@@ -3773,6 +3773,31 @@ public:
 };
 
 // =============================================================================
+// Decompose ReduceL2 to Sqrt(ReduceSumSquare)
+// =============================================================================
+struct DecomposeReduceL2Pattern
+    : public OpRewritePattern<ONNXReduceL2Op> {
+  using OpRewritePattern<ONNXReduceL2Op>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ONNXReduceL2Op reduceL2Op,
+      PatternRewriter &rewriter) const final {
+    Location loc = reduceL2Op.getLoc();
+    Value input = reduceL2Op.getData();
+    Value axes = reduceL2Op.getAxes();
+    int64_t keepDims = reduceL2Op.getKeepdims();
+    int64_t noopWithEmptyAxes = reduceL2Op.getNoopWithEmptyAxes();
+
+    auto reduceSumSquare =
+        rewriter.create<ONNXReduceSumSquareOp>(loc, reduceL2Op.getType(),
+            input, axes, keepDims, noopWithEmptyAxes);
+    auto sqrtOp = rewriter.create<ONNXSqrtOp>(
+        loc, reduceL2Op.getType(), reduceSumSquare.getResult());
+    rewriter.replaceOp(reduceL2Op, sqrtOp.getResult());
+    return success();
+  }
+};
+
+// =============================================================================
 // Decompose InstanceNormalization to LayerNormalization
 // =============================================================================
 struct DecomposeInstanceNormPattern
@@ -4015,7 +4040,8 @@ struct DecomposeONNXToONNXPass
       bool enableConvTransposeDecomposeToPhasedConv = false,
       bool enableConvTranspose1dDecomposeToPhasedConv = false,
       bool enableInstanceNormDecompose = true,
-      bool enableSplitToSliceDecompose = false) {
+      bool enableSplitToSliceDecompose = false,
+      bool enableReduceL2Decompose = true) {
     this->target = target;
     this->enableConvTransposeDecompose = enableConvTransposeDecompose;
     this->enableConvTransposeDecomposeToPhasedConv =
@@ -4024,6 +4050,7 @@ struct DecomposeONNXToONNXPass
         enableConvTranspose1dDecomposeToPhasedConv;
     this->enableInstanceNormDecompose = enableInstanceNormDecompose;
     this->enableSplitToSliceDecompose = enableSplitToSliceDecompose;
+    this->enableReduceL2Decompose = enableReduceL2Decompose;
   }
 
   DecomposeONNXToONNXPass(const DecomposeONNXToONNXPass &pass)
@@ -4038,6 +4065,8 @@ struct DecomposeONNXToONNXPass
         pass.enableInstanceNormDecompose.getValue();
     this->enableSplitToSliceDecompose =
         pass.enableSplitToSliceDecompose.getValue();
+    this->enableReduceL2Decompose =
+        pass.enableReduceL2Decompose.getValue();
   }
 
   StringRef getArgument() const override { return "decompose-onnx"; }
@@ -4077,6 +4106,11 @@ struct DecomposeONNXToONNXPass
       llvm::cl::desc("Enable decomposition of Split to Slice operations"),
       ::llvm::cl::init(false)};
 
+  Option<bool> enableReduceL2Decompose{*this, "enable-reducel2-decompose",
+      llvm::cl::desc("Enable decomposition of ReduceL2 to "
+                     "Sqrt(ReduceSumSquare)"),
+      ::llvm::cl::init(true)};
+
   void runOnOperation() final;
 
   typedef PassWrapper<DecomposeONNXToONNXPass, OperationPass<func::FuncOp>>
@@ -4090,7 +4124,7 @@ void DecomposeONNXToONNXPass::runOnOperation() {
   onnx_mlir::getDecomposeONNXToONNXPatterns(patterns,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
       enableConvTranspose1dDecomposeToPhasedConv, enableInstanceNormDecompose,
-      enableSplitToSliceDecompose);
+      enableSplitToSliceDecompose, enableReduceL2Decompose);
   patterns.insert<ReplaceCastLikeByCastPattern>(context);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
@@ -4111,7 +4145,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns, bool enableConvTransposeDecompose,
     bool enableConvTransposeDecomposeToPhasedConv,
     bool enableConvTranspose1dDecomposeToPhasedConv,
-    bool enableInstanceNormDecompose, bool enableSplitToSliceDecompose) {
+    bool enableInstanceNormDecompose, bool enableSplitToSliceDecompose,
+    bool enableReduceL2Decompose) {
   MLIRContext *context = patterns.getContext();
   populateWithGenerated(patterns);
   if (enableConvTransposeDecompose)
@@ -4122,6 +4157,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     convtranspose_1d_phased::populateWithGenerated(patterns);
   if (enableInstanceNormDecompose)
     patterns.insert<DecomposeInstanceNormPattern>(context);
+  if (enableReduceL2Decompose)
+    patterns.insert<DecomposeReduceL2Pattern>(context);
   if (enableSplitToSliceDecompose)
     patterns.insert<SplitToSlicePattern>(context);
   patterns.insert<onnx_mlir::DecomposeEinsumPattern>(context);
@@ -4166,9 +4203,10 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createDecomposeONNXToONNXPass(
     const std::string &target, bool enableConvTransposeDecompose,
     bool enableConvTransposeDecomposeToPhasedConv,
     bool enableConvTranspose1dDecomposeToPhasedConv,
-    bool enableInstanceNormDecompose, bool enableSplitToSliceDecompose) {
+    bool enableInstanceNormDecompose, bool enableSplitToSliceDecompose,
+    bool enableReduceL2Decompose) {
   return std::make_unique<DecomposeONNXToONNXPass>(target,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
       enableConvTranspose1dDecomposeToPhasedConv, enableInstanceNormDecompose,
-      enableSplitToSliceDecompose);
+      enableSplitToSliceDecompose, enableReduceL2Decompose);
 }

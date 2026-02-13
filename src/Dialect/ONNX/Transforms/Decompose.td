@@ -127,12 +127,8 @@ def ReduceL1OpPattern
     : Pat<(ONNXReduceL1Op $oprd, $axes, $keepdims, $noop),
           (ONNXReduceSumOp(ONNXAbsOp $oprd), $axes, $keepdims, $noop)>;
 
-//===----------------------------------------------------------------------===//
-// ONNXReduceL2Op %X = ONNXSqrtOp (ONNXReduceSumSquareOp (%X))
-//===----------------------------------------------------------------------===//
-def ReduceL2OpPattern
-    : Pat<(ONNXReduceL2Op $oprd, $axes, $keepdims, $noop),
-          (ONNXSqrtOp(ONNXReduceSumSquareOp $oprd, $axes, $keepdims, $noop))>;
+// NOTE: ONNXReduceL2Op decomposition has been moved to Decompose.cpp
+// to allow it to be controlled by the enableReduceL2Decompose flag.
 
 //===----------------------------------------------------------------------===//
 // ONNXReduceLogSumOp %X = ONNXLogOp (ONNXReduceSumOp (%X))

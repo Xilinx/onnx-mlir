@@ -99,7 +99,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
       /*target=*/"", opts.enableConvTransposeDecompose,
       opts.enableConvTransposeDecomposeToPhasedConv,
       opts.enableConvTranspose1dDecomposeToPhasedConv,
-      opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose));
+      opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose,
+      opts.enableReduceL2Decompose));
   if (!opts.disableRecomposeOption)
     pm.addNestedPass<func::FuncOp>(
         onnx_mlir::createRecomposeONNXToONNXPass(/*target=*/""));
@@ -110,7 +111,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
         opts.enableConvTransposeDecompose,
         opts.enableConvTransposeDecomposeToPhasedConv,
         opts.enableConvTranspose1dDecomposeToPhasedConv,
-        opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose));
+        opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose,
+        opts.enableReduceL2Decompose));
     // Convolution Optimization for CPU: enable when there are no accelerators.
     if (targetCPU && opts.enableConvOptPass) {
       pm.addNestedPass<func::FuncOp>(onnx_mlir::createConvOptONNXToONNXPass(
@@ -121,7 +123,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
           opts.enableConvTransposeDecompose,
           opts.enableConvTransposeDecomposeToPhasedConv,
           opts.enableConvTranspose1dDecomposeToPhasedConv,
-          opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose));
+          opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose,
+          opts.enableReduceL2Decompose));
     }
     // If quark quantized legalization is enabled, do a last const prop after it
     // so that we cover any remaining Cast -> Cast patterns that weren't covered
@@ -179,7 +182,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
         opts.enableConvTransposeDecompose,
         opts.enableConvTransposeDecomposeToPhasedConv,
         opts.enableConvTranspose1dDecomposeToPhasedConv,
-        opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose));
+        opts.enableInstanceNormDecompose, opts.enableSplitToSliceDecompose,
+        opts.enableReduceL2Decompose));
   } else {
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
     pm.addPass(mlir::createCanonicalizerPass());
