@@ -30,18 +30,10 @@ using namespace onnx_mlir;
 class FrontendDialectHelperTest {
 private:
   MLIRContext ctx;
-  ModuleOp module;
-  std::unique_ptr<OpBuilder> builder;
 
 public:
   FrontendDialectHelperTest() {
     ctx.getOrLoadDialect<ONNXDialect>();
-    module = ModuleOp::create(UnknownLoc::get(&ctx));
-    builder = std::make_unique<OpBuilder>(module.getBodyRegion());
-  }
-
-  ~FrontendDialectHelperTest() {
-    module.erase();
   }
 
   bool testInMemoryExternalDataFloat32() {

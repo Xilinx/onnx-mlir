@@ -63,12 +63,21 @@ struct ExternalDataLoc {
   }
 };
 
+// True if the location of a TensorProto::EXTERNAL is in-memory.
+bool isInMemoryExternal(std::string_view location) {
+  // onnxruntime#12465 kTensorProtoMemoryAddressTag = "*/_ORT_MEM_ADDR_/*"
+  return location == "*/_ORT_MEM_ADDR_/*";
+}
+
 // Reads external data from file location specified in tensor proto.
 // The data is little endian encoded.
 // See https://github.com/onnx/onnx/blob/main/docs/ExternalData.md
 std::unique_ptr<llvm::MemoryBuffer> readExternalData_LE(
     const std::string &externalDataDir, const ExternalDataLoc &loc) {
   assert(!loc.location.empty() && "missing external data location");
+  // This should only be used for on-file external data.
+  assert(!isInMemoryExternal(loc.location));
+
   SmallVector<char> path(externalDataDir.begin(), externalDataDir.end());
   llvm::sys::path::append(path, loc.location);
   const std::string pathStr(path.data(), path.size());
@@ -280,10 +289,9 @@ ElementsAttr createElmAttr(RankedTensorType tensorType,
   if (tp.has_data_location() &&
       tp.data_location() == onnx::TensorProto::EXTERNAL) {
     ExternalDataLoc loc(tp);
-    if (loc.location == "*/_ORT_MEM_ADDR_/*") {
-      // onnxruntime#12465 kTensorProtoMemoryAddressTag = "*/_ORT_MEM_ADDR_/*"
+    if (isInMemoryExternal(loc.location)) {
       return createElmAttrFromRawBytes_LE<T>(tensorType,
-         llvm::ArrayRef(reinterpret_cast<char *>(loc.offset), loc.length));
+          llvm::ArrayRef(reinterpret_cast<char *>(loc.offset), loc.length));
     }
     return createElementsAttrFromMemoryBuffer_LE<T>(
         tensorType, readExternalData_LE(externalDataDir, loc));
