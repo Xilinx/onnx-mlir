@@ -167,8 +167,10 @@ public:
       transform(op->getOperands(), std::back_inserter(newInputs),
           [&](Value operand) { return irMapping.lookupOrDefault(operand); });
 
+      auto fusedLoc =
+          rewriter.getFusedLoc({qOp.getLoc(), op.getLoc(), dqOp.getLoc()});
       auto newOp =
-          rewriter.create<T>(op.getLoc(), TypeRange{qOp.getResult().getType()},
+          rewriter.create<T>(fusedLoc, TypeRange{qOp.getResult().getType()},
               ValueRange{newInputs}, op->getAttrs());
       rewriter.replaceOp(qOp, newOp.getResult());
       return success();
