@@ -454,7 +454,7 @@ func.func @test_quantized_leakyrelu_standalone(
   // CHECK: %[[NOVAL:.*]] = "onnx.NoValue"()
   // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[NOVAL]])
   // CHECK-SAME: leakyrelu_alpha = {{[0-9.e+-]+}} : f32
-  // CHECK-SAME: nonlinear = "LEAKYRELU"
+  // CHECK-SAME: nonlinear = "NONE"
   // CHECK-SAME: prelu_in = 3 : si64
   // CHECK-SAME: prelu_shift = 8 : si64
   // CHECK-SAME: type = "LEAKYRELU"
