@@ -239,9 +239,8 @@ struct FuseQuantizedEltwiseWithoutActivation
 
     auto [leakyAlpha, preluIn, preluShift] =
         getLeakyReluAttrsIfApplicable(eltwiseOp.getOperation(), rewriter);
-    // Verifier requires nonlinear=LEAKYRELU when leakyrelu_alpha/prelu_* are
-    // set.
-    StringRef nonlinear = leakyAlpha ? "LEAKYRELU" : "NONE";
+    
+    StringRef nonlinear = "NONE";
 
     auto fusedOp = rewriter.create<XCOMPILERFusedEltwiseOp>(eltwiseOp.getLoc(),
         eltwiseOp.getType(), // result type (quantized)
