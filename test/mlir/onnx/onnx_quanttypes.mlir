@@ -1,7 +1,6 @@
 // RUN: onnx-mlir-opt %s -quant-types | FileCheck %s
 
 // Expected to fail until the commit in `utils/clone-mlir.sh` is updated
-// XFAIL: *
 
 func.func @matmul_add(%arg0: tensor<1x128x768xf32>) -> tensor<1x128x768xf32> {
   %0 = onnx.Constant dense<35166> : tensor<ui16>
