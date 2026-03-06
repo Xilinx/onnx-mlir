@@ -3140,6 +3140,10 @@ func.func @maxpool_k5_p1_s1_maxpool_k3_p1_s1_quant_int8(%arg0: tensor<1x3x224x22
 
 // -----
 
+/// Test that if we have three chains of two-back-to-back maxpools, where each chain's
+/// input is used in more than one place we fuse only the maxpools in each chain and maintain
+/// the serial order of the maxpools instead of recursively merging them so that we end up
+/// with three parallel maxpools.
 func.func @back_to_back_i8_maxpools(%arg0: tensor<1x192x23x40xf32>) -> tensor<1x768x23x40xf32> {
   %0 = onnx.Constant dense<6.250000e-02> : tensor<f32>
   %1 = onnx.Constant dense<0> : tensor<i8>
