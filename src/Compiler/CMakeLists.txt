@@ -103,7 +103,13 @@ add_onnx_mlir_library(OMOnnxToMlirPasses
   ${ONNX_MLIR_SRC_ROOT}/include
 
   LINK_LIBS PRIVATE
+  OMOpTransform
+  OMInstrument
+  OMInstrumentONNX
   OMHybridTransform
+  OMInstrument
+  OMInstrumentONNX
+  OMOpTransform
   OMONNXStandardFuncReturnPass
   OMONNXSimplifyShapeRelatedOps
   OMDisposableGarbageCollector

@@ -29,6 +29,12 @@ LogicalResult XFEConvOp::inferShapes(
   return XFEConvOpShapeInference(this->getOperation(), doShapeInference);
 }
 
+LogicalResult XFEConvTransposeOp::inferShapes(
+    std::function<void(Region &)> doShapeInference) {
+  return XFEConvTransposeOpShapeInference(
+      this->getOperation(), doShapeInference);
+}
+
 LogicalResult XFEAveragePoolOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
   return XFEAveragePoolOpShapeInference(this->getOperation(), doShapeInference);
@@ -69,6 +75,11 @@ LogicalResult XFESpaceToDepthOp::inferShapes(
       this->getOperation(), doShapeInference);
 }
 
+LogicalResult XFEResizeOp::inferShapes(
+    std::function<void(Region &)> doShapeInference) {
+  return XFEResizeOpShapeInference(this->getOperation(), doShapeInference);
+}
+
 // ============================================================
 // Verify
 // ============================================================
@@ -79,6 +90,10 @@ LogicalResult XFEMatMulBiasOp::verify() {
 
 LogicalResult XFEConvOp::verify() {
   return XFEConvOpVerify(this->getOperation());
+}
+
+LogicalResult XFEConvTransposeOp::verify() {
+  return XFEConvTransposeOpVerify(this->getOperation());
 }
 
 LogicalResult XFEAveragePoolOp::verify() {
@@ -107,4 +122,8 @@ LogicalResult XFEDepthToSpaceOp::verify() {
 
 LogicalResult XFESpaceToDepthOp::verify() {
   return XFESpaceToDepthOpVerify(this->getOperation());
+}
+
+LogicalResult XFEResizeOp::verify() {
+  return XFEResizeOpVerify(this->getOperation());
 }

@@ -39,6 +39,12 @@ LogicalResult XFEConvOpVerify(Operation *op) {
   return success();
 }
 
+LogicalResult XFEConvTransposeOpVerify(Operation *op) {
+  // Verification for ConvTransposeChannelLast
+  // For now, delegate to basic verification - can add custom checks later
+  return success();
+}
+
 LogicalResult XFEAveragePoolOpVerify(Operation *op) {
   // TODO: Implement verification for AveragePoolChannelLast
   //
@@ -141,6 +147,12 @@ LogicalResult XFESpaceToDepthOpVerify(Operation *op) {
   // if (operandType.getRank() < 2)
   //   return op->emitError("Expected input rank >= 2");
 
+  return success();
+}
+
+LogicalResult XFEResizeOpVerify(Operation *op) {
+  // Verification for ResizeChannelLast
+  // For now, delegate to basic verification - can add custom checks later
   return success();
 }
 

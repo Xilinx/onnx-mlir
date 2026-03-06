@@ -6,6 +6,7 @@
 
 namespace mlir {
 class ModuleOp;
+class OpPassManager;
 class PassManager;
 } // namespace mlir
 
@@ -17,10 +18,12 @@ struct OnnxToMlirOptions {
   bool enableConvTransposeDecomposeToPhasedConv = false;
   bool enableConvTranspose1dDecomposeToPhasedConv = false;
   bool enableInstanceNormDecompose = true;
+  bool enableMatmulNBitsDecompose = false;
+  bool enableGroupQueryAttentionDecompose = true;
   bool enableRemoveDqQAroundOp = false;
   bool enableRemoveBinary = false;
   bool enableFusePadIntoAvgpool = false;
-  bool enableRecomposeLayernormByTranspose = false;
+  bool enableXMCPasses = false;
   bool enableSplitToSliceDecompose = false;
 
   bool disableRecomposeOption = false;
@@ -41,6 +44,8 @@ struct OnnxToMlirOptions {
 
 void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     bool donotScrubDisposableElementsAttr = false, OnnxToMlirOptions opts = {});
+
+void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts = {});
 } // namespace onnx_mlir
 
 #endif

@@ -38,6 +38,7 @@
 
 #include "src/Compiler/CompilerOptions.hpp"
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
+#include "src/Dialect/ONNX/ElementsAttr/DisposableElementsAttr.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/ElementsAttrHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
@@ -3324,7 +3325,7 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
           customOp, "input 'head_sink' not supported by onnx.Attention");
 
     auto smoothSoftmax = customOp->getAttrOfType<IntegerAttr>("smooth_softmax");
-    if (smoothSoftmax && smoothSoftmax.getSInt() != 0)
+    if (smoothSoftmax && smoothSoftmax.getSInt() == 1)
       return rewriter.notifyMatchFailure(customOp,
           "attribute 'smooth_softmax' not supported by onnx.Attention");
 
@@ -3351,11 +3352,12 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     // need to split them up if this is the case.
     ONNXConstantOp splitLens;
     ONNXSplitOp split;
+    int64_t headSize;
     if (isNoneValue(key) && isNoneValue(value)) {
       int64_t totalNumHeads = qNumHeads.getSInt() + 2 * kvNumHeads.getSInt();
       // microsoft.GroupQueryAttention assumes the head_size is the same for q,
       // k and v
-      int64_t headSize = queryType.getShape()[2] / totalNumHeads;
+      headSize = queryType.getShape()[2] / totalNumHeads;
 
       SmallVector<int64_t, 3> splitLensI64 = {headSize * qNumHeads.getSInt(),
           headSize * kvNumHeads.getSInt(), headSize * kvNumHeads.getSInt()};
@@ -3381,6 +3383,8 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       query = split->getOpResult(0);
       key = split->getOpResult(1);
       value = split->getOpResult(2);
+    } else {
+      headSize = queryType.getShape()[2] / qNumHeads.getSInt();
     }
 
     // If do_rotary = 1, query and key need to be passed through a rotary
@@ -3390,9 +3394,74 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     ONNXRotaryEmbeddingOp ropeKey;
     if (doRotary && doRotary.getSInt() > 0) {
       assert(numIn >= 9 && !isNoneValue(cosCache) && !isNoneValue(sinCache));
-
-      if (numIn < 10 || isNoneValue(positionIds))
+      // If do_rotary = 1 and no position ids are provided, we need to slice and
+      // transform the cos and sin caches to have shape:
+      // [batch_size, sequence_length, head_size / 2].
+      if (numIn < 10 || isNoneValue(positionIds)) {
         positionIds = none;
+
+        // We need to know the past sequence length to find the total sequence
+        // length (or vice versa). We could get the total sequence length from
+        // seqlens_k, but only if this input is a constant that we can read.
+        if (isNoneValue(pastKey))
+          return rewriter.notifyMatchFailure(
+              customOp, "expected 'past_ks' input to be provided");
+        auto pastKeyType = cast<ShapedType>(pastKey.getType());
+        if (!pastKeyType.hasStaticShape())
+          return rewriter.notifyMatchFailure(
+              customOp, "expected 'past_ks' input to have static type");
+
+        // Assuming the sequence length is the same kv_sequence_length
+        const int64_t seqLen = queryType.getShape()[1];
+        const int64_t pastSeqLen = pastKeyType.getShape()[2];
+        const int64_t totalSeqLen = pastSeqLen + seqLen;
+
+        // The slice mimics indexing the cos/sin caches using the default
+        // pos_ids: [past_seq_len..total_seq_len].
+        onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+            rewriter, loc);
+        Value startsConst = create.onnx.constantInt64({pastSeqLen});
+        Value endsConst = create.onnx.constantInt64({totalSeqLen});
+        Value axesConst = create.onnx.constantInt64({0});
+        Value stepsConst = create.onnx.constantInt64({1});
+        toCheck.append({startsConst, endsConst, axesConst, stepsConst});
+
+        auto elementType = getElementTypeOrSelf(cosCache.getType());
+        auto cacheSlicedType =
+            RankedTensorType::get({seqLen, headSize / 2}, elementType);
+        auto cosCacheSliced = rewriter.create<ONNXSliceOp>(loc, cacheSlicedType,
+            cosCache, startsConst, endsConst, axesConst, stepsConst);
+        auto sinCacheSliced = rewriter.create<ONNXSliceOp>(loc, cacheSlicedType,
+            sinCache, startsConst, endsConst, axesConst, stepsConst);
+        toCheck.append({cosCacheSliced, sinCacheSliced});
+
+        // reshape to [1, sequence_length, head_size / 2]
+        auto cache3dType =
+            RankedTensorType::get({1, seqLen, headSize / 2}, elementType);
+        auto reshapeShapeConst =
+            create.onnx.constantInt64({1, seqLen, headSize / 2});
+        cosCache =
+            create.onnx.reshape(cache3dType, cosCacheSliced, reshapeShapeConst);
+        sinCache =
+            create.onnx.reshape(cache3dType, sinCacheSliced, reshapeShapeConst);
+        toCheck.append({reshapeShapeConst, cosCache, sinCache});
+
+        // Assume total/past sequence length is the same for every batch and
+        // broadcast the default pos_ids to get cos/sin caches with shape:
+        // [batch_size, sequence_length, head_size / 2]
+        int64_t batchSize = queryType.getShape()[0];
+        if (batchSize != 1) {
+          auto cacheBroadcastType = RankedTensorType::get(
+              {batchSize, seqLen, headSize / 2}, elementType);
+          auto broadcastShapeConst =
+              create.onnx.constantInt64({batchSize, seqLen, headSize / 2});
+          cosCache = create.onnx.expand(
+              cacheBroadcastType, cosCache, broadcastShapeConst);
+          sinCache = create.onnx.expand(
+              cacheBroadcastType, sinCache, broadcastShapeConst);
+          toCheck.append({broadcastShapeConst, cosCache, sinCache});
+        }
+      }
 
       int64_t rotaryInterleaved = 0;
       if (customOp->hasAttrOfType<IntegerAttr>("rotary_interleaved"))
@@ -3425,6 +3494,7 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
 
     attention.setQNumHeadsAttr(qNumHeads);
     attention.setKvNumHeadsAttr(kvNumHeads);
+    attention.setIsCausal(1);
 
     if (customOp->hasAttrOfType<IntegerAttr>("qk_output")) {
       auto qkOutput = customOp->getAttrOfType<IntegerAttr>("qk_output");
@@ -3518,6 +3588,242 @@ struct MicrosoftRotaryEmbedding : public CustomOpToOnnxOps {
 
     return success();
   };
+};
+
+// Converts Microsoft.MatmulNBits to onnx.DequantizeLinear and onnx.MatMul
+//   A    B  scales zps       A      B  scales zps
+//   │    │     │    │        │      │     │    │
+//   │    │     │    │      fp32    ui8  fp32  ui8
+// fp32  ui8  fp32  ui8       │      │     │    │
+//   │    │     │    │        │      ▼     ▼    ▼
+//   └─┐  │     │  ┌─┘        │   ┌────────────────┐
+//     ▼  ▼     ▼  ▼          │   │                │
+//   ┌───────────────┐        │   │DequantizeLinear│
+//   │               │        │   │                │
+//   │  MatmulNBits  │   =►   │   └────────┬───────┘
+//   │               │        │            │
+//   └───────┬───────┘        │          fp32
+//           │                └───────┐    │
+//           │                        ▼    ▼
+//         fp32                     ┌────────┐
+//           │                      │ Matmul │
+//           ▼                      └────┬───┘
+//                                       │
+//                                     fp32
+//                                       │
+//                                       ▼
+// Here, A is an ifm and B, scales, and zps are constants.
+// The decomposition first unpacks the B and zps constants. Then, it dequantizes
+// the unpacked B matrix using DequantizeLinear. This dequantized B matrix
+// is transposed and finally passed to a Matmul where it gets multiplied with
+// the A matrix.
+struct MicrosoftMatmulNBits : public CustomOpToOnnxOps {
+  MicrosoftMatmulNBits(MLIRContext *ctx, PatternBenefit b = 1)
+      : CustomOpToOnnxOps(ctx, MicrosoftDomainName, "MatmulNBits", b) {}
+
+  // Unpacks a uint8 constant where the values are actually n-bit values packed
+  // as uint8s.
+  static Value unpackValue(onnx_mlir::OnnxBuilder &b,
+      SmallVector<Value> &toCheck, ONNXConstantOp constOp, int64_t bits,
+      int64_t N, int64_t allBlocksSize, int64_t targetSize) {
+    auto uint8Type = b.getBuilder().getIntegerType(8, false);
+
+    DenseElementsAttr values;
+    if (auto disposable =
+            dyn_cast<DisposableElementsAttr>(constOp.getValueAttr())) {
+      values = disposable.toDenseElementsAttr();
+    } else {
+      values = cast<DenseElementsAttr>(constOp.getValueAttr());
+    }
+    const int64_t numElements = N * allBlocksSize;
+    assert(values.getNumElements() == numElements);
+
+    SmallVector<int64_t> packedValues;
+    packedValues.reserve(numElements);
+    for (APInt v : values.getValues<APInt>())
+      packedValues.push_back(v.getSExtValue());
+
+    // Perform the unpacking:
+    // bits = 2: 1xuint8 0bAABBCCDD => 4xuint8 0bAA 0bBB 0bCC 0bDD
+    // bits = 4: 1xuint8 0bAAAABBBB => 2xuint8 0bAAAA 0bBBBB
+    SmallVector<uint8_t> unpackedValues;
+    unpackedValues.reserve(numElements * 8 / bits);
+    const uint8_t mask = (1 << bits) - 1;
+    for (int64_t i = 0; i < numElements; i++) {
+      for (int64_t j = 0; j < 8 / bits; j++) {
+        uint8_t value = uint8_t(packedValues[i] >> (j * bits)) & mask;
+        unpackedValues.push_back(value);
+      }
+    }
+
+    SmallVector<int64_t> unpackedShape({1, N, allBlocksSize * 8 / bits});
+    RankedTensorType unpackedType =
+        RankedTensorType::get({1, N, allBlocksSize * 8 / bits}, uint8Type);
+    Value unpackedValue = b.constant(DenseElementsAttr::get(
+        unpackedType, ArrayRef<uint8_t>(unpackedValues)));
+    toCheck.push_back(unpackedValue);
+
+    // We need to slice to compensate for the ceil function in the shapes of the
+    // inputs.
+    // For unpacking B, if K is not divisible by block_size,
+    //   then allBlocksSize > K, and so we need to slice
+    // For unpacking zps, if K * bits is not divisible by 8 * block_size,
+    //   then allBlocksSize > numBlocks, and so we need to slice
+    if (targetSize != allBlocksSize * 8 / bits) {
+      Value starts = b.constantInt64({0});
+      Value ends = b.constantInt64({targetSize});
+      Value axes = b.constantInt64({2});
+      Value steps = b.constantInt64({1});
+      RankedTensorType sliceType =
+          RankedTensorType::get({1, N, targetSize}, uint8Type);
+      unpackedValue =
+          b.slice(sliceType, unpackedValue, starts, ends, axes, steps);
+      toCheck.push_back(starts);
+      toCheck.push_back(ends);
+      toCheck.push_back(axes);
+      toCheck.push_back(steps);
+      toCheck.push_back(unpackedValue);
+    }
+
+    return unpackedValue;
+  }
+
+  LogicalResult matchAndRewriteImpl(
+      ONNXCustomOp customOp, PatternRewriter &rewriter) const final {
+
+    const Location loc = customOp.getLoc();
+
+    const int64_t numIn = customOp.getNumOperands();
+    assert((numIn >= 3 && numIn <= 6) && "expects 3..6 inputs");
+    const int64_t numOut = customOp.getNumResults();
+    assert((numOut == 1) && "expects 1 outputs");
+
+    Value aMat = customOp.getOperand(0);
+    Value bMat = customOp.getOperand(1);
+    Value scales = customOp.getOperand(2);
+
+    Value zeroPoints;
+    if (numIn > 3)
+      zeroPoints = customOp.getOperand(3);
+
+    // 4th input g_idx is deprecated
+
+    Value bias;
+    if (numIn > 5)
+      bias = customOp.getOperand(5);
+
+    auto KAttr = customOp->getAttrOfType<IntegerAttr>("K");
+    const int64_t K = KAttr.getSInt();
+    auto NAttr = customOp->getAttrOfType<IntegerAttr>("N");
+    const int64_t N = NAttr.getSInt();
+
+    auto blockSizeAttr = customOp->getAttrOfType<IntegerAttr>("block_size");
+    const int64_t blockSize = blockSizeAttr.getSInt();
+
+    // B matrix should be: N x ceil(K / block_size) x (block_size * 8 / bits)
+    if (!isa<ShapedType>(bMat.getType()))
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'B' input to have shaped type");
+    auto bType = cast<ShapedType>(bMat.getType());
+    if (!bType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'B' input to have static type");
+    assert(bType.getRank() == 3 && "B input must have rank 3");
+    assert(bType.getElementType().isUnsignedInteger(8) &&
+           "B must be uint8 tensor");
+
+    auto uint8Type = bType.getElementType();
+    if (zeroPoints && !onnx_mlir::isNoneValue(zeroPoints))
+      assert(getElementTypeOrSelf(zeroPoints.getType()) == uint8Type &&
+             "zero_points must be uint8 tensor");
+
+    if (!customOp->hasAttrOfType<IntegerAttr>("bits"))
+      return rewriter.notifyMatchFailure(customOp, "expected 'bits' attribute");
+
+    auto bitsAttr = customOp->getAttrOfType<IntegerAttr>("bits");
+    const int64_t bits = bitsAttr.getSInt();
+    // Other bits values are not supported by the Microsoft spec
+    assert((bits == 2 || bits == 4 || bits == 8) &&
+           "expected bits to be 2, 4, or 8");
+
+    onnx_mlir::OnnxBuilder b(rewriter, loc);
+    SmallVector<Value> toCheck;
+
+    // number of blocks that the K dim is divided into = ceil(K / blockSize)
+    const int64_t numBlocks = (K + blockSize - 1) / blockSize;
+    // number of uint8 values in a block
+    const int64_t packedBlockSize = (blockSize * bits) / 8;
+    ONNXConstantOp constBOp = dyn_cast<ONNXConstantOp>(bMat.getDefiningOp());
+    if (!constBOp && constBOp->hasAttr("value"))
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'B' input to be a constant");
+    Value unpackedB = unpackValue(
+        b, toCheck, constBOp, bits, N, numBlocks * packedBlockSize, K);
+
+    // zero_points should be: N x ceil((K * bits) / (8 * block_size))
+    //  i.e. N x numBlocks as packed uint8s
+    Value unpackedZP;
+    if (zeroPoints && !onnx_mlir::isNoneValue(zeroPoints)) {
+      ONNXConstantOp constZPOp =
+          dyn_cast<ONNXConstantOp>(zeroPoints.getDefiningOp());
+      if (!constZPOp && constZPOp->hasAttr("value"))
+        return rewriter.notifyMatchFailure(
+            customOp, "expected 'zero_points' input to be a constant");
+      // ceil((K / blockSize) * (bits / 8))
+      const int64_t zpPackedBlocksSize =
+          (K * bits + 8 * blockSize - 1) / (8 * blockSize);
+      unpackedZP = unpackValue(
+          b, toCheck, constZPOp, bits, N, zpPackedBlocksSize, numBlocks);
+    } else {
+      unpackedZP = b.none();
+      toCheck.push_back(unpackedZP);
+    }
+
+    // The scales constant should have shape: N x ceil(K / block_size)
+    // For onnx.DequantizeLinear, it needs to have the same shape as zero_points
+    SmallVector<int64_t> newScalesShape({1, N, numBlocks});
+    Value reshapeScalesConst = b.constantInt64(newScalesShape);
+    toCheck.push_back(reshapeScalesConst);
+
+    auto reshapeScalesType =
+        RankedTensorType::get(newScalesShape, getElementTypeOrSelf(scales));
+    Value reshapeScales =
+        b.reshape(reshapeScalesType, scales, reshapeScalesConst);
+    toCheck.push_back(reshapeScales);
+
+    // Dequantize the unpacked B matrix from uint8 to fp32
+    auto dqType =
+        RankedTensorType::get({1, N, K}, getElementTypeOrSelf(aMat.getType()));
+    auto dq = rewriter.create<ONNXDequantizeLinearOp>(
+        loc, dqType, unpackedB, reshapeScales, unpackedZP);
+    dq.setBlockSize(blockSize);
+    dq.setAxis(-1);
+    toCheck.push_back(dq);
+
+    // Transpose the dequantized B matrix to the shape: 1 x K x N
+    auto transposeBType =
+        RankedTensorType::get({1, K, N}, getElementTypeOrSelf(aMat.getType()));
+    Value transposeB =
+        b.transpose(transposeBType, dq, rewriter.getI64ArrayAttr({0, 2, 1}));
+    toCheck.push_back(transposeB);
+
+    // Matmul A x B : (1 x M x K),  (1 x K x N) => (1 x M x N)
+    Value mm = b.matmul(customOp.getResultTypes()[0], aMat, transposeB, false);
+    toCheck.push_back(mm);
+    if (bias) {
+      mm = b.add(mm, bias);
+      toCheck.push_back(mm);
+    }
+
+    if (failed(verifyOpsErasingOnError(toCheck, rewriter))) {
+      return rewriter.notifyMatchFailure(
+          customOp, "Decomposition failed verification");
+    }
+
+    rewriter.replaceOp(customOp, mm);
+
+    return success();
+  }
 };
 
 template <typename OpToCreate>
@@ -4014,6 +4320,8 @@ struct DecomposeONNXToONNXPass
       bool enableConvTransposeDecomposeToPhasedConv = false,
       bool enableConvTranspose1dDecomposeToPhasedConv = false,
       bool enableInstanceNormDecompose = true,
+      bool enableMatmulNBitsDecompose = false,
+      bool enableGroupQueryAttentionDecompose = true,
       bool enableSplitToSliceDecompose = false) {
     this->target = target;
     this->enableConvTransposeDecompose = enableConvTransposeDecompose;
@@ -4022,6 +4330,9 @@ struct DecomposeONNXToONNXPass
     this->enableConvTranspose1dDecomposeToPhasedConv =
         enableConvTranspose1dDecomposeToPhasedConv;
     this->enableInstanceNormDecompose = enableInstanceNormDecompose;
+    this->enableMatmulNBitsDecompose = enableMatmulNBitsDecompose;
+    this->enableGroupQueryAttentionDecompose =
+        enableGroupQueryAttentionDecompose;
     this->enableSplitToSliceDecompose = enableSplitToSliceDecompose;
   }
 
@@ -4035,6 +4346,10 @@ struct DecomposeONNXToONNXPass
         pass.enableConvTransposeDecomposeToPhasedConv.getValue();
     this->enableInstanceNormDecompose =
         pass.enableInstanceNormDecompose.getValue();
+    this->enableMatmulNBitsDecompose =
+        pass.enableMatmulNBitsDecompose.getValue();
+    this->enableGroupQueryAttentionDecompose =
+        pass.enableGroupQueryAttentionDecompose.getValue();
     this->enableSplitToSliceDecompose =
         pass.enableSplitToSliceDecompose.getValue();
   }
@@ -4072,6 +4387,17 @@ struct DecomposeONNXToONNXPass
                      "LayerNormalization"),
       ::llvm::cl::init(true)};
 
+  Option<bool> enableMatmulNBitsDecompose{*this, "enable-matmulnbits-decompose",
+      llvm::cl::desc("Enable decomposition of Microsoft MatmulNBits to "
+                     "dequantize linear and matmul ops"),
+      ::llvm::cl::init(false)};
+
+  Option<bool> enableGroupQueryAttentionDecompose{*this,
+      "enable-groupqueryattention-decompose",
+      llvm::cl::desc("Enable decomposition of Microsoft GroupQueryAttention to "
+                     "onnx.Attention and onnx.RotaryEmbedding ops"),
+      ::llvm::cl::init(true)};
+
   Option<bool> enableSplitToSliceDecompose{*this, "enable-split-to-slice",
       llvm::cl::desc("Enable decomposition of Split to Slice operations"),
       ::llvm::cl::init(false)};
@@ -4089,6 +4415,7 @@ void DecomposeONNXToONNXPass::runOnOperation() {
   onnx_mlir::getDecomposeONNXToONNXPatterns(patterns,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
       enableConvTranspose1dDecomposeToPhasedConv, enableInstanceNormDecompose,
+      enableMatmulNBitsDecompose, enableGroupQueryAttentionDecompose,
       enableSplitToSliceDecompose);
   patterns.insert<ReplaceCastLikeByCastPattern>(context);
 
@@ -4110,7 +4437,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns, bool enableConvTransposeDecompose,
     bool enableConvTransposeDecomposeToPhasedConv,
     bool enableConvTranspose1dDecomposeToPhasedConv,
-    bool enableInstanceNormDecompose, bool enableSplitToSliceDecompose) {
+    bool enableInstanceNormDecompose, bool enableMatmulNBitsDecompose,
+    bool enableGroupQueryAttentionDecompose, bool enableSplitToSliceDecompose) {
   MLIRContext *context = patterns.getContext();
   populateWithGenerated(patterns);
   if (enableConvTransposeDecompose)
@@ -4139,8 +4467,11 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   patterns.insert<MicrosoftSkipLayerNorm>(context);
   patterns.insert<SimplifiedLayerNorm>(context);
   patterns.insert<MicrosoftSkipSimplifiedLayerNorm>(context);
-  patterns.insert<MicrosoftGroupQueryAttention>(context);
+  if (enableGroupQueryAttentionDecompose)
+    patterns.insert<MicrosoftGroupQueryAttention>(context);
   patterns.insert<MicrosoftRotaryEmbedding>(context);
+  if (enableMatmulNBitsDecompose)
+    patterns.insert<MicrosoftMatmulNBits>(context);
   patterns.insert<DecomposeSlicePadPattern>(context);
   patterns.insert<DecomposeScatterNDPattern>(context);
   patterns.insert<SoftmaxCrossEntropyPattern>(context);
@@ -4165,9 +4496,11 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createDecomposeONNXToONNXPass(
     const std::string &target, bool enableConvTransposeDecompose,
     bool enableConvTransposeDecomposeToPhasedConv,
     bool enableConvTranspose1dDecomposeToPhasedConv,
-    bool enableInstanceNormDecompose, bool enableSplitToSliceDecompose) {
+    bool enableInstanceNormDecompose, bool enableMatmulNBitsDecompose,
+    bool enableGroupQueryAttentionDecompose, bool enableSplitToSliceDecompose) {
   return std::make_unique<DecomposeONNXToONNXPass>(target,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
       enableConvTranspose1dDecomposeToPhasedConv, enableInstanceNormDecompose,
+      enableMatmulNBitsDecompose, enableGroupQueryAttentionDecompose,
       enableSplitToSliceDecompose);
 }
