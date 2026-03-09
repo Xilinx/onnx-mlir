@@ -4,7 +4,7 @@
 
 //===---------------- Elementwise.cpp - Elementwise Op --------------------===//
 //
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -29,6 +29,18 @@ namespace onnx_mlir {
 template <>
 struct TOSADialectOp<ONNXNegOp> {
   using Op = mlir::tosa::NegateOp;
+};
+
+struct IsIntOrFloatOrQuantizedInt {
+  static LogicalResult checkType(
+      ConversionPatternRewriter &rewriter, Type scalarType, Operation *op) {
+    if (!isa<FloatType>(scalarType) && !isTOSAInt(scalarType) &&
+        !isTOSAQuantizedInt(scalarType)) {
+      return rewriter.notifyMatchFailure(op,
+          "this operation only supports int, float, or quantized int types");
+    }
+    return success();
+  }
 };
 
 struct IsIntOrFloat {
@@ -724,7 +736,7 @@ static void populateLoweringONNXElementwiseUnaryTemplateOpToTOSAPattern(
       ONNXElementwiseUnaryOpLoweringToTOSA<ONNXNotOp, mlir::tosa::LogicalNotOp,
           IsBool, IsBool>,
       ONNXElementwiseUnaryOpLoweringToTOSA<ONNXAbsOp, mlir::tosa::AbsOp,
-          IsIntOrFloat, IsIntOrFloat>,
+          IsIntOrFloatOrQuantizedInt, IsIntOrFloatOrQuantizedInt>,
       ONNXElementwiseUnaryOpLoweringToTOSA<ONNXErfOp, mlir::tosa::ErfOp,
           IsFloat, IsFloat>,
       ONNXElementwiseUnaryOpLoweringToTOSA<ONNXSinOp, mlir::tosa::SinOp,

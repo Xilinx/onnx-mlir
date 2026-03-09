@@ -5,7 +5,7 @@
 //====------ ConvertONNXToTOSA.cpp - ONNX dialects to TOSA lowering -------===//
 //
 // Copyright (c) 2022 Arm Limited.
-// Copyright (c) 2022-2025 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -174,11 +174,11 @@ void FrontendToTosaLoweringPass::runOnOperation() {
 
   // We use the type converter to legalize types before any conversion patterns
   // are executed. This ensures that we do not need to trigger separate
-  // conversion failures. Quantized types are not supported right now.
+  // conversion failures. Only per-tensor quantization is supported right now.
   TypeConverter typeConverter;
   typeConverter.addConversion([](Type type) -> std::optional<Type> {
     if (isTOSAInt(type) || isa<FloatType>(type) || isa<NoneType>(type) ||
-        isTOSABool(type))
+        isTOSABool(type) || isTOSAQuantizedInt(type))
       return type;
     return std::nullopt;
   });

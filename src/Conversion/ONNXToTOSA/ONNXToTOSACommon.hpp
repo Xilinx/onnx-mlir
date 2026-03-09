@@ -5,7 +5,7 @@
 //====------ ONNXToTOSACommon.hpp - ONNX dialects to TOSA lowering --------===//
 //
 // Copyright 2020-2024 The TensorFlow Authors. All Rights Reserved.
-// Copyright (c) 2022-2024 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -102,6 +102,11 @@ inline bool isTOSAInt(mlir::Type type) {
 inline bool isTOSAFloat(mlir::Type type) {
   return mlir::isa<mlir::BFloat16Type, mlir::Float16Type, mlir::Float32Type>(
       type);
+}
+
+inline bool isTOSAQuantizedInt(mlir::Type type) {
+  auto quantizedType = mlir::dyn_cast<mlir::quant::UniformQuantizedType>(type);
+  return quantizedType && isTOSAInt(quantizedType.getStorageType());
 }
 
 //===----------------------------------------------------------------------===//

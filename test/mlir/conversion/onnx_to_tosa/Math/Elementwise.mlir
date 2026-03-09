@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Advanced Micro Devices, Inc.
+
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa -cse %s -split-input-file | FileCheck %s
 
 // -----
@@ -784,6 +786,29 @@ func.func @test_abs_f64(%arg0: tensor<3xf64>) -> tensor<3xf64> {
 // CHECK-LABEL:  func @test_abs_f64
 // CHECK-NOT:    onnx.Abs
 // CHECK:        return {{.*}}: tensor<3xf64>
+}
+
+func.func @test_abs_qi8(%arg0: tensor<3x!quant.uniform<i8:f32, 1.0>>) -> tensor<3x!quant.uniform<i8:f32, 1.0>> {
+  %0 = "onnx.Abs"(%arg0) : (tensor<3x!quant.uniform<i8:f32, 1.0>>) -> tensor<3x!quant.uniform<i8:f32, 1.0>>
+  return %0 : tensor<3x!quant.uniform<i8:f32, 1.0>>
+// CHECK-LABEL:  func @test_abs_qi8
+// CHECK-NEXT:     [[VAR_0_:%.+]] = tosa.abs [[PARAM_0_]] : (tensor<3x!quant.uniform<i8:f32, 1.000000e+00>>) -> tensor<3x!quant.uniform<i8:f32, 1.000000e+00>>
+// CHECK-NEXT:     return [[VAR_0_]] : tensor<3x!quant.uniform<i8:f32, 1.000000e+00>>
+// CHECK-NEXT:   }
+}
+
+// Per-channel quantized types use quant.uniform<i8:f32:1 {s0, s1, ...}>, 
+// which is not currently handled by the ONNX-to-TOSA elementwise conversion.
+// Only per-tensor uniform quantized types are supported.
+// This test checks that the conversion does not fail but keeps the original op.
+
+func.func @test_abs_qi8_channel(%arg0: tensor<3x4x!quant.uniform<i8:f32:1, {1.0, 2.0, 3.0, 4.0}>>) -> tensor<3x4x!quant.uniform<i8:f32:1, {1.0, 2.0, 3.0, 4.0}>> {
+  %0 = "onnx.Abs"(%arg0) : (tensor<3x4x!quant.uniform<i8:f32:1, {1.0, 2.0, 3.0, 4.0}>>) -> tensor<3x4x!quant.uniform<i8:f32:1, {1.0, 2.0, 3.0, 4.0}>>
+  return %0 : tensor<3x4x!quant.uniform<i8:f32:1, {1.0, 2.0, 3.0, 4.0}>>
+
+// CHECK-LABEL:  func @test_abs_qi8_channel
+// CHECK:        "onnx.Abs"
+// CHECK:        return
 }
 
 // -----
