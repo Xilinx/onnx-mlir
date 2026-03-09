@@ -1952,7 +1952,7 @@ struct PropagateBiasOrScaleIntoLayerNormRewritePatternBase
 
     // The bias/scale dim should be not affected by the reshape. We need to
     // map it back through it.
-    size_t reshapeInComputationDim;
+    size_t reshapeInComputationDim = 0;
     auto reshapeInType =
         dyn_cast<ShapedType>(reshapeOp->getOperand(0).getType());
     if (!reshapeInType || !reshapeInType.hasStaticShape()) {
