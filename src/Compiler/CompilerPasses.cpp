@@ -242,6 +242,11 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.instrumentOnnxNode = instrumentOnnxNode;
     opts.profileIR = profileIR;
     opts.instrumentStage = instrumentStage;
+    opts.enableXMCPasses = enableXMCPasses;
+    if (enableXMCPasses) {
+      opts.enableInstanceNormDecompose = false;
+      opts.enableConvTransposeDecomposeToPhasedConv = false;
+    }
 
     addONNXToMLIRPasses(pm, /*target CPU*/ false,
         /*donotScrubDisposableElementsAttr=*/false, opts);

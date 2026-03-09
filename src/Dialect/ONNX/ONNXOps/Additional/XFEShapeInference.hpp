@@ -22,6 +22,10 @@ LogicalResult XFEMatMulBiasOpShapeInference(
 LogicalResult XFEConvOpShapeInference(
     Operation *op, std::function<void(Region &)> doShapeInference);
 
+// Shape inference for ConvTransposeChannelLast
+LogicalResult XFEConvTransposeOpShapeInference(
+    Operation *op, std::function<void(Region &)> doShapeInference);
+
 // Shape inference for AveragePoolChannelLast
 LogicalResult XFEAveragePoolOpShapeInference(
     Operation *op, std::function<void(Region &)> doShapeInference);
@@ -48,6 +52,10 @@ LogicalResult XFEDepthToSpaceOpShapeInference(
 
 // Shape inference for SpaceToDepthChannelLast
 LogicalResult XFESpaceToDepthOpShapeInference(
+    Operation *op, std::function<void(Region &)> doShapeInference);
+
+// Shape inference for ResizeChannelLast
+LogicalResult XFEResizeOpShapeInference(
     Operation *op, std::function<void(Region &)> doShapeInference);
 
 } // namespace mlir

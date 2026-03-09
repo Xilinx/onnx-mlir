@@ -20,6 +20,9 @@ LogicalResult XFEMatMulBiasOpVerify(Operation *op);
 // Verify for ConvChannelLast
 LogicalResult XFEConvOpVerify(Operation *op);
 
+// Verify for ConvTransposeChannelLast
+LogicalResult XFEConvTransposeOpVerify(Operation *op);
+
 // Verify for AveragePoolChannelLast
 LogicalResult XFEAveragePoolOpVerify(Operation *op);
 
@@ -40,5 +43,8 @@ LogicalResult XFEDepthToSpaceOpVerify(Operation *op);
 
 // Verify for SpaceToDepthChannelLast
 LogicalResult XFESpaceToDepthOpVerify(Operation *op);
+
+// Verify for ResizeChannelLast
+LogicalResult XFEResizeOpVerify(Operation *op);
 
 } // namespace mlir

@@ -242,8 +242,7 @@ struct RecomposeLayerNormFromDivPattern : public OpRewritePattern<DivOperator> {
       [[maybe_unused]] MatchDivArgs &&m) {
     return reportFailure("RMS missing norm, div, reciprocal or pow op");
   }
-  template <>
-  bool matchLastOperator<ONNXDivOp>(ONNXDivOp divOp, MatchDivArgs &&m) {
+  static bool matchLastOperator(ONNXDivOp divOp, MatchDivArgs &&m) {
     // Matched norm = d / stdDev.
     // %norm = "onnx.Div"(%d, %stdDev)
     // %normScaled = "onnx.Mul"(%norm, %scale)
@@ -257,8 +256,7 @@ struct RecomposeLayerNormFromDivPattern : public OpRewritePattern<DivOperator> {
       return reportFailure("RMS missing std dev (via div), sqrt op");
     return true;
   }
-  template <>
-  bool matchLastOperator<ONNXMulOp>(ONNXMulOp mulOp, MatchDivArgs &&m) {
+  static bool matchLastOperator(ONNXMulOp mulOp, MatchDivArgs &&m) {
     using namespace onnx_mlir;
     // Matched norm = d * (invStdDev).
     // %Norm = "onnx.Mul"(%d, %InvStdDev)
@@ -353,8 +351,7 @@ struct RecomposeLayerNormFromDivPattern : public OpRewritePattern<DivOperator> {
     }
     return true;
   }
-  template <>
-  bool matchLastOperator<ONNXPowOp>(ONNXPowOp powInputOp, MatchDivArgs &&m) {
+  static bool matchLastOperator(ONNXPowOp powInputOp, MatchDivArgs &&m) {
     using namespace onnx_mlir;
     // The following pattern is now matched
     // %invStdDev = "onnx.Pow"(%varEps, %negHalf)
@@ -452,17 +449,16 @@ struct RecomposeLayerNormFromDivPattern : public OpRewritePattern<DivOperator> {
     Operation *dSubOp = nullptr;
     Operation *powOp = nullptr;
 
-    if (!matchLastOperator<DivOperator>(
-            LayerNormOp, MatchDivArgs{.isdRecipOp = &isdRecipOp,
-                             .nDivOp = &nDivOp,
-                             .nMulOp = &nMulOp,
-                             .powOp = &powOp,
-                             .sdSqrtOp = &sdSqrtOp,
-                             .veAddOp = &veAddOp,
-                             .d = d,
-                             .invStdDev = invStdDev,
-                             .stdDev = stdDev,
-                             .varEps = varEps})) {
+    if (!matchLastOperator(LayerNormOp, MatchDivArgs{.isdRecipOp = &isdRecipOp,
+                                            .nDivOp = &nDivOp,
+                                            .nMulOp = &nMulOp,
+                                            .powOp = &powOp,
+                                            .sdSqrtOp = &sdSqrtOp,
+                                            .veAddOp = &veAddOp,
+                                            .d = d,
+                                            .invStdDev = invStdDev,
+                                            .stdDev = stdDev,
+                                            .varEps = varEps})) {
       return reportFailure("First operator could not be matched");
     }
 
@@ -1480,17 +1476,11 @@ struct RecomposeONNXToONNXPass
     : public PassWrapper<RecomposeONNXToONNXPass, OperationPass<func::FuncOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RecomposeONNXToONNXPass)
 
-  RecomposeONNXToONNXPass(
-      const std::string &target, const bool &recomposeLayernormByTranspose) {
-    this->target = target;
-    this->recomposeLayernormByTranspose = recomposeLayernormByTranspose;
-  }
+  RecomposeONNXToONNXPass(const std::string &target) { this->target = target; }
   RecomposeONNXToONNXPass(const RecomposeONNXToONNXPass &pass)
       : mlir::PassWrapper<RecomposeONNXToONNXPass,
             OperationPass<func::FuncOp>>() {
     this->target = pass.target.getValue();
-    this->recomposeLayernormByTranspose =
-        pass.recomposeLayernormByTranspose.getValue();
   }
 
   StringRef getArgument() const override { return "recompose-onnx"; }
@@ -1503,12 +1493,6 @@ struct RecomposeONNXToONNXPass
   Option<std::string> target{*this, "target",
       llvm::cl::desc("Target Dialect to Recompose into"), ::llvm::cl::init("")};
 
-  Option<bool> recomposeLayernormByTranspose{*this,
-      "recompose-layernorm-by-transpose",
-      llvm::cl::desc("Use transpose operator to make unsuitable axes suitable "
-                     "for matching layernorm"),
-      ::llvm::cl::init(false)};
-
   void runOnOperation() final;
 
   typedef PassWrapper<RecomposeONNXToONNXPass, OperationPass<func::FuncOp>>
@@ -1520,8 +1504,7 @@ void RecomposeONNXToONNXPass::runOnOperation() {
   MLIRContext *context = &getContext();
 
   RewritePatternSet patterns(context);
-  onnx_mlir::getRecomposeONNXToONNXPatterns(
-      patterns, recomposeLayernormByTranspose);
+  onnx_mlir::getRecomposeONNXToONNXPatterns(patterns);
 
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
@@ -1532,17 +1515,15 @@ void RecomposeONNXToONNXPass::runOnOperation() {
 } // namespace
 
 void onnx_mlir::getRecomposeONNXToONNXPatterns(
-    mlir::RewritePatternSet &patterns, bool recomposeLayernormByTranspose) {
+    mlir::RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
   patterns.insert<RecomposeGeluFromMulPattern>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, false>>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXMulOp, false>>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXPowOp, false>>(context);
-  if (recomposeLayernormByTranspose) {
-    patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, true>>(context);
-    patterns.insert<RecomposeLayerNormFromDivPattern<ONNXMulOp, true>>(context);
-    patterns.insert<RecomposeLayerNormFromDivPattern<ONNXPowOp, true>>(context);
-  }
+  patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, true>>(context);
+  patterns.insert<RecomposeLayerNormFromDivPattern<ONNXMulOp, true>>(context);
+  patterns.insert<RecomposeLayerNormFromDivPattern<ONNXPowOp, true>>(context);
   patterns.insert<RecomposeDepthToSpaceCRD>(context);
   patterns.insert<RecomposeDepthToSpaceDCR>(context);
   // AMD Disabled as downstream has no special support for it
@@ -1554,7 +1535,6 @@ void onnx_mlir::getRecomposeONNXToONNXPatterns(
  * Create a RecomposeONNX pass.
  */
 std::unique_ptr<mlir::Pass> onnx_mlir::createRecomposeONNXToONNXPass(
-    const std::string &target, const bool &recomposeLayernormByTranspose) {
-  return std::make_unique<RecomposeONNXToONNXPass>(
-      target, recomposeLayernormByTranspose);
+    const std::string &target) {
+  return std::make_unique<RecomposeONNXToONNXPass>(target);
 }
