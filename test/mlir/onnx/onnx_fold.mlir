@@ -79,3 +79,50 @@ func.func @test_slice_reverse_tensor(%arg0: tensor<3x2xi64>) -> tensor<3x2xi64> 
 // CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<0> : tensor<1xi64>
 // CHECK:           [[VAR_3_:%.+]] = "onnx.Slice"([[PARAM_0_]], [[VAR_0_]], [[VAR_1_]], [[VAR_2_]], [[VAR_0_]]) {onnx_node_name = "/Slice"} : (tensor<3x2xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<3x2xi64>
 // CHECK:           return [[VAR_3_]] : tensor<3x2xi64>
+
+// -----
+
+// Clip fold: min > max => replace with splat of max.
+func.func @test_clip_fold_min_gt_max(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  %min = onnx.Constant dense<5.0> : tensor<f32>
+  %max = onnx.Constant dense<3.0> : tensor<f32>
+  %0 = "onnx.Clip"(%arg0, %min, %max) : (tensor<2x3xf32>, tensor<f32>, tensor<f32>) -> tensor<2x3xf32>
+  return %0 : tensor<2x3xf32>
+}
+
+// CHECK-LABEL:  func.func @test_clip_fold_min_gt_max
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<3.000000e+00> : tensor<2x3xf32>
+// CHECK:           return [[VAR_0_]] : tensor<2x3xf32>
+// CHECK-NOT:       "onnx.Clip"
+
+// -----
+
+// Clip fold: min == max => replace with splat of max.
+func.func @test_clip_fold_min_eq_max(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  %min = onnx.Constant dense<4.0> : tensor<f32>
+  %max = onnx.Constant dense<4.0> : tensor<f32>
+  %0 = "onnx.Clip"(%arg0, %min, %max) : (tensor<2x3xf32>, tensor<f32>, tensor<f32>) -> tensor<2x3xf32>
+  return %0 : tensor<2x3xf32>
+}
+
+// CHECK-LABEL:  func.func @test_clip_fold_min_eq_max
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<4.000000e+00> : tensor<2x3xf32>
+// CHECK:           return [[VAR_0_]] : tensor<2x3xf32>
+// CHECK-NOT:       "onnx.Clip"
+
+// -----
+
+// Clip fold: min < max => no folding, Clip remains.
+func.func @test_clip_no_fold_min_lt_max(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  %min = onnx.Constant dense<1.0> : tensor<f32>
+  %max = onnx.Constant dense<5.0> : tensor<f32>
+  %0 = "onnx.Clip"(%arg0, %min, %max) : (tensor<2x3xf32>, tensor<f32>, tensor<f32>) -> tensor<2x3xf32>
+  return %0 : tensor<2x3xf32>
+}
+
+// CHECK-LABEL:  func.func @test_clip_no_fold_min_lt_max
+// CHECK-SAME:   (%[[ARG0:.*]]: tensor<2x3xf32>) -> tensor<2x3xf32> {
+// CHECK-DAG:       [[MIN_:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<f32>
+// CHECK-DAG:       [[MAX_:%.+]] = onnx.Constant dense<5.000000e+00> : tensor<f32>
+// CHECK:           [[VAR_0_:%.+]] = "onnx.Clip"(%[[ARG0]], [[MIN_]], [[MAX_]]) : (tensor<2x3xf32>, tensor<f32>, tensor<f32>) -> tensor<2x3xf32>
+// CHECK:           return [[VAR_0_]] : tensor<2x3xf32>
