@@ -39,6 +39,7 @@
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
+#include "src/Dialect/ONNX/Transforms/ResultNamesUpdater.hpp"
 #include "src/Pass/Passes.hpp"
 
 using namespace mlir;
@@ -57,6 +58,17 @@ void transferOnnxNodeName(Operation *sourceOp, Operation *targetOp) {
   // If source has onnx_node_name, set it on target
   if (onnxNodeName && !onnxNodeName.getValue().empty()) {
     targetOp->setAttr("onnx_node_name", onnxNodeName);
+  }
+}
+
+// Helper function to transfer ResultNames attribute from source to target op
+void transferResultNames(Operation *sourceOp, Operation *targetOp) {
+  if (!sourceOp || !targetOp)
+    return;
+
+  if (auto resultNames =
+          sourceOp->getAttrOfType<mlir::ArrayAttr>("ResultNames")) {
+    targetOp->setAttr("ResultNames", resultNames);
   }
 }
 
@@ -216,6 +228,7 @@ struct ConvToChannelLastPattern : public OpRewritePattern<ONNXConvOp> {
 
     // Transfer onnx_node_name attribute from original Conv to XFEConv
     transferOnnxNodeName(convOp, convChannelLastOp);
+    transferResultNames(convOp, convChannelLastOp);
 
     // CRITICAL: Immediately run shape inference to resolve unranked type
     // This ensures the output has correct shape AND element type before
@@ -297,6 +310,7 @@ struct ConvTransposeToChannelLastPattern
     // Transfer onnx_node_name attribute from original ConvTranspose to
     // XFEConvTranspose
     transferOnnxNodeName(convTransposeOp, convTransposeChannelLastOp);
+    transferResultNames(convTransposeOp, convTransposeChannelLastOp);
 
     // CRITICAL: Immediately run shape inference
     if (failed(convTransposeChannelLastOp.inferShapes(nullptr))) {
@@ -361,6 +375,7 @@ struct AveragePoolToChannelLastPattern
     // Transfer onnx_node_name attribute from original AveragePool to
     // XFEAveragePool
     transferOnnxNodeName(poolOp, poolChannelLastOp);
+    transferResultNames(poolOp, poolChannelLastOp);
 
     // CRITICAL: Immediately run shape inference
     if (failed(poolChannelLastOp.inferShapes(nullptr))) {
@@ -414,6 +429,7 @@ struct MaxPoolToChannelLastPattern
 
     // Transfer onnx_node_name attribute from original MaxPool to XFEMaxPool
     transferOnnxNodeName(poolOp, poolChannelLastOp);
+    transferResultNames(poolOp, poolChannelLastOp);
 
     // CRITICAL: Immediately run shape inference
     if (failed(poolChannelLastOp.inferShapes(nullptr))) {
@@ -463,6 +479,7 @@ struct GlobalAveragePoolToChannelLastPattern
     // Transfer onnx_node_name attribute from original GlobalAveragePool to
     // XFEGlobalAveragePool
     transferOnnxNodeName(poolOp, poolChannelLastOp);
+    transferResultNames(poolOp, poolChannelLastOp);
 
     // CRITICAL: Immediately run shape inference
     if (failed(poolChannelLastOp.inferShapes(nullptr))) {
@@ -512,6 +529,7 @@ struct GlobalMaxPoolToChannelLastPattern
     // Transfer onnx_node_name attribute from original GlobalMaxPool to
     // XFEGlobalMaxPool
     transferOnnxNodeName(poolOp, poolChannelLastOp);
+    transferResultNames(poolOp, poolChannelLastOp);
 
     // CRITICAL: Immediately run shape inference
     if (failed(poolChannelLastOp.inferShapes(nullptr))) {
@@ -566,6 +584,7 @@ struct BatchNormToChannelLastPattern
 
     // Transfer onnx_node_name attribute
     transferOnnxNodeName(bnOp, bnChannelLastOp);
+    transferResultNames(bnOp, bnChannelLastOp);
 
     // Run shape inference
     if (failed(bnChannelLastOp.inferShapes(nullptr))) {
@@ -618,6 +637,7 @@ struct InstanceNormToChannelLastPattern
     // Transfer onnx_node_name attribute from original InstanceNormalization to
     // XFEInstanceNormalization
     transferOnnxNodeName(normOp, normChannelLastOp);
+    transferResultNames(normOp, normChannelLastOp);
 
     // CRITICAL: Immediately run shape inference
     if (failed(normChannelLastOp.inferShapes(nullptr))) {
@@ -672,6 +692,7 @@ struct DepthToSpaceToChannelLastPattern
     // Transfer onnx_node_name attribute from original DepthToSpace to
     // XFEDepthToSpace
     transferOnnxNodeName(d2sOp, d2sChannelLastOp);
+    transferResultNames(d2sOp, d2sChannelLastOp);
 
     // Infer shapes to get ranked type
     if (failed(d2sChannelLastOp.inferShapes([](Region &) {}))) {
@@ -722,6 +743,7 @@ struct SpaceToDepthToChannelLastPattern
     // Transfer onnx_node_name attribute from original SpaceToDepth to
     // XFESpaceToDepth
     transferOnnxNodeName(s2dOp, s2dChannelLastOp);
+    transferResultNames(s2dOp, s2dChannelLastOp);
 
     // Infer shapes to get ranked type
     if (failed(s2dChannelLastOp.inferShapes([](Region &) {}))) {
@@ -980,6 +1002,7 @@ struct ResizeToChannelLastPattern : public OpRewritePattern<ONNXResizeOp> {
 
     // Transfer onnx_node_name attribute from original Resize to XFEResize
     transferOnnxNodeName(resizeOp, resizeChannelLastOp);
+    transferResultNames(resizeOp, resizeChannelLastOp);
 
     // Infer shapes to get ranked type
     if (failed(resizeChannelLastOp.inferShapes([](Region &) {}))) {
@@ -1028,7 +1051,11 @@ struct ConvertToChannelLastPass : public PassWrapper<ConvertToChannelLastPass,
     patterns.add<SpaceToDepthToChannelLastPattern>(context);
     patterns.add<ResizeToChannelLastPattern>(context);
 
-    if (failed(applyPatternsGreedily(function, std::move(patterns)))) {
+    GreedyRewriteConfig config;
+    onnx_mlir::ResultNamesUpdater rnUpdater;
+    config.listener = &rnUpdater;
+
+    if (failed(applyPatternsGreedily(function, std::move(patterns), config))) {
       signalPassFailure();
     }
   }
