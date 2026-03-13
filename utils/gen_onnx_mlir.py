@@ -625,7 +625,7 @@ OpsWithVerifier = [
 ]
 
 # Op with fold function
-OpsWithFolder = ["Constant", "Squeeze", "SqueezeV11", "ReduceMean", "Slice"]
+OpsWithFolder = ["Constant", "Squeeze", "SqueezeV11", "ReduceMean", "Slice", "Clip"]
 
 # Dynamic lists for custom ops with verify and fold (populated at runtime)
 CustomOpsWithVerifier = []
