@@ -2684,11 +2684,13 @@ struct FuseBackToBackMaxpools
     ONNXMaxPoolSingleOutOp upperMaxpool = nullptr;
     auto upperDequant = dyn_cast<ONNXDequantizeLinearOp>(upperOp);
 
+    Operation *quantOp = nullptr;
     if (upperDequant) {
       auto *quant = upperDequant->getOperand(0).getDefiningOp();
       if (!quant || !isa<ONNXQuantizeLinearOp>(quant))
         return rewriter.notifyMatchFailure(
             lowerMaxpool->getLoc(), "No Q->Dq chain between the maxpools");
+      quantOp = quant;
       Operation *quantInputDef = quant->getOperand(0).getDefiningOp();
       if (!quantInputDef)
         return rewriter.notifyMatchFailure(lowerMaxpool->getLoc(),
@@ -2707,6 +2709,11 @@ struct FuseBackToBackMaxpools
     if (!upperMaxpool->hasOneUse()) {
       return rewriter.notifyMatchFailure(lowerMaxpool->getLoc(),
           "Optimization only works when upper maxpool has one user");
+    }
+    if (quantOp && !quantOp->hasOneUse()) {
+      return rewriter.notifyMatchFailure(lowerMaxpool->getLoc(),
+          "QuantizeLinear before the "
+          "upper maxpool has more than one user");
     }
 
     auto upperMaxpoolKernelSizeArr = upperMaxpool.getKernelShape().getValue();
@@ -2847,8 +2854,15 @@ struct FuseBackToBackMaxpools
 
     auto newPadding = rewriter.getArrayAttr(newPaddingVec);
 
-    // Create replacement maxpool
-    MultiDialectBuilder<OnnxBuilder> b(rewriter, lowerMaxpool.getLoc());
+    SmallVector<Location> locsToFuse;
+    locsToFuse.push_back(upperMaxpool->getLoc());
+    locsToFuse.push_back(lowerMaxpool->getLoc());
+    if (upperDequant) {
+      locsToFuse.push_back(quantOp->getLoc());
+      locsToFuse.push_back(upperDequant->getLoc());
+    }
+    Location fusedLoc = rewriter.getFusedLoc(locsToFuse);
+    MultiDialectBuilder<OnnxBuilder> b(rewriter, fusedLoc);
     auto newMaxpool =
         b.onnx.createTypedOpAndInferShapes<ONNXMaxPoolSingleOutOp>(
             lowerMaxpool->getResultTypes()[0], upperMaxpool.getX(),
