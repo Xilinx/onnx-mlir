@@ -240,6 +240,62 @@ bool hasValidShapeForWeightFusion(
   return true;
 }
 
+// Check if a scale constant is scalar or per-channel compatible with the
+// given result shape (NCHW layout, channel dim = 1).
+bool isPerChannelOrScalarScale(Value scale, Value result) {
+  const auto scaleType = dyn_cast<ShapedType>(scale.getType());
+  const auto resultType = dyn_cast<ShapedType>(result.getType());
+  if (!scaleType || !resultType)
+    return false;
+  if (!scaleType.hasStaticShape() || !resultType.hasStaticShape())
+    return false;
+  if (resultType.getRank() < 2)
+    return false;
+
+  if (scaleType.getNumElements() == 1)
+    return true;
+
+  const int64_t resultRank = resultType.getRank();
+  const int64_t cOut = resultType.getShape()[1];
+  const auto scaleShape = scaleType.getShape();
+  const int64_t scaleRank = scaleType.getRank();
+
+  for (int64_t i = 0; i < resultRank; ++i) {
+    const int64_t scaleIdx = scaleRank - (resultRank - i);
+    const int64_t scaleDim = (scaleIdx >= 0) ? scaleShape[scaleIdx] : 1;
+    if (i == 1) {
+      // channel dim
+      if (scaleDim != 1 && scaleDim != cOut)
+        return false;
+    } else {
+      if (scaleDim != 1)
+        return false;
+    }
+  }
+  return true;
+}
+
+// Check if at least one of the two values is defined by a fusible ONNXConvOp
+// or is a dense ONNX constant. A Conv is only considered fusible if its weights
+// are constant and its bias is either None or constant, so that a subsequent
+// FuseMulConvPattern can actually absorb the Mul.
+// TODO: Extend for further ops that can swallow muls, like MatMul.
+bool hasConvOrConstantOperand(Value a, Value b) {
+  const auto isFusibleConv = [](Value v) {
+    auto conv = v.getDefiningOp<ONNXConvOp>();
+    if (!conv)
+      return false;
+    if (!isDenseONNXConstant(conv.getW()))
+      return false;
+    const auto bias = conv.getB();
+    return isa<NoneType>(bias.getType()) || isDenseONNXConstant(bias);
+  };
+  const auto isFusible = [&](Value v) {
+    return isFusibleConv(v) || isDenseONNXConstant(v);
+  };
+  return isFusible(a) || isFusible(b);
+}
+
 // Get return type for a MatMulOp whose A's rank is N (>2) and B's rank is 2.
 Type getReturnTypeForMatMulOpND2D(Value A, Value B) {
   ArrayRef<int64_t> aShape =
@@ -3254,6 +3310,7 @@ void ONNXMulOp::getCanonicalizationPatterns(
   results.insert<NormalizeMulPattern>(context);
   results.insert<FuseMulConvNullBiasPattern>(context);
   results.insert<FuseMulConvPattern>(context);
+  results.insert<DistributeMulOverAddPattern>(context);
   results.insert<BinaryOpBroadcastAxisPattern<ONNXMulOp>>(context);
   results.insert<PropagateScalarConstantExpandPattern<ONNXMulOp>>(context);
   results.insert<PropagateReshapeThroughBinaryOpPattern<ONNXMulOp>>(context);

@@ -1335,6 +1335,191 @@ func.func @test_no_fuse_mul_conv_dynamic_weight(%arg0: tensor<1x3x8x8xf32>, %w: 
 
 // -----
 
+func.func @test_distribute_mul_over_add_both_conv(%arg0: tensor<1x3x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    %w1 = onnx.Constant dense<1.0> : tensor<16x3x1x1xf32>
+    %b1 = onnx.Constant dense<0.5> : tensor<16xf32>
+    %w2 = onnx.Constant dense<2.0> : tensor<16x3x1x1xf32>
+    %b2 = onnx.Constant dense<0.25> : tensor<16xf32>
+    %scale = onnx.Constant dense<3.0> : tensor<1x16x1x1xf32>
+    %conv1 = "onnx.Conv"(%arg0, %w1, %b1) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %conv2 = "onnx.Conv"(%arg0, %w2, %b2) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %add = "onnx.Add"(%conv1, %conv2) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%add, %scale) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    return %result : tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL:  func.func @test_distribute_mul_over_add_both_conv
+    // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<16> : tensor<1xi64>
+    // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<16x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<5.000000e-01> : tensor<16xf32>
+    // CHECK-DAG:       [[VAR_3_:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<16x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_4_:%.+]] = onnx.Constant dense<2.500000e-01> : tensor<16xf32>
+    // CHECK-DAG:       [[VAR_5_:%.+]] = onnx.Constant dense<3.000000e+00> : tensor<1x16x1x1xf32>
+    // CHECK-DAG:       [[VAR_6_:%.+]] = onnx.Constant dense<3.000000e+00> : tensor<f32>
+    // CHECK-DAG:       [[VAR_7_:%.+]] = "onnx.Mul"([[VAR_1_]], [[VAR_6_]]) : (tensor<16x3x1x1xf32>, tensor<f32>) -> tensor<16x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_8_:%.+]] = "onnx.Reshape"([[VAR_5_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<1x16x1x1xf32>, tensor<1xi64>) -> tensor<16xf32>
+    // CHECK-DAG:       [[VAR_9_:%.+]] = "onnx.Mul"([[VAR_8_]], [[VAR_2_]]) : (tensor<16xf32>, tensor<16xf32>) -> tensor<16xf32>
+    // CHECK-DAG:       [[VAR_10_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_7_]], [[VAR_9_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK-DAG:       [[VAR_11_:%.+]] = "onnx.Mul"([[VAR_3_]], [[VAR_6_]]) : (tensor<16x3x1x1xf32>, tensor<f32>) -> tensor<16x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_12_:%.+]] = "onnx.Mul"([[VAR_8_]], [[VAR_4_]]) : (tensor<16xf32>, tensor<16xf32>) -> tensor<16xf32>
+    // CHECK-DAG:       [[VAR_13_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_11_]], [[VAR_12_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK:           [[VAR_14_:%.+]] = "onnx.Add"([[VAR_10_]], [[VAR_13_]]) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK:           return [[VAR_14_]] : tensor<1x16x8x8xf32>
+}
+
+// -----
+
+func.func @test_distribute_mul_over_add_one_conv(%arg0: tensor<1x3x8x8xf32>, %arg1: tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    %w = onnx.Constant dense<1.0> : tensor<16x3x1x1xf32>
+    %b = onnx.Constant dense<0.5> : tensor<16xf32>
+    %scale = onnx.Constant dense<2.0> : tensor<1x16x1x1xf32>
+    %conv = "onnx.Conv"(%arg0, %w, %b) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %add = "onnx.Add"(%conv, %arg1) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%add, %scale) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    return %result : tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL:  func.func @test_distribute_mul_over_add_one_conv
+    // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x8x8xf32>, [[PARAM_1_:%.+]]: tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<16> : tensor<1xi64>
+    // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<16x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<5.000000e-01> : tensor<16xf32>
+    // CHECK-DAG:       [[VAR_3_:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<1x16x1x1xf32>
+    // CHECK-DAG:       [[VAR_4_:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<f32>
+    // CHECK-DAG:       [[VAR_5_:%.+]] = "onnx.Mul"([[VAR_1_]], [[VAR_4_]]) : (tensor<16x3x1x1xf32>, tensor<f32>) -> tensor<16x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.Reshape"([[VAR_3_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<1x16x1x1xf32>, tensor<1xi64>) -> tensor<16xf32>
+    // CHECK-DAG:       [[VAR_7_:%.+]] = "onnx.Mul"([[VAR_6_]], [[VAR_2_]]) : (tensor<16xf32>, tensor<16xf32>) -> tensor<16xf32>
+    // CHECK-DAG:       [[VAR_8_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_5_]], [[VAR_7_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK-DAG:       [[VAR_9_:%.+]] = "onnx.Mul"([[PARAM_1_]], [[VAR_3_]]) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK:           [[VAR_10_:%.+]] = "onnx.Add"([[VAR_8_]], [[VAR_9_]]) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK:           return [[VAR_10_]] : tensor<1x16x8x8xf32>
+}
+
+// -----
+
+func.func @test_distribute_mul_over_add_one_const(%arg0: tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    %c = onnx.Constant dense<1.0> : tensor<1x16x8x8xf32>
+    %scale = onnx.Constant dense<2.0> : tensor<1x16x1x1xf32>
+    %add = "onnx.Add"(%arg0, %c) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%add, %scale) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    return %result : tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL:  func.func @test_distribute_mul_over_add_one_const
+    // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<1x16x8x8xf32>
+    // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<1x16x1x1xf32>
+    // CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[VAR_1_]]) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK-DAG:       [[VAR_3_:%.+]] = "onnx.Mul"([[VAR_0_]], [[VAR_1_]]) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK:           [[VAR_4_:%.+]] = "onnx.Add"([[VAR_2_]], [[VAR_3_]]) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK:           return [[VAR_4_]] : tensor<1x16x8x8xf32>
+}
+
+// -----
+
+func.func @test_distribute_mul_over_add_scalar_scale(%arg0: tensor<1x3x8x8xf32>, %arg1: tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    %w = onnx.Constant dense<1.0> : tensor<16x3x1x1xf32>
+    %b = onnx.Constant dense<0.5> : tensor<16xf32>
+    %scale = onnx.Constant dense<2.0> : tensor<1xf32>
+    %conv = "onnx.Conv"(%arg0, %w, %b) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %add = "onnx.Add"(%conv, %arg1) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%add, %scale) : (tensor<1x16x8x8xf32>, tensor<1xf32>) -> tensor<1x16x8x8xf32>
+    return %result : tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL:  func.func @test_distribute_mul_over_add_scalar_scale
+    // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x8x8xf32>, [[PARAM_1_:%.+]]: tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<16x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<5.000000e-01> : tensor<16xf32>
+    // CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<1xf32>
+    // CHECK-DAG:       [[VAR_3_:%.+]] = "onnx.Mul"([[VAR_0_]], [[VAR_2_]]) : (tensor<16x3x1x1xf32>, tensor<1xf32>) -> tensor<16x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_4_:%.+]] = "onnx.Mul"([[VAR_1_]], [[VAR_2_]]) : (tensor<16xf32>, tensor<1xf32>) -> tensor<16xf32>
+    // CHECK-DAG:       [[VAR_5_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_3_]], [[VAR_4_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.Mul"([[PARAM_1_]], [[VAR_2_]]) : (tensor<1x16x8x8xf32>, tensor<1xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK:           [[VAR_7_:%.+]] = "onnx.Add"([[VAR_5_]], [[VAR_6_]]) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK:           return [[VAR_7_]] : tensor<1x16x8x8xf32>
+    // CHECK:         }
+}
+
+// -----
+
+func.func @test_no_distribute_mul_no_conv_or_const(%arg0: tensor<1x16x8x8xf32>, %arg1: tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    %scale = onnx.Constant dense<2.0> : tensor<1x16x1x1xf32>
+    %add = "onnx.Add"(%arg0, %arg1) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%add, %scale) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    return %result : tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL: @test_no_distribute_mul_no_conv_or_const
+    // CHECK: onnx.Add
+    // CHECK: onnx.Mul
+}
+
+// -----
+
+func.func @test_no_distribute_mul_multi_use_add(%arg0: tensor<1x3x8x8xf32>, %arg1: tensor<1x16x8x8xf32>) -> (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) {
+    %w = onnx.Constant dense<1.0> : tensor<16x3x1x1xf32>
+    %b = onnx.Constant dense<0.5> : tensor<16xf32>
+    %scale = onnx.Constant dense<2.0> : tensor<1x16x1x1xf32>
+    %conv = "onnx.Conv"(%arg0, %w, %b) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %add = "onnx.Add"(%conv, %arg1) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%add, %scale) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    return %result, %add : tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL: @test_no_distribute_mul_multi_use_add
+    // CHECK: onnx.Conv
+    // CHECK: onnx.Add
+    // CHECK: onnx.Mul
+}
+
+// -----
+
+func.func @test_no_distribute_mul_dynamic_scale(%arg0: tensor<1x3x8x8xf32>, %arg1: tensor<1x16x8x8xf32>, %scale: tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32> {
+    %w = onnx.Constant dense<1.0> : tensor<16x3x1x1xf32>
+    %b = onnx.Constant dense<0.5> : tensor<16xf32>
+    %conv = "onnx.Conv"(%arg0, %w, %b) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %add = "onnx.Add"(%conv, %arg1) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%add, %scale) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    return %result : tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL: @test_no_distribute_mul_dynamic_scale
+    // CHECK: onnx.Conv
+    // CHECK: onnx.Add
+    // CHECK: onnx.Mul
+}
+
+// -----
+
+
+func.func @test_no_distribute_mul_bad_scale_shape(%arg0: tensor<1x3x8x8xf32>, %arg1: tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    %w = onnx.Constant dense<1.0> : tensor<16x3x1x1xf32>
+    %b = onnx.Constant dense<0.5> : tensor<16xf32>
+    %scale = onnx.Constant dense<2.0> : tensor<1x1x8x1xf32>
+    %conv = "onnx.Conv"(%arg0, %w, %b) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %add = "onnx.Add"(%conv, %arg1) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%add, %scale) : (tensor<1x16x8x8xf32>, tensor<1x1x8x1xf32>) -> tensor<1x16x8x8xf32>
+    return %result : tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL: @test_no_distribute_mul_bad_scale_shape
+    // CHECK: onnx.Conv
+    // CHECK: onnx.Add
+    // CHECK: onnx.Mul
+}
+
+// -----
+
+func.func @test_no_distribute_mul_conv_dynamic_weights(%arg0: tensor<1x3x8x8xf32>, %w: tensor<16x3x1x1xf32>, %arg1: tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    %b = onnx.Constant dense<0.5> : tensor<16xf32>
+    %scale = onnx.Constant dense<2.0> : tensor<1x16x1x1xf32>
+    %conv = "onnx.Conv"(%arg0, %w, %b) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %add = "onnx.Add"(%conv, %arg1) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%add, %scale) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    return %result : tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL: @test_no_distribute_mul_conv_dynamic_weights
+    // CHECK: onnx.Conv
+    // CHECK: onnx.Add
+    // CHECK: onnx.Mul
+}
+
+// -----
+
 func.func @test_less(%arg0 : tensor<i32>, %arg1 : tensor<i32>) -> tensor<i1> {
   %0 = "onnx.Cast"(%arg0) {to = f32} : (tensor<i32>) -> tensor<f32>
   %1 = "onnx.Cast"(%arg1) {to = f32} : (tensor<i32>) -> tensor<f32>

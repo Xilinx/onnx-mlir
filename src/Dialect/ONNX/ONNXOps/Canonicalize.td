@@ -161,6 +161,16 @@ def HasValidShapeForWeightFusion: Constraint<
   CPred<"onnx_mlir::hasValidShapeForWeightFusion($0, $1, $2)">,
   "Constant has valid shape for weight fusion (scalar, splat, or per-channel)">;
 
+// $0 is scale constant, $1 is the Mul result
+def IsPerChannelOrScalarScale: Constraint<
+  CPred<"onnx_mlir::isPerChannelOrScalarScale($0, $1)">,
+  "Scale is scalar or per-channel compatible with result shape">;
+
+// $0 and $1 are the two Add operands
+def HasConvOrConstantOperand: Constraint<
+  CPred<"onnx_mlir::hasConvOrConstantOperand($0, $1)">,
+  "At least one operand is from ONNXConvOp or ONNXConstantOp">;
+
 def HaveSameShapedType: Constraint<
     CPred<"(isa<ShapedType>($0.getType()) &&"
           "dyn_cast<ShapedType>($0.getType()) == "
@@ -482,6 +492,25 @@ def FuseMulConvPattern: Pat<
    (IsStaticShapeTensor:$conv_res),
    (HasRankOf<1> $b),
    (HaveSameElementType $b, $y)]
+>;
+
+// Distribute a per-channel or scalar Mul over an Add:
+//   Mul(Add(a, b), scale) -> Add(Mul(a, scale), Mul(b, scale))
+// This enables FuseMulConvPattern to fold the scale into each branch's
+// conv weights/bias.
+def DistributeMulOverAddPattern: Pat<
+  (ONNXMulOp:$res
+    (ONNXAddOp:$add_res $a, $b),
+    (ONNXConstantOp:$scale $_, $denseAttr, $_, $_, $_, $_, $_, $_)),
+  (ONNXAddOp
+    (ONNXMulOp $a, $scale),
+    (ONNXMulOp $b, $scale)),
+  [(HasOneUse $add_res),
+   (AttributeIsNotNull:$denseAttr),
+   (IsStaticShapeTensor:$res),
+   (IsStaticShapeTensor:$add_res),
+   (IsPerChannelOrScalarScale $scale, $res),
+   (HasConvOrConstantOperand $a, $b)]
 >;
 
 //===----------------------------------------------------------------------===//
