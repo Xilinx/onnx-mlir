@@ -151,6 +151,27 @@ Value createReshapedConstantForWeightFusion(
       constOpLoc, resultType, constant, shapeConst);
 }
 
+// Create a reshaped constant for fusing into Conv bias multiplication.
+//   1. For scalars: returns as-is (broadcasts with rank-1 bias).
+//   2. Otherwise: reshapes to [C_out] matching bias shape.
+Value createReshapedConstantForBiasFusion(
+    PatternRewriter &rewriter, Value constant, Value bias) {
+  const auto constantType = cast<ShapedType>(constant.getType());
+  const auto biasType = cast<ShapedType>(bias.getType());
+
+  if (constantType.getNumElements() == 1)
+    return constant;
+
+  auto constOp = constant.getDefiningOp<ONNXConstantOp>();
+  const auto biasShape = biasType.getShape();
+  Value shapeConst = rewriter.create<ONNXConstantOp>(
+      constOp->getLoc(), nullptr, rewriter.getI64TensorAttr(biasShape));
+  auto resultType =
+      RankedTensorType::get(biasShape, constantType.getElementType());
+  return rewriter.create<ONNXReshapeOp>(
+      constOp->getLoc(), resultType, constant, shapeConst);
+}
+
 // Check if constant to Mul has valid shape for folding into the weights of
 // Conv. This is used for  FuseMulConvNullBiasPattern Valid cases:
 //   1. Scalar (1 element)
@@ -3232,6 +3253,7 @@ void ONNXMulOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<NormalizeMulPattern>(context);
   results.insert<FuseMulConvNullBiasPattern>(context);
+  results.insert<FuseMulConvPattern>(context);
   results.insert<BinaryOpBroadcastAxisPattern<ONNXMulOp>>(context);
   results.insert<PropagateScalarConstantExpandPattern<ONNXMulOp>>(context);
   results.insert<PropagateReshapeThroughBinaryOpPattern<ONNXMulOp>>(context);

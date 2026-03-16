@@ -1243,6 +1243,98 @@ func.func @test_no_fuse_mul_conv_batch_scaling(%arg0: tensor<1x1x28x28xf32>) -> 
 
 // -----
 
+func.func @test_fuse_mul_conv_with_bias(%arg0: tensor<1x3x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    %w = onnx.Constant dense<1.0> : tensor<16x3x1x1xf32>
+    %b = onnx.Constant dense<0.5> : tensor<16xf32>
+    %scale = onnx.Constant dense<2.0> : tensor<1x16x1x1xf32>
+    %conv = "onnx.Conv"(%arg0, %w, %b) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%conv, %scale) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    return %result : tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL:  func.func @test_fuse_mul_conv_with_bias
+    // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<16> : tensor<1xi64>
+    // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<16x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<5.000000e-01> : tensor<16xf32>
+    // CHECK-DAG:       [[VAR_3_:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<1x16x1x1xf32>
+    // CHECK-DAG:       [[VAR_4_:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<f32>
+    // CHECK-DAG:       [[VAR_5_:%.+]] = "onnx.Mul"([[VAR_1_]], [[VAR_4_]]) : (tensor<16x3x1x1xf32>, tensor<f32>) -> tensor<16x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.Reshape"([[VAR_3_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<1x16x1x1xf32>, tensor<1xi64>) -> tensor<16xf32>
+    // CHECK:           [[VAR_7_:%.+]] = "onnx.Mul"([[VAR_6_]], [[VAR_2_]]) : (tensor<16xf32>, tensor<16xf32>) -> tensor<16xf32>
+    // CHECK:           [[VAR_8_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_5_]], [[VAR_7_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK:           return [[VAR_8_]] : tensor<1x16x8x8xf32>
+}
+
+// -----
+
+// Test FuseMulConvPattern: scalar scale with non-null bias.
+func.func @test_fuse_mul_conv_scalar_with_bias(%arg0: tensor<1x3x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    %w = onnx.Constant dense<1.0> : tensor<16x3x1x1xf32>
+    %b = onnx.Constant dense<0.5> : tensor<16xf32>
+    %scale = onnx.Constant dense<3.0> : tensor<1xf32>
+    %conv = "onnx.Conv"(%arg0, %w, %b) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%conv, %scale) : (tensor<1x16x8x8xf32>, tensor<1xf32>) -> tensor<1x16x8x8xf32>
+    return %result : tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL:  func.func @test_fuse_mul_conv_scalar_with_bias
+    // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x8x8xf32>) -> tensor<1x16x8x8xf32> {
+    // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<16x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<5.000000e-01> : tensor<16xf32>
+    // CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<3.000000e+00> : tensor<1xf32>
+    // CHECK-DAG:       [[VAR_3_:%.+]] = "onnx.Mul"([[VAR_0_]], [[VAR_2_]]) : (tensor<16x3x1x1xf32>, tensor<1xf32>) -> tensor<16x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_4_:%.+]] = "onnx.Mul"([[VAR_1_]], [[VAR_2_]]) : (tensor<16xf32>, tensor<1xf32>) -> tensor<16xf32>
+    // CHECK:           [[VAR_5_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_3_]], [[VAR_4_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    // CHECK:           return [[VAR_5_]] : tensor<1x16x8x8xf32>
+}
+
+// -----
+
+// Conv has multiple uses, pattern should NOT fire.
+func.func @test_no_fuse_mul_conv_multi_use(%arg0: tensor<1x3x8x8xf32>) -> (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) {
+    %w = onnx.Constant dense<1.0> : tensor<16x3x1x1xf32>
+    %b = onnx.Constant dense<0.5> : tensor<16xf32>
+    %scale = onnx.Constant dense<2.0> : tensor<1x16x1x1xf32>
+    %conv = "onnx.Conv"(%arg0, %w, %b) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %scaled = "onnx.Mul"(%conv, %scale) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    return %scaled, %conv : tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL: @test_no_fuse_mul_conv_multi_use
+    // CHECK: onnx.Conv
+    // CHECK: onnx.Mul
+}
+
+// -----
+
+// bias is not from a constant op, pattern should NOT fire.
+func.func @test_no_fuse_mul_conv_dynamic_bias(%arg0: tensor<1x3x8x8xf32>, %bias: tensor<16xf32>) -> tensor<1x16x8x8xf32> {
+    %w = onnx.Constant dense<1.0> : tensor<16x3x1x1xf32>
+    %scale = onnx.Constant dense<2.0> : tensor<1x16x1x1xf32>
+    %conv = "onnx.Conv"(%arg0, %w, %bias) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%conv, %scale) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    return %result : tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL: @test_no_fuse_mul_conv_dynamic_bias
+    // CHECK: onnx.Conv
+    // CHECK: onnx.Mul
+}
+
+// -----
+
+// Negative test: weight is not from a constant op, pattern should NOT fire.
+func.func @test_no_fuse_mul_conv_dynamic_weight(%arg0: tensor<1x3x8x8xf32>, %w: tensor<16x3x1x1xf32>) -> tensor<1x16x8x8xf32> {
+    %b = onnx.Constant dense<0.5> : tensor<16xf32>
+    %scale = onnx.Constant dense<2.0> : tensor<1x16x1x1xf32>
+    %conv = "onnx.Conv"(%arg0, %w, %b) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<16x3x1x1xf32>, tensor<16xf32>) -> tensor<1x16x8x8xf32>
+    %result = "onnx.Mul"(%conv, %scale) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
+    return %result : tensor<1x16x8x8xf32>
+
+    // CHECK-LABEL: @test_no_fuse_mul_conv_dynamic_weight
+    // CHECK: onnx.Conv
+    // CHECK: onnx.Mul
+}
+
+// -----
+
 func.func @test_less(%arg0 : tensor<i32>, %arg1 : tensor<i32>) -> tensor<i1> {
   %0 = "onnx.Cast"(%arg0) {to = f32} : (tensor<i32>) -> tensor<f32>
   %1 = "onnx.Cast"(%arg1) {to = f32} : (tensor<i32>) -> tensor<f32>

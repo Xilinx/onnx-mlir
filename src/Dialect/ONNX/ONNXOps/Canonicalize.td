@@ -92,6 +92,10 @@ def createDenseElementsAttrOfOneToRankOf : NativeCodeCall<
 def createReshapedConstantForWeightFusion : NativeCodeCall<
   "onnx_mlir::createReshapedConstantForWeightFusion($_builder, $0, $1)">;
 
+// Create reshaped constant [C_out] if necessary for bias fusion
+def createReshapedConstantForBiasFusion : NativeCodeCall<
+  "onnx_mlir::createReshapedConstantForBiasFusion($_builder, $0, $1)">;
+
 // Create an ArrayAttr of IntegerAttr(s) of values in [2, rank - 1].
 def createArrayAttrOfTwoToRankOf : NativeCodeCall<
   "onnx_mlir::createArrayAttrOfNToM($_builder, 2, mlir::cast<ShapedType>($0.getType()).getRank() - 1)">;
@@ -454,11 +458,31 @@ def FuseMulConvNullBiasPattern: Pat<
   ]
 >;
 
-// TODO add pattern for non-null bias with constraints:
-// - bias must be have rank equal to 1 and
-// - bias element data type must be the same as mul constant
-// - bias dimension (0) must be equal to mul constant dim(0)
-// codegen is different too (look it up in onnx-runtime)
+// Fold mul-constant into weights of Conv with existing bias
+// conv(x, w, b) *c = conv(x, w * c, b * c)
+def FuseMulConvPattern: Pat<
+  (ONNXMulOp:$res
+    (ONNXConvOp:$conv_res
+       $x, $w, $b, $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
+    (ONNXConstantOp:$y $_, $denseAttr, $_, $_, $_, $_, $_, $_)),
+  (ONNXConvOp
+     $x,
+     (ONNXMulOp $w, (createReshapedConstantForWeightFusion $y, $w)),
+     (ONNXMulOp $b, (createReshapedConstantForBiasFusion $y, $b)),
+     $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
+  [(HasOneUse $conv_res),
+   (NotNoneType $b),
+   (AttributeIsNotNull:$denseAttr),
+   (IsFromONNXConstantOp $w),
+   (IsFromONNXConstantOp $b),
+   (HaveSameElementType $w, $y),
+   (HasRankGT<1> $w),
+   (HasValidShapeForWeightFusion $y, $w, $res),
+   (IsStaticShapeTensor:$res),
+   (IsStaticShapeTensor:$conv_res),
+   (HasRankOf<1> $b),
+   (HaveSameElementType $b, $y)]
+>;
 
 //===----------------------------------------------------------------------===//
 // Canonicalization for ONNXIdentityOp
