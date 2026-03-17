@@ -17,5 +17,6 @@ func.func @main_graph(%arg0: tensor<1x180x320x3xf32> ) -> (tensor<1x16x90x160xf3
 }
 "onnx.EntryPoint"() {func = @main_graph} : () -> ()
 
-//CHECK:  %{{[0-9]+}} = "onnx.Conv"(%{{.*}}, %{{.*}}, %{{.*}}) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [3, 3], onnx_node_name = "Conv_9", pads = [1, 1, 1, 1], strides = [2, 2]} : (tensor<1x3x180x320xf32>, tensor<16x3x3x3xf32>, tensor<16xf32>) -> tensor<1x16x90x160xf32>
-//CHECK-NEXT:  %{{[0-9]+}} = "onnx.Add"(%{{.*}}, %{{.*}}) {onnx_node_name = "Add_11"} : (tensor<1x16x90x160xf32>, tensor<f32>) -> tensor<1x16x90x160xf32>
+
+//CHECK:  %{{[0-9]+}} = "onnx.Add"(%{{.*}}, %{{.*}}) : (tensor<16xf32>, tensor<f32>) -> tensor<16xf32>
+//CHECK:  %{{[0-9]+}} = "onnx.Conv"(%{{.*}}, %{{.*}}, %{{.*}}) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1], strides = [2, 2]} : (tensor<1x3x180x320xf32>, tensor<16x3x3x3xf32>, tensor<16xf32>) -> tensor<1x16x90x160xf32>

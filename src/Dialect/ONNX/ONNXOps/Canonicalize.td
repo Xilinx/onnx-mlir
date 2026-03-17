@@ -161,6 +161,13 @@ def HasValidShapeForWeightFusion: Constraint<
   CPred<"onnx_mlir::hasValidShapeForWeightFusion($0, $1, $2)">,
   "Constant has valid shape for weight fusion (scalar, splat, or per-channel)">;
 
+// Check if constant has valid shape for bias fusion into Conv via Add.
+// Valid cases: 1) Scalar, 2) Per-channel (proper alignment)
+// $0 is constant, $1 is bias, $2 is the Add result
+def HasValidShapeForBiasFusion: Constraint<
+  CPred<"onnx_mlir::hasValidShapeForBiasFusion($0, $1, $2)">,
+  "Constant has valid shape for bias fusion (scalar or per-channel)">;
+
 // $0 is scale constant, $1 is the Mul result
 def IsPerChannelOrScalarScale: Constraint<
   CPred<"onnx_mlir::isPerChannelOrScalarScale($0, $1)">,
@@ -170,6 +177,11 @@ def IsPerChannelOrScalarScale: Constraint<
 def HasConvOrConstantOperand: Constraint<
   CPred<"onnx_mlir::hasConvOrConstantOperand($0, $1)">,
   "At least one operand is from ONNXConvOp or ONNXConstantOp">;
+
+// $0 is the Add operand
+def IsAddReassociationTarget: Constraint<
+  CPred<"onnx_mlir::isAddReassociationTarget($0)">,
+  "Value is a dense constant or from a Conv with none-or-const bias">;
 
 def HaveSameShapedType: Constraint<
     CPred<"(isa<ShapedType>($0.getType()) &&"
@@ -404,21 +416,45 @@ def FuseAddConvPattern: Pat<
     (ONNXConstantOp:$y $_, $denseAttr, $_, $_, $_, $_, $_, $_)),
   (ONNXConvOp
      $x, $w,
-     // new_b
-     (ONNXAddOp
-        $b,
-        (ONNXSqueezeOp
-           $y,
-           (ONNXConstantOpFromDenseAttr (createDenseElementsAttrOfOneToRankOf $y)))),
+     // new_b = Add(b, reshape_for_bias(y))
+     (ONNXAddOp $b, (createReshapedConstantForBiasFusion $y, $b)),
      // unchanged operands and attributes.
      $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
   [(HasShapeAndRank:$res),
    (NotNoneType $b),
    (AttributeIsNotNull:$denseAttr),
-   (ValidAxisConstraints<1>:$y),
-   (RankXMinusRankYIs<1> $res, $y),
-   (HasRankGT<0> $y),
-   (AllDimsFromAxisToEndAre<1, 1>:$y)]
+   (HasValidShapeForBiasFusion $y, $b, $res)]
+>;
+
+// Reassociate add(add(a, target), const) to push the constant next to a Conv
+// or constant operand, enabling FuseAddConvPattern to fold it into the bias
+// or constant folding to merge two constants.
+// Pattern A: Inner RHS is the reassociation target (Conv or constant)
+def ReassociateAddConstToRhsPattern: Pat<
+  (ONNXAddOp:$res
+    (ONNXAddOp:$inner_res $a, $target),
+    (ONNXConstantOp:$c $_, $denseAttr, $_, $_, $_, $_, $_, $_)),
+  (ONNXAddOp $a, (ONNXAddOp $target, $c)),
+  [(HasOneUse $inner_res),
+   (AttributeIsNotNull:$denseAttr),
+   (IsStaticShapeTensor:$res),
+   (IsStaticShapeTensor:$inner_res),
+   (IsPerChannelOrScalarScale $c, $res),
+   (IsAddReassociationTarget $target)]
+>;
+
+// Pattern B: Inner LHS is the reassociation target (Conv or constant)
+def ReassociateAddConstToLhsPattern: Pat<
+  (ONNXAddOp:$res
+    (ONNXAddOp:$inner_res $target, $b),
+    (ONNXConstantOp:$c $_, $denseAttr, $_, $_, $_, $_, $_, $_)),
+  (ONNXAddOp (ONNXAddOp $target, $c), $b),
+  [(HasOneUse $inner_res),
+   (AttributeIsNotNull:$denseAttr),
+   (IsStaticShapeTensor:$res),
+   (IsStaticShapeTensor:$inner_res),
+   (IsPerChannelOrScalarScale $c, $res),
+   (IsAddReassociationTarget $target)]
 >;
 
 //===----------------------------------------------------------------------===//
