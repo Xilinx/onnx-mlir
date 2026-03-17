@@ -126,8 +126,8 @@ LogicalResult ONNXSequenceEmptyOp::inferShapes(
 }
 
 std::vector<Type> ONNXSequenceEmptyOp::resultTypeInference() {
-  return {cast<ShapedType>(
-      SeqType::get(getResultElementTypeFromDtypeDefaultingToF32(*this), 0))};
+  Type elemTy = getResultElementTypeFromDtypeDefaultingToF32(*this);
+  return {SeqType::get(UnrankedTensorType::get(elemTy), 0)};
 }
 
 //===----------------------------------------------------------------------===//

@@ -18,15 +18,24 @@
 
 #include "src/Builder/ImportONNXUtils.hpp"
 
-bool IsTopologicallySorted(const onnx::GraphProto &graph) {
-  std::set<std::string> visited;
-  for (const auto &initializer : graph.initializer()) {
-    const auto &initializerName = initializer.name();
-    visited.insert(initializerName);
-  }
-  for (const auto &input : graph.input()) {
-    visited.insert(input.name());
-  }
+// Collect all names that are "pre-defined" for a graph: its inputs,
+// initializers, and any names inherited from enclosing scopes.
+static std::set<std::string> getAvailableNames(
+    const onnx::GraphProto &graph,
+    const std::set<std::string> &outerScopeNames) {
+  std::set<std::string> available(outerScopeNames);
+  for (const auto &initializer : graph.initializer())
+    available.insert(initializer.name());
+  for (const auto &input : graph.input())
+    available.insert(input.name());
+  // Empty input names are placeholders and should always be ignored.
+  available.insert("");
+  return available;
+}
+
+bool IsTopologicallySorted(const onnx::GraphProto &graph,
+    const std::set<std::string> &outerScopeNames) {
+  std::set<std::string> visited = getAvailableNames(graph, outerScopeNames);
   for (const auto &node : graph.node()) {
     for (const auto &input : node.input()) {
       if (!visited.count(input))
@@ -41,7 +50,8 @@ bool IsTopologicallySorted(const onnx::GraphProto &graph) {
 
 // Sort graph into lexicographically smallest topological ordering.
 // Returns true if sorted succesfully and false otherwise.
-bool SortGraph(onnx::GraphProto *graph) {
+bool SortGraph(onnx::GraphProto *graph,
+    const std::set<std::string> &outerScopeNames) {
   int nNodes = graph->node().size();
   // Map of edges / node-outputs to their parent ops
   std::map<std::string, int> origIndex;
@@ -54,45 +64,34 @@ bool SortGraph(onnx::GraphProto *graph) {
   }
   assert(index == nNodes);
 
-  // graph inputs and initializers should not be counted as dependencies.
-  std::set<std::string> graphInputsAndInitializers;
-  for (const auto &initializer : graph->initializer()) {
-    const auto &initializerName = initializer.name();
-    graphInputsAndInitializers.insert(initializerName);
-  }
-  for (const auto &input : graph->input()) {
-    graphInputsAndInitializers.insert(input.name());
-  }
-  // Empty input names should be ignored.
-  graphInputsAndInitializers.insert("");
+  // Names that don't create intra-graph dependencies: graph inputs,
+  // initializers, outer-scope names, and empty placeholders.
+  std::set<std::string> predefined = getAvailableNames(*graph, outerScopeNames);
 
   // Users tracks idx of the ops which consumes a given ops outputs.
   std::vector<std::vector<int>> users(nNodes);
   index = 0;
   for (const auto &node : graph->node()) {
     for (const auto &input : node.input()) {
-      // Input edges to node are graph inputs or initializers.
-      if (graphInputsAndInitializers.count(input))
+      if (predefined.count(input))
         continue;
-      // Check if input edges to node aren't graph inputs or initializers and
-      // don't have a parent op, in which case its not possible to topologically
-      // sort the graph.
-      if (!origIndex.count(input)) {
+      // Input not predefined and not produced by any node in this graph:
+      // the graph references an undefined name and cannot be sorted.
+      if (!origIndex.count(input))
         return false;
-      }
       // Add current node as a user of the op that produces input.
       users[origIndex[input]].push_back(index);
     }
     index++;
   }
 
-  // inDegrees stores the number of inputs to a given node not counting inputs
-  // which are graph inputs or initializers.
+  // inDegrees stores the number of inputs to a given node not counting
+  // predefined names.
   std::vector<int> inDegrees(nNodes, 0);
   index = 0;
   for (const auto &node : graph->node()) {
     for (const auto &input : node.input()) {
-      if (!graphInputsAndInitializers.count(input)) {
+      if (!predefined.count(input)) {
         inDegrees[index]++;
       }
     }
@@ -152,4 +151,36 @@ bool SortGraph(onnx::GraphProto *graph) {
     }
   }
   return true; // Succesfully sorted graph.
+}
+
+bool SortAllSubgraphs(onnx::GraphProto *graph,
+    const std::set<std::string> &outerScopeNames) {
+  // Build the full set of names visible in this graph: outer scope + this
+  // graph's own inputs, initializers, and all node outputs.
+  std::set<std::string> scopeNames = getAvailableNames(*graph, outerScopeNames);
+  for (const auto &node : graph->node()) {
+    for (const auto &output : node.output())
+      scopeNames.insert(output);
+  }
+
+  // Recurse into subgraphs. They can see everything defined in this graph.
+  for (auto &node : *graph->mutable_node()) {
+    for (auto &attr : *node.mutable_attribute()) {
+      if (attr.has_g()) {
+        if (!SortAllSubgraphs(attr.mutable_g(), scopeNames))
+          return false;
+      }
+      for (auto &g : *attr.mutable_graphs()) {
+        if (!SortAllSubgraphs(&g, scopeNames))
+          return false;
+      }
+    }
+  }
+
+  // Sort this graph itself if needed.
+  if (!IsTopologicallySorted(*graph, outerScopeNames)) {
+    if (!SortGraph(graph, outerScopeNames))
+      return false;
+  }
+  return true;
 }

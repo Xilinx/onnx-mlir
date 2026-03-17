@@ -47,8 +47,9 @@ namespace onnx_mlir {
 // true.  Assert when not in range. Return positive axis.
 int64_t getAxisInRange(int64_t axis, int64_t rank, bool includeRank = false);
 int64_t getAxisInRange(int64_t axis, mlir::Value val, bool includeRank = false);
-// Check if axis is in [-rank, rank), or [-rank, rank] when includeRank is true.
-// Return false when not in range; set axis to positive value when in range.
+// Check if axis is in [-rank, rank), or [-rank, rank] when includeRank is
+// true. Return false when not in range; set axis to positive value when in
+// range.
 bool isAxisInRange(int64_t &axis, int64_t rank, bool includeRank = false);
 bool isAxisInRange(int64_t &axis, mlir::Value val, bool includeRank = false);
 
@@ -57,24 +58,22 @@ bool isAxisInRange(int64_t &axis, mlir::Value val, bool includeRank = false);
 //===----------------------------------------------------------------------===//
 
 // Update a tensor type by using the given shape, elementType and encoding.
-// TODO: when all ops are migrated to the new scheme, make this function private
-// to ONNXOpShapeHelper.
-// Parameters:
-// Val: this function will update val's type.
-// shape: shape of the ranked tensor type of val.
-// elementType: When nullptr, pick the elementary type from val.
-// encoding: When nullptr, pick the encoding from val if defined.
+// TODO: when all ops are migrated to the new scheme, make this function
+// private to ONNXOpShapeHelper. Parameters: Val: this function will update
+// val's type. shape: shape of the ranked tensor type of val. elementType:
+// When nullptr, pick the elementary type from val. encoding: When nullptr,
+// pick the encoding from val if defined.
 void updateType(mlir::Operation *op, mlir::Value val,
     llvm::ArrayRef<int64_t> shape, mlir::Type elementType = nullptr,
     mlir::Attribute encoding = nullptr, bool refineShape = true);
 
 // When we perform shape inference, we always assume that the type's shape in
 // onnx is correct. There are rare instance where we transform an existing op
-// (see RNN's handling of layout in RNNOpRewriteLayoutPattern) and then seek to
-// perform shape inference on it. As the operation has changed, then we must
-// first "erase" its constant shape's for the output type as they are not
-// correct anymore. It might be wiser to not reuse an existing op, but since we
-// currently have this pattern, this function must be called prior to infer
+// (see RNN's handling of layout in RNNOpRewriteLayoutPattern) and then seek
+// to perform shape inference on it. As the operation has changed, then we
+// must first "erase" its constant shape's for the output type as they are not
+// correct anymore. It might be wiser to not reuse an existing op, but since
+// we currently have this pattern, this function must be called prior to infer
 // shapes of existing but modified operations.
 void resetTypesShapeToQuestionmarks(mlir::Operation *op);
 
@@ -122,8 +121,8 @@ using ONNXSplitToSequenceOpShapeHelper = ONNXUnimplementedOpShapeHelper; // Reas
 // Broadcast Ops
 //===----------------------------------------------------------------------===//
 
-// Compute a broadcasted shape from the shapes of given operands. Operands must
-// be ranked in advance.
+// Compute a broadcasted shape from the shapes of given operands. Operands
+// must be ranked in advance.
 struct ONNXBroadcastOpShapeHelper : public ONNXOpShapeHelper {
   ONNXBroadcastOpShapeHelper(mlir::Operation *op, mlir::ValueRange operands,
       IndexExprBuilder *ieBuilder = nullptr, IndexExprScope *scope = nullptr,
@@ -149,7 +148,8 @@ struct ONNXBroadcastOpShapeHelper : public ONNXOpShapeHelper {
   //   - i: index of the operand in Index Expr Dims 'this->inputsDims'.
   //   - loopAccessExprs: IndexExprs for the loop's IVs.
   //   - operandAccessExprs: access indices to access the operand.
-  //     This is the output of this function. Use it in subsequent load/stores.
+  //     This is the output of this function. Use it in subsequent
+  //     load/stores.
   //   - flattenedInnerDims: whether the innermost dimension corresponds to a
   //   collapsed/flattened loop index or not.
   //   - ruledOutBroadcast: determined using shape analysis that there is no
@@ -185,14 +185,14 @@ struct ONNXBroadcastOpShapeHelper : public ONNXOpShapeHelper {
   // interpreted as 1x5xf32
   //
   // Examples without rank broadcast:
-  // * 2x5xf32 and 1x5xf32 does not have rank broadcasting because the ranks are
-  // already equal
+  // * 2x5xf32 and 1x5xf32 does not have rank broadcasting because the ranks
+  // are already equal
   virtual bool hasRankBroadcast();
 
-  // Determine of the broadcast operation has manageable broadcast (MB), and if
-  // so, at which level/rank. We first attempt to see if the innermost dimension
-  // has MB, and if it does, we then attempt to test at the next innermost
-  // level... until we fail or we run out of dimensions.
+  // Determine of the broadcast operation has manageable broadcast (MB), and
+  // if so, at which level/rank. We first attempt to see if the innermost
+  // dimension has MB, and if it does, we then attempt to test at the next
+  // innermost level... until we fail or we run out of dimensions.
   //
   // Below: ?1 and ?2 indicate 2 dynamic dimensions, which may/may not be
   // guaranteed to be equal depending on what dynamic analysis says.
@@ -203,11 +203,11 @@ struct ONNXBroadcastOpShapeHelper : public ONNXOpShapeHelper {
   //
   // The function return true if there is some MB, and then
   // * collapsedInnermostLoops: indicates how many inner loops are involved in
-  //   the MB. They are named "collapsed" as in the SIMD code execution, we may
-  //   collapse these dimensions in a single long iteration. For example,
-  //   `0x?x4x5` and `0x?x4x5` have a collapsedInnermostLoops==2 (if the two `?`
-  //   cannot be shown as equals). This means that we may implement operations
-  //   on these inputs as `?x20` and `?x20` respectively.
+  //   the MB. They are named "collapsed" as in the SIMD code execution, we
+  //   may collapse these dimensions in a single long iteration. For example,
+  //   `0x?x4x5` and `0x?x4x5` have a collapsedInnermostLoops==2 (if the two
+  //   `?` cannot be shown as equals). This means that we may implement
+  //   operations on these inputs as `?x20` and `?x20` respectively.
   // * collapsedLiteralSize: cumulative static size of the collapsed inner
   //   loops.
   // * collapsedDynamicSize: cumulative dynamic size of the collapsed inner
@@ -517,7 +517,7 @@ using ONNXGlobalMaxPoolOpShapeHelper = ONNXGenericGlobalPoolOpShapeHelper<mlir::
 struct ONNXSliceOpShapeHelper : public ONNXOpShapeHelper {
   ONNXSliceOpShapeHelper(mlir::Operation *op, mlir::ValueRange operands,
       IndexExprBuilder *ieBuilder = nullptr, IndexExprScope *scope = nullptr)
-      : ONNXOpShapeHelper(op, operands, ieBuilder, scope){};
+      : ONNXOpShapeHelper(op, operands, ieBuilder, scope) {};
   virtual ~ONNXSliceOpShapeHelper() {}
   mlir::LogicalResult computeShape() final;
   // Additional data for SliceOp.
@@ -883,6 +883,7 @@ using ONNXBatchNormalizationV9OpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir:
 using ONNXBatchNormalizationInferenceModeOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXBatchNormalizationInferenceModeOp>;
 using ONNXCategoryMapperOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXCategoryMapperOp>;
 using ONNXCompressOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXCompressOp>;
+using ONNXConcatFromSequenceOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXConcatFromSequenceOp>;
 using ONNXConcatOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXConcatOp>;
 using ONNXConcatShapeTransposeOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXConcatShapeTransposeOp>;
 using ONNXConstantOfShapeOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXConstantOfShapeOp>;

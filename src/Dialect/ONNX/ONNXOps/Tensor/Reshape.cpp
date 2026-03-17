@@ -241,13 +241,26 @@ LogicalResult ONNXReshapeOp::verify() {
 
 LogicalResult ONNXReshapeOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
-  // Cannot infer shape without data rank and static shape of shape.
-  // If shape is constant shape, the rank of the output known.
-  // This step may be helpful to reach the fix point.
-  // TODO: Infer shape without data rank if shape is a constant
-  //       without -1 and without 0 and allowzero.
-  if (!hasShapeAndRank(getData()) && !hasStaticShape(getShape().getType()))
+  // Cannot infer shape if the shape operand has no rank/shape info.
+  if (!hasShapeAndRank(getShape()))
     return success();
+
+  // If data is unranked but shape has static shape, we can at least determine
+  // the output rank (all dimensions unknown). computeShape() is not safe to
+  // call with unranked data, so handle this case directly.
+  if (!hasShapeAndRank(getData())) {
+    if (!hasStaticShape(getShape().getType()))
+      return success();
+    auto shapeTy = mlir::cast<ShapedType>(getShape().getType());
+    int64_t outputRank = shapeTy.getDimSize(0);
+    if (outputRank == ShapedType::kDynamic)
+      return success();
+    Type elemTy =
+        mlir::cast<ShapedType>(getData().getType()).getElementType();
+    SmallVector<int64_t> resultShape(outputRank, ShapedType::kDynamic);
+    getResult().setType(RankedTensorType::get(resultShape, elemTy));
+    return success();
+  }
 
   Type elementType =
       mlir::cast<ShapedType>(getData().getType()).getElementType();

@@ -36,6 +36,7 @@
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Interface/HasOnnxSubgraphOpInterface.hpp"
 #include "src/Interface/ResultTypeInferenceOpInterface.hpp"
+#include "src/Interface/ShapeInferenceOpInterface.hpp"
 #include "src/Support/SuppressWarnings.h"
 
 SUPPRESS_WARNINGS_PUSH
@@ -992,6 +993,17 @@ private:
       }
     }
 
+    // If any result is still NoneType and the op supports shape inference,
+    // run it now to avoid producing invalid IR (e.g. ConcatFromSequence
+    // whose output type depends on its SeqType input).
+    if (auto opWithShapeInference =
+            mlir::dyn_cast<ShapeInferenceOpInterface>(op.getOperation())) {
+      bool hasNoneResult = llvm::any_of(
+          op->getResultTypes(), [](Type t) { return isa<NoneType>(t); });
+      if (hasNoneResult)
+        (void)opWithShapeInference.inferShapes([](Region &) {});
+    }
+
     for (const auto &[i, output] : llvm::enumerate(node.output())) {
       // Skip the output with empty name, which is used as a placeholder
       // in multiple outputs.
@@ -1018,6 +1030,10 @@ private:
       } else {
         if (const Value *valuePtr = frontend_symbols_.GetByOnnxName(item)) {
           inputs.push_back(*valuePtr);
+        } else {
+          llvm::errs() << "Warning: Unknown input '" << item
+                       << "' in node " << node.op_type()
+                       << " (silently dropped)\n";
         }
       }
     }
@@ -1269,6 +1285,9 @@ private:
               frontend_symbols_.GetByOnnxName(item.value())) {
         inVals[item.index()] = *valuePtr;
       } else {
+        llvm::errs() << "Unknown input: " << item.value()
+                     << " (index: " << std::to_string(item.index())
+                     << ") in node " << node.op_type() << "\n";
         assert(false && "Unknown input");
       }
     }
@@ -1378,7 +1397,7 @@ private:
     int newestValidOpsetVersion = opset_list_it->second.back();
     int upperRangeOfNewestValidOpsetVersion = current_opset;
     for (auto opsetIter = opset_list_it->second.begin();
-         opsetIter != opset_list_it->second.end(); ++opsetIter) {
+        opsetIter != opset_list_it->second.end(); ++opsetIter) {
       if (*opsetIter <= current_opset) {
         if (opsetIter != opset_list_it->second.begin()) {
           upperRangeOfNewestValidOpsetVersion = std::max(
@@ -1854,7 +1873,7 @@ private:
   // Get the version of the model
   // Code copied from onnx/onnx/version_coverter/convert.cc
   for (auto it = model.opset_import().begin(); it != model.opset_import().end();
-       ++it) {
+      ++it) {
     if (isDefaultDomain(it->domain())) {
       originVersion = it->version();
       break;
@@ -1893,6 +1912,10 @@ private:
             << e.what() << "\n";
       }
     }
+    // Shape inference may reorder nodes in subgraphs. Ensure all subgraphs
+    // are topologically sorted before import.
+    if (options.allowSorting)
+      SortAllSubgraphs(convertModel.mutable_graph());
     return ImportFrontendModel(
         convertModel, context, module, errorMessage, options);
   } else {
@@ -1905,6 +1928,10 @@ private:
             << e.what() << "\n";
       }
     }
+    // Shape inference may reorder nodes in subgraphs. Ensure all subgraphs
+    // are topologically sorted before import.
+    if (options.allowSorting)
+      SortAllSubgraphs(model.mutable_graph());
     return ImportFrontendModel(model, context, module, errorMessage, options);
   }
   return CompilerSuccess;
@@ -1935,7 +1962,7 @@ namespace {
   // Remove // comments, which are non-standard json and onnx text
   // but appear in lit tests in test/mlir/onnx/parse.
   for (llvm::line_iterator line(*buf, /*SkipBlanks=*/false), end; line != end;
-       ++line) {
+      ++line) {
     if (line->ltrim(" \t").starts_with("//"))
       continue; // omit comment lines beginning with (whitespace and) //
     if (line->contains("//")) {
