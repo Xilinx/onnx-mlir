@@ -381,12 +381,14 @@ def FuseGemmFollowedByAddition : Pat<(ONNXAddOp (ONNXGemmOp:$res $m1, $m2, $none
 // The shape of 'constant' must be compatible with that of 'b'
 //===----------------------------------------------------------------------===//
 
+// Add(const, x) -> Add(x, const): move constant to RHS
 def NormalizeAddPattern: Pat<
   (ONNXAddOp $x, $y),
   (ONNXAddOp $y, $x),
   [(IsFromONNXConstantOp $x), (IsNotFromONNXConstantOp $y)]
 >;
 
+// Add(Conv(x, w, none), const) -> Conv(x, w, const): fuse Add into Conv as bias.
 def FuseAddConvNullBiasPattern: Pat<
   (ONNXAddOp:$res
     (ONNXConvOp
@@ -409,6 +411,7 @@ def FuseAddConvNullBiasPattern: Pat<
    ]
 >;
 
+// Add(Conv(x, w, b), const) -> Conv(x, w, b + reshape(const)): fold into bias.
 def FuseAddConvPattern: Pat<
   (ONNXAddOp:$res
     (ONNXConvOp
@@ -473,6 +476,7 @@ def ReassociateAddConstToLhsPattern: Pat<
 // The shape of 'c' must be compatible with that of 'w'
 //===----------------------------------------------------------------------===//
 
+// Mul(const, x) -> Mul(x, const): move constant to RHS.
 def NormalizeMulPattern: Pat<
   (ONNXMulOp $x, $y),
   (ONNXMulOp $y, $x),
