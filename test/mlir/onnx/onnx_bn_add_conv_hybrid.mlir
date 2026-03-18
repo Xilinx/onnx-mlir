@@ -33,6 +33,44 @@ func.func @test_bn_add_conv_conv(%arg0: tensor<1x3x4x4xf32>) -> tensor<1x4x4x4xf
 
 // -----
 
+// Test BN(Add(Conv, Conv)) where the Add has multiple uses (e.g. skip connection).
+// The DistributeMulOverAddPattern requires HasOneUse on the Add, so the BN
+// cannot be fused into the Convs. The BN decomposes into Mul+Add but the Mul
+// is not distributed over the inner Add.
+func.func @test_bn_add_conv_conv_multi_use(%arg0: tensor<1x3x4x4xf32>) -> (tensor<1x4x4x4xf32>, tensor<1x4x4x4xf32>) {
+    %w1 = onnx.Constant dense<1.0> : tensor<4x3x1x1xf32>
+    %b1 = onnx.Constant dense<0.5> : tensor<4xf32>
+    %w2 = onnx.Constant dense<2.0> : tensor<4x3x1x1xf32>
+    %b2 = onnx.Constant dense<0.25> : tensor<4xf32>
+    %scale = onnx.Constant dense<2.0> : tensor<4xf32>
+    %bias = onnx.Constant dense<1.0> : tensor<4xf32>
+    %mean = onnx.Constant dense<0.0> : tensor<4xf32>
+    %var = onnx.Constant dense<1.0> : tensor<4xf32>
+    %conv1 = "onnx.Conv"(%arg0, %w1, %b1) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x4x4xf32>, tensor<4x3x1x1xf32>, tensor<4xf32>) -> tensor<1x4x4x4xf32>
+    %conv2 = "onnx.Conv"(%arg0, %w2, %b2) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x4x4xf32>, tensor<4x3x1x1xf32>, tensor<4xf32>) -> tensor<1x4x4x4xf32>
+    %add = "onnx.Add"(%conv1, %conv2) : (tensor<1x4x4x4xf32>, tensor<1x4x4x4xf32>) -> tensor<1x4x4x4xf32>
+    %bn = "onnx.BatchNormalizationInferenceMode"(%add, %scale, %bias, %mean, %var) {epsilon = 1.0E-5 : f32} : (tensor<1x4x4x4xf32>, tensor<4xf32>, tensor<4xf32>, tensor<4xf32>, tensor<4xf32>) -> tensor<1x4x4x4xf32>
+    return %bn, %add : tensor<1x4x4x4xf32>, tensor<1x4x4x4xf32>
+
+    // CHECK-LABEL:  func.func @test_bn_add_conv_conv_multi_use
+    // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x4x4xf32>) -> (tensor<1x4x4x4xf32>, tensor<1x4x4x4xf32>) {
+    // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<4x1x1xf32>
+    // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<1.999990e+00> : tensor<4x1x1xf32>
+    // CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<4x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_3_:%.+]] = onnx.Constant dense<5.000000e-01> : tensor<4xf32>
+    // CHECK-DAG:       [[VAR_4_:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<4x3x1x1xf32>
+    // CHECK-DAG:       [[VAR_5_:%.+]] = onnx.Constant dense<2.500000e-01> : tensor<4xf32>
+    // CHECK-DAG:       [[VAR_6_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_2_]], [[VAR_3_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x4x4xf32>, tensor<4x3x1x1xf32>, tensor<4xf32>) -> tensor<1x4x4x4xf32>
+    // CHECK-DAG:       [[VAR_7_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_4_]], [[VAR_5_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x4x4xf32>, tensor<4x3x1x1xf32>, tensor<4xf32>) -> tensor<1x4x4x4xf32>
+    // CHECK:           [[VAR_8_:%.+]] = "onnx.Add"([[VAR_6_]], [[VAR_7_]]) : (tensor<1x4x4x4xf32>, tensor<1x4x4x4xf32>) -> tensor<1x4x4x4xf32>
+    // CHECK:           [[VAR_9_:%.+]] = "onnx.Mul"([[VAR_8_]], [[VAR_1_]]) : (tensor<1x4x4x4xf32>, tensor<4x1x1xf32>) -> tensor<1x4x4x4xf32>
+    // CHECK:           [[VAR_10_:%.+]] = "onnx.Add"([[VAR_9_]], [[VAR_0_]]) : (tensor<1x4x4x4xf32>, tensor<4x1x1xf32>) -> tensor<1x4x4x4xf32>
+    // CHECK:           return [[VAR_10_]], [[VAR_8_]] : tensor<1x4x4x4xf32>, tensor<1x4x4x4xf32>
+    // CHECK:         }
+}
+
+// -----
+
 // Test BN(Add(Conv, arg)): BN decomposes, Mul distributes, Conv branch fuses.
 // Non-const branch keeps a Mul. BN bias folds into Conv bias.
 func.func @test_bn_add_conv_nonconst(%arg0: tensor<1x3x4x4xf32>, %arg1: tensor<1x4x4x4xf32>) -> tensor<1x4x4x4xf32> {
