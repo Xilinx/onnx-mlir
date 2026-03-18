@@ -1459,21 +1459,18 @@ func.func @test_distribute_mul_over_add_one_conv(%arg0: tensor<1x3x8x8xf32>, %ar
 
 // -----
 
-func.func @test_distribute_mul_over_add_one_const(%arg0: tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32> {
+// Do not redistribute if no operand is a conv
+// This would only swap the add and mul
+func.func @test_no_distribute_mul_over_add_one_const(%arg0: tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32> {
     %c = onnx.Constant dense<1.0> : tensor<1x16x8x8xf32>
     %scale = onnx.Constant dense<2.0> : tensor<1x16x1x1xf32>
     %add = "onnx.Add"(%arg0, %c) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
     %result = "onnx.Mul"(%add, %scale) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
     return %result : tensor<1x16x8x8xf32>
 
-    // CHECK-LABEL:  func.func @test_distribute_mul_over_add_one_const
-    // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32> {
-    // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<1x16x8x8xf32>
-    // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<1x16x1x1xf32>
-    // CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[VAR_1_]]) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
-    // CHECK-DAG:       [[VAR_3_:%.+]] = "onnx.Mul"([[VAR_0_]], [[VAR_1_]]) : (tensor<1x16x8x8xf32>, tensor<1x16x1x1xf32>) -> tensor<1x16x8x8xf32>
-    // CHECK:           [[VAR_4_:%.+]] = "onnx.Add"([[VAR_2_]], [[VAR_3_]]) : (tensor<1x16x8x8xf32>, tensor<1x16x8x8xf32>) -> tensor<1x16x8x8xf32>
-    // CHECK:           return [[VAR_4_]] : tensor<1x16x8x8xf32>
+    // CHECK-LABEL: @test_no_distribute_mul_over_add_one_const
+    // CHECK: onnx.Add
+    // CHECK: onnx.Mul
 }
 
 // -----

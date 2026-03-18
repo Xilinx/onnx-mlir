@@ -332,18 +332,15 @@ bool hasNoneOrConstBias(ONNXConvOp conv) {
 }
 
 // Check if at least one of the two values is defined by a fusible ONNXConvOp
-// or is a dense ONNX constant. A Conv is only considered fusible if its weights
-// are constant and its bias is either None or constant, so that a subsequent
-// FuseMulConvPattern can actually absorb the Mul.
+// whose weights are constant and bias is either None or constant, so that a
+// subsequent FuseMulConvPattern can actually absorb the Mul.
 // TODO: Extend for further ops that can swallow muls, like MatMul.
-bool hasConvOrConstantOperand(Value a, Value b) {
-  const auto isFusible = [](Value v) {
-    if (isDenseONNXConstant(v))
-      return true;
+bool hasConvOperand(Value a, Value b) {
+  const auto isFusibleConv = [](Value v) {
     auto conv = v.getDefiningOp<ONNXConvOp>();
     return conv && isDenseONNXConstant(conv.getW()) && hasNoneOrConstBias(conv);
   };
-  return isFusible(a) || isFusible(b);
+  return isFusibleConv(a) || isFusibleConv(b);
 }
 
 // Check if a value is a profitable target for Add reassociation: either a dense

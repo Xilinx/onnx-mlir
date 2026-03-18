@@ -174,9 +174,9 @@ def IsPerChannelOrScalarScale: Constraint<
   "Scale is scalar or per-channel compatible with result shape">;
 
 // $0 and $1 are the two Add operands
-def HasConvOrConstantOperand: Constraint<
-  CPred<"onnx_mlir::hasConvOrConstantOperand($0, $1)">,
-  "At least one operand is from ONNXConvOp or ONNXConstantOp">;
+def HasConvOperand: Constraint<
+  CPred<"onnx_mlir::hasConvOperand($0, $1)">,
+  "At least one operand is from a fusible ONNXConvOp">;
 
 // $0 is the Add operand
 def IsAddReassociationTarget: Constraint<
@@ -550,7 +550,7 @@ def DistributeMulOverAddPattern: Pat<
    (IsStaticShapeTensor:$res),
    (IsStaticShapeTensor:$add_res),
    (IsPerChannelOrScalarScale $scale, $res),
-   (HasConvOrConstantOperand $a, $b)]
+   (HasConvOperand $a, $b)]
 >;
 
 //===----------------------------------------------------------------------===//
