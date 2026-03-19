@@ -119,8 +119,8 @@ public:
       llvm::cl::desc("If enabled, convert onnx.slice only if all steps are 1"),
       llvm::cl::ZeroOrMore, llvm::cl::init(false)};
   ListOption<std::string> excludedOps{*this, "excluded-ops",
-      llvm::cl::desc("ONNX op names to exclude from TOSA conversion "
-                     "(e.g. Gather,Cast)"),
+      llvm::cl::desc("TOSA op names to exclude from conversion "
+                     "(e.g. gather, cast)"),
       llvm::cl::ZeroOrMore};
 };
 
@@ -198,7 +198,7 @@ void FrontendToTosaLoweringPass::runOnOperation() {
       mlir::arith::ArithDialect, mlir::shape::ShapeDialect>();
 
   for (const std::string &opName : excludedOps)
-    target.addLegalOp(OperationName("onnx." + opName, context));
+    target.addIllegalOp(OperationName("tosa." + opName, context));
 
   // Define patterns
   populateONNXToTOSAConversionPattern(target, patterns, typeConverter, context,

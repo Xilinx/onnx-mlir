@@ -1,5 +1,5 @@
 // RUN: onnx-mlir-opt --convert-onnx-to-tosa -cse %s -split-input-file | FileCheck %s
-// RUN: onnx-mlir-opt --convert-onnx-to-tosa="excluded-ops=Gather" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDE
+// RUN: onnx-mlir-opt --convert-onnx-to-tosa="excluded-ops=gather" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDE
 
 func.func @test_gather_axis0(%arg0 : tensor<3x2xf32>) -> tensor<2x2x2xf32> {
   %indices = "onnx.Constant"() {value = dense<[[0, 1], [1, 2]]> : tensor<2x2xi64>} : () -> tensor<2x2xi64>
@@ -162,8 +162,8 @@ func.func @test_gather_like_slice(%arg0 : tensor<3x3xf32>) -> tensor<3xf32> {
 // CHECK:         return %[[VAL_2]]
 
 // EXCLUDE-LABEL:   func.func @test_gather_like_slice(
-// EXCLUDE:           onnx.Gather
-// EXCLUDE-NOT:       tosa.slice
+// EXCLUDE-NOT:       onnx.Gather
+// EXCLUDE:           tosa.slice
 }
 
 // -----
@@ -179,8 +179,8 @@ func.func @test_gather_like_slice_positive_integer(%arg0 : tensor<3x3xf32>) -> t
 // CHECK:         return %[[VAL_2]]
 
 // EXCLUDE-LABEL:   func.func @test_gather_like_slice_positive_integer(
-// EXCLUDE:           onnx.Gather
-// EXCLUDE-NOT:       tosa.slice
+// EXCLUDE-NOT:       onnx.Gather
+// EXCLUDE:           tosa.slice
 }
 
 // -----
@@ -196,8 +196,8 @@ func.func @test_gather_like_slice_negative_integer(%arg0 : tensor<3x3xf32>) -> t
 // CHECK:         return %[[VAL_2]]
 
 // EXCLUDE-LABEL:   func.func @test_gather_like_slice_negative_integer(
-// EXCLUDE:           onnx.Gather
-// EXCLUDE-NOT:       tosa.slice
+// EXCLUDE-NOT:       onnx.Gather
+// EXCLUDE:           tosa.slice
 }
 
 // -----
