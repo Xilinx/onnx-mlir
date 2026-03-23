@@ -67,7 +67,10 @@
     - tensor(uint16)
     - tensor(int8)
     - tensor(int16)
-    - tensor(quant_QuantizedType)
+    - tensor(float16)
+    - tensor(float)
+    - tensor(double)
+    - tensor(bfloat16)
   - type_param: T_or_None
     description: Constrain to all types in T plus NoneType.
     allowed_types:
@@ -75,7 +78,10 @@
     - tensor(uint16)
     - tensor(int8)
     - tensor(int16)
-    - tensor(quant_QuantizedType)
+    - tensor(float16)
+    - tensor(float)
+    - tensor(double)
+    - tensor(bfloat16)    
     - NoneType
   min_input: 2
   max_input: 2
@@ -126,6 +132,10 @@
     description: Auto padding mode (NOTSET, SAME_UPPER, SAME_LOWER, VALID). Defaults to NOTSET.
     type: string
     default_value: NOTSET
+  - name: activation
+    description: Fused activation function type (NONE, RELU, LEAKYRELU, PRELU, HSIGMOID, RELU6, SIGMOID). Defaults to NONE (no activation).
+    type: string
+    default_value: NONE
   type_constraints:
   - type_param: T
     description: Constrain input and output types to all numeric tensor types.
@@ -138,7 +148,6 @@
     - tensor(uint16)
     - tensor(int8)
     - tensor(int16)
-    - tensor(quant_QuantizedType)
   - type_param: T_or_None
     description: Constrain to all types in T plus NoneType.
     allowed_types:
@@ -150,7 +159,6 @@
     - tensor(uint16)
     - tensor(int8)
     - tensor(int16)
-    - tensor(quant_QuantizedType)
     - NoneType
   min_input: 2
   max_input: 3
