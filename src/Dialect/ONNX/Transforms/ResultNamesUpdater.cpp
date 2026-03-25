@@ -31,7 +31,9 @@ void ResultNamesUpdater::notifyOperationReplaced(
     return;
 
   // Always overwrite if replacement is a new op or if it has single use
-  if (replacement->use_empty() || replacement->hasOneUse()) {
+  if (replacement->use_empty() ||
+      llvm::all_of(replacement->getResults(),
+          [](OpResult result) { return result.hasOneUse(); })) {
     replacement->setAttr("ResultNames", resultNamesArray);
     return;
   }
