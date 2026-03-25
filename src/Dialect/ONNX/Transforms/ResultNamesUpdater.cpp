@@ -30,14 +30,17 @@ void ResultNamesUpdater::notifyOperationReplaced(
   if (!resultNamesArray)
     return;
 
-  // Always overwrite on newly created op
-  bool newOp = replacement->getUses().empty();
-  // Check if ResultNames exist already
-  auto replResultNames = replacement->getAttrOfType<ArrayAttr>("ResultNames");
-  if (!newOp && replResultNames && llvm::all_of(replResultNames, isTensorName))
+  // Always overwrite if replacement is a new op or if it has single use
+  if (replacement->use_empty() || replacement->hasOneUse()) {
+    replacement->setAttr("ResultNames", resultNamesArray);
     return;
+  }
 
-  replacement->setAttr("ResultNames", resultNamesArray);
+  // Copy ResultNames if they don't exist already
+  if (auto replResultNames =
+          replacement->getAttrOfType<ArrayAttr>("ResultNames");
+      !replResultNames || !llvm::all_of(replResultNames, isTensorName))
+    replacement->setAttr("ResultNames", resultNamesArray);
 }
 
 void ResultNamesUpdater::notifyOperationReplaced(
@@ -66,8 +69,9 @@ void ResultNamesUpdater::notifyOperationReplaced(
       if (auto existing = replOp->getAttrOfType<ArrayAttr>("ResultNames"))
         replResultNames = SmallVector<Attribute>(existing.getValue());
 
-      bool newOp = replOp->getUses().empty();
-      if (!newOp && isTensorName(replResultNames[replResult.getResultNumber()]))
+      // If not a new val AND has more than one use AND has existing TensorName
+      if (!replResult.use_empty() && !replResult.hasOneUse() &&
+          isTensorName(replResultNames[replResult.getResultNumber()]))
         continue;
 
       // Replace the ResultName of current result
