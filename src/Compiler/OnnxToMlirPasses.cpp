@@ -5,11 +5,12 @@
 #include "mlir/Transforms/Passes.h"
 #include "src/Compiler/DisposableGarbageCollector.hpp"
 #include "src/Pass/Passes.hpp"
-
+#include <iostream>
 using namespace mlir;
 namespace onnx_mlir {
 
 void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
+    std::cout <<"AddXMCMLIRPasses" <<std::endl;
   pm.addNestedPass<func::FuncOp>(createFixNegScalePass());
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createOptimizeOnnxRequantizationPass());
@@ -57,6 +58,9 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createConvertMatMulToXFEConvPass());
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createONNXTransposeOptimizationPass());
+  
+      pm.addNestedPass<func::FuncOp>(
+        onnx_mlir::createReplaceHsigmoidAndHswishPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createConstPropONNXToONNXPass());
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createRemoveContinuousTransposeWithReshapePass());
@@ -84,8 +88,6 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
 
   pm.addNestedPass<func::FuncOp>(mlir::createCanonicalizerPass());
   pm.addNestedPass<func::FuncOp>(
-      onnx_mlir::createReplaceHsigmoidAndHswishPass());
-  pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createConvertXFEConvToDepthwiseConvPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createFuseConvActivationPass());
   pm.addNestedPass<func::FuncOp>(
@@ -106,7 +108,7 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // 2. Easy to compare two approaches.
   // In future, only the dynamic pass, ONNXOpTransformPass, will be used for
   // this function.
-
+        std::cout<<"Inside add onnx to mlir passes" <<std::endl;
   configureBatchNormCanonicalization(opts.disableBatchNormDecompose);
 
   if (!donotScrubDisposableElementsAttr)
