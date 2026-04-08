@@ -3684,6 +3684,33 @@ func.func @test_seqence_3(%arg0: tensor<2x4x8xf32>, %arg1: tensor<3x6xf32>) -> !
 
 // -----
 
+// Test that SequenceEmpty (with explicit dtype) -> SequenceInsert -> SequenceAt
+// correctly propagates shape through the chain:
+//   - SequenceEmpty result stays !onnx.Seq<tensor<*xf32>> (element type is
+//     unranked because SequenceEmpty has no shape info, only dtype).
+//   - SequenceInsert sees an empty seq (length=0) and promotes the element
+//     type to the concrete shape of the inserted tensor.
+//   - SequenceAt propagates that element type to the output.
+//   - The function return type is refined from tensor<*xf32> to tensor<1x4xf32>.
+func.func @test_sequence_empty_insert_at(%arg0: tensor<1x4xf32>) -> tensor<*xf32> {
+  %0 = "onnx.SequenceEmpty"() {dtype = 1 : si64} : () -> !onnx.Seq<tensor<*xf32>>
+  %cst_none = "onnx.NoValue"() {value} : () -> none
+  %1 = "onnx.SequenceInsert"(%0, %arg0, %cst_none) : (!onnx.Seq<tensor<*xf32>>, tensor<1x4xf32>, none) -> !onnx.Seq<tensor<*xf32>>
+  %cst_idx = onnx.Constant dense<0> : tensor<i64>
+  %2 = "onnx.SequenceAt"(%1, %cst_idx) : (!onnx.Seq<tensor<*xf32>>, tensor<i64>) -> tensor<*xf32>
+  onnx.Return %2 : tensor<*xf32>
+// CHECK-LABEL:  func @test_sequence_empty_insert_at
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x4xf32>) -> tensor<1x4xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<0> : tensor<i64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.NoValue"() {value} : () -> none
+// CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.SequenceEmpty"() {dtype = 1 : si64} : () -> !onnx.Seq<tensor<*xf32>>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.SequenceInsert"([[VAR_2_]], [[PARAM_0_]], [[VAR_1_]]) : (!onnx.Seq<tensor<*xf32>>, tensor<1x4xf32>, none) -> !onnx.Seq<tensor<1x4xf32>>
+// CHECK:           [[VAR_4_:%.+]] = "onnx.SequenceAt"([[VAR_3_]], [[VAR_0_]]) : (!onnx.Seq<tensor<1x4xf32>>, tensor<i64>) -> tensor<1x4xf32>
+// CHECK:           onnx.Return [[VAR_4_]] : tensor<1x4xf32>
+}
+
+// -----
+
 // when the split input is none we always infer that the splits will have dim
 // size 1 on the split axis even if we know the output sequence will be empty
 func.func @test_splittosequence_0(%arg0: tensor<0x?x4xf32>) -> !onnx.Seq<tensor<*xf32>> {

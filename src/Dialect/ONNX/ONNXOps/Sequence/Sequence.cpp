@@ -10,6 +10,9 @@
 //
 // This file provides definition of ONNX dialect Sequence operations.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
@@ -126,8 +129,9 @@ LogicalResult ONNXSequenceEmptyOp::inferShapes(
 }
 
 std::vector<Type> ONNXSequenceEmptyOp::resultTypeInference() {
-  return {cast<ShapedType>(
-      SeqType::get(getResultElementTypeFromDtypeDefaultingToF32(*this), 0))};
+  Type scalarType = getResultElementTypeFromDtypeDefaultingToF32(*this);
+  ShapedType elementType = UnrankedTensorType::get(scalarType);
+  return {SeqType::get(elementType, 0)};
 }
 
 //===----------------------------------------------------------------------===//
