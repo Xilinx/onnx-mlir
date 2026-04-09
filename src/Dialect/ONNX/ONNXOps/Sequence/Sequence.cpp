@@ -75,6 +75,20 @@ ShapedType sequenceAddType(
 // SequenceAtOp
 //===----------------------------------------------------------------------===//
 
+std::vector<Type> ONNXSequenceAtOp::resultTypeInference() {
+  // The output is the element type of the input sequence.  If the input
+  // sequence type is not yet resolved (e.g. NoneType at import time), fall
+  // back to tensor<*xf32> so that downstream code (e.g. the Decompose pass
+  // which runs before shape inference) always sees a valid ShapedType.
+  auto seqType = mlir::dyn_cast<SeqType>(getInputSequence().getType());
+  if (!seqType)
+    return {UnrankedTensorType::get(Builder(getContext()).getF32Type())};
+  auto shapedElem = mlir::dyn_cast<ShapedType>(seqType.getElementType());
+  if (!shapedElem)
+    return {UnrankedTensorType::get(Builder(getContext()).getF32Type())};
+  return {UnrankedTensorType::get(shapedElem.getElementType())};
+}
+
 LogicalResult ONNXSequenceAtOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
   auto outputType = getResult().getType();
@@ -90,6 +104,19 @@ LogicalResult ONNXSequenceAtOp::inferShapes(
 //===----------------------------------------------------------------------===//
 // SequenceConstructOp
 //===----------------------------------------------------------------------===//
+
+std::vector<Type> ONNXSequenceConstructOp::resultTypeInference() {
+  // Derive the sequence element type from the first input.  If inputs are not
+  // yet typed (NoneType), fall back to f32.
+  auto types = getInputs().getTypes();
+  Type scalarType = Builder(getContext()).getF32Type();
+  if (!types.empty()) {
+    if (auto shapedType = mlir::dyn_cast<ShapedType>(types.front()))
+      scalarType = shapedType.getElementType();
+  }
+  ShapedType elemType = UnrankedTensorType::get(scalarType);
+  return {SeqType::get(elemType, static_cast<int64_t>(types.size()))};
+}
 
 LogicalResult ONNXSequenceConstructOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
@@ -192,6 +219,23 @@ LogicalResult ONNXSequenceInsertOp::inferShapes(
     getResult().setType(SeqType::get(seqTensorType, newLength));
   }
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+// SequenceMapOp
+//===----------------------------------------------------------------------===//
+
+std::vector<Type> ONNXSequenceMapOp::resultTypeInference() {
+  // The body region outputs are tensors; each becomes the element type of the
+  // corresponding output sequence.  The output sequence length is unknown at
+  // import time (it equals the input sequence length, resolved during shape
+  // inference), so we use kDynamic.
+  Operation *terminator = getBody().back().getTerminator();
+  std::vector<Type> resultTypes;
+  for (Type ty : terminator->getOperandTypes())
+    resultTypes.push_back(
+        SeqType::get(mlir::cast<ShapedType>(ty), ShapedType::kDynamic));
+  return resultTypes;
 }
 
 //===----------------------------------------------------------------------===//

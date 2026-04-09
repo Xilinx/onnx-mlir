@@ -722,6 +722,7 @@ OpsWithResultTypeInference = [
     "Constant",
     "Cast",
     "CastLike",
+    "ConcatFromSequence",
     "ConstantOfShape",
     "EyeLike",
     "If",
@@ -731,7 +732,11 @@ OpsWithResultTypeInference = [
     "RandomUniform",
     "RandomUniformLike",
     "Scan",
+    "SequenceAt",
+    "SequenceConstruct",
     "SequenceEmpty",
+    "SequenceMap",
+    "SplitToSequence",
 ]
 
 FloatTypes = {"TensorOf<[F32]>"}
