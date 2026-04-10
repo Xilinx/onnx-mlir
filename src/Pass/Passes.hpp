@@ -229,6 +229,9 @@ std::unique_ptr<mlir::Pass> createTransfer5dStridedSliceTo4d();
 /// Pass for transferring SpaceToDepth patterns to Conv2D.
 std::unique_ptr<mlir::Pass> createTransferSpaceToDepthToConv2dPass();
 
+/// Pass for removing redundant DPU coefficient Mul after quantized AvgPool.
+std::unique_ptr<mlir::Pass> createReplaceQDQPoolPass();
+
 /// Pass for fusing quantized eltwise+activation patterns (XMC).
 std::unique_ptr<mlir::Pass> createReplaceQDQEltwisePass();
 
