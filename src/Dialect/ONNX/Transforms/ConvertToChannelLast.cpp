@@ -612,9 +612,11 @@ struct GroupNormToChannelLastPattern
     // Create XFEGroupNormalization operation
     auto origOutputType = mlir::cast<ShapedType>(gnOp.getType());
     Type outputElementType = origOutputType.getElementType();
+    Type nhwcOutputElemType = remapQuantTypeNchw2Nhwc(outputElementType, rank);
     auto gnChannelLastOp = rewriter.create<XFEGroupNormalizationOp>(loc,
-        UnrankedTensorType::get(outputElementType), inputChannelLast, scale,
-        bias, gnOp.getEpsilonAttr(), gnOp.getNumGroupsAttr());
+        UnrankedTensorType::get(nhwcOutputElemType), inputChannelLast, scale,
+        bias, gnOp.getEpsilonAttr(), gnOp.getNumGroupsAttr(),
+        gnOp.getStashTypeAttr());
 
     transferOnnxNodeName(gnOp, gnChannelLastOp);
 

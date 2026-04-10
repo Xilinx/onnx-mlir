@@ -339,14 +339,13 @@ LogicalResult XFEAveragePoolOpShapeInference(
   auto stridesAttr = poolOp.getStrides();
   auto padsAttr = poolOp.getPads();
   // Extract kernel shape (required attribute)
-  if (!kernelShapeAttr.has_value() ||
-      static_cast<int64_t>(kernelShapeAttr->size()) < numSpatialDims)
+  if (static_cast<int64_t>(kernelShapeAttr.size()) < numSpatialDims)
     return op->emitError(
         "kernel_shape attribute required with matching spatial dimensions");
 
   SmallVector<int64_t, 4> kernels;
   for (int64_t i = 0; i < numSpatialDims; ++i) {
-    kernels.push_back(mlir::cast<IntegerAttr>((*kernelShapeAttr)[i]).getInt());
+    kernels.push_back(mlir::cast<IntegerAttr>(kernelShapeAttr[i]).getInt());
   }
 
   // Parse strides (default 1)
@@ -370,9 +369,7 @@ LogicalResult XFEAveragePoolOpShapeInference(
   }
 
   // Get ceil_mode (default 0 = floor mode)
-  bool ceilMode = false;
-  if (auto ceilModeAttr = poolOp.getCeilModeAttr())
-    ceilMode = ceilModeAttr.getValue().getSExtValue() != 0;
+  bool ceilMode = poolOp.getCeilMode() != 0;
 
   // Compute output spatial dimensions (no dilation for average pool)
   SmallVector<int64_t, 6> outputShape;
@@ -441,14 +438,13 @@ LogicalResult XFEMaxPoolOpShapeInference(
   auto dilationsAttr = poolOp.getDilations();
 
   // Extract kernel shape (required attribute)
-  if (!kernelShapeAttr.has_value() ||
-      static_cast<int64_t>(kernelShapeAttr->size()) < numSpatialDims)
+  if (static_cast<int64_t>(kernelShapeAttr.size()) < numSpatialDims)
     return op->emitError(
         "kernel_shape attribute required with matching spatial dimensions");
 
   SmallVector<int64_t, 4> kernels;
   for (int64_t i = 0; i < numSpatialDims; ++i) {
-    kernels.push_back(mlir::cast<IntegerAttr>((*kernelShapeAttr)[i]).getInt());
+    kernels.push_back(mlir::cast<IntegerAttr>(kernelShapeAttr[i]).getInt());
   }
 
   // Parse strides (default 1)
@@ -481,9 +477,7 @@ LogicalResult XFEMaxPoolOpShapeInference(
   }
 
   // Get ceil_mode (default 0 = floor mode)
-  bool ceilMode = false;
-  if (auto ceilModeAttr = poolOp.getCeilModeAttr())
-    ceilMode = ceilModeAttr.getValue().getSExtValue() != 0;
+  bool ceilMode = poolOp.getCeilMode() != 0;
 
   // Compute output spatial dimensions with dilations and ceil_mode
   SmallVector<int64_t, 6> outputShape;
@@ -717,12 +711,7 @@ LogicalResult XFEDepthToSpaceOpShapeInference(
   if (inputShape.size() != 4)
     return op->emitError("DepthToSpaceChannelLast requires 4D input tensor");
 
-  // Get blocksize attribute
-  auto blocksizeAttr = d2sOp.getBlocksize();
-  if (!blocksizeAttr.has_value())
-    return op->emitError("blocksize attribute is required");
-
-  int64_t blocksize = blocksizeAttr.value();
+  int64_t blocksize = d2sOp.getBlocksize();
   if (blocksize <= 0)
     return op->emitError("blocksize must be positive");
 
@@ -770,12 +759,7 @@ LogicalResult XFESpaceToDepthOpShapeInference(
   if (inputShape.size() != 4)
     return op->emitError("SpaceToDepthChannelLast requires 4D input tensor");
 
-  // Get blocksize attribute
-  auto blocksizeAttr = s2dOp.getBlocksize();
-  if (!blocksizeAttr.has_value())
-    return op->emitError("blocksize attribute is required");
-
-  int64_t blocksize = blocksizeAttr.value();
+  int64_t blocksize = s2dOp.getBlocksize();
   if (blocksize <= 0)
     return op->emitError("blocksize must be positive");
 
