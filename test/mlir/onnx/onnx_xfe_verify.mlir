@@ -172,7 +172,7 @@ func.func @avgpool_kernel_extra_elements(%x: tensor<1x28x28x3xf32>) -> tensor<*x
 
 // Corner: unranked → skip all checks
 func.func @avgpool_unranked(%x: tensor<*xf32>) -> tensor<*xf32> {
-  %0 = "onnx.XFEAveragePool"(%x) {} : (tensor<*xf32>) -> tensor<*xf32>
+  %0 = "onnx.XFEAveragePool"(%x) {kernel_shape = [3, 3]} : (tensor<*xf32>) -> tensor<*xf32>
   onnx.Return %0 : tensor<*xf32>
 }
 
@@ -216,7 +216,7 @@ func.func @maxpool_rank4_dilations(%x: tensor<1x28x28x3xf32>) -> tensor<*xf32> {
 
 // Corner: unranked → skip
 func.func @maxpool_unranked(%x: tensor<*xf32>) -> tensor<*xf32> {
-  %0 = "onnx.XFEMaxPool"(%x) {} : (tensor<*xf32>) -> tensor<*xf32>
+  %0 = "onnx.XFEMaxPool"(%x) {kernel_shape = [3, 3]} : (tensor<*xf32>) -> tensor<*xf32>
   onnx.Return %0 : tensor<*xf32>
 }
 

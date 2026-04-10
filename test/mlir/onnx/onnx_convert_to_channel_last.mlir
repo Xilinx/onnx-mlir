@@ -283,7 +283,7 @@ func.func @test_groupnorm_4d_nchw(%arg0: tensor<1x64x28x28xf32>, %arg1: tensor<6
   onnx.Return %0 : tensor<1x64x28x28xf32>
 
   // CHECK: [[INPUT_NHWC:%.+]] = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x64x28x28xf32>) -> tensor<1x28x28x64xf32>
-  // CHECK: [[GN_NHWC:%.+]] = "onnx.XFEGroupNormalization"([[INPUT_NHWC]], %arg1, %arg2) {epsilon = 9.99999974E-6 : f32, num_groups = 4 : si64} : (tensor<1x28x28x64xf32>, tensor<64xf32>, tensor<64xf32>) -> tensor<1x28x28x64xf32>
+  // CHECK: [[GN_NHWC:%.+]] = "onnx.XFEGroupNormalization"([[INPUT_NHWC]], %arg1, %arg2) {epsilon = 9.99999974E-6 : f32, num_groups = 4 : si64, stash_type = 1 : si64} : (tensor<1x28x28x64xf32>, tensor<64xf32>, tensor<64xf32>) -> tensor<1x28x28x64xf32>
   // CHECK: [[OUTPUT_NCHW:%.+]] = "onnx.Transpose"([[GN_NHWC]]) {perm = [0, 3, 1, 2]} : (tensor<1x28x28x64xf32>) -> tensor<1x64x28x28xf32>
   // CHECK: onnx.Return [[OUTPUT_NCHW]] : tensor<1x64x28x28xf32>
 }
@@ -297,7 +297,7 @@ func.func @test_groupnorm_3d_ncd(%arg0: tensor<1x32x128xf32>, %arg1: tensor<32xf
   onnx.Return %0 : tensor<1x32x128xf32>
 
   // CHECK: [[INPUT_NDC:%.+]] = "onnx.Transpose"(%arg0) {perm = [0, 2, 1]} : (tensor<1x32x128xf32>) -> tensor<1x128x32xf32>
-  // CHECK: [[GN_NDC:%.+]] = "onnx.XFEGroupNormalization"([[INPUT_NDC]], %arg1, %arg2) {epsilon = 9.99999974E-6 : f32, num_groups = 8 : si64} : (tensor<1x128x32xf32>, tensor<32xf32>, tensor<32xf32>) -> tensor<1x128x32xf32>
+  // CHECK: [[GN_NDC:%.+]] = "onnx.XFEGroupNormalization"([[INPUT_NDC]], %arg1, %arg2) {epsilon = 9.99999974E-6 : f32, num_groups = 8 : si64, stash_type = 1 : si64} : (tensor<1x128x32xf32>, tensor<32xf32>, tensor<32xf32>) -> tensor<1x128x32xf32>
   // CHECK: [[OUTPUT_NCD:%.+]] = "onnx.Transpose"([[GN_NDC]]) {perm = [0, 2, 1]} : (tensor<1x128x32xf32>) -> tensor<1x32x128xf32>
   // CHECK: onnx.Return [[OUTPUT_NCD]] : tensor<1x32x128xf32>
 }
