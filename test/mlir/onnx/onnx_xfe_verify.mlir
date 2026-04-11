@@ -649,11 +649,11 @@ func.func @resize_downsample(%x: tensor<1x32x32x64xf32>) -> tensor<*xf32> {
 
 func.func @conv_peraxis_correct(%x: tensor<1x4x4x3x!quant.uniform<i8:f32:3, {0.1, 0.2, 0.3}>>,
                                 %w: tensor<4x3x3x3x!quant.uniform<i8:f32:0, {0.1, 0.2, 0.3, 0.4}>>,
-                                %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
+                                %b: tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
   %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1, 1], pads = [1, 1, 1, 1], dilations = [1, 1]} :
     (tensor<1x4x4x3x!quant.uniform<i8:f32:3, {0.1, 0.2, 0.3}>>,
      tensor<4x3x3x3x!quant.uniform<i8:f32:0, {0.1, 0.2, 0.3, 0.4}>>,
-     tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
+     tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
   onnx.Return %0 : tensor<*x!quant.uniform<i8:f32, 0.1>>
 }
 
@@ -665,11 +665,11 @@ func.func @conv_peraxis_correct(%x: tensor<1x4x4x3x!quant.uniform<i8:f32:3, {0.1
 
 func.func @conv_pertensor_pass(%x: tensor<1x4x4x3x!quant.uniform<i8:f32, 0.1>>,
                                %w: tensor<4x3x3x3x!quant.uniform<i8:f32, 0.2>>,
-                               %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
+                               %b: tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
   %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1, 1], pads = [0, 0, 0, 0], dilations = [1, 1]} :
     (tensor<1x4x4x3x!quant.uniform<i8:f32, 0.1>>,
      tensor<4x3x3x3x!quant.uniform<i8:f32, 0.2>>,
-     tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
+     tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
   onnx.Return %0 : tensor<*x!quant.uniform<i8:f32, 0.1>>
 }
 
@@ -681,11 +681,11 @@ func.func @conv_pertensor_pass(%x: tensor<1x4x4x3x!quant.uniform<i8:f32, 0.1>>,
 
 func.func @conv_peraxis_x_only(%x: tensor<1x4x4x3x!quant.uniform<i8:f32:3, {0.1, 0.2, 0.3}>>,
                                %w: tensor<4x3x3x3x!quant.uniform<i8:f32, 0.2>>,
-                               %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
+                               %b: tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
   %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1, 1], pads = [0, 0, 0, 0], dilations = [1, 1]} :
     (tensor<1x4x4x3x!quant.uniform<i8:f32:3, {0.1, 0.2, 0.3}>>,
      tensor<4x3x3x3x!quant.uniform<i8:f32, 0.2>>,
-     tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
+     tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
   onnx.Return %0 : tensor<*x!quant.uniform<i8:f32, 0.1>>
 }
 
@@ -697,11 +697,11 @@ func.func @conv_peraxis_x_only(%x: tensor<1x4x4x3x!quant.uniform<i8:f32:3, {0.1,
 
 func.func @conv_peraxis_w_only(%x: tensor<1x4x4x3x!quant.uniform<i8:f32, 0.1>>,
                                %w: tensor<4x3x3x3x!quant.uniform<i8:f32:0, {0.1, 0.2, 0.3, 0.4}>>,
-                               %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
+                               %b: tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
   %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1, 1], pads = [0, 0, 0, 0], dilations = [1, 1]} :
     (tensor<1x4x4x3x!quant.uniform<i8:f32, 0.1>>,
      tensor<4x3x3x3x!quant.uniform<i8:f32:0, {0.1, 0.2, 0.3, 0.4}>>,
-     tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
+     tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
   onnx.Return %0 : tensor<*x!quant.uniform<i8:f32, 0.1>>
 }
 
@@ -713,12 +713,12 @@ func.func @conv_peraxis_w_only(%x: tensor<1x4x4x3x!quant.uniform<i8:f32, 0.1>>,
 
 func.func @conv_peraxis_x_wrong(%x: tensor<1x4x4x3x!quant.uniform<i8:f32:1, {0.1, 0.2, 0.3, 0.4}>>,
                                 %w: tensor<4x3x3x3x!quant.uniform<i8:f32, 0.2>>,
-                                %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
+                                %b: tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
   // expected-error @+1 {{input X per-axis quantization axis is 1, but channel-last layout requires axis 3}}
   %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1, 1], pads = [0, 0, 0, 0], dilations = [1, 1]} :
     (tensor<1x4x4x3x!quant.uniform<i8:f32:1, {0.1, 0.2, 0.3, 0.4}>>,
      tensor<4x3x3x3x!quant.uniform<i8:f32, 0.2>>,
-     tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
+     tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
   onnx.Return %0 : tensor<*x!quant.uniform<i8:f32, 0.1>>
 }
 
@@ -730,12 +730,12 @@ func.func @conv_peraxis_x_wrong(%x: tensor<1x4x4x3x!quant.uniform<i8:f32:1, {0.1
 
 func.func @conv_peraxis_w_wrong(%x: tensor<1x4x4x3x!quant.uniform<i8:f32, 0.1>>,
                                 %w: tensor<4x3x3x3x!quant.uniform<i8:f32:1, {0.1, 0.2, 0.3}>>,
-                                %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
+                                %b: tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
   // expected-error @+1 {{weight W per-axis quantization axis is 1, but channel-last layout requires axis 0}}
   %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1, 1], pads = [0, 0, 0, 0], dilations = [1, 1]} :
     (tensor<1x4x4x3x!quant.uniform<i8:f32, 0.1>>,
      tensor<4x3x3x3x!quant.uniform<i8:f32:1, {0.1, 0.2, 0.3}>>,
-     tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
+     tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
   onnx.Return %0 : tensor<*x!quant.uniform<i8:f32, 0.1>>
 }
 
@@ -747,11 +747,11 @@ func.func @conv_peraxis_w_wrong(%x: tensor<1x4x4x3x!quant.uniform<i8:f32, 0.1>>,
 
 func.func @convtranspose_peraxis_correct(%x: tensor<1x4x4x3x!quant.uniform<i8:f32:3, {0.1, 0.2, 0.3}>>,
                                          %w: tensor<4x3x3x3x!quant.uniform<i8:f32:0, {0.1, 0.2, 0.3, 0.4}>>,
-                                         %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
+                                         %b: tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
   %0 = "onnx.XFEConvTranspose"(%x, %w, %b) {strides = [2, 2], pads = [1, 1, 1, 1]} :
     (tensor<1x4x4x3x!quant.uniform<i8:f32:3, {0.1, 0.2, 0.3}>>,
      tensor<4x3x3x3x!quant.uniform<i8:f32:0, {0.1, 0.2, 0.3, 0.4}>>,
-     tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
+     tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
   onnx.Return %0 : tensor<*x!quant.uniform<i8:f32, 0.1>>
 }
 
@@ -763,12 +763,12 @@ func.func @convtranspose_peraxis_correct(%x: tensor<1x4x4x3x!quant.uniform<i8:f3
 
 func.func @convtranspose_peraxis_x_wrong(%x: tensor<1x4x4x3x!quant.uniform<i8:f32:0, {0.1}>>,
                                          %w: tensor<4x3x3x3x!quant.uniform<i8:f32, 0.2>>,
-                                         %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
+                                         %b: tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
   // expected-error @+1 {{input X per-axis quantization axis is 0, but channel-last layout requires axis 3}}
   %0 = "onnx.XFEConvTranspose"(%x, %w, %b) {strides = [2, 2], pads = [1, 1, 1, 1]} :
     (tensor<1x4x4x3x!quant.uniform<i8:f32:0, {0.1}>>,
      tensor<4x3x3x3x!quant.uniform<i8:f32, 0.2>>,
-     tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
+     tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
   onnx.Return %0 : tensor<*x!quant.uniform<i8:f32, 0.1>>
 }
 
@@ -780,12 +780,12 @@ func.func @convtranspose_peraxis_x_wrong(%x: tensor<1x4x4x3x!quant.uniform<i8:f3
 
 func.func @convtranspose_peraxis_w_wrong(%x: tensor<1x4x4x3x!quant.uniform<i8:f32, 0.1>>,
                                          %w: tensor<4x3x3x3x!quant.uniform<i8:f32:2, {0.1, 0.2, 0.3}>>,
-                                         %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
+                                         %b: tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
   // expected-error @+1 {{weight W per-axis quantization axis is 2, but channel-last layout requires axis 0}}
   %0 = "onnx.XFEConvTranspose"(%x, %w, %b) {strides = [2, 2], pads = [1, 1, 1, 1]} :
     (tensor<1x4x4x3x!quant.uniform<i8:f32, 0.1>>,
      tensor<4x3x3x3x!quant.uniform<i8:f32:2, {0.1, 0.2, 0.3}>>,
-     tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
+     tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
   onnx.Return %0 : tensor<*x!quant.uniform<i8:f32, 0.1>>
 }
 
@@ -1061,11 +1061,11 @@ func.func @matmul_peraxis_b_wrong(%a: tensor<4x8xf32>,
 
 func.func @conv3d_peraxis_correct(%x: tensor<1x4x4x4x3x!quant.uniform<i8:f32:4, {0.1, 0.2, 0.3}>>,
                                   %w: tensor<4x3x3x3x3x!quant.uniform<i8:f32:0, {0.1, 0.2, 0.3, 0.4}>>,
-                                  %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
+                                  %b: tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
   %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1, 1, 1], pads = [0, 0, 0, 0, 0, 0], dilations = [1, 1, 1]} :
     (tensor<1x4x4x4x3x!quant.uniform<i8:f32:4, {0.1, 0.2, 0.3}>>,
      tensor<4x3x3x3x3x!quant.uniform<i8:f32:0, {0.1, 0.2, 0.3, 0.4}>>,
-     tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
+     tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
   onnx.Return %0 : tensor<*x!quant.uniform<i8:f32, 0.1>>
 }
 
@@ -1077,11 +1077,11 @@ func.func @conv3d_peraxis_correct(%x: tensor<1x4x4x4x3x!quant.uniform<i8:f32:4, 
 
 func.func @conv_unranked_bypass(%x: tensor<*x!quant.uniform<i8:f32:1, {0.1, 0.2}>>,
                                 %w: tensor<4x3x3x3x!quant.uniform<i8:f32, 0.2>>,
-                                %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
+                                %b: tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
   %0 = "onnx.XFEConv"(%x, %w, %b) {} :
     (tensor<*x!quant.uniform<i8:f32:1, {0.1, 0.2}>>,
      tensor<4x3x3x3x!quant.uniform<i8:f32, 0.2>>,
-     tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
+     tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
   onnx.Return %0 : tensor<*x!quant.uniform<i8:f32, 0.1>>
 }
 
@@ -1105,10 +1105,10 @@ func.func @global_avgpool_pertensor(%x: tensor<1x4x4x3x!quant.uniform<i8:f32, 0.
 
 func.func @conv_u8_peraxis_correct(%x: tensor<1x4x4x3x!quant.uniform<u8:f32:3, {0.1:128, 0.2:128, 0.3:128}>>,
                                    %w: tensor<4x3x3x3x!quant.uniform<i8:f32:0, {0.1, 0.2, 0.3, 0.4}>>,
-                                   %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
+                                   %b: tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
   %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1, 1], pads = [0, 0, 0, 0], dilations = [1, 1]} :
     (tensor<1x4x4x3x!quant.uniform<u8:f32:3, {0.1:128, 0.2:128, 0.3:128}>>,
      tensor<4x3x3x3x!quant.uniform<i8:f32:0, {0.1, 0.2, 0.3, 0.4}>>,
-     tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
+     tensor<4xf32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>
   onnx.Return %0 : tensor<*x!quant.uniform<i8:f32, 0.1>>
 }
