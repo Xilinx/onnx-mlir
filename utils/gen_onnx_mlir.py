@@ -1976,7 +1976,9 @@ def main(args):  # type: (Type[Args]) -> None
                 else:
                     filename = f"{domain_abbrev}Ops.td"
                     filepath = os.path.join(curr_dir, filename)
-                    custom_domain_files[domain] = io.open(filepath, "w", newline="", encoding="utf-8")
+                    custom_domain_files[domain] = io.open(
+                        filepath, "w", newline="", encoding="utf-8"
+                    )
                     print(f"Generating custom ops for domain '{domain}' in {filename}")
 
                 # Write header for custom domain file
@@ -2473,7 +2475,9 @@ if __name__ == "__main__":
             op_def_file_path = os.path.join(curr_dir, "ONNXOps.td.inc")
             op_def = io.open(op_def_file_path, "w", newline="", encoding="utf-8")
             op_importer_file_path = os.path.join(curr_dir, "OpBuildTable.inc")
-            op_importer = io.open(op_importer_file_path, "w", newline="", encoding="utf-8")
+            op_importer = io.open(
+                op_importer_file_path, "w", newline="", encoding="utf-8"
+            )
 
     main(Args)
 
