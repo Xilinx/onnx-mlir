@@ -11,9 +11,13 @@
 // Also promotes all-float Where ops to quantized if downstream consumers
 // produce quant.uniform types.
 //
-// The Cast(int→i1) condition conversion to REQUANTIZE is handled later in
-// xcompiler-mlir's ONNXToXIRDialectPass, where Cast + Where are converted
-// together into xir.QLinearEltwiseOp(REQUANTIZE) + xir.QLinearWhereOp.
+// Handles Cast(int→i1) conditions by replacing the Cast with
+// XCOMPILERFusedEltwise(REQUANTIZE), converting the i1 condition to a
+// quantized condition. This mirrors xcompiler's transfer_where2 pattern.
+//
+// Handles Greater(int,int→i1) conditions by replacing with
+// XCOMPILERFusedEltwise(GREATER), converting the i1 condition to a
+// quantized condition. This mirrors xcompiler's transfer_greater pattern.
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Quant/IR/Quant.h"
@@ -198,6 +202,149 @@ struct ReplaceQDQWherePattern : public OpRewritePattern<ONNXWhereOp> {
   }
 };
 
+// Replace Cast(int→i1) feeding Where condition with
+// XCOMPILERFusedEltwise(REQUANTIZE). This mirrors xcompiler's transfer_where2
+// pattern where the boolean Cast is replaced by qlinear-eltwise REQUANTIZE,
+// converting the i1 condition to a quantized/integer condition that can be
+// directly consumed by downstream QLinearWhereOp conversion.
+//
+// Before: Cast(quant_or_int → i1) → Where(cond=i1, x=quant, y=quant) → quant
+// After:  FusedEltwise(REQUANTIZE, quant_or_int) → Where(cond=storage, x=quant, y=quant) → quant
+struct ReplaceCastCondWithRequantize : public OpRewritePattern<ONNXWhereOp> {
+  using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXWhereOp op, PatternRewriter &rewriter) const override {
+    auto resultType = mlir::dyn_cast<RankedTensorType>(op.getType());
+    if (!resultType)
+      return failure();
+
+    auto resultQType = getUniformQuantType(resultType);
+    if (!resultQType)
+      return failure();
+
+    Value condition = op.getCondition();
+    auto condRTT = mlir::dyn_cast<RankedTensorType>(condition.getType());
+    if (!condRTT || !condRTT.getElementType().isSignlessInteger(1))
+      return failure();
+
+    auto castOp = condition.getDefiningOp<ONNXCastOp>();
+    if (!castOp)
+      return failure();
+
+    Value castInput = castOp.getInput();
+    auto castInputRTT = mlir::dyn_cast<RankedTensorType>(castInput.getType());
+    if (!castInputRTT)
+      return failure();
+
+    auto loc = op.getLoc();
+
+    // REQUANTIZE output uses identity quant params (scale=1, zp=0) with the
+    // same storage type as the Where result. This matches xcompiler's
+    // transfer_where2 which sets a_scale=1, a_zp=0, y_scale=1, y_zp=0.
+    auto identityQType = mlir::quant::UniformQuantizedType::get(
+        resultQType.getFlags(), resultQType.getStorageType(),
+        rewriter.getF32Type(), 1.0, 0,
+        resultQType.getStorageTypeMin(), resultQType.getStorageTypeMax());
+    auto requantOutputType =
+        RankedTensorType::get(castInputRTT.getShape(), identityQType);
+
+    Value noneB = rewriter.create<ONNXNoneOp>(loc).getResult();
+    auto requantize = rewriter.create<XCOMPILERFusedEltwiseOp>(loc,
+        requantOutputType, castInput, noneB,
+        /*clip_max=*/IntegerAttr(),
+        /*clip_min=*/IntegerAttr(),
+        /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),
+        /*leakyrelu_alpha=*/FloatAttr(),
+        /*mul_y=*/FloatAttr(),
+        /*nonlinear=*/rewriter.getStringAttr("NONE"),
+        /*nonlinear_in_scales=*/FloatAttr(),
+        /*nonlinear_in_zeropoints=*/IntegerAttr(),
+        /*prelu_in=*/IntegerAttr(),
+        /*prelu_shift=*/IntegerAttr(),
+        /*type=*/rewriter.getStringAttr("REQUANTIZE"));
+
+    auto newWhere = rewriter.create<ONNXWhereOp>(
+        loc, resultType, requantize.getResult(), op.getX(), op.getY());
+    onnx_mlir::ResultNamesUpdater().notifyOperationReplaced(
+        op, newWhere->getResults());
+    rewriter.replaceOp(op, newWhere);
+    return success();
+  }
+};
+
+// Replace Greater(int/quant, int/quant → i1) feeding Where condition with
+// XCOMPILERFusedEltwise(GREATER). This mirrors xcompiler's transfer_greater
+// pattern where the boolean Greater is replaced by qlinear-eltwise GREATER,
+// converting the i1 condition to a quantized condition that can be directly
+// consumed by downstream QLinearWhereOp conversion.
+//
+// Before: Greater(a, b) → i1 → Where(cond=i1, x=quant, y=quant) → quant
+// After:  FusedEltwise(GREATER, a, b) → quant → Where(cond=quant, x=quant, y=quant) → quant
+struct ReplaceGreaterCondWithEltwise : public OpRewritePattern<ONNXWhereOp> {
+  using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXWhereOp op, PatternRewriter &rewriter) const override {
+    auto resultType = mlir::dyn_cast<RankedTensorType>(op.getType());
+    if (!resultType)
+      return failure();
+
+    auto resultQType = getUniformQuantType(resultType);
+    if (!resultQType)
+      return failure();
+
+    Value condition = op.getCondition();
+    auto condRTT = mlir::dyn_cast<RankedTensorType>(condition.getType());
+    if (!condRTT || !condRTT.getElementType().isSignlessInteger(1))
+      return failure();
+
+    auto greaterOp = condition.getDefiningOp<ONNXGreaterOp>();
+    if (!greaterOp)
+      return failure();
+
+    Value lhs = greaterOp.getA();
+    Value rhs = greaterOp.getB();
+    auto lhsRTT = mlir::dyn_cast<RankedTensorType>(lhs.getType());
+    auto rhsRTT = mlir::dyn_cast<RankedTensorType>(rhs.getType());
+    if (!lhsRTT || !rhsRTT)
+      return failure();
+
+    auto loc = op.getLoc();
+
+    // GREATER output uses identity quant params (scale=1, zp=0) with the
+    // same storage type as the Where result. Downstream WhereQuantConversion
+    // handles type casting of inputs and broadcasting.
+    auto identityQType = mlir::quant::UniformQuantizedType::get(
+        resultQType.getFlags(), resultQType.getStorageType(),
+        rewriter.getF32Type(), 1.0, 0,
+        resultQType.getStorageTypeMin(), resultQType.getStorageTypeMax());
+    auto greaterOutputType =
+        RankedTensorType::get(condRTT.getShape(), identityQType);
+
+    auto fusedGreater = rewriter.create<XCOMPILERFusedEltwiseOp>(loc,
+        greaterOutputType, lhs, rhs,
+        /*clip_max=*/IntegerAttr(),
+        /*clip_min=*/IntegerAttr(),
+        /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),
+        /*leakyrelu_alpha=*/FloatAttr(),
+        /*mul_y=*/FloatAttr(),
+        /*nonlinear=*/rewriter.getStringAttr("NONE"),
+        /*nonlinear_in_scales=*/FloatAttr(),
+        /*nonlinear_in_zeropoints=*/IntegerAttr(),
+        /*prelu_in=*/IntegerAttr(),
+        /*prelu_shift=*/IntegerAttr(),
+        /*type=*/rewriter.getStringAttr("GREATER"));
+
+    auto newWhere = rewriter.create<ONNXWhereOp>(
+        loc, resultType, fusedGreater.getResult(), op.getX(), op.getY());
+    onnx_mlir::ResultNamesUpdater().notifyOperationReplaced(
+        op, newWhere->getResults());
+    rewriter.replaceOp(op, newWhere);
+    return success();
+  }
+};
+
 } // end anonymous namespace
 
 namespace onnx_mlir {
@@ -217,6 +364,8 @@ struct ReplaceQDQWherePass
     MLIRContext *ctx = &getContext();
     RewritePatternSet patterns(ctx);
     patterns.add<ReplaceQDQWherePattern>(ctx);
+    patterns.add<ReplaceCastCondWithRequantize>(ctx);
+    patterns.add<ReplaceGreaterCondWithEltwise>(ctx);
 
     GreedyRewriteConfig config;
     config.useTopDownTraversal = true;

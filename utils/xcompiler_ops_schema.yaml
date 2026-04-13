@@ -63,6 +63,7 @@
   - type_param: T
     description: Constrain input and output types to all numeric tensor types.
     allowed_types:
+    - tensor(bool)
     - tensor(uint8)
     - tensor(uint16)
     - tensor(int8)
@@ -78,6 +79,7 @@
   - type_param: T_or_None
     description: Constrain to all types in T plus NoneType.
     allowed_types:
+    - tensor(bool)
     - tensor(uint8)
     - tensor(uint16)
     - tensor(int8)
