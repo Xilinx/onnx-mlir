@@ -56,8 +56,8 @@ static bool isQuantizedType(Type type) {
 // When an onnx.Where has a float result but its downstream consumers produce
 // a quant.uniform type, retrieve that type so we can quantize the Where.
 // All quant-typed users must agree on the same quant type.
-static mlir::quant::UniformQuantizedType
-getDownstreamQuantType(ONNXWhereOp op) {
+static mlir::quant::UniformQuantizedType getDownstreamQuantType(
+    ONNXWhereOp op) {
   mlir::quant::UniformQuantizedType found = nullptr;
   for (Operation *user : op.getResult().getUsers()) {
     for (auto resultType : user->getResultTypes()) {
@@ -72,9 +72,10 @@ getDownstreamQuantType(ONNXWhereOp op) {
   return found;
 }
 
-// Quantize a float value: q = clamp(round(f / scale) + zp, storageMin, storageMax)
-static int64_t quantizeFloat(
-    float val, double scale, int64_t zp, int64_t storageMin, int64_t storageMax) {
+// Quantize a float value: q = clamp(round(f / scale) + zp, storageMin,
+// storageMax)
+static int64_t quantizeFloat(float val, double scale, int64_t zp,
+    int64_t storageMin, int64_t storageMax) {
   int64_t q = static_cast<int64_t>(std::llround(val / scale)) + zp;
   return std::clamp(q, storageMin, storageMax);
 }
@@ -96,29 +97,29 @@ static DenseElementsAttr quantizeDenseAttr(DenseElementsAttr floatAttr,
   for (APFloat fVal : floatAttr.getValues<APFloat>()) {
     float f = fVal.convertToFloat();
     int64_t q = quantizeFloat(f, scale, zp, storageMin, storageMax);
-    quantizedValues.push_back(APInt(bitWidth, q, /*isSigned=*/qtype.isSigned()));
+    quantizedValues.push_back(
+        APInt(bitWidth, q, /*isSigned=*/qtype.isSigned()));
   }
 
   return DenseElementsAttr::get(resultTensorType, quantizedValues);
 }
 
 // Quantize a float constant operand: create a new constant with quantized
-// integer values and wrap it with quant.scast to produce the quant.uniform type.
+// integer values and wrap it with quant.scast to produce the quant.uniform
+// type.
 static Value quantizeConstantOperand(PatternRewriter &rewriter, Location loc,
     ONNXConstantOp constOp, mlir::quant::UniformQuantizedType qtype,
     RankedTensorType targetQuantTensorType) {
-  auto floatAttr =
-      mlir::dyn_cast<DenseElementsAttr>(constOp.getValueAttr());
+  auto floatAttr = mlir::dyn_cast<DenseElementsAttr>(constOp.getValueAttr());
   if (!floatAttr)
     return nullptr;
 
   auto shape = targetQuantTensorType.getShape();
   auto quantizedAttr = quantizeDenseAttr(floatAttr, qtype, shape);
 
-  auto newConst =
-      rewriter.create<ONNXConstantOp>(loc,
-          /*sparse_value=*/Attribute(),
-          /*value=*/quantizedAttr);
+  auto newConst = rewriter.create<ONNXConstantOp>(loc,
+      /*sparse_value=*/Attribute(),
+      /*value=*/quantizedAttr);
 
   auto scast = rewriter.create<quant::StorageCastOp>(
       loc, targetQuantTensorType, newConst);
@@ -186,9 +187,10 @@ struct ReplaceQDQWherePattern : public OpRewritePattern<ONNXWhereOp> {
       changed = true;
     }
 
-    auto newResultType = promoteToQuant
-        ? RankedTensorType::get(resultType.getShape(), resultQType)
-        : resultType;
+    auto newResultType =
+        promoteToQuant
+            ? RankedTensorType::get(resultType.getShape(), resultQType)
+            : resultType;
 
     if (!changed)
       return failure();
@@ -209,7 +211,8 @@ struct ReplaceQDQWherePattern : public OpRewritePattern<ONNXWhereOp> {
 // directly consumed by downstream QLinearWhereOp conversion.
 //
 // Before: Cast(quant_or_int → i1) → Where(cond=i1, x=quant, y=quant) → quant
-// After:  FusedEltwise(REQUANTIZE, quant_or_int) → Where(cond=storage, x=quant, y=quant) → quant
+// After:  FusedEltwise(REQUANTIZE, quant_or_int) → Where(cond=storage, x=quant,
+// y=quant) → quant
 struct ReplaceCastCondWithRequantize : public OpRewritePattern<ONNXWhereOp> {
   using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
 
@@ -242,10 +245,10 @@ struct ReplaceCastCondWithRequantize : public OpRewritePattern<ONNXWhereOp> {
     // REQUANTIZE output uses identity quant params (scale=1, zp=0) with the
     // same storage type as the Where result. This matches xcompiler's
     // transfer_where2 which sets a_scale=1, a_zp=0, y_scale=1, y_zp=0.
-    auto identityQType = mlir::quant::UniformQuantizedType::get(
-        resultQType.getFlags(), resultQType.getStorageType(),
-        rewriter.getF32Type(), 1.0, 0,
-        resultQType.getStorageTypeMin(), resultQType.getStorageTypeMax());
+    auto identityQType =
+        mlir::quant::UniformQuantizedType::get(resultQType.getFlags(),
+            resultQType.getStorageType(), rewriter.getF32Type(), 1.0, 0,
+            resultQType.getStorageTypeMin(), resultQType.getStorageTypeMax());
     auto requantOutputType =
         RankedTensorType::get(castInputRTT.getShape(), identityQType);
 
@@ -280,7 +283,8 @@ struct ReplaceCastCondWithRequantize : public OpRewritePattern<ONNXWhereOp> {
 // consumed by downstream QLinearWhereOp conversion.
 //
 // Before: Greater(a, b) → i1 → Where(cond=i1, x=quant, y=quant) → quant
-// After:  FusedEltwise(GREATER, a, b) → quant → Where(cond=quant, x=quant, y=quant) → quant
+// After:  FusedEltwise(GREATER, a, b) → quant → Where(cond=quant, x=quant,
+// y=quant) → quant
 struct ReplaceGreaterCondWithEltwise : public OpRewritePattern<ONNXWhereOp> {
   using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
 
@@ -315,10 +319,10 @@ struct ReplaceGreaterCondWithEltwise : public OpRewritePattern<ONNXWhereOp> {
     // GREATER output uses identity quant params (scale=1, zp=0) with the
     // same storage type as the Where result. Downstream WhereQuantConversion
     // handles type casting of inputs and broadcasting.
-    auto identityQType = mlir::quant::UniformQuantizedType::get(
-        resultQType.getFlags(), resultQType.getStorageType(),
-        rewriter.getF32Type(), 1.0, 0,
-        resultQType.getStorageTypeMin(), resultQType.getStorageTypeMax());
+    auto identityQType =
+        mlir::quant::UniformQuantizedType::get(resultQType.getFlags(),
+            resultQType.getStorageType(), rewriter.getF32Type(), 1.0, 0,
+            resultQType.getStorageTypeMin(), resultQType.getStorageTypeMax());
     auto greaterOutputType =
         RankedTensorType::get(condRTT.getShape(), identityQType);
 
@@ -374,8 +378,8 @@ struct ReplaceQDQWherePass
     ResultNamesUpdater rnUpdater;
     config.listener = &rnUpdater;
 
-    if (failed(applyPatternsGreedily(
-            getOperation(), std::move(patterns), config)))
+    if (failed(
+            applyPatternsGreedily(getOperation(), std::move(patterns), config)))
       signalPassFailure();
   }
 };

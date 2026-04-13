@@ -5,12 +5,13 @@
 //********************************************************
 
 // DO NOT EDIT - Auto-generated forwarding stubs
-// This file forwards to manual implementations in shape inference, verify, and fold files
-// Copy this file to src/Dialect/ONNX/ONNXOps/Additional/XCOMPILER.cpp
+// This file forwards to manual implementations in shape inference, verify, and
+// fold files Copy this file to
+// src/Dialect/ONNX/ONNXOps/Additional/XCOMPILER.cpp
 
-#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "XCOMPILERShapeInference.hpp"
 #include "XCOMPILERVerify.hpp"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 
 using namespace mlir;
 using namespace onnx_mlir;
@@ -21,17 +22,20 @@ using namespace onnx_mlir;
 
 LogicalResult XCOMPILERFusedEltwiseOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
-  return XCOMPILERFusedEltwiseOpShapeInference(this->getOperation(), doShapeInference);
+  return XCOMPILERFusedEltwiseOpShapeInference(
+      this->getOperation(), doShapeInference);
 }
 
 LogicalResult XCOMPILERDepthwiseConvOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
-  return XCOMPILERDepthwiseConvOpShapeInference(this->getOperation(), doShapeInference);
+  return XCOMPILERDepthwiseConvOpShapeInference(
+      this->getOperation(), doShapeInference);
 }
 
 LogicalResult XCOMPILERRequantizeOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
-  return XCOMPILERRequantizeOpShapeInference(this->getOperation(), doShapeInference);
+  return XCOMPILERRequantizeOpShapeInference(
+      this->getOperation(), doShapeInference);
 }
 
 // ============================================================
@@ -49,4 +53,3 @@ LogicalResult XCOMPILERDepthwiseConvOp::verify() {
 LogicalResult XCOMPILERRequantizeOp::verify() {
   return XCOMPILERRequantizeOpVerify(this->getOperation());
 }
-

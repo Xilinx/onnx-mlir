@@ -791,10 +791,9 @@ struct ReplaceExpandWithEltwise : public OpRewritePattern<ONNXExpandOp> {
       return rewriter.notifyMatchFailure(expandOp, "not ranked tensors");
 
     auto inputShape = inputRankedType.getShape();
-    if (inputShape.size() == 4 &&
-        (inputShape[1] != 1 || inputShape[2] != 1))
-      return rewriter.notifyMatchFailure(expandOp,
-          "4D input requires dim[1] == 1 and dim[2] == 1");
+    if (inputShape.size() == 4 && (inputShape[1] != 1 || inputShape[2] != 1))
+      return rewriter.notifyMatchFailure(
+          expandOp, "4D input requires dim[1] == 1 and dim[2] == 1");
 
     LLVM_DEBUG(llvm::dbgs() << "Replacing quantized Expand with eltwise ADD: "
                             << expandOp->getName() << "\n");

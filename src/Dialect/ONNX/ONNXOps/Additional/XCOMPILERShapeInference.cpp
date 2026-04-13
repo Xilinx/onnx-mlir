@@ -74,36 +74,36 @@ LogicalResult XCOMPILERFusedEltwiseOpShapeInference(
 LogicalResult XCOMPILERDepthwiseConvOpShapeInference(
     Operation *op, std::function<void(Region &)> doShapeInference) {
   // TODO: Implement shape inference for DepthwiseConv
-  // 
+  //
   // Cast to specific op type to access operation-specific methods:
   // auto customOp = dyn_cast<XCOMPILERDepthwiseConvOp>(op);
   // if (!customOp) return failure();
-  // 
+  //
   // Get operand types and shapes:
   // auto operandType = customOp.getOperand(0).getType().dyn_cast<ShapedType>();
-  // 
+  //
   // Compute output shape based on operation semantics
   // Set result type:
   // customOp.getResult().setType(...);
-  
+
   return success();
 }
 
 LogicalResult XCOMPILERRequantizeOpShapeInference(
     Operation *op, std::function<void(Region &)> doShapeInference) {
   // TODO: Implement shape inference for Requantize
-  // 
+  //
   // Cast to specific op type to access operation-specific methods:
   // auto customOp = dyn_cast<XCOMPILERRequantizeOp>(op);
   // if (!customOp) return failure();
-  // 
+  //
   // Get operand types and shapes:
   // auto operandType = customOp.getOperand(0).getType().dyn_cast<ShapedType>();
-  // 
+  //
   // Compute output shape based on operation semantics
   // Set result type:
   // customOp.getResult().setType(...);
-  
+
   return success();
 }
 
