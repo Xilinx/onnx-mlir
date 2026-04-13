@@ -165,6 +165,10 @@ std::unique_ptr<mlir::Pass> createReplaceErfToGeluPass();
 /// QLINEARSIGMOID.
 std::unique_ptr<mlir::Pass> createReplaceQDQSigmoidPass();
 
+/// Pass for quantizing float constant operands in onnx.Where ops
+/// (post-QuantTypesPass) to ensure consistent quant.uniform types.
+std::unique_ptr<mlir::Pass> createReplaceQDQWherePass();
+
 /// Pass for transferring ReduceMean/Sum operations to Conv operations.
 std::unique_ptr<mlir::Pass> createTransferReduceMeanSumToConvPass();
 
