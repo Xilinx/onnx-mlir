@@ -14,10 +14,15 @@
 // Handles Cast(int→i1) conditions by replacing the Cast with
 // XCOMPILERFusedEltwise(REQUANTIZE), preserving the original type conversion
 // (e.g. i32 → i1) and attaching identity scale/zp attributes (1.0/0).
+//
+// Handles Greater(int,int→i1) conditions by replacing with
+// XCOMPILERFusedEltwise(GREATER), preserving i1 output type and attaching
+// identity scale/zp attributes.
+//
 // Downstream XIR conversion produces:
 //   xir.qlinear_eltwise {a_scale=[1.0], a_zero_point=[0],
 //     b_scale=[1.0], b_zero_point=[0], y_scale=[1.0], y_zero_point=[0],
-//     op_type="REQUANTIZE"} : (tensor<...xi32>) -> tensor<...xi1>
+//     op_type="REQUANTIZE"|"GREATER"} : (...) -> tensor<...xi1>
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Quant/IR/Quant.h"
@@ -281,6 +286,84 @@ struct ReplaceCastCondWithRequantize : public OpRewritePattern<ONNXWhereOp> {
   }
 };
 
+// Replace Greater(int,int→i1) feeding Where condition with
+// XCOMPILERFusedEltwise(GREATER). Preserves the original i1 output type
+// and adds identity scale/zp attributes so the downstream XIR conversion
+// produces:
+//   xir.qlinear_eltwise {a_scale=[1.0], a_zero_point=[0],
+//     b_scale=[1.0], b_zero_point=[0], y_scale=[1.0], y_zero_point=[0],
+//     op_type="GREATER"} : (tensor<...xi64>, tensor<...xi64>) -> tensor<...xi1>
+struct ReplaceGreaterCondWithEltwise : public OpRewritePattern<ONNXWhereOp> {
+  using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXWhereOp op, PatternRewriter &rewriter) const override {
+    auto resultType = mlir::dyn_cast<RankedTensorType>(op.getType());
+    if (!resultType)
+      return failure();
+
+    auto resultQType = getUniformQuantType(resultType);
+    if (!resultQType)
+      return failure();
+
+    Value condition = op.getCondition();
+    auto condRTT = mlir::dyn_cast<RankedTensorType>(condition.getType());
+    if (!condRTT || !condRTT.getElementType().isSignlessInteger(1))
+      return failure();
+
+    auto greaterOp = condition.getDefiningOp<ONNXGreaterOp>();
+    if (!greaterOp)
+      return failure();
+
+    Value lhs = greaterOp.getA();
+    Value rhs = greaterOp.getB();
+    auto lhsRTT = mlir::dyn_cast<RankedTensorType>(lhs.getType());
+    auto rhsRTT = mlir::dyn_cast<RankedTensorType>(rhs.getType());
+    if (!lhsRTT || !rhsRTT)
+      return failure();
+
+    auto loc = op.getLoc();
+
+    // Keep the Greater's output type (i1) as the GREATER output type.
+    auto greaterOutputType = condRTT;
+
+    auto fusedGreater = rewriter.create<XCOMPILERFusedEltwiseOp>(loc,
+        greaterOutputType, lhs, rhs,
+        /*clip_max=*/IntegerAttr(),
+        /*clip_min=*/IntegerAttr(),
+        /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),
+        /*leakyrelu_alpha=*/FloatAttr(),
+        /*mul_y=*/FloatAttr(),
+        /*nonlinear=*/rewriter.getStringAttr("NONE"),
+        /*nonlinear_in_scales=*/FloatAttr(),
+        /*nonlinear_in_zeropoints=*/IntegerAttr(),
+        /*prelu_in=*/IntegerAttr(),
+        /*prelu_shift=*/IntegerAttr(),
+        /*type=*/rewriter.getStringAttr("GREATER"));
+
+    // Identity scale/zp — carried through to XIR conversion.
+    fusedGreater->setAttr(
+        "a_scale", rewriter.getF32ArrayAttr({1.0f}));
+    fusedGreater->setAttr(
+        "a_zero_point", rewriter.getI64ArrayAttr({0}));
+    fusedGreater->setAttr(
+        "b_scale", rewriter.getF32ArrayAttr({1.0f}));
+    fusedGreater->setAttr(
+        "b_zero_point", rewriter.getI64ArrayAttr({0}));
+    fusedGreater->setAttr(
+        "y_scale", rewriter.getF32ArrayAttr({1.0f}));
+    fusedGreater->setAttr(
+        "y_zero_point", rewriter.getI64ArrayAttr({0}));
+
+    auto newWhere = rewriter.create<ONNXWhereOp>(
+        loc, resultType, fusedGreater.getResult(), op.getX(), op.getY());
+    onnx_mlir::ResultNamesUpdater().notifyOperationReplaced(
+        op, newWhere->getResults());
+    rewriter.replaceOp(op, newWhere);
+    return success();
+  }
+};
+
 } // end anonymous namespace
 
 namespace onnx_mlir {
@@ -301,6 +384,7 @@ struct ReplaceQDQWherePass
     RewritePatternSet patterns(ctx);
     patterns.add<ReplaceQDQWherePattern>(ctx);
     patterns.add<ReplaceCastCondWithRequantize>(ctx);
+    patterns.add<ReplaceGreaterCondWithEltwise>(ctx);
 
     GreedyRewriteConfig config;
     config.useTopDownTraversal = true;
