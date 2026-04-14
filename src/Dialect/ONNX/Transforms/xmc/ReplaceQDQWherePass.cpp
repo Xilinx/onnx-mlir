@@ -264,18 +264,12 @@ struct ReplaceCastCondWithRequantize : public OpRewritePattern<ONNXWhereOp> {
         /*type=*/rewriter.getStringAttr("REQUANTIZE"));
 
     // Identity scale/zp for the REQUANTIZE — carried through to XIR conversion.
-    requantize->setAttr(
-        "a_scale", rewriter.getF32ArrayAttr({1.0f}));
-    requantize->setAttr(
-        "a_zero_point", rewriter.getI64ArrayAttr({0}));
-    requantize->setAttr(
-        "b_scale", rewriter.getF32ArrayAttr({1.0f}));
-    requantize->setAttr(
-        "b_zero_point", rewriter.getI64ArrayAttr({0}));
-    requantize->setAttr(
-        "y_scale", rewriter.getF32ArrayAttr({1.0f}));
-    requantize->setAttr(
-        "y_zero_point", rewriter.getI64ArrayAttr({0}));
+    requantize->setAttr("a_scale", rewriter.getF32ArrayAttr({1.0f}));
+    requantize->setAttr("a_zero_point", rewriter.getI64ArrayAttr({0}));
+    requantize->setAttr("b_scale", rewriter.getF32ArrayAttr({1.0f}));
+    requantize->setAttr("b_zero_point", rewriter.getI64ArrayAttr({0}));
+    requantize->setAttr("y_scale", rewriter.getF32ArrayAttr({1.0f}));
+    requantize->setAttr("y_zero_point", rewriter.getI64ArrayAttr({0}));
 
     auto newWhere = rewriter.create<ONNXWhereOp>(
         loc, resultType, requantize.getResult(), op.getX(), op.getY());
@@ -342,18 +336,12 @@ struct ReplaceGreaterCondWithEltwise : public OpRewritePattern<ONNXWhereOp> {
         /*type=*/rewriter.getStringAttr("GREATER"));
 
     // Identity scale/zp — carried through to XIR conversion.
-    fusedGreater->setAttr(
-        "a_scale", rewriter.getF32ArrayAttr({1.0f}));
-    fusedGreater->setAttr(
-        "a_zero_point", rewriter.getI64ArrayAttr({0}));
-    fusedGreater->setAttr(
-        "b_scale", rewriter.getF32ArrayAttr({1.0f}));
-    fusedGreater->setAttr(
-        "b_zero_point", rewriter.getI64ArrayAttr({0}));
-    fusedGreater->setAttr(
-        "y_scale", rewriter.getF32ArrayAttr({1.0f}));
-    fusedGreater->setAttr(
-        "y_zero_point", rewriter.getI64ArrayAttr({0}));
+    fusedGreater->setAttr("a_scale", rewriter.getF32ArrayAttr({1.0f}));
+    fusedGreater->setAttr("a_zero_point", rewriter.getI64ArrayAttr({0}));
+    fusedGreater->setAttr("b_scale", rewriter.getF32ArrayAttr({1.0f}));
+    fusedGreater->setAttr("b_zero_point", rewriter.getI64ArrayAttr({0}));
+    fusedGreater->setAttr("y_scale", rewriter.getF32ArrayAttr({1.0f}));
+    fusedGreater->setAttr("y_zero_point", rewriter.getI64ArrayAttr({0}));
 
     auto newWhere = rewriter.create<ONNXWhereOp>(
         loc, resultType, fusedGreater.getResult(), op.getX(), op.getY());
