@@ -737,9 +737,10 @@ func.func @test_expand_to_eltwise_i8(
 }
 
 // -----
-// Negative: Pattern 5 should NOT fire when 4D input has W (dim 3) != 1
-// CHECK-LABEL: func.func @test_expand_no_match_w_not_one
-func.func @test_expand_no_match_w_not_one(
+// Test Pattern 5: 4D input with dim[3] != 1 but dim[2] == 1 should match
+// (only dim[2] is gated, matching xcompiler's ReplaceQDQExpandToEltwisePass)
+// CHECK-LABEL: func.func @test_expand_dim3_not_one
+func.func @test_expand_dim3_not_one(
     %arg0: tensor<1x1x1x4x!quant.uniform<u8:f32, 0.05:128>>)
     -> tensor<1x1x8x4x!quant.uniform<u8:f32, 0.05:128>> {
   %shape = "onnx.Constant"() {value = dense<[1, 1, 8, 4]> : tensor<4xi64>} : () -> tensor<4xi64>
@@ -748,14 +749,17 @@ func.func @test_expand_no_match_w_not_one(
       -> tensor<1x1x8x4x!quant.uniform<u8:f32, 0.05:128>>
   return %expand : tensor<1x1x8x4x!quant.uniform<u8:f32, 0.05:128>>
 
-  // CHECK: "onnx.Expand"
-  // CHECK-NOT: "onnx.XCOMPILERFusedEltwise"
+  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<0> : tensor<1x1x8x4xui8>}
+  // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
+  // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: type = "ADD"
+  // CHECK: return %[[FUSED]]
 }
 
 // -----
-// Negative: Pattern 5 should NOT fire when 4D input has C (dim 1) != 1
-// CHECK-LABEL: func.func @test_expand_no_match_c_not_one
-func.func @test_expand_no_match_c_not_one(
+// Test Pattern 5: 4D input with dim[1] != 1 but dim[2] == 1 should match
+// CHECK-LABEL: func.func @test_expand_dim1_not_one
+func.func @test_expand_dim1_not_one(
     %arg0: tensor<1x16x1x1x!quant.uniform<u8:f32, 0.05:128>>)
     -> tensor<1x16x32x32x!quant.uniform<u8:f32, 0.05:128>> {
   %shape = "onnx.Constant"() {value = dense<[1, 16, 32, 32]> : tensor<4xi64>} : () -> tensor<4xi64>
@@ -764,8 +768,11 @@ func.func @test_expand_no_match_c_not_one(
       -> tensor<1x16x32x32x!quant.uniform<u8:f32, 0.05:128>>
   return %expand : tensor<1x16x32x32x!quant.uniform<u8:f32, 0.05:128>>
 
-  // CHECK: "onnx.Expand"
-  // CHECK-NOT: "onnx.XCOMPILERFusedEltwise"
+  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<0> : tensor<1x16x32x32xui8>}
+  // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
+  // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: type = "ADD"
+  // CHECK: return %[[FUSED]]
 }
 
 // -----
@@ -782,6 +789,42 @@ func.func @test_expand_float_not_replaced(
 
   // CHECK: "onnx.Expand"
   // CHECK-NOT: "onnx.XCOMPILERFusedEltwise"
+}
+
+// -----
+// Negative: Pattern 5 should NOT fire when 4D input has dim[2] != 1
+// CHECK-LABEL: func.func @test_expand_no_match_dim2_not_one
+func.func @test_expand_no_match_dim2_not_one(
+    %arg0: tensor<1x1x4x1x!quant.uniform<u8:f32, 0.05:128>>)
+    -> tensor<1x1x8x1x!quant.uniform<u8:f32, 0.05:128>> {
+  %shape = "onnx.Constant"() {value = dense<[1, 1, 8, 1]> : tensor<4xi64>} : () -> tensor<4xi64>
+  %expand = "onnx.Expand"(%arg0, %shape) :
+      (tensor<1x1x4x1x!quant.uniform<u8:f32, 0.05:128>>, tensor<4xi64>)
+      -> tensor<1x1x8x1x!quant.uniform<u8:f32, 0.05:128>>
+  return %expand : tensor<1x1x8x1x!quant.uniform<u8:f32, 0.05:128>>
+
+  // CHECK: "onnx.Expand"
+  // CHECK-NOT: "onnx.XCOMPILERFusedEltwise"
+}
+
+// -----
+// Test Pattern 5: Golden model shape 1x1x1x151 -> expand to 1x6x1x151
+// Matches xcompiler ReplaceQDQExpandToEltwisePass behavior (dim[2]=1 passes)
+// CHECK-LABEL: func.func @test_expand_golden_model_shape
+func.func @test_expand_golden_model_shape(
+    %arg0: tensor<1x1x1x151x!quant.uniform<u16:f32, 0.015259:65535>>)
+    -> tensor<1x6x1x151x!quant.uniform<u16:f32, 0.015259:65535>> {
+  %shape = "onnx.Constant"() {value = dense<[1, 6, 1, 151]> : tensor<4xi64>} : () -> tensor<4xi64>
+  %expand = "onnx.Expand"(%arg0, %shape) :
+      (tensor<1x1x1x151x!quant.uniform<u16:f32, 0.015259:65535>>, tensor<4xi64>)
+      -> tensor<1x6x1x151x!quant.uniform<u16:f32, 0.015259:65535>>
+  return %expand : tensor<1x6x1x151x!quant.uniform<u16:f32, 0.015259:65535>>
+
+  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<0> : tensor<1x6x1x151xui16>}
+  // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
+  // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: type = "ADD"
+  // CHECK: return %[[FUSED]]
 }
 
 // -----
