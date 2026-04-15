@@ -66,6 +66,10 @@ std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass();
 std::unique_ptr<mlir::Pass> createQDQCanonicalizePass(
     bool removeBinary = false, bool removeQDQAroundOps = false);
 
+/// Pass for removing scalar binary ops on quant-typed tensors by absorbing
+/// them into quantization parameters (quant-types variant of remove-binary).
+std::unique_ptr<mlir::Pass> createRemoveBinaryQuantTypesPass();
+
 std::unique_ptr<mlir::Pass> createONNXCSEPass();
 
 std::unique_ptr<mlir::Pass> createQuantTypesPass();

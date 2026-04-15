@@ -275,6 +275,10 @@ void registerOMPasses(int optLevel) {
     return createQDQCanonicalizePass();
   });
 
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createRemoveBinaryQuantTypesPass();
+  });
+
 #ifdef ONNX_MLIR_ENABLE_KRNL
   mlir::registerPass(
       []() -> std::unique_ptr<mlir::Pass> { return createInstrumentPass(); });

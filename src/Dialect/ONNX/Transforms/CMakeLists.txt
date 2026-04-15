@@ -45,6 +45,7 @@ add_onnx_mlir_library(OMONNXRewrite
   QDQAroundOpOpt.cpp    
   DQBinaryQOpt.cpp  
   QDQCanonicalize.cpp
+  RemoveBinaryQuantTypes.cpp
   ConvOpt.cpp
   Decompose.cpp
   DecomposeEinsum.cpp
