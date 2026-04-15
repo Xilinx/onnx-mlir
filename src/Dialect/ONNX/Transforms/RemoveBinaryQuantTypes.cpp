@@ -55,16 +55,15 @@ static std::optional<QuantParams> getQuantParams(Type type) {
   return QuantParams{qt.getScale(), qt.getZeroPoint(), qt};
 }
 
-static RankedTensorType updateQuantType(RankedTensorType tensorType,
-                                        double newScale, int64_t newZeroPoint) {
+static RankedTensorType updateQuantType(
+    RankedTensorType tensorType, double newScale, int64_t newZeroPoint) {
   auto oldQt =
       dyn_cast<quant::UniformQuantizedType>(tensorType.getElementType());
   if (!oldQt)
     return tensorType;
-  auto newQt = quant::UniformQuantizedType::get(
-      oldQt.getFlags(), oldQt.getStorageType(), oldQt.getExpressedType(),
-      newScale, newZeroPoint, oldQt.getStorageTypeMin(),
-      oldQt.getStorageTypeMax());
+  auto newQt = quant::UniformQuantizedType::get(oldQt.getFlags(),
+      oldQt.getStorageType(), oldQt.getExpressedType(), newScale, newZeroPoint,
+      oldQt.getStorageTypeMin(), oldQt.getStorageTypeMax());
   return RankedTensorType::get(tensorType.getShape(), newQt);
 }
 
@@ -136,7 +135,7 @@ static bool isValuePreservingOp(Operation *op) {
   if (!op)
     return false;
   return isa<ONNXIdentityOp, ONNXReshapeOp, ONNXSqueezeOp, ONNXUnsqueezeOp,
-             ONNXTransposeOp>(op);
+      ONNXTransposeOp>(op);
 }
 
 static bool hasBranchOnValue(Value v) {
@@ -146,10 +145,8 @@ static bool hasBranchOnValue(Value v) {
   return uniq.size() > 1;
 }
 
-static LogicalResult checkNewParamsFit(PatternRewriter &rewriter,
-                                       Operation *op,
-                                       quant::UniformQuantizedType qt,
-                                       double newScale, int64_t newZp) {
+static LogicalResult checkNewParamsFit(PatternRewriter &rewriter, Operation *op,
+    quant::UniformQuantizedType qt, double newScale, int64_t newZp) {
   auto storageType = qt.getStorageType();
   if (auto intType = dyn_cast<IntegerType>(storageType)) {
     int64_t zpMin, zpMax;
@@ -178,8 +175,8 @@ static LogicalResult checkNewParamsFit(PatternRewriter &rewriter,
     else if (floatType.isF64())
       scaleMax = std::numeric_limits<double>::max();
     else
-      return rewriter.notifyMatchFailure(op,
-                                         "unsupported float type for scale");
+      return rewriter.notifyMatchFailure(
+          op, "unsupported float type for scale");
     if (newScale < -scaleMax || newScale > scaleMax)
       return rewriter.notifyMatchFailure(op, "new scale overflows");
   }
@@ -228,8 +225,7 @@ static std::optional<double> tryGetScalarConstant(Value val) {
 
   Operation *defOp = val.getDefiningOp();
   if (defOp && isValuePreservingOp(defOp)) {
-    if (auto constOp =
-            defOp->getOperand(0).getDefiningOp<ONNXConstantOp>())
+    if (auto constOp = defOp->getOperand(0).getDefiningOp<ONNXConstantOp>())
       return getScalarTensorValue<double>(constOp);
   }
 
@@ -244,8 +240,8 @@ template <typename BinOp>
 struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
   using OpRewritePattern<BinOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(BinOp op,
-                                PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(
+      BinOp op, PatternRewriter &rewriter) const override {
     if (!op->hasOneUse())
       return rewriter.notifyMatchFailure(op, "binary op has multiple users");
 
@@ -332,8 +328,8 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
     if (state.dstParams.scale == 0.0) {
       if constexpr (std::is_same_v<BinOp, ONNXAddOp> ||
                     std::is_same_v<BinOp, ONNXSubOp>) {
-        return rewriter.notifyMatchFailure(op,
-                                           "scale=0 would cause div-by-zero");
+        return rewriter.notifyMatchFailure(
+            op, "scale=0 would cause div-by-zero");
       }
     }
 
@@ -370,11 +366,10 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
                         : static_cast<int64_t>(std::ceil(newZpFloat));
 
     if (newScale <= 0.0)
-      return rewriter.notifyMatchFailure(op,
-                                         "new scale would be non-positive");
+      return rewriter.notifyMatchFailure(op, "new scale would be non-positive");
 
-    if (failed(checkNewParamsFit(rewriter, op, state.dstParams.quantType,
-                                 newScale, newZp)))
+    if (failed(checkNewParamsFit(
+            rewriter, op, state.dstParams.quantType, newScale, newZp)))
       return failure();
 
     auto actTensorType =
@@ -393,13 +388,11 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
 
 class RemoveBinaryQuantTypesPass
     : public PassWrapper<RemoveBinaryQuantTypesPass,
-                         OperationPass<func::FuncOp>> {
+          OperationPass<func::FuncOp>> {
 public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RemoveBinaryQuantTypesPass)
 
-  StringRef getArgument() const override {
-    return "remove-binary-quant-types";
-  }
+  StringRef getArgument() const override { return "remove-binary-quant-types"; }
 
   StringRef getDescription() const override {
     return "Remove scalar binary ops (Add/Sub/Mul/Div) by absorbing them "
