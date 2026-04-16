@@ -24,6 +24,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "src/Dialect/ONNX/ONNXOps.hpp"
+#include "src/Dialect/ONNX/Transforms/ResultNamesUpdater.hpp"
 #include "src/Pass/Passes.hpp"
 
 #include <cmath>
@@ -275,11 +276,21 @@ static Operation *findBoundaryQDQOp(Value quantVal) {
   return nullptr;
 }
 
+static bool hasBranchOnValue(Value v) {
+  llvm::SmallPtrSet<Operation *, 8> uniq;
+  for (auto *u : v.getUsers())
+    uniq.insert(u);
+  return uniq.size() > 1;
+}
+
 struct MatchState {
   Value activationValue;
   double kValue = 0.0;
   double dstScale = 0.0;
   int64_t dstZeroPoint = 0;
+  quant::UniformQuantizedType dstQuantType;
+  bool foldIntoInput =
+      false; // true = fold into DQ/input, false = fold into Q/output
 };
 
 // Extract a scalar float constant from a value. Handles plain float constants,
@@ -394,13 +405,36 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
       return rewriter.notifyMatchFailure(
           op, "activation is a block argument, cannot modify");
 
-    state.dstScale = outQP->scale;
-    state.dstZeroPoint = outQP->zeroPoint;
+    // Choose fold direction — mirrors findDestinationNode in DQBinaryQOpt.cpp.
+    // Check branching on both the activation (DQ output) and its scast input
+    // (DQ input). If either is branched, fold into input (DQ) side.
+    auto actQP = getQuantParams(state.activationValue.getType());
+    bool branchAfter = actQP && hasBranchOnValue(state.activationValue);
+    bool branchBefore = false;
+    if (auto scast =
+            state.activationValue.getDefiningOp<quant::StorageCastOp>())
+      branchBefore = hasBranchOnValue(scast.getInput());
+    if (actQP && (branchAfter || branchBefore)) {
+      state.foldIntoInput = true;
+      state.dstScale = actQP->scale;
+      state.dstZeroPoint = actQP->zeroPoint;
+      state.dstQuantType = actQP->quantType;
+    } else {
+      state.foldIntoInput = false;
+      state.dstScale = outQP->scale;
+      state.dstZeroPoint = outQP->zeroPoint;
+      state.dstQuantType = outQP->quantType;
+    }
 
-    // Avoid division by zero: Mul folds as scale/k, so k=0 is invalid.
-    // Div folds as scale*k, so k=0 gives scale=0, caught by newScale<=0 below.
+    // Safety checks — direction-dependent, identical to DQBinaryQOpt.cpp.
+    // scale/k division happens for Div+input or Mul+output.
     if (state.kValue == 0.0) {
+      bool divByK = false;
+      if constexpr (std::is_same_v<BinOp, ONNXDivOp>)
+        divByK = state.foldIntoInput;
       if constexpr (std::is_same_v<BinOp, ONNXMulOp>)
+        divByK = !state.foldIntoInput;
+      if (divByK)
         return rewriter.notifyMatchFailure(op, "k=0 would cause div-by-zero");
     }
     if (state.dstScale == 0.0) {
@@ -411,23 +445,36 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
       }
     }
 
-    // Same formulas as compute_new_scale_and_zp_values in DQBinaryQOpt.cpp
-    // (fold-into-Q / fold-into-output direction).
+    // Formulas identical to compute_new_scale_and_zp_values in
+    // DQBinaryQOpt.cpp. Direction flips the sign for Add/Sub and inverts
+    // Mul/Div.
     double newScale = state.dstScale;
     double newZpFloat = static_cast<double>(state.dstZeroPoint);
     const double kVal = state.kValue;
+    const bool dstIsInput = state.foldIntoInput;
 
     if constexpr (std::is_same_v<BinOp, ONNXAddOp>) {
-      newZpFloat += (kVal / newScale);
+      if (dstIsInput)
+        newZpFloat -= (kVal / newScale);
+      else
+        newZpFloat += (kVal / newScale);
     } else if constexpr (std::is_same_v<BinOp, ONNXSubOp>) {
-      newZpFloat -= (kVal / newScale);
+      if (dstIsInput)
+        newZpFloat += (kVal / newScale);
+      else
+        newZpFloat -= (kVal / newScale);
     } else if constexpr (std::is_same_v<BinOp, ONNXMulOp>) {
-      newScale /= kVal;
+      if (dstIsInput)
+        newScale *= kVal;
+      else
+        newScale /= kVal;
     } else if constexpr (std::is_same_v<BinOp, ONNXDivOp>) {
-      newScale *= kVal;
+      if (dstIsInput)
+        newScale /= kVal;
+      else
+        newScale *= kVal;
     }
 
-    // Same rounding as DQBinaryQOpt: floor for non-negative, ceil for negative.
     int64_t newZp = (newZpFloat >= 0.0)
                         ? static_cast<int64_t>(std::floor(newZpFloat))
                         : static_cast<int64_t>(std::ceil(newZpFloat));
@@ -435,13 +482,15 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
     if (newScale <= 0.0)
       return rewriter.notifyMatchFailure(op, "new scale would be non-positive");
 
-    if (failed(
-            checkNewParamsFit(rewriter, op, outQP->quantType, newScale, newZp)))
+    if (failed(checkNewParamsFit(
+            rewriter, op, state.dstQuantType, newScale, newZp)))
       return failure();
 
-    // Boundary case: surviving Q behind scast — update Q's constants directly.
+    // Apply the fold.
     auto *boundaryQ = findBoundaryQDQOp(state.activationValue);
-    if (boundaryQ) {
+
+    if (!state.foldIntoInput && boundaryQ) {
+      // Fold into output + surviving Q: update Q's constants directly.
       auto upstreamQ = cast<ONNXQuantizeLinearOp>(boundaryQ);
       updateInitializer(
           rewriter, boundaryQ, upstreamQ->getOperand(1), newScale);
@@ -453,7 +502,6 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
           state.activationValue.getDefiningOp<quant::StorageCastOp>();
       auto downstreamScast =
           dyn_cast<quant::StorageCastOp>(*result.getUsers().begin());
-
       if (downstreamScast) {
         rewriter.replaceOp(downstreamScast, qResult);
         rewriter.eraseOp(op);
@@ -463,7 +511,8 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
       if (upstreamScast && upstreamScast->use_empty())
         rewriter.eraseOp(upstreamScast);
     } else {
-      // Interior case: no surviving Q/DQ — update the quant type annotation.
+      // Fold into input (branching) or interior (no boundary Q):
+      // update the quant type annotation on the activation.
       auto actType = cast<RankedTensorType>(state.activationValue.getType());
       state.activationValue.setType(updateQuantType(actType, newScale, newZp));
       rewriter.replaceOp(op, state.activationValue);
@@ -502,7 +551,9 @@ public:
     patterns.add<RemoveBinaryQuantTypesPattern<ONNXDivOp>>(
         patterns.getContext());
 
-    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
+    onnx_mlir::ResultNamesUpdater rnUpdater;
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns),
+            GreedyRewriteConfig{.listener = &rnUpdater})))
       signalPassFailure();
   }
 };
