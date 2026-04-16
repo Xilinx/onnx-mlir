@@ -4,13 +4,13 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Quant-types variant of DQBinaryQOpt. After create-quant-types converts Q/DQ
-// to quant::StorageCastOp with !quant.uniform element types, scalar arithmetic
-// (Add/Sub/Mul/Div) between a quantized activation and a constant can be
-// absorbed into the scale or zero-point of the UniformQuantizedType:
+// Quant-types variant of DQBinaryQOpt (remove-binary). Absorbs scalar binary
+// ops (Add/Sub/Mul/Div) into quantization parameters after create-quant-types
+// has replaced Q/DQ with quant::StorageCastOp + !quant.uniform element types.
 //
-//   Add/Sub with scalar k  ->  zp_new = zp +/- k/scale
-//   Mul/Div with scalar k  ->  scale_new = scale * k  or  scale / k
+// Handles two IR shapes:
+//   Boundary: QuantizeLinear -> scast -> Binary(k) -> scast
+//   Interior: scast -> Binary(k) -> scast  (no surviving Q/DQ)
 //
 //===----------------------------------------------------------------------===//
 
@@ -34,10 +34,6 @@
 using namespace mlir;
 
 namespace {
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 struct QuantParams {
   double scale;
@@ -67,6 +63,7 @@ static RankedTensorType updateQuantType(
   return RankedTensorType::get(tensorType.getShape(), newQt);
 }
 
+// Identical to getScalarTensorValue in DQBinaryQOpt.cpp.
 template <typename T>
 static std::optional<T> getScalarTensorValue(ONNXConstantOp constOp) {
   auto elementsAttr = dyn_cast_or_null<ElementsAttr>(constOp.getValueAttr());
@@ -131,6 +128,7 @@ static std::optional<T> getScalarTensorValue(ONNXConstantOp constOp) {
   return std::nullopt;
 }
 
+// Identical to isValuePreservingOp in DQBinaryQOpt.cpp.
 static bool isValuePreservingOp(Operation *op) {
   if (!op)
     return false;
@@ -138,13 +136,8 @@ static bool isValuePreservingOp(Operation *op) {
       ONNXTransposeOp>(op);
 }
 
-static bool hasBranchOnValue(Value v) {
-  llvm::SmallPtrSet<Operation *, 8> uniq;
-  for (auto *u : v.getUsers())
-    uniq.insert(u);
-  return uniq.size() > 1;
-}
-
+// Identical to checkNewQDQParameterFits in DQBinaryQOpt.cpp but reads
+// storage/expressed types from UniformQuantizedType instead of Value operands.
 static LogicalResult checkNewParamsFit(PatternRewriter &rewriter, Operation *op,
     quant::UniformQuantizedType qt, double newScale, int64_t newZp) {
   auto storageType = qt.getStorageType();
@@ -184,27 +177,130 @@ static LogicalResult checkNewParamsFit(PatternRewriter &rewriter, Operation *op,
   return success();
 }
 
-// ---------------------------------------------------------------------------
-// Match state
-// ---------------------------------------------------------------------------
+// Identical to makeScalarDEA in DQBinaryQOpt.cpp.
+static DenseElementsAttr makeScalarDEA(ShapedType likeTy, double d) {
+  auto ranked = dyn_cast<RankedTensorType>(likeTy);
+  if (!ranked || !ranked.hasStaticShape() || ranked.getNumElements() != 1)
+    return {};
+
+  Type outET = ranked.getElementType();
+
+  if (auto outFT = dyn_cast<FloatType>(outET)) {
+    llvm::APFloat ap(d);
+    bool loses = false;
+    ap.convert(
+        outFT.getFloatSemantics(), llvm::APFloat::rmNearestTiesToEven, &loses);
+    return DenseElementsAttr::get(ranked, FloatAttr::get(outFT, ap));
+  }
+
+  if (auto outIT = dyn_cast<IntegerType>(outET)) {
+    int64_t iv = static_cast<int64_t>(std::llround(d));
+    unsigned bw = outIT.getWidth();
+    bool isSigned = outIT.isSigned();
+    int64_t minV = isSigned ? (-(int64_t(1) << (bw - 1))) : 0;
+    int64_t maxV =
+        isSigned ? ((int64_t(1) << (bw - 1)) - 1) : ((int64_t(1) << bw) - 1);
+    iv = std::min<int64_t>(std::max<int64_t>(iv, minV), maxV);
+    return DenseElementsAttr::get(ranked, IntegerAttr::get(outIT, iv));
+  }
+  return {};
+}
+
+// Identical to updateInitializer in DQBinaryQOpt.cpp.
+static void updateInitializer(PatternRewriter &rewriter, Operation *targetOp,
+    Value oldInit, double newScalar) {
+  if (!targetOp || !oldInit)
+    return;
+  auto oldCst = oldInit.getDefiningOp<ONNXConstantOp>();
+  if (!oldCst)
+    return;
+  auto likeTy = dyn_cast<ShapedType>(oldInit.getType());
+  if (!likeTy || !likeTy.hasStaticShape() || likeTy.getNumElements() != 1)
+    return;
+  DenseElementsAttr payload = makeScalarDEA(likeTy, newScalar);
+  if (!payload)
+    return;
+
+  auto singleUseByTarget = [&]() -> bool {
+    auto it = oldInit.use_begin(), e = oldInit.use_end();
+    if (it == e)
+      return false;
+    auto *owner = it->getOwner();
+    ++it;
+    return (it == e) && (owner == targetOp);
+  };
+
+  if (singleUseByTarget()) {
+    rewriter.modifyOpInPlace(oldCst, [&] {
+      oldCst->setAttr("value", payload);
+      oldCst->removeAttr("sparse_value");
+      oldCst->removeAttr("value_float");
+      oldCst->removeAttr("value_floats");
+      oldCst->removeAttr("value_int");
+      oldCst->removeAttr("value_ints");
+      oldCst->removeAttr("value_string");
+      oldCst->removeAttr("value_strings");
+    });
+    return;
+  }
+
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPoint(targetOp);
+  OperationState st(targetOp->getLoc(), ONNXConstantOp::getOperationName());
+  st.addTypes(likeTy);
+  st.addAttribute("value", payload);
+  Operation *raw = Operation::create(st);
+  rewriter.insert(raw);
+  auto newCst = dyn_cast<ONNXConstantOp>(raw);
+  if (!newCst)
+    return;
+  for (unsigned i = 0, e = targetOp->getNumOperands(); i < e; ++i) {
+    if (targetOp->getOperand(i) == oldInit) {
+      targetOp->setOperand(i, newCst.getOutput());
+      break;
+    }
+  }
+}
+
+// Trace through quant.scast to find a surviving Q or DQ boundary op.
+static Operation *findBoundaryQDQOp(Value quantVal) {
+  auto scast = quantVal.getDefiningOp<quant::StorageCastOp>();
+  if (!scast)
+    return nullptr;
+  Value storageVal = scast.getInput();
+  if (auto qOp = storageVal.getDefiningOp<ONNXQuantizeLinearOp>())
+    return qOp;
+  if (auto dqOp = storageVal.getDefiningOp<ONNXDequantizeLinearOp>())
+    return dqOp;
+  return nullptr;
+}
 
 struct MatchState {
   Value activationValue;
   double kValue = 0.0;
-  QuantParams dstParams;
-  bool foldIntoInput = false;
+  double dstScale = 0.0;
+  int64_t dstZeroPoint = 0;
 };
 
-// ---------------------------------------------------------------------------
-// Try to extract a scalar float constant from a value.
-// ---------------------------------------------------------------------------
-
+// Extract a scalar float constant from a value. Handles plain float constants,
+// quant-typed constants (after --quant-types folds DQ into the constant),
+// constants behind quant.scast, and constants behind value-preserving ops.
 static std::optional<double> tryGetScalarConstant(Value val) {
   if (!val)
     return std::nullopt;
 
-  if (auto constOp = val.getDefiningOp<ONNXConstantOp>())
-    return getScalarTensorValue<double>(constOp);
+  if (auto constOp = val.getDefiningOp<ONNXConstantOp>()) {
+    auto floatVal = getScalarTensorValue<double>(constOp);
+    if (floatVal)
+      return floatVal;
+    auto qp = getQuantParams(val.getType());
+    if (qp) {
+      auto intVal = getScalarTensorValue<int64_t>(constOp);
+      if (intVal)
+        return (*intVal - qp->zeroPoint) * qp->scale;
+    }
+    return std::nullopt;
+  }
 
   if (auto scast = val.getDefiningOp<quant::StorageCastOp>()) {
     auto qp = getQuantParams(scast.getResult().getType());
@@ -232,10 +328,6 @@ static std::optional<double> tryGetScalarConstant(Value val) {
   return std::nullopt;
 }
 
-// ---------------------------------------------------------------------------
-// Pattern: RemoveBinaryQuantTypesPattern
-// ---------------------------------------------------------------------------
-
 template <typename BinOp>
 struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
   using OpRewritePattern<BinOp>::OpRewritePattern;
@@ -258,7 +350,6 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
 
     MatchState state;
 
-    // Case A: lhs is quant activation, rhs is scalar constant
     if (lhsQP) {
       auto kOpt = tryGetScalarConstant(rhs);
       if (kOpt) {
@@ -266,7 +357,6 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
         state.kValue = *kOpt;
       }
     }
-    // Case A-reversed: rhs is quant activation, lhs is scalar constant
     if (!state.activationValue && rhsQP) {
       auto kOpt = tryGetScalarConstant(lhs);
       if (kOpt) {
@@ -279,7 +369,6 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
         state.kValue = *kOpt;
       }
     }
-    // Case B: both quant-typed, one traces to a constant
     if (!state.activationValue && lhsQP && rhsQP) {
       auto kLhs = tryGetScalarConstant(lhs);
       auto kRhs = tryGetScalarConstant(rhs);
@@ -303,29 +392,18 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
 
     if (!state.activationValue.getDefiningOp())
       return rewriter.notifyMatchFailure(
-          op, "activation is a block argument, cannot modify its type");
+          op, "activation is a block argument, cannot modify");
 
-    auto actQP = getQuantParams(state.activationValue.getType());
+    state.dstScale = outQP->scale;
+    state.dstZeroPoint = outQP->zeroPoint;
 
-    if (actQP && hasBranchOnValue(state.activationValue)) {
-      state.foldIntoInput = true;
-      state.dstParams = *actQP;
-    } else {
-      state.foldIntoInput = false;
-      state.dstParams = *outQP;
-    }
-
-    // Safety checks
+    // Avoid division by zero: Mul folds as scale/k, so k=0 is invalid.
+    // Div folds as scale*k, so k=0 gives scale=0, caught by newScale<=0 below.
     if (state.kValue == 0.0) {
-      bool divByK = false;
-      if constexpr (std::is_same_v<BinOp, ONNXDivOp>)
-        divByK = state.foldIntoInput;
       if constexpr (std::is_same_v<BinOp, ONNXMulOp>)
-        divByK = !state.foldIntoInput;
-      if (divByK)
         return rewriter.notifyMatchFailure(op, "k=0 would cause div-by-zero");
     }
-    if (state.dstParams.scale == 0.0) {
+    if (state.dstScale == 0.0) {
       if constexpr (std::is_same_v<BinOp, ONNXAddOp> ||
                     std::is_same_v<BinOp, ONNXSubOp>) {
         return rewriter.notifyMatchFailure(
@@ -333,34 +411,23 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
       }
     }
 
-    // Compute new scale and zero-point
-    double newScale = state.dstParams.scale;
-    double newZpFloat = static_cast<double>(state.dstParams.zeroPoint);
+    // Same formulas as compute_new_scale_and_zp_values in DQBinaryQOpt.cpp
+    // (fold-into-Q / fold-into-output direction).
+    double newScale = state.dstScale;
+    double newZpFloat = static_cast<double>(state.dstZeroPoint);
     const double kVal = state.kValue;
-    const bool dstIsInput = state.foldIntoInput;
 
     if constexpr (std::is_same_v<BinOp, ONNXAddOp>) {
-      if (dstIsInput)
-        newZpFloat -= (kVal / newScale);
-      else
-        newZpFloat += (kVal / newScale);
+      newZpFloat += (kVal / newScale);
     } else if constexpr (std::is_same_v<BinOp, ONNXSubOp>) {
-      if (dstIsInput)
-        newZpFloat += (kVal / newScale);
-      else
-        newZpFloat -= (kVal / newScale);
+      newZpFloat -= (kVal / newScale);
     } else if constexpr (std::is_same_v<BinOp, ONNXMulOp>) {
-      if (dstIsInput)
-        newScale *= kVal;
-      else
-        newScale /= kVal;
+      newScale /= kVal;
     } else if constexpr (std::is_same_v<BinOp, ONNXDivOp>) {
-      if (dstIsInput)
-        newScale /= kVal;
-      else
-        newScale *= kVal;
+      newScale *= kVal;
     }
 
+    // Same rounding as DQBinaryQOpt: floor for non-negative, ceil for negative.
     int64_t newZp = (newZpFloat >= 0.0)
                         ? static_cast<int64_t>(std::floor(newZpFloat))
                         : static_cast<int64_t>(std::ceil(newZpFloat));
@@ -368,23 +435,43 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
     if (newScale <= 0.0)
       return rewriter.notifyMatchFailure(op, "new scale would be non-positive");
 
-    if (failed(checkNewParamsFit(
-            rewriter, op, state.dstParams.quantType, newScale, newZp)))
+    if (failed(
+            checkNewParamsFit(rewriter, op, outQP->quantType, newScale, newZp)))
       return failure();
 
-    auto actTensorType =
-        cast<RankedTensorType>(state.activationValue.getType());
-    auto newType = updateQuantType(actTensorType, newScale, newZp);
-    state.activationValue.setType(newType);
+    // Boundary case: surviving Q behind scast — update Q's constants directly.
+    auto *boundaryQ = findBoundaryQDQOp(state.activationValue);
+    if (boundaryQ) {
+      auto upstreamQ = cast<ONNXQuantizeLinearOp>(boundaryQ);
+      updateInitializer(
+          rewriter, boundaryQ, upstreamQ->getOperand(1), newScale);
+      updateInitializer(rewriter, boundaryQ, upstreamQ->getOperand(2),
+          static_cast<double>(newZp));
 
-    rewriter.replaceOp(op, state.activationValue);
+      Value qResult = upstreamQ.getResult();
+      auto upstreamScast =
+          state.activationValue.getDefiningOp<quant::StorageCastOp>();
+      auto downstreamScast =
+          dyn_cast<quant::StorageCastOp>(*result.getUsers().begin());
+
+      if (downstreamScast) {
+        rewriter.replaceOp(downstreamScast, qResult);
+        rewriter.eraseOp(op);
+      } else {
+        rewriter.replaceOp(op, state.activationValue);
+      }
+      if (upstreamScast && upstreamScast->use_empty())
+        rewriter.eraseOp(upstreamScast);
+    } else {
+      // Interior case: no surviving Q/DQ — update the quant type annotation.
+      auto actType = cast<RankedTensorType>(state.activationValue.getType());
+      state.activationValue.setType(updateQuantType(actType, newScale, newZp));
+      rewriter.replaceOp(op, state.activationValue);
+    }
+
     return success();
   }
 };
-
-// ---------------------------------------------------------------------------
-// Pass
-// ---------------------------------------------------------------------------
 
 class RemoveBinaryQuantTypesPass
     : public PassWrapper<RemoveBinaryQuantTypesPass,
@@ -406,7 +493,6 @@ public:
 
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-
     patterns.add<RemoveBinaryQuantTypesPattern<ONNXAddOp>>(
         patterns.getContext());
     patterns.add<RemoveBinaryQuantTypesPattern<ONNXSubOp>>(
