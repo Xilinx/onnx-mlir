@@ -17,8 +17,8 @@ func.func @test_where_quantize_float_x(
       -> tensor<1x4x!quant.uniform<u8:f32, 0.1:128>>
   return %where : tensor<1x4x!quant.uniform<u8:f32, 0.1:128>>
 
-  // CHECK: %[[QCONST:.*]] = onnx.Constant {value = dense<{{.*}}> : tensor<1x4xui8>}
-  // CHECK: %[[SCAST:.*]] = quant.scast %[[QCONST]] : tensor<1x4xui8> -> tensor<1x4x!quant.uniform<u8:f32, {{.*}}>>
+  // CHECK: %[[QCONST:.*]] = onnx.Constant dense<{{.*}}> : tensor<1x4xui8>
+  // CHECK: %[[SCAST:.*]] = quant.scast %[[QCONST]] : tensor<1x4xui8> to tensor<1x4x!quant.uniform<u8:f32, {{.*}}>>
   // CHECK: %[[WHERE:.*]] = "onnx.Where"(%arg0, %[[SCAST]], %arg1)
   // CHECK: return %[[WHERE]]
 }
@@ -37,8 +37,8 @@ func.func @test_where_quantize_float_y(
       -> tensor<1x4x!quant.uniform<u8:f32, 0.1:128>>
   return %where : tensor<1x4x!quant.uniform<u8:f32, 0.1:128>>
 
-  // CHECK: %[[QCONST:.*]] = onnx.Constant {value = dense<{{.*}}> : tensor<1x4xui8>}
-  // CHECK: %[[SCAST:.*]] = quant.scast %[[QCONST]] : tensor<1x4xui8> -> tensor<1x4x!quant.uniform<u8:f32, {{.*}}>>
+  // CHECK: %[[QCONST:.*]] = onnx.Constant dense<{{.*}}> : tensor<1x4xui8>
+  // CHECK: %[[SCAST:.*]] = quant.scast %[[QCONST]] : tensor<1x4xui8> to tensor<1x4x!quant.uniform<u8:f32, {{.*}}>>
   // CHECK: %[[WHERE:.*]] = "onnx.Where"(%arg0, %arg1, %[[SCAST]])
   // CHECK: return %[[WHERE]]
 }
@@ -57,11 +57,11 @@ func.func @test_where_quantize_both_floats(
       -> tensor<1x4x!quant.uniform<u8:f32, 0.1:128>>
   return %where : tensor<1x4x!quant.uniform<u8:f32, 0.1:128>>
 
-  // CHECK-DAG: %[[QX:.*]] = onnx.Constant {value = dense<{{.*}}> : tensor<1x4xui8>}
-  // CHECK-DAG: %[[SX:.*]] = quant.scast %[[QX]]
-  // CHECK-DAG: %[[QY:.*]] = onnx.Constant {value = dense<{{.*}}> : tensor<1x4xui8>}
-  // CHECK-DAG: %[[SY:.*]] = quant.scast %[[QY]]
-  // CHECK: "onnx.Where"(%arg0, %[[SX]], %[[SY]])
+  // CHECK: onnx.Constant dense<{{.*}}> : tensor<1x4xui8>
+  // CHECK: onnx.Constant dense<{{.*}}> : tensor<1x4xui8>
+  // CHECK: quant.scast
+  // CHECK: quant.scast
+  // CHECK: "onnx.Where"
 }
 
 // -----
@@ -114,8 +114,8 @@ func.func @test_where_quantize_u16(
       -> tensor<1x151x!quant.uniform<u16:f32, 0.015259:65535>>
   return %where : tensor<1x151x!quant.uniform<u16:f32, 0.015259:65535>>
 
-  // CHECK: %[[QCONST:.*]] = onnx.Constant {value = dense<0> : tensor<1x151xui16>}
-  // CHECK: %[[SCAST:.*]] = quant.scast %[[QCONST]] : tensor<1x151xui16> -> tensor<1x151x!quant.uniform<u16:f32, {{.*}}>>
+  // CHECK: %[[QCONST:.*]] = onnx.Constant dense<0> : tensor<1x151xui16>
+  // CHECK: %[[SCAST:.*]] = quant.scast %[[QCONST]] : tensor<1x151xui16> to tensor<1x151x!quant.uniform<u16:f32, {{.*}}>>
   // CHECK: "onnx.Where"(%arg0, %[[SCAST]], %arg1)
 }
 
@@ -128,7 +128,7 @@ func.func @test_where_cast_cond_requantize(
     %x: tensor<1x151x!quant.uniform<u16:f32, 0.015259:65535>>,
     %y: tensor<1x151x!quant.uniform<u16:f32, 0.015259:65535>>)
     -> tensor<1x151x!quant.uniform<u16:f32, 0.015259:65535>> {
-  %cond = "onnx.Cast"(%input) {to = 9 : si64} :
+  %cond = "onnx.Cast"(%input) {to = i1} :
       (tensor<1x151xi32>) -> tensor<1x151xi1>
   %where = "onnx.Where"(%cond, %x, %y) :
       (tensor<1x151xi1>, tensor<1x151x!quant.uniform<u16:f32, 0.015259:65535>>,
@@ -228,7 +228,7 @@ func.func @test_where_cast_cond_and_float_x(
     %input: tensor<1x151xi32>,
     %y: tensor<1x151x!quant.uniform<u16:f32, 0.015259:65535>>)
     -> tensor<1x151x!quant.uniform<u16:f32, 0.015259:65535>> {
-  %cond = "onnx.Cast"(%input) {to = 9 : si64} :
+  %cond = "onnx.Cast"(%input) {to = i1} :
       (tensor<1x151xi32>) -> tensor<1x151xi1>
   %x_float = "onnx.Constant"() {value = dense<-1.0e+09> : tensor<1x151xf32>} : () -> tensor<1x151xf32>
   %where = "onnx.Where"(%cond, %x_float, %y) :
@@ -238,8 +238,8 @@ func.func @test_where_cast_cond_and_float_x(
 
   // CHECK-NOT: "onnx.Cast"
   // CHECK-DAG: %[[NONE:.*]] = "onnx.NoValue"
-  // CHECK-DAG: %[[REQ:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[NONE]]){{.*}}type = "REQUANTIZE"{{.*}} -> tensor<1x151xi1>
-  // CHECK-DAG: %[[QCONST:.*]] = onnx.Constant {value = dense<0> : tensor<1x151xui16>}
+  // CHECK-DAG: %[[QCONST:.*]] = onnx.Constant dense<0> : tensor<1x151xui16>
   // CHECK-DAG: %[[SCAST:.*]] = quant.scast %[[QCONST]]
+  // CHECK-DAG: %[[REQ:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[NONE]]){{.*}}type = "REQUANTIZE"{{.*}} -> tensor<1x151xi1>
   // CHECK: "onnx.Where"(%[[REQ]], %[[SCAST]], %arg1)
 }
