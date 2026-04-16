@@ -84,9 +84,11 @@ std::unique_ptr<Transform> SliceOpTensorNameInference::inferTensorNameTransform(
     mlir::Operation *op) const {
   auto sliceOp = cast<ONNXSliceOp>(op);
 
-  // Validate if shapes are static
-  auto inType = cast<RankedTensorType>(sliceOp.getOperand(0).getType());
-  auto outType = cast<RankedTensorType>(sliceOp.getResult().getType());
+  // Validate if shapes are static and ranked.
+  auto inType = dyn_cast<RankedTensorType>(sliceOp.getOperand(0).getType());
+  auto outType = dyn_cast<RankedTensorType>(sliceOp.getResult().getType());
+  if (!inType || !outType)
+    return nullptr;
   if (!inType.hasStaticShape() || !outType.hasStaticShape())
     return nullptr;
 
