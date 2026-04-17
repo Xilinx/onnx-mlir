@@ -408,8 +408,11 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
     // Choose fold direction — mirrors findDestinationNode in DQBinaryQOpt.cpp.
     // Check branching on both the activation (DQ output) and its scast input
     // (DQ input). If either is branched, fold into input (DQ) side.
+    // branchAfter is gated on boundaryQ (parent Q existence) to mirror the
+    // original's `q && hasBranchOnValue(dq.getY())` gating.
+    auto *boundaryQ = findBoundaryQDQOp(state.activationValue);
     auto actQP = getQuantParams(state.activationValue.getType());
-    bool branchAfter = actQP && hasBranchOnValue(state.activationValue);
+    bool branchAfter = boundaryQ && hasBranchOnValue(state.activationValue);
     bool branchBefore = false;
     if (auto scast =
             state.activationValue.getDefiningOp<quant::StorageCastOp>())
@@ -479,6 +482,10 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
                         ? static_cast<int64_t>(std::floor(newZpFloat))
                         : static_cast<int64_t>(std::ceil(newZpFloat));
 
+    // Divergence from DQBinaryQOpt.cpp: reject non-positive newScale.
+    // quant::UniformQuantizedType::get asserts on non-positive scales, so we
+    // cannot construct a valid quant type here. The original pass accepts
+    // these (folds remain valid without the quant-types framework constraint).
     if (newScale <= 0.0)
       return rewriter.notifyMatchFailure(op, "new scale would be non-positive");
 
@@ -487,7 +494,6 @@ struct RemoveBinaryQuantTypesPattern : public OpRewritePattern<BinOp> {
       return failure();
 
     // Apply the fold.
-    auto *boundaryQ = findBoundaryQDQOp(state.activationValue);
 
     if (!state.foldIntoInput && boundaryQ) {
       // Fold into output + surviving Q: update Q's constants directly.
