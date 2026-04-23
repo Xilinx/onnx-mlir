@@ -326,10 +326,9 @@ static std::pair<ONNXAddOp, Value> findFusibleBiasAdd(
 
 /// Re-quantize bias into the conv accumulation domain (int32).
 ///
-/// Dequantizes each element to float, then re-quantizes into the conv
-/// accumulation scale (x_scale * w_scale):
-///   new_bias[i] = round( (orig_bias[i] - bias_zp) * bias_scale
-///                        / (x_scale * w_scale) )
+/// Matches golden xcompiler TransferQDQMatMulToConv2dPass exactly:
+///   bias_mul = round(bias_scale / (w_scale * x_scale))
+///   new_bias[i] = (orig_bias[i] - bias_zp) * bias_mul
 ///
 /// The result is a 1D int32 constant with quant type
 ///   !quant.uniform<i32:f32, x_scale * w_scale : 0>
@@ -408,8 +407,11 @@ static Value requantizeBiasForConv(PatternRewriter &rewriter, Location loc,
   int64_t biasZP = getZP0(biasQType);
   double accumScale = inputScale * weightScale;
 
-  // Flatten original bias data and re-quantize to int32.
-  //   new_bias[i] = round( (raw[i] - biasZP) * biasScale / accumScale )
+  // Compute integer multiplier (matches golden xcompiler exactly):
+  //   bias_mul = round(bias_scale / (weights_scale * input_scale))
+  //   new_bias[i] = (raw[i] - bias_zp) * bias_mul
+  int32_t biasMul = static_cast<int32_t>(std::round(biasScale / accumScale));
+
   auto flatStorageType =
       RankedTensorType::get({N}, denseAttr.getType().getElementType());
   auto flatAttr = denseAttr.reshape(flatStorageType);
@@ -436,9 +438,7 @@ static Value requantizeBiasForConv(PatternRewriter &rewriter, Location loc,
       else
         raw = static_cast<int64_t>(flatAttr.getValues<uint32_t>()[i]);
     }
-    double floatBias = static_cast<double>(raw - biasZP) * biasScale;
-    newBiasData.push_back(
-        static_cast<int32_t>(std::round(floatBias / accumScale)));
+    newBiasData.push_back(static_cast<int32_t>((raw - biasZP) * biasMul));
   }
 
   // Create int32 dense attribute.
