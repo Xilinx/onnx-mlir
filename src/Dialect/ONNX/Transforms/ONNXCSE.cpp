@@ -113,7 +113,7 @@ public:
           continue;
       }
       // Preserve distinct producers for each named function output.
-      if (feedsFuncReturn(op))
+      if (llvm::any_of(op.getUsers(), isa<func::ReturnOp, Operation*>)
         continue;
       if (auto foundOpIter = knownOps.find(&op);
           foundOpIter != knownOps.end()) {
