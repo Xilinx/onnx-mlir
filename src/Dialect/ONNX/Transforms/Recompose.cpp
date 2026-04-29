@@ -1580,12 +1580,20 @@ void onnx_mlir::getRecomposeONNXToONNXPatterns(
   MLIRContext *context = patterns.getContext();
   patterns.insert<RecomposeHardSigmoidFromMulClipPattern>(context);
   patterns.insert<RecomposeGeluFromMulPattern>(context);
-  patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, false>>(context);
-  patterns.insert<RecomposeLayerNormFromDivPattern<ONNXMulOp, false>>(context);
-  patterns.insert<RecomposeLayerNormFromDivPattern<ONNXPowOp, false>>(context);
-  patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, true>>(context);
-  patterns.insert<RecomposeLayerNormFromDivPattern<ONNXMulOp, true>>(context);
-  patterns.insert<RecomposeLayerNormFromDivPattern<ONNXPowOp, true>>(context);
+  // EXPERIMENT (RAFT InstanceNorm decomposition): the LayerNorm-from-Div
+  // recomposition matches the
+  //   ReduceMean -> Sub -> Mul -> ReduceMean -> Add(eps) -> Sqrt -> Div
+  // chain we emit when decomposing InstanceNormalization, and folds it back
+  // into onnx.LayerNormalization (also dropping the per-channel gamma/beta).
+  // Disable just these 6 patterns so the decomposed chain reaches kernel
+  // selection as discrete ReduceMean/Sub/Mul/Add ops and can pick HCWN_C8
+  // kernels that match the upstream Conv layout.
+  // patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, false>>(context);
+  // patterns.insert<RecomposeLayerNormFromDivPattern<ONNXMulOp, false>>(context);
+  // patterns.insert<RecomposeLayerNormFromDivPattern<ONNXPowOp, false>>(context);
+  // patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, true>>(context);
+  // patterns.insert<RecomposeLayerNormFromDivPattern<ONNXMulOp, true>>(context);
+  // patterns.insert<RecomposeLayerNormFromDivPattern<ONNXPowOp, true>>(context);
   patterns.insert<RecomposeDepthToSpaceCRD>(context);
   patterns.insert<RecomposeDepthToSpaceDCR>(context);
   // AMD Disabled as downstream has no special support for it
