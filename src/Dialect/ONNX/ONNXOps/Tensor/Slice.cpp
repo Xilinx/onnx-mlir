@@ -159,6 +159,9 @@ LogicalResult ONNXSliceOp::inferShapes(
   if (!hasShapeAndRank(getData()))
     return success();
 
+  if (!hasShapeAndRank(getStarts()))
+    return success();
+
   Value axes = getAxes();
   Value steps = getSteps();
 
