@@ -88,7 +88,8 @@ LogicalResult ONNXConcatFromSequenceOp::inferShapes(
 
   // Sequence length must be statically known.
   const int64_t seqLen = seqType.getLength();
-  // Check ShapedType::kDynamic at the same time as it's negative
+  if (seqLen == ShapedType::kDynamic)
+    return success();
   if (seqLen < 0)
     return success();
 

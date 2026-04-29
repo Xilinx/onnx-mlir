@@ -1367,7 +1367,7 @@ public:
 
     if (M <= 0 || M > kMaxUnrollCount)
       return rewriter.notifyMatchFailure(
-          loopOp, "Out of bound maximum trip count");
+          loopOp, "M is too big we decide not to unroll");
 
     MLIRContext *ctx = rewriter.getContext();
     Location loc = loopOp.getLoc();
