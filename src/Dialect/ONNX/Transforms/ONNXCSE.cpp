@@ -89,6 +89,20 @@ public:
            "defined properties.";
   }
 
+  // Returns true if any result of `op` is consumed by a func::ReturnOp.
+  // Such ops are skipped by CSE so that every named function output keeps a
+  // distinct producer SSA value. CSE'ing two ops that both feed the function
+  // return would collapse two named outputs into one (`return %x, %x`), which
+  // breaks downstream consumers (e.g. xcompiler-mlir PartitionPass) that
+  // assume each return operand has a unique producer.
+  static bool feedsFuncReturn(Operation &op) {
+    for (Operation *user : op.getUsers()) {
+      if (isa<func::ReturnOp>(user))
+        return true;
+    }
+    return false;
+  }
+
   void runOnOperation() override {
     func::FuncOp func = getOperation();
     llvm::SmallDenseSet<Operation *> opsToErase;
@@ -98,6 +112,9 @@ public:
         if (!memInterface.hasNoEffect())
           continue;
       }
+      // Preserve distinct producers for each named function output.
+      if (feedsFuncReturn(op))
+        continue;
       if (auto foundOpIter = knownOps.find(&op);
           foundOpIter != knownOps.end()) {
         op.replaceAllUsesWith((*foundOpIter)->getResults());
