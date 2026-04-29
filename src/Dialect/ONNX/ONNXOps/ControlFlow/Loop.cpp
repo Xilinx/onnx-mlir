@@ -10,6 +10,9 @@
 //
 // This file provides definition of ONNX dialect Loop operation.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
@@ -96,16 +99,30 @@ LogicalResult ONNXLoopOp::inferShapes(
   // For scan outputs, we set their shape to be the shape of the return
   // values of the loop body function corresponding to scan outputs, but
   // with an extra leading dimension.
+  //
+  // If M (the maximum trip count) is a statically known constant AND the loop
+  // has no early-termination condition (i.e. the condition input is absent /
+  // None), we can use that constant as the leading dimension, making scan
+  // output shapes fully static.  In all other cases we fall back to the
+  // conservative kDynamic.
+  int64_t leadingDim = ShapedType::kDynamic;
+  Value tripCountVal = getM();
+  Value condVal = getCond();
+  if (mlir::isa<NoneType>(condVal.getType())) {
+    if (auto tripAttr = getElementAttributeFromONNXValue(tripCountVal)) {
+      auto staticCount = getScalarValue<int64_t>(
+          tripAttr, mlir::cast<ShapedType>(tripCountVal.getType()));
+      if (staticCount > 0)
+        leadingDim = staticCount;
+    }
+  }
+
   auto bodyScanOutputTys = llvm::drop_begin(bodyOuputTys, numCarried);
   for (auto [opScanOutput, ty] : llvm::zip(scan_outputs(), bodyScanOutputTys)) {
     // TODO: Handle SeqType, OptType.
     if (auto rankedTy = mlir::dyn_cast<RankedTensorType>(ty)) {
       SmallVector<int64_t, 4> unsqueezedShape(rankedTy.getShape());
-      // Note that we may know the extent of the scan output leading
-      // dimension, which is very likely just the trip count specified as an
-      // input to Loop operation, but we need to eliminate the possibility of
-      // early termination to be sure.
-      unsqueezedShape.insert(unsqueezedShape.begin(), ShapedType::kDynamic);
+      unsqueezedShape.insert(unsqueezedShape.begin(), leadingDim);
       updateType(getOperation(), opScanOutput, unsqueezedShape,
           rankedTy.getElementType(), /*encoding=*/nullptr,
           /*refineShape=*/false);
