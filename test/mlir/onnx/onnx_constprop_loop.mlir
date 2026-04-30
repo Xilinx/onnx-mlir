@@ -264,6 +264,312 @@ func.func @test_loop_m0_with_scan() -> (tensor<i64>, tensor<?xi64>) {
 // CHECK:           onnx.Return [[VAR_0_]], [[VAR_1_]] : tensor<i64>, tensor<0xi64>
 // CHECK:         }
 
+//===----------------------------------------------------------------------===//
+// Scan output: additional shape and content coverage.
+//===----------------------------------------------------------------------===//
+
+// -----
+
+// Scan output with 2-D elements: each of 3 iterations contributes a constant
+// row vector dense<[10, 20]> : tensor<2xi64>.  LoopUnroll emits three
+// Unsqueeze(tensor<1x2xi64>) ops and one Concat(axis=0); subsequent constprop
+// folds them into a single constant matrix.
+// Expected scan output: [[10, 20], [10, 20], [10, 20]] : tensor<3x2xi64>.
+
+func.func @test_loop_scan_2d_elem() -> tensor<3x2xi64> {
+  %trip = onnx.Constant dense<3>    : tensor<i64>
+  %none = "onnx.NoValue"() {value}  : () -> none
+  %init = onnx.Constant dense<0>    : tensor<i64>
+  %carried_out, %scan = "onnx.Loop"(%trip, %none, %init) ({
+  ^bb0(%iter: tensor<i64>, %cond: tensor<i1>, %carried: tensor<i64>):
+    %one  = onnx.Constant dense<1>        : tensor<i64>
+    %next = "onnx.Add"(%carried, %one)    : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %row  = onnx.Constant dense<[10, 20]> : tensor<2xi64>
+    %true = onnx.Constant dense<true>     : tensor<i1>
+    onnx.Yield %true, %next, %row : tensor<i1>, tensor<i64>, tensor<2xi64>
+  }) : (tensor<i64>, none, tensor<i64>) -> (tensor<i64>, tensor<3x2xi64>)
+  onnx.Return %scan : tensor<3x2xi64>
+}
+// CHECK-LABEL: func.func @test_loop_scan_2d_elem
+// CHECK-SAME:  () -> tensor<3x2xi64> {
+// CHECK:         [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}[10, 20], [10, 20], [10, 20]{{.}}> : tensor<3x2xi64>
+// CHECK:         onnx.Return [[VAR_0_]] : tensor<3x2xi64>
+// CHECK:       }
+
+// -----
+
+// Multiple scan outputs: the body records both the running sum and the raw
+// iteration counter at each step.  Two independent scan tapes are built and
+// both fold to constants.
+// Expected: scan_sum = [1, 2, 3], scan_iter = [0, 1, 2].
+
+func.func @test_loop_scan_multiple() -> (tensor<3xi64>, tensor<3xi64>) {
+  %trip = onnx.Constant dense<3>   : tensor<i64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %init = onnx.Constant dense<0>   : tensor<i64>
+  %carried_out, %scan_sum, %scan_iter = "onnx.Loop"(%trip, %none, %init) ({
+  ^bb0(%iter: tensor<i64>, %cond: tensor<i1>, %carried: tensor<i64>):
+    %one  = onnx.Constant dense<1> : tensor<i64>
+    %next = "onnx.Add"(%carried, %one) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %true = onnx.Constant dense<true>  : tensor<i1>
+    onnx.Yield %true, %next, %next, %iter
+        : tensor<i1>, tensor<i64>, tensor<i64>, tensor<i64>
+  }) : (tensor<i64>, none, tensor<i64>) -> (tensor<i64>, tensor<3xi64>, tensor<3xi64>)
+  onnx.Return %scan_sum, %scan_iter : tensor<3xi64>, tensor<3xi64>
+}
+// CHECK-LABEL: func.func @test_loop_scan_multiple
+// CHECK-SAME:  () -> (tensor<3xi64>, tensor<3xi64>) {
+// CHECK-DAG:     [[SUM:%.+]] = onnx.Constant dense<[1, 2, 3]> : tensor<3xi64>
+// CHECK-DAG:     [[IDX:%.+]] = onnx.Constant dense<[0, 1, 2]> : tensor<3xi64>
+// CHECK:         onnx.Return [[SUM]], [[IDX]] : tensor<3xi64>, tensor<3xi64>
+// CHECK:       }
+
+// -----
+
+// Five simultaneous scan outputs: each tape records a different function of
+// the loop state.  Trip = 4, one carried scalar (running sum starting at 0).
+//
+//   scan_sum    = running sum at end of each iter :  [1, 2, 3, 4]
+//   scan_iter   = raw iteration counter            :  [0, 1, 2, 3]
+//   scan_sq     = square of the iteration counter  :  [0, 1, 4, 9]
+//   scan_double = 2 × running sum                  :  [2, 4, 6, 8]
+//   scan_neg    = −1 × running sum                 :  [-1,-2,-3,-4]
+//
+// All five Unsqueeze+Concat chains fold completely because every contribution
+// is a compile-time constant.
+
+func.func @test_loop_scan_many_outputs()
+    -> (tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>) {
+  %trip = onnx.Constant dense<4>   : tensor<i64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %init = onnx.Constant dense<0>   : tensor<i64>
+  %carried_out, %scan_sum, %scan_iter, %scan_sq, %scan_double, %scan_neg =
+      "onnx.Loop"(%trip, %none, %init) ({
+  ^bb0(%iter: tensor<i64>, %cond: tensor<i1>, %carried: tensor<i64>):
+    %one    = onnx.Constant dense<1>  : tensor<i64>
+    %two    = onnx.Constant dense<2>  : tensor<i64>
+    %neg1   = onnx.Constant dense<-1> : tensor<i64>
+    %next   = "onnx.Add"(%carried, %one) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %sq     = "onnx.Mul"(%iter, %iter)   : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %double = "onnx.Mul"(%next, %two)    : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %neg    = "onnx.Mul"(%next, %neg1)   : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %true   = onnx.Constant dense<true>  : tensor<i1>
+    onnx.Yield %true, %next, %next, %iter, %sq, %double, %neg
+        : tensor<i1>, tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>
+  }) : (tensor<i64>, none, tensor<i64>)
+       -> (tensor<i64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>)
+  onnx.Return %scan_sum, %scan_iter, %scan_sq, %scan_double, %scan_neg
+      : tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>
+}
+// CHECK-LABEL: func.func @test_loop_scan_many_outputs
+// CHECK-SAME:  () -> (tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>) {
+// CHECK-DAG:     [[SUM:%.+]]  = onnx.Constant dense<[1, 2, 3, 4]>      : tensor<4xi64>
+// CHECK-DAG:     [[IDX:%.+]]  = onnx.Constant dense<[0, 1, 2, 3]>      : tensor<4xi64>
+// CHECK-DAG:     [[SQ:%.+]]   = onnx.Constant dense<[0, 1, 4, 9]>      : tensor<4xi64>
+// CHECK-DAG:     [[DBL:%.+]]  = onnx.Constant dense<[2, 4, 6, 8]>      : tensor<4xi64>
+// CHECK-DAG:     [[NEG:%.+]]  = onnx.Constant dense<[-1, -2, -3, -4]>  : tensor<4xi64>
+// CHECK:         onnx.Return [[SUM]], [[IDX]], [[SQ]], [[DBL]], [[NEG]]
+// CHECK-SAME:        : tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>
+// CHECK:       }
+
+// -----
+
+// Many carried variables AND many scan outputs simultaneously.
+// Trip = 4, four v_initials, four scan outputs.
+//
+//   Carried variables (init → update rule):
+//     a  ( 0 ) : counter   — next_a = a + 1
+//     b  ( 1 ) : powers-2  — next_b = b × 2
+//     c  (10 ) : countdown — next_c = c − 3
+//     d  ( 0 ) : product   — next_d = a × b  (uses *input* a and b)
+//
+//   Scan outputs (what each tape records per iteration):
+//     scan_a  : next_a            →  [1,  2,  3,   4]
+//     scan_b  : next_b            →  [2,  4,  8,  16]
+//     scan_c  : next_c            →  [7,  4,  1,  -2]
+//     scan_ab : next_a + next_b   →  [3,  6, 11,  20]
+//
+//   Final carried values after 4 iters:
+//     v_final_a =  4,  v_final_b = 16,  v_final_c = -2,  v_final_d = 24
+//
+// All eight results (4 carried + 4 scan) fold to constants.
+
+func.func @test_loop_many_carried_and_scans()
+    -> (tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>,
+        tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>) {
+  %trip   = onnx.Constant dense<4>  : tensor<i64>
+  %none   = "onnx.NoValue"() {value} : () -> none
+  %init_a = onnx.Constant dense<0>  : tensor<i64>
+  %init_b = onnx.Constant dense<1>  : tensor<i64>
+  %init_c = onnx.Constant dense<10> : tensor<i64>
+  %init_d = onnx.Constant dense<0>  : tensor<i64>
+  %v_a, %v_b, %v_c, %v_d, %scan_a, %scan_b, %scan_c, %scan_ab =
+      "onnx.Loop"(%trip, %none, %init_a, %init_b, %init_c, %init_d) ({
+  ^bb0(%iter : tensor<i64>, %cond : tensor<i1>,
+       %a : tensor<i64>, %b : tensor<i64>,
+       %c : tensor<i64>, %d : tensor<i64>):
+    %one  = onnx.Constant dense<1>  : tensor<i64>
+    %two  = onnx.Constant dense<2>  : tensor<i64>
+    %neg3 = onnx.Constant dense<-3> : tensor<i64>
+    %next_a  = "onnx.Add"(%a, %one)       : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %next_b  = "onnx.Mul"(%b, %two)       : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %next_c  = "onnx.Add"(%c, %neg3)      : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %next_d  = "onnx.Mul"(%a, %b)         : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %sum_ab  = "onnx.Add"(%next_a, %next_b) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %true = onnx.Constant dense<true> : tensor<i1>
+    onnx.Yield %true, %next_a, %next_b, %next_c, %next_d,
+               %next_a, %next_b, %next_c, %sum_ab
+        : tensor<i1>,
+          tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>,
+          tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>
+  }) : (tensor<i64>, none, tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>)
+       -> (tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>,
+           tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>)
+  onnx.Return %v_a, %v_b, %v_c, %v_d, %scan_a, %scan_b, %scan_c, %scan_ab
+      : tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>,
+        tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>
+}
+// CHECK-LABEL: func.func @test_loop_many_carried_and_scans
+// CHECK-DAG:     [[VA:%.+]]  = onnx.Constant dense<4>               : tensor<i64>
+// CHECK-DAG:     [[VB:%.+]]  = onnx.Constant dense<16>              : tensor<i64>
+// CHECK-DAG:     [[VC:%.+]]  = onnx.Constant dense<-2>              : tensor<i64>
+// CHECK-DAG:     [[VD:%.+]]  = onnx.Constant dense<24>              : tensor<i64>
+// CHECK-DAG:     [[SA:%.+]]  = onnx.Constant dense<[1, 2, 3, 4]>    : tensor<4xi64>
+// CHECK-DAG:     [[SB:%.+]]  = onnx.Constant dense<[2, 4, 8, 16]>   : tensor<4xi64>
+// CHECK-DAG:     [[SC:%.+]]  = onnx.Constant dense<[7, 4, 1, -2]>   : tensor<4xi64>
+// CHECK-DAG:     [[SAB:%.+]] = onnx.Constant dense<[3, 6, 11, 20]>  : tensor<4xi64>
+// CHECK:         onnx.Return [[VA]], [[VB]], [[VC]], [[VD]],
+// CHECK-SAME:                [[SA]], [[SB]], [[SC]], [[SAB]]
+
+// -----
+
+// Partial-fold companion to test_loop_many_carried_and_scans.
+// Same 4-carried + 4-scan topology, trip = 4, but two carried variables
+// depend on the runtime value %arg, so their folding is impossible.
+//
+//   Carried (init -> update rule):
+//     a  ( 0 ) : counter    — next_a = a + 1          FOLDS  (constant)
+//     b  ( 1 ) : powers-2   — next_b = b * 2          FOLDS  (constant)
+//     c  ( 0 ) : runtime    — next_c = c + %arg       NO FOLD (runtime)
+//     d  ( 0 ) : accumulate — next_d = d + b          FOLDS  (depends only on b)
+//
+//   Scan outputs:
+//     scan_a    : next_a              [1,2,3,4]     FOLDS
+//     scan_b    : next_b              [2,4,8,16]    FOLDS
+//     scan_c    : next_c              runtime tape  NO FOLD -> Unsqueeze + Concat remain
+//     scan_mixed: next_a + next_c     runtime tape  NO FOLD -> Unsqueeze + Concat remain
+//
+//   Final carried values:
+//     v_a =  4   (constant)   v_b = 16   (constant)
+//     v_c = runtime           v_d = 15   (1+2+4+8, constant)
+//
+// The loop is still fully UNROLLED (LoopUnroll fires on static M + NoneType cond).
+// The constant-foldable results collapse; the runtime-dependent scan tapes
+// remain as Unsqueeze + Concat chains in the IR.
+
+func.func @test_loop_many_partial_fold(%arg: tensor<i64>)
+    -> (tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>,
+        tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>) {
+  %trip   = onnx.Constant dense<4>  : tensor<i64>
+  %none   = "onnx.NoValue"() {value} : () -> none
+  %init_a = onnx.Constant dense<0>  : tensor<i64>
+  %init_b = onnx.Constant dense<1>  : tensor<i64>
+  %init_c = onnx.Constant dense<0>  : tensor<i64>
+  %init_d = onnx.Constant dense<0>  : tensor<i64>
+  %va, %vb, %vc, %vd, %scan_a, %scan_b, %scan_c, %scan_mixed =
+      "onnx.Loop"(%trip, %none, %init_a, %init_b, %init_c, %init_d) ({
+  ^bb0(%iter: tensor<i64>, %cond: tensor<i1>,
+       %a: tensor<i64>, %b: tensor<i64>,
+       %c: tensor<i64>, %d: tensor<i64>):
+    %one    = onnx.Constant dense<1> : tensor<i64>
+    %two    = onnx.Constant dense<2> : tensor<i64>
+    %next_a  = "onnx.Add"(%a, %one)        : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %next_b  = "onnx.Mul"(%b, %two)        : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %next_c  = "onnx.Add"(%c, %arg)        : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %next_d  = "onnx.Add"(%d, %b)          : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %mixed   = "onnx.Add"(%next_a, %next_c) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %true = onnx.Constant dense<true> : tensor<i1>
+    onnx.Yield %true, %next_a, %next_b, %next_c, %next_d,
+               %next_a, %next_b, %next_c, %mixed
+        : tensor<i1>,
+          tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>,
+          tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>
+  }) : (tensor<i64>, none, tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>)
+       -> (tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>,
+           tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>)
+  onnx.Return %va, %vb, %vc, %vd, %scan_a, %scan_b, %scan_c, %scan_mixed
+      : tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>,
+        tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>
+}
+// CHECK-LABEL: func.func @test_loop_many_partial_fold
+// CHECK-SAME:  (%arg0: tensor<i64>) -> (tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>,
+// CHECK-SAME:   tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>) {
+// Foldable results collapse to constants.
+// CHECK-NOT:   onnx.Loop
+// CHECK-DAG:   [[VA:%.+]]  = onnx.Constant dense<4>              : tensor<i64>
+// CHECK-DAG:   [[VB:%.+]]  = onnx.Constant dense<16>             : tensor<i64>
+// CHECK-DAG:   [[VD:%.+]]  = onnx.Constant dense<15>             : tensor<i64>
+// CHECK-DAG:   [[SA:%.+]]  = onnx.Constant dense<[1, 2, 3, 4]>   : tensor<4xi64>
+// CHECK-DAG:   [[SB:%.+]]  = onnx.Constant dense<[2, 4, 8, 16]>  : tensor<4xi64>
+// Runtime-dependent scan tapes: Unsqueeze per iter + Concat(axis=0) remain.
+// CHECK:       "onnx.Unsqueeze"
+// CHECK:       "onnx.Concat"
+// CHECK:       "onnx.Unsqueeze"
+// CHECK:       "onnx.Concat"
+// Final Return: constant results are named, runtime results are wildcarded.
+// CHECK:       onnx.Return [[VA]], [[VB]], {{%.+}}, [[VD]], [[SA]], [[SB]], {{%.+}}, {{%.+}}
+
+// -----
+
+// Scan output collects the raw iteration counter: trip = 4, the body carries
+// nothing useful and yields %iter as the scan element.
+// Each Unsqueeze of a constant scalar folds immediately; the resulting four
+// tensor<1xi64> slices are then Concat-folded into a single constant.
+// Expected scan output: [0, 1, 2, 3] : tensor<4xi64>.
+
+func.func @test_loop_scan_iter_counter() -> tensor<4xi64> {
+  %trip = onnx.Constant dense<4>   : tensor<i64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %init = onnx.Constant dense<0>   : tensor<i64>
+  %carried_out, %scan = "onnx.Loop"(%trip, %none, %init) ({
+  ^bb0(%iter: tensor<i64>, %cond: tensor<i1>, %carried: tensor<i64>):
+    %true = onnx.Constant dense<true> : tensor<i1>
+    onnx.Yield %true, %carried, %iter : tensor<i1>, tensor<i64>, tensor<i64>
+  }) : (tensor<i64>, none, tensor<i64>) -> (tensor<i64>, tensor<4xi64>)
+  onnx.Return %scan : tensor<4xi64>
+}
+// CHECK-LABEL: func.func @test_loop_scan_iter_counter
+// CHECK-SAME:  () -> tensor<4xi64> {
+// CHECK:         [[VAR_0_:%.+]] = onnx.Constant dense<[0, 1, 2, 3]> : tensor<4xi64>
+// CHECK:         onnx.Return [[VAR_0_]] : tensor<4xi64>
+// CHECK:       }
+
+// -----
+
+// Scan output with a non-constant body: the body adds the runtime value %arg,
+// so per-iteration contributions are not constants.  The loop is still fully
+// unrolled (onnx.Loop disappears) but the Unsqueeze + Concat ops that build
+// the scan tape cannot be constant-folded further.
+// Note: the first iteration's Add (0 + %arg) is folded by Add-identity to
+// %arg directly, leaving 2 Add ops for iterations 1 and 2.
+
+func.func @test_loop_scan_non_const(%arg: tensor<i64>) -> tensor<3xi64> {
+  %trip = onnx.Constant dense<3>   : tensor<i64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %init = onnx.Constant dense<0>   : tensor<i64>
+  %carried_out, %scan = "onnx.Loop"(%trip, %none, %init) ({
+  ^bb0(%iter: tensor<i64>, %cond: tensor<i1>, %carried: tensor<i64>):
+    %next = "onnx.Add"(%carried, %arg) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %true = onnx.Constant dense<true>  : tensor<i1>
+    onnx.Yield %true, %next, %next : tensor<i1>, tensor<i64>, tensor<i64>
+  }) : (tensor<i64>, none, tensor<i64>) -> (tensor<i64>, tensor<3xi64>)
+  onnx.Return %scan : tensor<3xi64>
+}
+// CHECK-LABEL: func.func @test_loop_scan_non_const
+// CHECK-NOT:   onnx.Loop
+// CHECK:       onnx.Unsqueeze
+// CHECK:       onnx.Concat
+
 // -----
 
 // Nested loops: outer loop runs 2 trips, each trip runs an inner loop for
