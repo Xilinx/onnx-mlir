@@ -1,4 +1,4 @@
-// RUN: onnx-mlir-opt --constprop-onnx --shape-inference %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --shape-inference --constprop-onnx %s -split-input-file | FileCheck %s
 
 //===----------------------------------------------------------------------===//
 // LoopUnroll: constant-trip-count loops with NoneType condition are physically

@@ -38,6 +38,7 @@
 #include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
 #include "src/Dialect/ONNX/Transforms/ConstProp.hpp"
 #include "src/Dialect/ONNX/Transforms/ResultNamesUpdater.hpp"
+#include "src/Dialect/ONNX/Transforms/ShapeInference.hpp"
 #include "src/Pass/Passes.hpp"
 #include "src/Support/TypeUtilities.hpp"
 
@@ -1670,6 +1671,16 @@ void ConstPropONNXToONNXPass::runOnOperation() {
   if (failed(applyPatternsGreedily(function, std::move(patterns),
           GreedyRewriteConfig{.listener = &rnUpdater})))
     signalPassFailure();
+
+  // Constant folding can change the types of values returned by the function
+  // (e.g. folding a ConcatFromSequence from tensor<?xi64> to tensor<3xi64>).
+  // If the function return types no longer match the actual return operand
+  // types, re-synchronise the signature.  This mirrors what ShapeInferencePass
+  // does and is a cheap O(n_results) check that is a no-op in the common case
+  // where no return type changed.
+  Operation *returnOp = function.getBody().back().getTerminator();
+  if (returnOp && function.getResultTypes() != returnOp->getOperandTypes())
+    inferFunctionReturnShapes(function);
 }
 
 } // end anonymous namespace.
