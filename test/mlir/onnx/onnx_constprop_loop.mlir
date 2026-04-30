@@ -1,4 +1,4 @@
-// RUN: onnx-mlir-opt --shape-inference --constprop-onnx %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --constprop-onnx --shape-inference %s -split-input-file | FileCheck %s
 
 //===----------------------------------------------------------------------===//
 // LoopUnroll: constant-trip-count loops with NoneType condition are physically
@@ -340,3 +340,75 @@ func.func @test_constprop_concatfromseq_no_fold(%arg: tensor<3xi32>) -> tensor<6
 }
 // CHECK-LABEL: @test_constprop_concatfromseq_no_fold
 // CHECK:       onnx.ConcatFromSequence
+
+//===----------------------------------------------------------------------===//
+// LoopUnroll + SequenceInsert + ConcatFromSequence
+//
+// These tests verify that LoopUnroll and ConstPropConcatFromSequence cooperate
+// to fold loops that carry and build sequences into a single constant.
+//
+// Note: constprop must run before shape-inference (the order used by this
+// file's RUN line). Running shape-inference first locks the function return
+// type to tensor<1xi64> (one sequence element) before the loop is unrolled;
+// constprop then folds ConcatFromSequence to tensor<3xi64>, creating a type
+// mismatch that the MLIR verifier rejects.
+//===----------------------------------------------------------------------===//
+
+// -----
+
+// Loop carries a growing sequence; each of 3 iterations appends the constant
+// [5]. After unrolling, the sequence chain is:
+//   SequenceEmpty → Insert([5]) → Insert([5]) → Insert([5])
+// ConcatFromSequence(axis=0) folds the whole thing into dense<5> : tensor<3xi64>
+// (MLIR splat notation for [5, 5, 5]).
+
+func.func @test_loop_unroll_build_seq_const() -> tensor<*xi64> {
+  %trip = onnx.Constant dense<3> : tensor<i64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %seq0 = "onnx.SequenceEmpty"() {dtype = 7 : si64} : () -> !onnx.Seq<tensor<*xi64>>
+  %seq_final = "onnx.Loop"(%trip, %none, %seq0) ({
+  ^bb0(%iter: tensor<i64>, %cond: tensor<i1>, %seq: !onnx.Seq<tensor<*xi64>>):
+    %elem = onnx.Constant dense<[5]> : tensor<1xi64>
+    %pos  = "onnx.NoValue"() {value} : () -> none
+    %next = "onnx.SequenceInsert"(%seq, %elem, %pos) : (!onnx.Seq<tensor<*xi64>>, tensor<1xi64>, none) -> !onnx.Seq<tensor<*xi64>>
+    %true = onnx.Constant dense<true> : tensor<i1>
+    onnx.Yield %true, %next : tensor<i1>, !onnx.Seq<tensor<*xi64>>
+  }) : (tensor<i64>, none, !onnx.Seq<tensor<*xi64>>) -> !onnx.Seq<tensor<*xi64>>
+  %result = "onnx.ConcatFromSequence"(%seq_final) {axis = 0 : si64} : (!onnx.Seq<tensor<*xi64>>) -> tensor<*xi64>
+  onnx.Return %result : tensor<*xi64>
+}
+// CHECK-LABEL:  func.func @test_loop_unroll_build_seq_const
+// CHECK-SAME:   () -> tensor<3xi64> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<5> : tensor<3xi64>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<3xi64>
+// CHECK:         }
+
+// -----
+
+// Loop carries a growing sequence; each iteration i appends the unsqueezed
+// iteration counter [i].  After unrolling, Unsqueeze is constant-folded for
+// each cloned iteration (iter=0→[0], iter=1→[1], iter=2→[2]), giving:
+//   SequenceEmpty → Insert([0]) → Insert([1]) → Insert([2])
+// ConcatFromSequence(axis=0) folds to dense<[0, 1, 2]> : tensor<3xi64>.
+
+func.func @test_loop_unroll_build_seq_iter() -> tensor<*xi64> {
+  %trip = onnx.Constant dense<3> : tensor<i64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %seq0 = "onnx.SequenceEmpty"() {dtype = 7 : si64} : () -> !onnx.Seq<tensor<*xi64>>
+  %axes = onnx.Constant dense<0> : tensor<1xi64>
+  %seq_final = "onnx.Loop"(%trip, %none, %seq0) ({
+  ^bb0(%iter: tensor<i64>, %cond: tensor<i1>, %seq: !onnx.Seq<tensor<*xi64>>):
+    %elem = "onnx.Unsqueeze"(%iter, %axes) : (tensor<i64>, tensor<1xi64>) -> tensor<1xi64>
+    %pos  = "onnx.NoValue"() {value} : () -> none
+    %next = "onnx.SequenceInsert"(%seq, %elem, %pos) : (!onnx.Seq<tensor<*xi64>>, tensor<1xi64>, none) -> !onnx.Seq<tensor<*xi64>>
+    %true = onnx.Constant dense<true> : tensor<i1>
+    onnx.Yield %true, %next : tensor<i1>, !onnx.Seq<tensor<*xi64>>
+  }) : (tensor<i64>, none, !onnx.Seq<tensor<*xi64>>) -> !onnx.Seq<tensor<*xi64>>
+  %result = "onnx.ConcatFromSequence"(%seq_final) {axis = 0 : si64} : (!onnx.Seq<tensor<*xi64>>) -> tensor<*xi64>
+  onnx.Return %result : tensor<*xi64>
+}
+// CHECK-LABEL:  func.func @test_loop_unroll_build_seq_iter
+// CHECK-SAME:   () -> tensor<3xi64> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[0, 1, 2]> : tensor<3xi64>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<3xi64>
+// CHECK:         }
