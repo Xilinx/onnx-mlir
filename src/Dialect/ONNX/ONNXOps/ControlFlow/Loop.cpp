@@ -76,9 +76,23 @@ LogicalResult ONNXLoopOp::inferShapes(
 
   // Set body input types for loop carried dependencies to the types of
   // their LoopOp input counterpart.
+  //
+  // Special case for sequences: the initial value may have a statically known
+  // length (e.g., SequenceEmpty → length 0), but the loop body can grow the
+  // sequence on each iteration, so the length at any arbitrary iteration is
+  // unknown.  Using the initial length would mislead SequenceInsert into
+  // thinking the sequence is always empty, producing a wrong output length (1).
+  // We therefore conservatively reset any known sequence length to kDynamic
+  // for the block argument, so downstream shape inference stays sound.
   auto bodyCarriedInputs = llvm::drop_begin(loopBody.getArguments(), 2);
-  for (auto [opInput, bodyInput] : llvm::zip(getVInitial(), bodyCarriedInputs))
-    bodyInput.setType(opInput.getType());
+  for (auto [opInput, bodyInput] :
+      llvm::zip(getVInitial(), bodyCarriedInputs)) {
+    Type ty = opInput.getType();
+    if (auto seqTy = mlir::dyn_cast<SeqType>(ty))
+      if (seqTy.getLength() != ShapedType::kDynamic)
+        ty = SeqType::get(seqTy.getElementType(), ShapedType::kDynamic);
+    bodyInput.setType(ty);
+  }
 
   // Now we have modified loop body input types according to
   // the knowledge we have on the initial inputs. Dispatch

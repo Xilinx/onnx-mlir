@@ -403,7 +403,7 @@ func.func @test_loop_unroll_build_seq_const() -> tensor<*xi64> {
   onnx.Return %result : tensor<*xi64>
 }
 // CHECK-LABEL:  func.func @test_loop_unroll_build_seq_const
-// CHECK-SAME:   () -> tensor<3xi64> {
+// CHECK-SAME:   () -> tensor<*xi64> {
 // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<5> : tensor<3xi64>
 // CHECK:           onnx.Return [[VAR_0_]] : tensor<3xi64>
 // CHECK:         }
@@ -433,7 +433,7 @@ func.func @test_loop_unroll_build_seq_iter() -> tensor<*xi64> {
   onnx.Return %result : tensor<*xi64>
 }
 // CHECK-LABEL:  func.func @test_loop_unroll_build_seq_iter
-// CHECK-SAME:   () -> tensor<3xi64> {
+// CHECK-SAME:   () -> tensor<*xi64> {
 // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[0, 1, 2]> : tensor<3xi64>
 // CHECK:           onnx.Return [[VAR_0_]] : tensor<3xi64>
 // CHECK:         }
