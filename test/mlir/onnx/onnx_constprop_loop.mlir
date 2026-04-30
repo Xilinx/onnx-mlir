@@ -171,6 +171,31 @@ func.func @test_loop_unroll_true_cond() -> tensor<i64> {
 
 // -----
 
+// Constant-true initial condition with passthrough body condition: the body
+// yields %body_cond unchanged (not a fresh constant). Since the initial
+// condition is dense<true> and the body never modifies it, every iteration
+// sees true — equivalent to NoneType. The loop should still be unrolled.
+
+func.func @test_loop_unroll_true_cond_passthrough() -> tensor<i64> {
+  %trip = onnx.Constant dense<3> : tensor<i64>
+  %cond = onnx.Constant dense<true> : tensor<i1>
+  %init = onnx.Constant dense<0> : tensor<i64>
+  %result = "onnx.Loop"(%trip, %cond, %init) ({
+  ^bb0(%iter: tensor<i64>, %body_cond: tensor<i1>, %carried: tensor<i64>):
+    %one = onnx.Constant dense<1> : tensor<i64>
+    %next = "onnx.Add"(%carried, %one) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    onnx.Yield %body_cond, %next : tensor<i1>, tensor<i64>
+  }) : (tensor<i64>, tensor<i1>, tensor<i64>) -> tensor<i64>
+  onnx.Return %result : tensor<i64>
+}
+// CHECK-LABEL:  func.func @test_loop_unroll_true_cond_passthrough
+// CHECK-SAME:   () -> tensor<i64> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<3> : tensor<i64>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<i64>
+// CHECK:         }
+
+// -----
+
 // NOT unrolled: body yields a non-constant condition. Even though the initial
 // condition is constant-true, we cannot guarantee the loop runs M times.
 
@@ -412,3 +437,37 @@ func.func @test_loop_unroll_build_seq_iter() -> tensor<*xi64> {
 // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[0, 1, 2]> : tensor<3xi64>
 // CHECK:           onnx.Return [[VAR_0_]] : tensor<3xi64>
 // CHECK:         }
+
+// -----
+
+// The loop condition is not a literal dense<true> but is computed via
+// onnx.Not(dense<false>), which the constprop pass folds to dense<true>.
+// Because the greedy driver applies patterns to a fixpoint, the Not ops are
+// folded first (both the outer initial-condition and the body's yield), and
+// LoopUnroll fires on the next driver iteration when it sees dense<true>.
+//
+// Expected: three additions of 1 unroll and fold to dense<3>.
+
+func.func @test_loop_unroll_foldable_cond() -> tensor<i64> {
+  %trip  = onnx.Constant dense<3>     : tensor<i64>
+  %false = onnx.Constant dense<false> : tensor<i1>
+  // Foldable initial condition: Not(false) → true.
+  %cond  = "onnx.Not"(%false) : (tensor<i1>) -> tensor<i1>
+  %init  = onnx.Constant dense<0> : tensor<i64>
+  %res = "onnx.Loop"(%trip, %cond, %init) ({
+  ^bb0(%iter: tensor<i64>, %body_cond: tensor<i1>, %carried: tensor<i64>):
+    %one  = onnx.Constant dense<1>     : tensor<i64>
+    %next = "onnx.Add"(%carried, %one) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %f    = onnx.Constant dense<false> : tensor<i1>
+    // Foldable yield condition: Not(false) → true.
+    %yield_cond = "onnx.Not"(%f) : (tensor<i1>) -> tensor<i1>
+    onnx.Yield %yield_cond, %next : tensor<i1>, tensor<i64>
+  }) : (tensor<i64>, tensor<i1>, tensor<i64>) -> tensor<i64>
+  onnx.Return %res : tensor<i64>
+}
+// CHECK-LABEL: func.func @test_loop_unroll_foldable_cond
+// CHECK-SAME:  () -> tensor<i64>
+// CHECK-NOT:   onnx.Loop
+// CHECK-NOT:   onnx.Not
+// CHECK:       [[C:%.+]] = onnx.Constant dense<3> : tensor<i64>
+// CHECK:       onnx.Return [[C]] : tensor<i64>

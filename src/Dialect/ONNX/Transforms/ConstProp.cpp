@@ -1347,19 +1347,13 @@ public:
 
   LogicalResult matchAndRewrite(
       ONNXLoopOp loopOp, PatternRewriter &rewriter) const override {
-    // The loop unrolling works only if MaxTripCount is a constant.
-    auto maxTripCountConstOp = loopOp.getM().getDefiningOp<ONNXConstantOp>();
-    if (!maxTripCountConstOp) {
+    // The loop unrolling works only if MaxTripCount is a constant i64 scalar
+    // (as required by the ONNX spec: M is tensor of int64).
+    SmallVector<int64_t, 1> mVals;
+    if (!getI64ValuesFromONNXConstantOp(loopOp.getM(), mVals))
       return rewriter.notifyMatchFailure(
-          loopOp, "Maximum trip count must be a constant");
-    }
-    int64_t M = 0;
-    if (auto intAttr = maxTripCountConstOp.getValueIntAttr()) {
-      M = intAttr.getInt();
-    } else if (auto denseAttr = dyn_cast_or_null<ElementsAttr>(
-                   maxTripCountConstOp.getValueAttr())) {
-      M = (*denseAttr.value_begin<APInt>()).getSExtValue();
-    }
+          loopOp, "trip count must be a constant i64 scalar");
+    int64_t M = mVals[0];
 
     if (M < 0 || M > kMaxUnrollCount)
       return rewriter.notifyMatchFailure(
@@ -1383,9 +1377,16 @@ public:
       auto elems = getConstValueElements(v);
       return (*elems.value_begin<APInt>()).getBoolValue();
     };
+    // The body's yielded condition (operand 0) guarantees always-true when it
+    // is either a constant true, or the same block argument the body received
+    // (passthrough) — in which case the initial true propagates unchanged.
+    Value yieldedCond = yieldOp.getOperand(0);
+    bool yieldAlwaysTrue =
+        getConstBool(yieldedCond) == std::optional<bool>(true) ||
+        yieldedCond == body.getArgument(1);
     bool condIsAlwaysTrue =
         getConstBool(loopOp.getCond()) == std::optional<bool>(true) &&
-        getConstBool(yieldOp.getOperand(0)) == std::optional<bool>(true);
+        yieldAlwaysTrue;
     if (!condIsNone && !condIsAlwaysTrue)
       return rewriter.notifyMatchFailure(loopOp,
           "Condition must be NoneType or a constant-true value with the body "
