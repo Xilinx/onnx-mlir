@@ -100,19 +100,46 @@ LogicalResult ONNXLoopOp::inferShapes(
   // values of the loop body function corresponding to scan outputs, but
   // with an extra leading dimension.
   //
-  // If M (the maximum trip count) is a statically known constant AND the loop
-  // has no early-termination condition (i.e. the condition input is absent /
-  // None), we can use that constant as the leading dimension, making scan
-  // output shapes fully static.  In all other cases we fall back to the
-  // conservative kDynamic.
+  // Three cases in which we can determine a static leading dimension:
+  //   M = 0  : body never executes → leading dim is 0, regardless of
+  //             condition (ONNX spec: trip count takes priority).
+  //   M > 0, NoneType condition : loop always runs exactly M iterations.
+  //   M > 0, constant-true condition AND body always yields constant true:
+  //             loop is also guaranteed to run M iterations.
+  // In all other cases we fall back to kDynamic.
   int64_t leadingDim = ShapedType::kDynamic;
   Value tripCountVal = getM();
   Value condVal = getCond();
-  if (mlir::isa<NoneType>(condVal.getType())) {
-    if (auto tripAttr = getElementAttributeFromONNXValue(tripCountVal)) {
-      auto staticCount = getScalarValue<int64_t>(
-          tripAttr, mlir::cast<ShapedType>(tripCountVal.getType()));
-      if (staticCount > 0)
+  if (auto tripAttr = getElementAttributeFromONNXValue(tripCountVal)) {
+    auto staticCount = getScalarValue<int64_t>(
+        tripAttr, mlir::cast<ShapedType>(tripCountVal.getType()));
+    if (staticCount == 0) {
+      // Body never executes regardless of condition: scan outputs are empty.
+      leadingDim = 0;
+    } else if (staticCount > 0) {
+      bool condIsNone = mlir::isa<NoneType>(condVal.getType());
+      // Check if the condition is statically always-true: both the initial
+      // condition and the body's yielded condition must be constant true.
+      bool condIsAlwaysTrue = false;
+      if (!condIsNone) {
+        // Use APInt iteration to safely read any integer width (including i1).
+        auto readBool = [](ElementsAttr attr) -> bool {
+          return (*attr.getValues<APInt>().begin()).getBoolValue();
+        };
+        if (auto condAttr = getElementAttributeFromONNXValue(condVal)) {
+          bool initCondTrue = readBool(condAttr);
+          // The body terminator's condition operand (operand 0) must also be
+          // a constant true so we know there is no early-exit possibility.
+          Value bodyYieldCond = terminator->getOperand(0);
+          if (initCondTrue) {
+            if (auto yieldCondAttr =
+                    getElementAttributeFromONNXValue(bodyYieldCond)) {
+              condIsAlwaysTrue = readBool(yieldCondAttr);
+            }
+          }
+        }
+      }
+      if (condIsNone || condIsAlwaysTrue)
         leadingDim = staticCount;
     }
   }

@@ -1346,12 +1346,7 @@ public:
 
   LogicalResult matchAndRewrite(
       ONNXLoopOp loopOp, PatternRewriter &rewriter) const override {
-    // Only handle loops whose condition is absent (NoneType → run exactly M
-    // times without an early-exit check).
-    if (!isa<NoneType>(loopOp.getCond().getType()))
-      return rewriter.notifyMatchFailure(loopOp, "Condition must be None");
-
-    // The loop unrolling works only if MaxTripCount is a constant
+    // The loop unrolling works only if MaxTripCount is a constant.
     auto maxTripCountConstOp = loopOp.getM().getDefiningOp<ONNXConstantOp>();
     if (!maxTripCountConstOp) {
       return rewriter.notifyMatchFailure(
@@ -1365,17 +1360,65 @@ public:
       M = (*denseAttr.value_begin<APInt>()).getSExtValue();
     }
 
-    if (M <= 0 || M > kMaxUnrollCount)
+    if (M < 0 || M > kMaxUnrollCount)
       return rewriter.notifyMatchFailure(
-          loopOp, "M is too big we decide not to unroll");
+          loopOp, "M is out of the unrollable range (0, kMaxUnrollCount]");
 
     MLIRContext *ctx = rewriter.getContext();
     Location loc = loopOp.getLoc();
     Block &body = loopOp.getRegion().front();
     auto yieldOp = cast<ONNXYieldOp>(body.getTerminator());
+
+    // Determine whether the loop is guaranteed to run exactly M iterations.
+    // Two accepted forms:
+    //   1. NoneType condition: ONNX spec says the loop runs exactly M trips.
+    //   2. Constant-true initial condition AND body always yields constant
+    //   true:
+    //      semantically equivalent to NoneType when both are statically known.
+    bool condIsNone = isa<NoneType>(loopOp.getCond().getType());
+    auto getConstBool = [](Value v) -> std::optional<bool> {
+      if (!isDenseONNXConstant(v))
+        return std::nullopt;
+      auto elems = getConstValueElements(v);
+      return (*elems.value_begin<APInt>()).getBoolValue();
+    };
+    bool condIsAlwaysTrue =
+        getConstBool(loopOp.getCond()) == std::optional<bool>(true) &&
+        getConstBool(yieldOp.getOperand(0)) == std::optional<bool>(true);
+    if (!condIsNone && !condIsAlwaysTrue)
+      return rewriter.notifyMatchFailure(loopOp,
+          "Condition must be NoneType or a constant-true value with the body "
+          "always yielding true");
     const auto numCarried = static_cast<int64_t>(loopOp.getVInitial().size());
     const auto numResults = static_cast<int64_t>(loopOp.getNumResults());
     const int64_t numScanOutputs = numResults - numCarried;
+
+    // M = 0: the loop body never executes.
+    // Carried outputs are the unchanged v_initial values.
+    // Scan outputs are zero-element tensors with the correct element type.
+    if (M == 0) {
+      rewriter.setInsertionPoint(loopOp);
+      OnnxBuilder ob0(rewriter, loc);
+      SmallVector<Value> zeroOutputs(
+          loopOp.getVInitial().begin(), loopOp.getVInitial().end());
+      for (int64_t k = 0; k < numScanOutputs; ++k) {
+        Type scanResultTy = loopOp.getResult(numCarried + k).getType();
+        Type elemTy = rewriter.getF32Type(); // fallback
+        SmallVector<int64_t> shape = {0};
+        if (auto rt = dyn_cast<RankedTensorType>(scanResultTy)) {
+          elemTy = rt.getElementType();
+          // Shape: [0, D1, ..., Dn] (leading dim = 0, inner dims preserved).
+          shape.append(rt.getShape().begin() + 1, rt.getShape().end());
+        } else if (auto st = dyn_cast<ShapedType>(scanResultTy)) {
+          elemTy = st.getElementType();
+        }
+        auto emptyTy = RankedTensorType::get(shape, elemTy);
+        zeroOutputs.push_back(ob0.constant(
+            DenseElementsAttr::get(emptyTy, llvm::ArrayRef<Attribute>{})));
+      }
+      rewriter.replaceOp(loopOp, zeroOutputs);
+      return success();
+    }
 
     OnnxBuilder ob(rewriter, loc);
 
@@ -1411,10 +1454,13 @@ public:
         map.map(body.getArgument(2 + j), carried[j]);
 
       // Clone every op in the body except the yield terminator.
+      // Set each cloned op's location to the original loop's location so that
+      // diagnostic messages and debug info refer to the loop, not the body op.
       for (Operation &op : body.getOperations()) {
         if (&op == yieldOp.getOperation())
           break;
-        rewriter.clone(op, map);
+        Operation *cloned = rewriter.clone(op, map);
+        cloned->setLoc(loc);
       }
 
       // Advance carried values and record scan contributions.

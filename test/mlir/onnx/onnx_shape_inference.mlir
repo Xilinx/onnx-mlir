@@ -2951,6 +2951,52 @@ func.func @test_loop_multi_scan_main_graph(%arg0: tensor<i64>, %arg1: tensor<i1>
 
 // -----
 
+// M=0 with a scan output: body never executes, so the scan output's leading
+// dimension is statically 0 even though the condition is absent (NoneType).
+
+func.func @test_loop_m0_scan_shape(%arg0: tensor<1xi64>) -> (tensor<*xi64>, tensor<*xi64>) {
+  %trip = onnx.Constant dense<0> : tensor<i64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %0:2 = "onnx.Loop"(%trip, %none, %arg0) ({
+  ^bb0(%iter: tensor<*xi64>, %cond: tensor<*xi1>, %carried: tensor<*xi64>):
+    %identity_cond = "onnx.Identity"(%cond) : (tensor<*xi1>) -> tensor<*xi1>
+    %next = "onnx.Add"(%carried, %iter) : (tensor<*xi64>, tensor<*xi64>) -> tensor<*xi64>
+    %scan_val = "onnx.Identity"(%next) : (tensor<*xi64>) -> tensor<*xi64>
+    onnx.Yield %identity_cond, %next, %scan_val : tensor<*xi1>, tensor<*xi64>, tensor<*xi64>
+  }) : (tensor<i64>, none, tensor<1xi64>) -> (tensor<*xi64>, tensor<*xi64>)
+  onnx.Return %0#0, %0#1 : tensor<*xi64>, tensor<*xi64>
+  // CHECK-LABEL: func @test_loop_m0_scan_shape
+  // CHECK-SAME:  ([[ARG0:%.+]]: tensor<1xi64>) -> (tensor<1xi64>, tensor<0x1xi64>)
+  // CHECK:       [[LOOP_OUT:%.+]]:2 = "onnx.Loop"
+  // CHECK:       }) : (tensor<i64>, none, tensor<1xi64>) -> (tensor<1xi64>, tensor<0x1xi64>)
+  // CHECK:       onnx.Return [[LOOP_OUT]]#0, [[LOOP_OUT]]#1 : tensor<1xi64>, tensor<0x1xi64>
+}
+
+// -----
+
+// M=3 with constant-true initial condition AND body always yields true:
+// both conditions are statically known, so the scan output leading dim is 3.
+
+func.func @test_loop_true_cond_scan_shape(%arg0: tensor<1xi64>) -> (tensor<*xi64>, tensor<*xi64>) {
+  %trip = onnx.Constant dense<3> : tensor<i64>
+  %cond = onnx.Constant dense<true> : tensor<i1>
+  %0:2 = "onnx.Loop"(%trip, %cond, %arg0) ({
+  ^bb0(%iter: tensor<*xi64>, %body_cond: tensor<*xi1>, %carried: tensor<*xi64>):
+    %next = "onnx.Add"(%carried, %iter) : (tensor<*xi64>, tensor<*xi64>) -> tensor<*xi64>
+    %scan_val = "onnx.Identity"(%next) : (tensor<*xi64>) -> tensor<*xi64>
+    %true = onnx.Constant dense<true> : tensor<i1>
+    onnx.Yield %true, %next, %scan_val : tensor<i1>, tensor<*xi64>, tensor<*xi64>
+  }) : (tensor<i64>, tensor<i1>, tensor<1xi64>) -> (tensor<*xi64>, tensor<*xi64>)
+  onnx.Return %0#0, %0#1 : tensor<*xi64>, tensor<*xi64>
+  // CHECK-LABEL: func @test_loop_true_cond_scan_shape
+  // CHECK-SAME:  ([[ARG0:%.+]]: tensor<1xi64>) -> (tensor<1xi64>, tensor<3x1xi64>)
+  // CHECK:       [[LOOP_OUT:%.+]]:2 = "onnx.Loop"
+  // CHECK:       }) : (tensor<i64>, tensor<i1>, tensor<1xi64>) -> (tensor<1xi64>, tensor<3x1xi64>)
+  // CHECK:       onnx.Return [[LOOP_OUT]]#0, [[LOOP_OUT]]#1 : tensor<1xi64>, tensor<3x1xi64>
+}
+
+// -----
+
 func.func @test_scan_simple_main_graph(%arg0: tensor<2xf32>, %arg1: tensor<3x2xf32>) -> (tensor<*xf32>, tensor<*xf32>) {
   %0:2 = "onnx.Scan"(%arg0, %arg1) ( {
   ^bb0(%arg2: tensor<*xf32>, %arg3: tensor<*xf32>):  // no predecessors

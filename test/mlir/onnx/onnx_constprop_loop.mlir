@@ -27,10 +27,11 @@ func.func @test_loop_unroll_carried_only() -> tensor<i64> {
   }) : (tensor<i64>, none, tensor<i64>) -> tensor<i64>
   onnx.Return %result : tensor<i64>
 }
-// CHECK-LABEL: @test_loop_unroll_carried_only() -> tensor<i64>
-// CHECK-NOT:   onnx.Loop
-// CHECK:       [[RES:%.+]] = onnx.Constant dense<3> : tensor<i64>
-// CHECK:       onnx.Return [[RES]] : tensor<i64>
+// CHECK-LABEL:  func.func @test_loop_unroll_carried_only
+// CHECK-SAME:   () -> tensor<i64> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<3> : tensor<i64>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<i64>
+// CHECK:         }
 
 // -----
 
@@ -51,10 +52,11 @@ func.func @test_loop_unroll_scan_output() -> tensor<3xi64> {
   }) : (tensor<i64>, none, tensor<i64>) -> (tensor<i64>, tensor<3xi64>)
   onnx.Return %scan : tensor<3xi64>
 }
-// CHECK-LABEL: @test_loop_unroll_scan_output() -> tensor<3xi64>
-// CHECK-NOT:   onnx.Loop
-// CHECK:       [[SCAN:%.+]] = onnx.Constant dense<[1, 2, 3]> : tensor<3xi64>
-// CHECK:       onnx.Return [[SCAN]] : tensor<3xi64>
+// CHECK-LABEL:  func.func @test_loop_unroll_scan_output
+// CHECK-SAME:   () -> tensor<3xi64> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[1, 2, 3]> : tensor<3xi64>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<3xi64>
+// CHECK:         }
 
 // -----
 
@@ -95,6 +97,181 @@ func.func @test_loop_no_unroll_dynamic_trip(%trip: tensor<i64>) -> tensor<i64> {
 // CHECK-LABEL: @test_loop_no_unroll_dynamic_trip
 // CHECK:       onnx.Loop
 
+// -----
+
+// NOT unrolled: M > kMaxUnrollCount (64). The pattern refuses to unroll
+// excessively large trip counts to avoid IR explosion.
+
+func.func @test_loop_no_unroll_too_large() -> tensor<i64> {
+  %trip = onnx.Constant dense<65> : tensor<i64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %init = onnx.Constant dense<0> : tensor<i64>
+  %result = "onnx.Loop"(%trip, %none, %init) ({
+  ^bb0(%iter: tensor<i64>, %cond: tensor<i1>, %carried: tensor<i64>):
+    %one = onnx.Constant dense<1> : tensor<i64>
+    %next = "onnx.Add"(%carried, %one) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %true = onnx.Constant dense<true> : tensor<i1>
+    onnx.Yield %true, %next : tensor<i1>, tensor<i64>
+  }) : (tensor<i64>, none, tensor<i64>) -> tensor<i64>
+  onnx.Return %result : tensor<i64>
+}
+// CHECK-LABEL: @test_loop_no_unroll_too_large
+// CHECK:       onnx.Loop
+
+// -----
+
+// Non-constant-foldable body: the loop still unrolls (Loop op disappears),
+// but the cloned Add ops are not further folded because %arg is a runtime value.
+// The initial carried value is dense<0>, so the first iteration (0 + %arg)
+// is folded by Add-identity to just %arg, leaving 2 Add ops instead of 3.
+
+func.func @test_loop_unroll_non_const_body(%arg: tensor<i64>) -> tensor<i64> {
+  %trip = onnx.Constant dense<3> : tensor<i64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %init = onnx.Constant dense<0> : tensor<i64>
+  %result = "onnx.Loop"(%trip, %none, %init) ({
+  ^bb0(%iter: tensor<i64>, %cond: tensor<i1>, %carried: tensor<i64>):
+    %next = "onnx.Add"(%carried, %arg) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %true = onnx.Constant dense<true> : tensor<i1>
+    onnx.Yield %true, %next : tensor<i1>, tensor<i64>
+  }) : (tensor<i64>, none, tensor<i64>) -> tensor<i64>
+  onnx.Return %result : tensor<i64>
+}
+// CHECK-LABEL:  func.func @test_loop_unroll_non_const_body
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<i64>) -> tensor<i64> {
+// CHECK:           [[VAR_0_:%.+]] = "onnx.Add"([[PARAM_0_]], [[PARAM_0_]]) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Add"([[VAR_0_]], [[PARAM_0_]]) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<i64>
+// CHECK:         }
+
+// -----
+
+// Constant-true initial condition + body always yields true: semantically
+// equivalent to NoneType condition. The loop should be unrolled and the result
+// folded to a constant.
+
+func.func @test_loop_unroll_true_cond() -> tensor<i64> {
+  %trip = onnx.Constant dense<3> : tensor<i64>
+  %cond = onnx.Constant dense<true> : tensor<i1>
+  %init = onnx.Constant dense<0> : tensor<i64>
+  %result = "onnx.Loop"(%trip, %cond, %init) ({
+  ^bb0(%iter: tensor<i64>, %body_cond: tensor<i1>, %carried: tensor<i64>):
+    %one = onnx.Constant dense<1> : tensor<i64>
+    %next = "onnx.Add"(%carried, %one) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %true = onnx.Constant dense<true> : tensor<i1>
+    onnx.Yield %true, %next : tensor<i1>, tensor<i64>
+  }) : (tensor<i64>, tensor<i1>, tensor<i64>) -> tensor<i64>
+  onnx.Return %result : tensor<i64>
+}
+// CHECK-LABEL:  func.func @test_loop_unroll_true_cond
+// CHECK-SAME:   () -> tensor<i64> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<3> : tensor<i64>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<i64>
+// CHECK:         }
+
+// -----
+
+// NOT unrolled: body yields a non-constant condition. Even though the initial
+// condition is constant-true, we cannot guarantee the loop runs M times.
+
+func.func @test_loop_no_unroll_non_const_yield_cond(%flag: tensor<i1>) -> tensor<i64> {
+  %trip = onnx.Constant dense<3> : tensor<i64>
+  %cond = onnx.Constant dense<true> : tensor<i1>
+  %init = onnx.Constant dense<0> : tensor<i64>
+  %result = "onnx.Loop"(%trip, %cond, %init) ({
+  ^bb0(%iter: tensor<i64>, %body_cond: tensor<i1>, %carried: tensor<i64>):
+    %one = onnx.Constant dense<1> : tensor<i64>
+    %next = "onnx.Add"(%carried, %one) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    onnx.Yield %flag, %next : tensor<i1>, tensor<i64>
+  }) : (tensor<i64>, tensor<i1>, tensor<i64>) -> tensor<i64>
+  onnx.Return %result : tensor<i64>
+}
+// CHECK-LABEL: @test_loop_no_unroll_non_const_yield_cond
+// CHECK:       onnx.Loop
+
+// -----
+
+// M = 0, carried-only: the loop body never executes; the carried output is
+// just the initial value passed through unchanged.
+
+func.func @test_loop_m0_carried_only() -> tensor<i64> {
+  %trip = onnx.Constant dense<0> : tensor<i64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %init = onnx.Constant dense<42> : tensor<i64>
+  %result = "onnx.Loop"(%trip, %none, %init) ({
+  ^bb0(%iter: tensor<i64>, %cond: tensor<i1>, %carried: tensor<i64>):
+    %one = onnx.Constant dense<1> : tensor<i64>
+    %next = "onnx.Add"(%carried, %one) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %true = onnx.Constant dense<true> : tensor<i1>
+    onnx.Yield %true, %next : tensor<i1>, tensor<i64>
+  }) : (tensor<i64>, none, tensor<i64>) -> tensor<i64>
+  onnx.Return %result : tensor<i64>
+}
+// CHECK-LABEL:  func.func @test_loop_m0_carried_only
+// CHECK-SAME:   () -> tensor<i64> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<42> : tensor<i64>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<i64>
+// CHECK:         }
+
+// -----
+
+// M = 0 with scan output: the loop body never executes; the carried output is
+// the initial value and the scan output is an empty tensor.
+
+func.func @test_loop_m0_with_scan() -> (tensor<i64>, tensor<?xi64>) {
+  %trip = onnx.Constant dense<0> : tensor<i64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %init = onnx.Constant dense<7> : tensor<i64>
+  %carried_out, %scan = "onnx.Loop"(%trip, %none, %init) ({
+  ^bb0(%iter: tensor<i64>, %cond: tensor<i1>, %carried: tensor<i64>):
+    %one = onnx.Constant dense<1> : tensor<i64>
+    %next = "onnx.Add"(%carried, %one) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+    %true = onnx.Constant dense<true> : tensor<i1>
+    onnx.Yield %true, %next, %next : tensor<i1>, tensor<i64>, tensor<i64>
+  }) : (tensor<i64>, none, tensor<i64>) -> (tensor<i64>, tensor<?xi64>)
+  onnx.Return %carried_out, %scan : tensor<i64>, tensor<?xi64>
+}
+// Shape inference (M=0) refines the scan output to tensor<0xi64> statically.
+// CHECK-LABEL:  func.func @test_loop_m0_with_scan
+// CHECK-SAME:   () -> (tensor<i64>, tensor<0xi64>) {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<7> : tensor<i64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<> : tensor<0xi64>
+// CHECK:           onnx.Return [[VAR_0_]], [[VAR_1_]] : tensor<i64>, tensor<0xi64>
+// CHECK:         }
+
+// -----
+
+// Nested loops: outer loop runs 2 trips, each trip runs an inner loop for
+// 3 trips. Both loops have NoneType condition and constant bodies.
+// Outer body: inner_result = Loop(3){ v = v + 1 }, carried = inner_result.
+// Starting carried = 0; after outer iter 0: inner gives 3; after iter 1: 6.
+// Expected final result: dense<6>.
+
+func.func @test_loop_unroll_nested() -> tensor<i64> {
+  %outer_trip = onnx.Constant dense<2> : tensor<i64>
+  %none       = "onnx.NoValue"() {value} : () -> none
+  %outer_init = onnx.Constant dense<0> : tensor<i64>
+  %result = "onnx.Loop"(%outer_trip, %none, %outer_init) ({
+  ^bb0(%outer_iter: tensor<i64>, %outer_cond: tensor<i1>, %outer_carried: tensor<i64>):
+    %inner_trip = onnx.Constant dense<3> : tensor<i64>
+    %inner_result = "onnx.Loop"(%inner_trip, %none, %outer_carried) ({
+    ^bb0(%inner_iter: tensor<i64>, %inner_cond: tensor<i1>, %inner_carried: tensor<i64>):
+      %one = onnx.Constant dense<1> : tensor<i64>
+      %next = "onnx.Add"(%inner_carried, %one) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+      %true = onnx.Constant dense<true> : tensor<i1>
+      onnx.Yield %true, %next : tensor<i1>, tensor<i64>
+    }) : (tensor<i64>, none, tensor<i64>) -> tensor<i64>
+    %true = onnx.Constant dense<true> : tensor<i1>
+    onnx.Yield %true, %inner_result : tensor<i1>, tensor<i64>
+  }) : (tensor<i64>, none, tensor<i64>) -> tensor<i64>
+  onnx.Return %result : tensor<i64>
+}
+// CHECK-LABEL:  func.func @test_loop_unroll_nested
+// CHECK-SAME:   () -> tensor<i64> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<6> : tensor<i64>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<i64>
+// CHECK:         }
+
 //===----------------------------------------------------------------------===//
 // ConstPropConcatFromSequence: when a ConcatFromSequence op's input is a
 // compile-time SequenceEmpty → SequenceInsert … chain with all-constant
@@ -118,11 +295,11 @@ func.func @test_constprop_concatfromseq_concat() -> tensor<6xi32> {
   %result = "onnx.ConcatFromSequence"(%seq2) {axis = 0 : si64} : (!onnx.Seq<tensor<*xi32>>) -> tensor<6xi32>
   onnx.Return %result : tensor<6xi32>
 }
-// CHECK-LABEL: @test_constprop_concatfromseq_concat() -> tensor<6xi32>
-// CHECK-NOT:   onnx.ConcatFromSequence
-// CHECK-NOT:   onnx.SequenceInsert
-// CHECK:       [[CST:%.+]] = onnx.Constant dense<[1, 1, 1, 2, 2, 2]> : tensor<6xi32>
-// CHECK:       onnx.Return [[CST]] : tensor<6xi32>
+// CHECK-LABEL:  func.func @test_constprop_concatfromseq_concat
+// CHECK-SAME:   () -> tensor<6xi32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[1, 1, 1, 2, 2, 2]> : tensor<6xi32>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<6xi32>
+// CHECK:         }
 
 // -----
 
@@ -140,11 +317,11 @@ func.func @test_constprop_concatfromseq_stack() -> tensor<2x3xi32> {
   %result = "onnx.ConcatFromSequence"(%seq2) {axis = 0 : si64, new_axis = 1 : si64} : (!onnx.Seq<tensor<*xi32>>) -> tensor<2x3xi32>
   onnx.Return %result : tensor<2x3xi32>
 }
-// CHECK-LABEL: @test_constprop_concatfromseq_stack() -> tensor<2x3xi32>
-// CHECK-NOT:   onnx.ConcatFromSequence
-// CHECK-NOT:   onnx.SequenceInsert
-// CHECK:       [[CST:%.+]] = onnx.Constant dense<{{.}}[1, 2, 3], [4, 5, 6]]> : tensor<2x3xi32>
-// CHECK:       onnx.Return [[CST]] : tensor<2x3xi32>
+// CHECK-LABEL:  func.func @test_constprop_concatfromseq_stack
+// CHECK-SAME:   () -> tensor<2x3xi32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}[1, 2, 3], [4, 5, 6]{{.}}> : tensor<2x3xi32>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<2x3xi32>
+// CHECK:         }
 
 // -----
 
