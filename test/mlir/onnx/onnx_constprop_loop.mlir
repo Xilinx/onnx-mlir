@@ -429,17 +429,18 @@ func.func @test_loop_many_carried_and_scans()
       : tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>,
         tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>
 }
-// CHECK-LABEL: func.func @test_loop_many_carried_and_scans
-// CHECK-DAG:     [[VA:%.+]]  = onnx.Constant dense<4>               : tensor<i64>
-// CHECK-DAG:     [[VB:%.+]]  = onnx.Constant dense<16>              : tensor<i64>
-// CHECK-DAG:     [[VC:%.+]]  = onnx.Constant dense<-2>              : tensor<i64>
-// CHECK-DAG:     [[VD:%.+]]  = onnx.Constant dense<24>              : tensor<i64>
-// CHECK-DAG:     [[SA:%.+]]  = onnx.Constant dense<[1, 2, 3, 4]>    : tensor<4xi64>
-// CHECK-DAG:     [[SB:%.+]]  = onnx.Constant dense<[2, 4, 8, 16]>   : tensor<4xi64>
-// CHECK-DAG:     [[SC:%.+]]  = onnx.Constant dense<[7, 4, 1, -2]>   : tensor<4xi64>
-// CHECK-DAG:     [[SAB:%.+]] = onnx.Constant dense<[3, 6, 11, 20]>  : tensor<4xi64>
-// CHECK:         onnx.Return [[VA]], [[VB]], [[VC]], [[VD]],
-// CHECK-SAME:                [[SA]], [[SB]], [[SC]], [[SAB]]
+// CHECK-LABEL:  func.func @test_loop_many_carried_and_scans
+// CHECK-SAME:   () -> (tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>) {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<4> : tensor<i64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<16> : tensor<i64>
+// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<-2> : tensor<i64>
+// CHECK-DAG:       [[VAR_3_:%.+]] = onnx.Constant dense<24> : tensor<i64>
+// CHECK-DAG:       [[VAR_4_:%.+]] = onnx.Constant dense<[1, 2, 3, 4]> : tensor<4xi64>
+// CHECK-DAG:       [[VAR_5_:%.+]] = onnx.Constant dense<[2, 4, 8, 16]> : tensor<4xi64>
+// CHECK-DAG:       [[VAR_6_:%.+]] = onnx.Constant dense<[7, 4, 1, -2]> : tensor<4xi64>
+// CHECK-DAG:       [[VAR_7_:%.+]] = onnx.Constant dense<[3, 6, 11, 20]> : tensor<4xi64>
+// CHECK:           onnx.Return [[VAR_0_]], [[VAR_1_]], [[VAR_2_]], [[VAR_3_]], [[VAR_4_]], [[VAR_5_]], [[VAR_6_]], [[VAR_7_]] : tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>
+// CHECK:         }
 
 // -----
 
@@ -501,23 +502,41 @@ func.func @test_loop_many_partial_fold(%arg: tensor<i64>)
       : tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>,
         tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>
 }
-// CHECK-LABEL: func.func @test_loop_many_partial_fold
-// CHECK-SAME:  (%arg0: tensor<i64>) -> (tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>,
-// CHECK-SAME:   tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>) {
-// Foldable results collapse to constants.
-// CHECK-NOT:   onnx.Loop
-// CHECK-DAG:   [[VA:%.+]]  = onnx.Constant dense<4>              : tensor<i64>
-// CHECK-DAG:   [[VB:%.+]]  = onnx.Constant dense<16>             : tensor<i64>
-// CHECK-DAG:   [[VD:%.+]]  = onnx.Constant dense<15>             : tensor<i64>
-// CHECK-DAG:   [[SA:%.+]]  = onnx.Constant dense<[1, 2, 3, 4]>   : tensor<4xi64>
-// CHECK-DAG:   [[SB:%.+]]  = onnx.Constant dense<[2, 4, 8, 16]>  : tensor<4xi64>
-// Runtime-dependent scan tapes: Unsqueeze per iter + Concat(axis=0) remain.
-// CHECK:       "onnx.Unsqueeze"
-// CHECK:       "onnx.Concat"
-// CHECK:       "onnx.Unsqueeze"
-// CHECK:       "onnx.Concat"
-// Final Return: constant results are named, runtime results are wildcarded.
-// CHECK:       onnx.Return [[VA]], [[VB]], {{%.+}}, [[VD]], [[SA]], [[SB]], {{%.+}}, {{%.+}}
+// CHECK-LABEL:  func.func @test_loop_many_partial_fold
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<i64>) -> (tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>) {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<[2, 4, 8, 16]> : tensor<4xi64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<[1, 2, 3, 4]> : tensor<4xi64>
+// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<0> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_3_:%.+]] = onnx.Constant dense<15> : tensor<i64>
+// CHECK-DAG:       [[VAR_4_:%.+]] = onnx.Constant dense<16> : tensor<i64>
+// CHECK-DAG:       [[VAR_5_:%.+]] = onnx.Constant dense<4> : tensor<i64>
+// CHECK-DAG:       [[VAR_6_:%.+]] = onnx.Constant dense<3> : tensor<i64>
+// CHECK-DAG:       [[VAR_7_:%.+]] = onnx.Constant dense<2> : tensor<i64>
+// CHECK-DAG:       [[VAR_8_:%.+]] = onnx.Constant dense<1> : tensor<i64>
+// CHECK-NOT: separator of consecutive DAGs
+// CHECK-DAG:       [[VAR_9_:%.+]] = "onnx.Add"([[PARAM_0_]], [[VAR_8_]]) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+// CHECK-DAG:       [[VAR_10_:%.+]] = "onnx.Add"([[PARAM_0_]], [[PARAM_0_]]) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+// CHECK-NOT: separator of consecutive DAGs
+// CHECK-DAG:       [[VAR_11_:%.+]] = "onnx.Add"([[VAR_10_]], [[VAR_7_]]) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+// CHECK-DAG:       [[VAR_12_:%.+]] = "onnx.Add"([[VAR_10_]], [[PARAM_0_]]) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+// CHECK-NOT: separator of consecutive DAGs
+// CHECK-DAG:       [[VAR_13_:%.+]] = "onnx.Add"([[VAR_12_]], [[VAR_6_]]) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+// CHECK-DAG:       [[VAR_14_:%.+]] = "onnx.Add"([[VAR_12_]], [[PARAM_0_]]) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+// CHECK-NOT: separator of consecutive DAGs
+// CHECK-DAG:       [[VAR_15_:%.+]] = "onnx.Add"([[VAR_14_]], [[VAR_5_]]) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+// CHECK-DAG:       [[VAR_16_:%.+]] = "onnx.Unsqueeze"([[PARAM_0_]], [[VAR_2_]]) : (tensor<i64>, tensor<1xi64>) -> tensor<1xi64>
+// CHECK-DAG:       [[VAR_17_:%.+]] = "onnx.Unsqueeze"([[VAR_10_]], [[VAR_2_]]) : (tensor<i64>, tensor<1xi64>) -> tensor<1xi64>
+// CHECK-DAG:       [[VAR_18_:%.+]] = "onnx.Unsqueeze"([[VAR_12_]], [[VAR_2_]]) : (tensor<i64>, tensor<1xi64>) -> tensor<1xi64>
+// CHECK-DAG:       [[VAR_19_:%.+]] = "onnx.Unsqueeze"([[VAR_14_]], [[VAR_2_]]) : (tensor<i64>, tensor<1xi64>) -> tensor<1xi64>
+// CHECK-NOT: separator of consecutive DAGs
+// CHECK-DAG:       [[VAR_20_:%.+]] = "onnx.Concat"([[VAR_16_]], [[VAR_17_]], [[VAR_18_]], [[VAR_19_]]) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<4xi64>
+// CHECK-DAG:       [[VAR_21_:%.+]] = "onnx.Unsqueeze"([[VAR_9_]], [[VAR_2_]]) : (tensor<i64>, tensor<1xi64>) -> tensor<1xi64>
+// CHECK-DAG:       [[VAR_22_:%.+]] = "onnx.Unsqueeze"([[VAR_11_]], [[VAR_2_]]) : (tensor<i64>, tensor<1xi64>) -> tensor<1xi64>
+// CHECK-DAG:       [[VAR_23_:%.+]] = "onnx.Unsqueeze"([[VAR_13_]], [[VAR_2_]]) : (tensor<i64>, tensor<1xi64>) -> tensor<1xi64>
+// CHECK-DAG:       [[VAR_24_:%.+]] = "onnx.Unsqueeze"([[VAR_15_]], [[VAR_2_]]) : (tensor<i64>, tensor<1xi64>) -> tensor<1xi64>
+// CHECK:           [[VAR_25_:%.+]] = "onnx.Concat"([[VAR_21_]], [[VAR_22_]], [[VAR_23_]], [[VAR_24_]]) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<4xi64>
+// CHECK:           onnx.Return [[VAR_5_]], [[VAR_4_]], [[VAR_14_]], [[VAR_3_]], [[VAR_1_]], [[VAR_0_]], [[VAR_20_]], [[VAR_25_]] : tensor<i64>, tensor<i64>, tensor<i64>, tensor<i64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>
+// CHECK:         }
 
 // -----
 
@@ -565,10 +584,18 @@ func.func @test_loop_scan_non_const(%arg: tensor<i64>) -> tensor<3xi64> {
   }) : (tensor<i64>, none, tensor<i64>) -> (tensor<i64>, tensor<3xi64>)
   onnx.Return %scan : tensor<3xi64>
 }
-// CHECK-LABEL: func.func @test_loop_scan_non_const
-// CHECK-NOT:   onnx.Loop
-// CHECK:       onnx.Unsqueeze
-// CHECK:       onnx.Concat
+// CHECK-LABEL:  func.func @test_loop_scan_non_const
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<i64>) -> tensor<3xi64> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<0> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.Add"([[PARAM_0_]], [[PARAM_0_]]) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+// CHECK-NOT: separator of consecutive DAGs
+// CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.Add"([[VAR_1_]], [[PARAM_0_]]) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+// CHECK-DAG:       [[VAR_3_:%.+]] = "onnx.Unsqueeze"([[PARAM_0_]], [[VAR_0_]]) : (tensor<i64>, tensor<1xi64>) -> tensor<1xi64>
+// CHECK-DAG:       [[VAR_4_:%.+]] = "onnx.Unsqueeze"([[VAR_1_]], [[VAR_0_]]) : (tensor<i64>, tensor<1xi64>) -> tensor<1xi64>
+// CHECK:           [[VAR_5_:%.+]] = "onnx.Unsqueeze"([[VAR_2_]], [[VAR_0_]]) : (tensor<i64>, tensor<1xi64>) -> tensor<1xi64>
+// CHECK:           [[VAR_6_:%.+]] = "onnx.Concat"([[VAR_3_]], [[VAR_4_]], [[VAR_5_]]) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<3xi64>
+// CHECK:           onnx.Return [[VAR_6_]] : tensor<3xi64>
+// CHECK:         }
 
 // -----
 
@@ -669,8 +696,16 @@ func.func @test_constprop_concatfromseq_no_fold(%arg: tensor<3xi32>) -> tensor<6
   %result = "onnx.ConcatFromSequence"(%seq2) {axis = 0 : si64} : (!onnx.Seq<tensor<*xi32>>) -> tensor<6xi32>
   onnx.Return %result : tensor<6xi32>
 }
-// CHECK-LABEL: @test_constprop_concatfromseq_no_fold
-// CHECK:       onnx.ConcatFromSequence
+// CHECK-LABEL:  func.func @test_constprop_concatfromseq_no_fold
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3xi32>) -> tensor<6xi32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<2> : tensor<3xi32>
+// CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.NoValue"() {value} : () -> none
+// CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.SequenceEmpty"() {dtype = 6 : si64} : () -> !onnx.Seq<tensor<*xi32>>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.SequenceInsert"([[VAR_2_]], [[PARAM_0_]], [[VAR_1_]]) : (!onnx.Seq<tensor<*xi32>>, tensor<3xi32>, none) -> !onnx.Seq<tensor<3xi32>>
+// CHECK:           [[VAR_4_:%.+]] = "onnx.SequenceInsert"([[VAR_3_]], [[VAR_0_]], [[VAR_1_]]) : (!onnx.Seq<tensor<3xi32>>, tensor<3xi32>, none) -> !onnx.Seq<tensor<3xi32>>
+// CHECK:           [[VAR_5_:%.+]] = "onnx.ConcatFromSequence"([[VAR_4_]]) {axis = 0 : si64, new_axis = 0 : si64} : (!onnx.Seq<tensor<3xi32>>) -> tensor<6xi32>
+// CHECK:           onnx.Return [[VAR_5_]] : tensor<6xi32>
+// CHECK:         }
 
 //===----------------------------------------------------------------------===//
 // LoopUnroll + SequenceInsert + ConcatFromSequence
@@ -771,9 +806,8 @@ func.func @test_loop_unroll_foldable_cond() -> tensor<i64> {
   }) : (tensor<i64>, tensor<i1>, tensor<i64>) -> tensor<i64>
   onnx.Return %res : tensor<i64>
 }
-// CHECK-LABEL: func.func @test_loop_unroll_foldable_cond
-// CHECK-SAME:  () -> tensor<i64>
-// CHECK-NOT:   onnx.Loop
-// CHECK-NOT:   onnx.Not
-// CHECK:       [[C:%.+]] = onnx.Constant dense<3> : tensor<i64>
-// CHECK:       onnx.Return [[C]] : tensor<i64>
+// CHECK-LABEL:  func.func @test_loop_unroll_foldable_cond
+// CHECK-SAME:   () -> tensor<i64> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<3> : tensor<i64>
+// CHECK:           onnx.Return [[VAR_0_]] : tensor<i64>
+// CHECK:         }
