@@ -97,6 +97,33 @@ static bool isSplatConstant(Value val) {
   return false;
 }
 
+// Replace a splat constant with a scalar constant holding the splat value.
+static Value createScalarFromSplat(PatternRewriter &rewriter, Value constant) {
+  auto constOp = constant.getDefiningOp<ONNXConstantOp>();
+  auto denseAttr = mlir::cast<DenseElementsAttr>(constOp.getValueAttr());
+  const auto elementType =
+      mlir::cast<ShapedType>(constant.getType()).getElementType();
+  const auto scalarType = RankedTensorType::get({}, elementType);
+  auto splatValue = denseAttr.getSplatValue<Attribute>();
+  auto scalarAttr = DenseElementsAttr::get(scalarType, splatValue);
+  return rewriter.create<ONNXConstantOp>(
+      constOp->getLoc(), nullptr, scalarAttr);
+}
+
+// Check if a splat constant can be fused without introducing spatial
+// broadcasting. Returns true when the first operand of the defining op
+// (the Conv output) has the same shape as opResult (the Mul/Add result).
+static bool isSplatWithoutBroadcasting(Value constant, Value opResult) {
+  if (!isSplatConstant(constant))
+    return false;
+  auto convOutput = opResult.getDefiningOp()->getOperand(0);
+  auto convType = mlir::dyn_cast<ShapedType>(convOutput.getType());
+  if (!convType || !convType.hasStaticShape())
+    return false;
+  auto resultType = mlir::cast<ShapedType>(opResult.getType());
+  return convType.getShape() == resultType.getShape();
+}
+
 // Create a reshaped constant for fusing into Conv weight multiplication.
 //   1. For scalars: returns as-is.
 //   2. For splats: creates scalar.
@@ -111,30 +138,18 @@ Value createReshapedConstantForWeightFusion(
   const int64_t weightRank = weightType.getRank();
 
   // Case 1: Scalar (1 element) - return as-is
-  if (numElements == 1) {
+  if (numElements == 1)
     return constant;
-  }
-
-  auto constOp = constant.getDefiningOp<ONNXConstantOp>();
-  auto constOpLoc = constOp->getLoc();
 
   // Case 2: Splat constant - create a scalar constant with the splat value
-  if (isSplatConstant(constant)) {
-    auto denseAttr = mlir::cast<DenseElementsAttr>(constOp.getValueAttr());
-
-    // Create a new scalar constant with the splat value
-    auto elementType = constantType.getElementType();
-    auto scalarType = RankedTensorType::get({}, elementType);
-    auto splatValue = denseAttr.getSplatValue<Attribute>();
-    auto scalarAttr = DenseElementsAttr::get(scalarType, splatValue);
-
-    return rewriter.create<ONNXConstantOp>(constOpLoc, nullptr, scalarAttr);
-  }
+  if (isSplatConstant(constant))
+    return createScalarFromSplat(rewriter, constant);
 
   // Case 3: Per-ouput-channel (C_out elements) - reshape to [C_out, 1, 1, ...]
   assert(cOut == numElements &&
          "For non-splat constants, numElements must equal C_out");
 
+  const auto loc = constant.getDefiningOp()->getLoc();
   SmallVector<int64_t> targetShape;
   targetShape.push_back(cOut);
   for (int i = 1; i < weightRank; ++i)
@@ -142,15 +157,78 @@ Value createReshapedConstantForWeightFusion(
 
   // Create shape constant
   Value shapeConst = rewriter.create<ONNXConstantOp>(
-      constOpLoc, nullptr, rewriter.getI64TensorAttr(targetShape));
+      loc, nullptr, rewriter.getI64TensorAttr(targetShape));
 
   // Create result type for reshape
   auto elementType = constantType.getElementType();
   auto resultType = RankedTensorType::get(targetShape, elementType);
 
   // Create and return the reshape op
+  return rewriter.create<ONNXReshapeOp>(loc, resultType, constant, shapeConst);
+}
+
+// Create a reshaped constant for fusing into Conv bias multiplication/addition.
+//   1. For scalars with rank <= bias rank: returns as-is.
+//   2. For scalars with rank > bias rank: reshapes to [1] to avoid
+//      broadcasting the result to a higher rank than the bias.
+//   3. For splats: creates a scalar constant with the splat value.
+//   4. Otherwise: reshapes to [C_out] matching bias shape.
+Value createReshapedConstantForBiasFusion(
+    PatternRewriter &rewriter, Value constant, Value bias) {
+  const auto constantType = cast<ShapedType>(constant.getType());
+  const auto biasType = cast<ShapedType>(bias.getType());
+
+  if (constantType.getNumElements() == 1) {
+    if (constantType.getRank() <= biasType.getRank())
+      return constant;
+    // Reshape to [1] to avoid broadcasting the result to a higher rank than the
+    // bias.
+    auto constOp = constant.getDefiningOp<ONNXConstantOp>();
+    SmallVector<int64_t> scalarShape(biasType.getRank(), 1);
+    const auto reshapedType =
+        RankedTensorType::get(scalarShape, constantType.getElementType());
+    Value shapeConst = rewriter.create<ONNXConstantOp>(
+        constOp->getLoc(), nullptr, rewriter.getI64TensorAttr(scalarShape));
+    return rewriter.create<ONNXReshapeOp>(
+        constOp->getLoc(), reshapedType, constant, shapeConst);
+  }
+
+  if (isSplatConstant(constant))
+    return createScalarFromSplat(rewriter, constant);
+
+  auto constOp = constant.getDefiningOp<ONNXConstantOp>();
+  const auto constOpLoc = constOp->getLoc();
+  const auto biasShape = biasType.getShape();
+  Value shapeConst = rewriter.create<ONNXConstantOp>(
+      constOpLoc, nullptr, rewriter.getI64TensorAttr(biasShape));
+  auto resultType =
+      RankedTensorType::get(biasShape, constantType.getElementType());
   return rewriter.create<ONNXReshapeOp>(
       constOpLoc, resultType, constant, shapeConst);
+}
+
+// Check if a constant shape is per-channel compatible with a Conv result shape
+// (NC... layout). After right-aligning the constant shape against the result
+// shape, all non-channel dimensions must be 1, and the channel dimension
+// (dim 1) must be either 1 (broadcast) or cOut (per-channel).
+bool isPerChannelCompatibleShape(
+    ArrayRef<int64_t> constShape, int64_t cOut, int64_t resultRank) {
+  const int64_t constRank = constShape.size();
+  for (int64_t i = 0; i < resultRank; ++i) {
+    const int64_t constIdx = constRank - (resultRank - i);
+    const int64_t constDim = (constIdx >= 0) ? constShape[constIdx] : 1;
+    if (i == 1) {
+      // The channel dimension must be either 1 (broadcast) or cOut
+      // (per-channel).
+      if (constDim != 1 && constDim != cOut)
+        return false;
+    } else {
+      // All other dimensions must be 1.
+      if (constDim != 1)
+        return false;
+    }
+  }
+  return true;
 }
 
 // Check if constant to Mul has valid shape for folding into the weights of
@@ -173,52 +251,110 @@ bool hasValidShapeForWeightFusion(
 
   const int64_t numElements = constType.getNumElements();
   const int64_t cOut = weightType.getShape()[0];
-  const int64_t resultRank = resultType.getRank();
-  auto constShape = constType.getShape();
-  const int64_t constRank = constType.getRank();
 
   // Case 1: Scalar (1 element)
   if (numElements == 1)
     return true;
 
-  // Case 2: Splat constant (uniform value) - only if Mul doesn't change shape
+  // Case 2: Splat constant (uniform value) - only if Mul doesn't change shape.
   // If Mul does broadcasting (changes shape), don't fuse because we'd just
   // trade Mul for a Broadcast op, which is not a real optimization.
-  if (isSplatConstant(constant)) {
-    // Check if Mul changes shape by comparing Conv output with Mul result
-    // We need the Conv output shape, which we can infer from the Mul inputs
-    // For now, check if constant and result have compatible shapes
-    // If they're the same shape, no broadcasting happens
-    auto convOutput = mulResult.getDefiningOp()->getOperand(0);
-    auto convType = mlir::dyn_cast<ShapedType>(convOutput.getType());
-    if (!convType || !convType.hasRank())
-      return false;
-
-    // If Conv output shape != Mul result shape, Mul is doing broadcasting
-    // In that case, don't fuse even for splats
-    return convType.getShape() == resultType.getShape();
-  }
+  if (isSplatWithoutBroadcasting(constant, mulResult))
+    return true;
 
   // Case 3: Per-channel scaling
-  // After right-aligning shapes for broadcasting, the constant must be 1 on
-  // all dimensions except the channel dimension (dim 1 in NCHW layout).
-  // This ensures the constant only varies along the channel dimension.
-  for (int64_t i = 0; i < resultRank; ++i) {
-    // Right-align: find corresponding constant dimension
-    int64_t constIdx = constRank - (resultRank - i);
-    int64_t constDim = (constIdx >= 0) ? constShape[constIdx] : 1;
+  return isPerChannelCompatibleShape(
+      constType.getShape(), cOut, resultType.getRank());
+}
 
-    if (i == 1) {
-      // Channel dimension: can be 1 (broadcast) or C_out (per-channel)
-      if (constDim != 1 && constDim != cOut)
-        return false;
-    } else {
-      // Non-channel dimensions: MUST broadcast (must be 1)
-      if (constDim != 1)
-        return false;
-    }
-  }
-  return true;
+// Check if a constant has valid shape for folding into Conv bias via Add.
+// Valid cases:
+//   1. Scalar (1 element)
+//   2. Splat constant, only if Add doesn't change shape (no spatial
+//      broadcasting)
+//   3. Per-channel: after right-aligning shapes for broadcasting, the constant
+//      must be 1 on all dimensions except the channel dim (dim 1 in NCHW).
+// $0 = constant, $1 = bias, $2 = Add result
+bool hasValidShapeForBiasFusion(Value constant, Value bias, Value addResult) {
+  const auto constType = mlir::dyn_cast<ShapedType>(constant.getType());
+  const auto biasType = mlir::dyn_cast<ShapedType>(bias.getType());
+  const auto resultType = mlir::dyn_cast<ShapedType>(addResult.getType());
+
+  if (!constType || !biasType || !resultType)
+    return false;
+  if (!constType.hasRank() || !biasType.hasRank() || !resultType.hasRank())
+    return false;
+  if (resultType.getRank() < 2)
+    return false;
+
+  const int64_t numElements = constType.getNumElements();
+
+  // Case 1: Scalar (1 element). The reshape helper will handle it.
+  if (numElements == 1)
+    return true;
+
+  // Case 2: Splat constant (uniform value) - only if Add doesn't change shape.
+  // If Add does broadcasting (changes shape), don't fuse because we'd just
+  // trade Add for a Broadcast op, which is not a real optimization.
+  if (isSplatWithoutBroadcasting(constant, addResult))
+    return true;
+
+  // Case 3: Per-channel constant.
+  // Must have exactly C_out elements and only vary along the channel dimension.
+  const int64_t cOut = resultType.getShape()[1];
+  if (numElements != cOut)
+    return false;
+
+  return isPerChannelCompatibleShape(
+      constType.getShape(), cOut, resultType.getRank());
+}
+
+// Check if a scale constant is scalar or per-channel compatible with the
+// given result shape (NCHW layout, channel dim = 1).
+bool isPerChannelOrScalarScale(Value scale, Value result) {
+  const auto scaleType = dyn_cast<ShapedType>(scale.getType());
+  const auto resultType = dyn_cast<ShapedType>(result.getType());
+  if (!scaleType || !resultType)
+    return false;
+  if (!scaleType.hasStaticShape() || !resultType.hasStaticShape())
+    return false;
+  if (resultType.getRank() < 2)
+    return false;
+
+  if (scaleType.getNumElements() == 1)
+    return true;
+
+  return isPerChannelCompatibleShape(
+      scaleType.getShape(), resultType.getShape()[1], resultType.getRank());
+}
+
+bool hasNoneOrConstBias(ONNXConvOp conv) {
+  const auto bias = conv.getB();
+  return isa<NoneType>(bias.getType()) || isDenseONNXConstant(bias);
+}
+
+// Check if at least one of the two values is defined by a fusible ONNXConvOp
+// whose weights are constant and bias is either None or constant, so that a
+// subsequent FuseMulConvPattern can actually absorb the Mul.
+// TODO: Extend for further ops that can swallow muls, like MatMul.
+bool hasConvOperand(Value a, Value b) {
+  const auto isFusibleConv = [](Value v) {
+    auto conv = v.getDefiningOp<ONNXConvOp>();
+    return conv && isDenseONNXConstant(conv.getW()) && hasNoneOrConstBias(conv);
+  };
+  return isFusibleConv(a) || isFusibleConv(b);
+}
+
+// Check if a value is a profitable target for Add reassociation: either a dense
+// constant (enabling constant folding) or a Conv with none-or-const bias
+// (enabling FuseAddConvPattern to absorb the constant into the bias).
+bool isAddReassociationTarget(Value v) {
+  if (isDenseONNXConstant(v))
+    return true;
+  auto conv = v.getDefiningOp<ONNXConvOp>();
+  if (!conv)
+    return false;
+  return hasNoneOrConstBias(conv);
 }
 
 // Get return type for a MatMulOp whose A's rank is N (>2) and B's rank is 2.
@@ -3601,6 +3737,8 @@ void ONNXAddOp::getCanonicalizationPatterns(
   results.insert<FuseGemmFollowedByAddition>(context);
   results.insert<FuseAddConvPattern>(context);
   results.insert<FuseAddConvNullBiasPattern>(context);
+  results.insert<ReassociateAddConstToRhsPattern>(context);
+  results.insert<ReassociateAddConstToLhsPattern>(context);
   results.insert<BinaryOpBroadcastAxisPattern<ONNXAddOp>>(context);
   results.insert<PropagateScalarConstantExpandPattern<ONNXAddOp>>(context);
   results.insert<PropagateScaleIntoLayerNormPattern<ONNXLayerNormalizationOp>>(
@@ -3782,6 +3920,8 @@ void ONNXMulOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<NormalizeMulPattern>(context);
   results.insert<FuseMulConvNullBiasPattern>(context);
+  results.insert<FuseMulConvPattern>(context);
+  results.insert<DistributeMulOverAddPattern>(context);
   results.insert<BinaryOpBroadcastAxisPattern<ONNXMulOp>>(context);
   results.insert<PropagateScalarConstantExpandPattern<ONNXMulOp>>(context);
   results.insert<PropagateReshapeThroughBinaryOpPattern<ONNXMulOp>>(context);

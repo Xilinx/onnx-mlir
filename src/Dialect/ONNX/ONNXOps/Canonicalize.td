@@ -92,6 +92,10 @@ def createDenseElementsAttrOfOneToRankOf : NativeCodeCall<
 def createReshapedConstantForWeightFusion : NativeCodeCall<
   "onnx_mlir::createReshapedConstantForWeightFusion($_builder, $0, $1)">;
 
+// Create reshaped constant [C_out] if necessary for bias fusion
+def createReshapedConstantForBiasFusion : NativeCodeCall<
+  "onnx_mlir::createReshapedConstantForBiasFusion($_builder, $0, $1)">;
+
 // Create an ArrayAttr of IntegerAttr(s) of values in [2, rank - 1].
 def createArrayAttrOfTwoToRankOf : NativeCodeCall<
   "onnx_mlir::createArrayAttrOfNToM($_builder, 2, mlir::cast<ShapedType>($0.getType()).getRank() - 1)">;
@@ -156,6 +160,28 @@ class HaveSameDim<int dim>: Constraint<
 def HasValidShapeForWeightFusion: Constraint<
   CPred<"onnx_mlir::hasValidShapeForWeightFusion($0, $1, $2)">,
   "Constant has valid shape for weight fusion (scalar, splat, or per-channel)">;
+
+// Check if constant has valid shape for bias fusion into Conv via Add.
+// Valid cases: 1) Scalar, 2) Per-channel (proper alignment)
+// $0 is constant, $1 is bias, $2 is the Add result
+def HasValidShapeForBiasFusion: Constraint<
+  CPred<"onnx_mlir::hasValidShapeForBiasFusion($0, $1, $2)">,
+  "Constant has valid shape for bias fusion (scalar or per-channel)">;
+
+// $0 is scale constant, $1 is the Mul result
+def IsPerChannelOrScalarScale: Constraint<
+  CPred<"onnx_mlir::isPerChannelOrScalarScale($0, $1)">,
+  "Scale is scalar or per-channel compatible with result shape">;
+
+// $0 and $1 are the two Add operands
+def HasConvOperand: Constraint<
+  CPred<"onnx_mlir::hasConvOperand($0, $1)">,
+  "At least one operand is from a fusible ONNXConvOp">;
+
+// $0 is the Add operand
+def IsAddReassociationTarget: Constraint<
+  CPred<"onnx_mlir::isAddReassociationTarget($0)">,
+  "Value is a dense constant or from a Conv with none-or-const bias">;
 
 def HaveSameShapedType: Constraint<
     CPred<"(isa<ShapedType>($0.getType()) &&"
@@ -355,12 +381,14 @@ def FuseGemmFollowedByAddition : Pat<(ONNXAddOp (ONNXGemmOp:$res $m1, $m2, $none
 // The shape of 'constant' must be compatible with that of 'b'
 //===----------------------------------------------------------------------===//
 
+// Add(const, x) -> Add(x, const): move constant to RHS
 def NormalizeAddPattern: Pat<
   (ONNXAddOp $x, $y),
   (ONNXAddOp $y, $x),
   [(IsFromONNXConstantOp $x), (IsNotFromONNXConstantOp $y)]
 >;
 
+// Add(Conv(x, w, none), const) -> Conv(x, w, const): fuse Add into Conv as bias.
 def FuseAddConvNullBiasPattern: Pat<
   (ONNXAddOp:$res
     (ONNXConvOp
@@ -383,6 +411,7 @@ def FuseAddConvNullBiasPattern: Pat<
    ]
 >;
 
+// Add(Conv(x, w, b), const) -> Conv(x, w, b + reshape(const)): fold into bias.
 def FuseAddConvPattern: Pat<
   (ONNXAddOp:$res
     (ONNXConvOp
@@ -390,21 +419,45 @@ def FuseAddConvPattern: Pat<
     (ONNXConstantOp:$y $_, $denseAttr, $_, $_, $_, $_, $_, $_)),
   (ONNXConvOp
      $x, $w,
-     // new_b
-     (ONNXAddOp
-        $b,
-        (ONNXSqueezeOp
-           $y,
-           (ONNXConstantOpFromDenseAttr (createDenseElementsAttrOfOneToRankOf $y)))),
+     // new_b = Add(b, reshape_for_bias(y))
+     (ONNXAddOp $b, (createReshapedConstantForBiasFusion $y, $b)),
      // unchanged operands and attributes.
      $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
   [(HasShapeAndRank:$res),
    (NotNoneType $b),
    (AttributeIsNotNull:$denseAttr),
-   (ValidAxisConstraints<1>:$y),
-   (RankXMinusRankYIs<1> $res, $y),
-   (HasRankGT<0> $y),
-   (AllDimsFromAxisToEndAre<1, 1>:$y)]
+   (HasValidShapeForBiasFusion $y, $b, $res)]
+>;
+
+// Reassociate add(add(a, target), const) to push the constant next to a Conv
+// or constant operand, enabling FuseAddConvPattern to fold it into the bias
+// or constant folding to merge two constants.
+// Pattern A: Inner RHS is the reassociation target (Conv or constant)
+def ReassociateAddConstToRhsPattern: Pat<
+  (ONNXAddOp:$res
+    (ONNXAddOp:$inner_res $a, $target),
+    (ONNXConstantOp:$c $_, $denseAttr, $_, $_, $_, $_, $_, $_)),
+  (ONNXAddOp $a, (ONNXAddOp $target, $c)),
+  [(HasOneUse $inner_res),
+   (AttributeIsNotNull:$denseAttr),
+   (IsStaticShapeTensor:$res),
+   (IsStaticShapeTensor:$inner_res),
+   (IsPerChannelOrScalarScale $c, $res),
+   (IsAddReassociationTarget $target)]
+>;
+
+// Pattern B: Inner LHS is the reassociation target (Conv or constant)
+def ReassociateAddConstToLhsPattern: Pat<
+  (ONNXAddOp:$res
+    (ONNXAddOp:$inner_res $target, $b),
+    (ONNXConstantOp:$c $_, $denseAttr, $_, $_, $_, $_, $_, $_)),
+  (ONNXAddOp (ONNXAddOp $target, $c), $b),
+  [(HasOneUse $inner_res),
+   (AttributeIsNotNull:$denseAttr),
+   (IsStaticShapeTensor:$res),
+   (IsStaticShapeTensor:$inner_res),
+   (IsPerChannelOrScalarScale $c, $res),
+   (IsAddReassociationTarget $target)]
 >;
 
 //===----------------------------------------------------------------------===//
@@ -423,6 +476,7 @@ def FuseAddConvPattern: Pat<
 // The shape of 'c' must be compatible with that of 'w'
 //===----------------------------------------------------------------------===//
 
+// Mul(const, x) -> Mul(x, const): move constant to RHS.
 def NormalizeMulPattern: Pat<
   (ONNXMulOp $x, $y),
   (ONNXMulOp $y, $x),
@@ -454,11 +508,50 @@ def FuseMulConvNullBiasPattern: Pat<
   ]
 >;
 
-// TODO add pattern for non-null bias with constraints:
-// - bias must be have rank equal to 1 and
-// - bias element data type must be the same as mul constant
-// - bias dimension (0) must be equal to mul constant dim(0)
-// codegen is different too (look it up in onnx-runtime)
+// Fold mul-constant into weights of Conv with existing bias
+// conv(x, w, b) *c = conv(x, w * c, b * c)
+def FuseMulConvPattern: Pat<
+  (ONNXMulOp:$res
+    (ONNXConvOp:$conv_res
+       $x, $w, $b, $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
+    (ONNXConstantOp:$y $_, $denseAttr, $_, $_, $_, $_, $_, $_)),
+  (ONNXConvOp
+     $x,
+     (ONNXMulOp $w, (createReshapedConstantForWeightFusion $y, $w)),
+     (ONNXMulOp $b, (createReshapedConstantForBiasFusion $y, $b)),
+     $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
+  [(HasOneUse $conv_res),
+   (NotNoneType $b),
+   (AttributeIsNotNull:$denseAttr),
+   (IsFromONNXConstantOp $w),
+   (IsFromONNXConstantOp $b),
+   (HaveSameElementType $w, $y),
+   (HasRankGT<1> $w),
+   (HasValidShapeForWeightFusion $y, $w, $res),
+   (IsStaticShapeTensor:$res),
+   (IsStaticShapeTensor:$conv_res),
+   (HasRankOf<1> $b),
+   (HaveSameElementType $b, $y)]
+>;
+
+// Distribute a per-channel or scalar Mul over an Add:
+//   Mul(Add(a, b), scale) -> Add(Mul(a, scale), Mul(b, scale))
+// This enables FuseMulConvPattern to fold the scale into each branch's
+// conv weights/bias.
+def DistributeMulOverAddPattern: Pat<
+  (ONNXMulOp:$res
+    (ONNXAddOp:$add_res $a, $b),
+    (ONNXConstantOp:$scale $_, $denseAttr, $_, $_, $_, $_, $_, $_)),
+  (ONNXAddOp
+    (ONNXMulOp $a, $scale),
+    (ONNXMulOp $b, $scale)),
+  [(HasOneUse $add_res),
+   (AttributeIsNotNull:$denseAttr),
+   (IsStaticShapeTensor:$res),
+   (IsStaticShapeTensor:$add_res),
+   (IsPerChannelOrScalarScale $scale, $res),
+   (HasConvOperand $a, $b)]
+>;
 
 //===----------------------------------------------------------------------===//
 // Canonicalization for ONNXIdentityOp
