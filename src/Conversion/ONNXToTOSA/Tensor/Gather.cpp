@@ -116,10 +116,10 @@ public:
 
 } // namespace
 
-void populateLoweringONNXGatherOpToTOSAPattern(ConversionTarget &target,
+void populateLoweringONNXGatherOpToTOSAPattern(ConversionTarget & /*target*/,
     RewritePatternSet &patterns, TypeConverter &typeConverter,
     MLIRContext *ctx) {
-  patterns.insert<ONNXGatherLoweringToTOSA>(ctx);
+  patterns.insert<ONNXGatherLoweringToTOSA>(typeConverter, ctx);
 }
 
 } // namespace onnx_mlir

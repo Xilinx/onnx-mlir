@@ -45,6 +45,7 @@ add_onnx_mlir_library(OMONNXRewrite
   QDQAroundOpOpt.cpp    
   DQBinaryQOpt.cpp  
   QDQCanonicalize.cpp
+  FoldQuantizedBinary.cpp
   ConvOpt.cpp
   Decompose.cpp
   DecomposeEinsum.cpp
@@ -52,7 +53,9 @@ add_onnx_mlir_library(OMONNXRewrite
   SetONNXNodeName.cpp
   Recompose.cpp
   LegalizeQuarkQuantizedOps.cpp
+  ONNXCSE.cpp
   QuantTypes.cpp
+  FixNegScale.cpp
   ConvertToChannelLast.cpp
   ResultNamesUpdater.cpp
   xmc/MergeSliceConcatPass.cpp
@@ -60,8 +63,11 @@ add_onnx_mlir_library(OMONNXRewrite
   xmc/MergeContinuousStridedSlice.cpp
   xmc/RemoveContinuousTransposeWithReshape.cpp
   xmc/RemoveUselessQLinearPoolPass.cpp
+  xmc/ReplaceErfToGeluPass.cpp
   xmc/ReplaceHsigmoidAndHswishPass.cpp
+  xmc/ReplaceQDQSigmoidPass.cpp
   xmc/ReplaceQDQEltwisePass.cpp
+  xmc/ReplaceQuantizedTileToAddPass.cpp
   xmc/MergeStridedSliceConcatConvPass.cpp
   xmc/ConvertPoolLikeOpToPool2dPass.cpp
   xmc/InstanceNormToGroupNormPass.cpp
@@ -71,6 +77,7 @@ add_onnx_mlir_library(OMONNXRewrite
   xmc/StandardizeStridedSlice.cpp
   xmc/TransferConvSliceToConvPass.cpp
   xmc/TransferReduceMeanSumToConvPass.cpp
+  xmc/TransferReduceHdimToReduceCdimPass.cpp
   xmc/ConvertMulToDepthwiseConv2dPass.cpp
   xmc/TransferOp3dToOp2dPass.cpp
   xmc/TransferPoolFixToDownsampleFixPass.cpp
@@ -102,6 +109,8 @@ add_onnx_mlir_library(OMONNXRewrite
   xmc/ConvWithBiasPass.cpp
   xmc/RemoveRedundantReshapePass.cpp
   xmc/ConvertXFEConvToDepthwiseConvPass.cpp
+  xmc/FuseConvActivationPass.cpp
+  xmc/NormalizeConvActivationPass.cpp
 
   DEPENDS
   OMONNXDecomposeIncGen
@@ -139,14 +148,16 @@ add_onnx_mlir_library(OMHybridTransform
   OMShapeInference
   )
 
-add_onnx_mlir_library(OMONNXPreKrnlVerifyONNX
-  ONNXPreKrnlVerifyPass.cpp
+if (ONNX_MLIR_ENABLE_KRNL)
+  add_onnx_mlir_library(OMONNXPreKrnlVerifyONNX
+    ONNXPreKrnlVerifyPass.cpp
 
-  LINK_LIBS PUBLIC
-  OMONNXOps
-  MLIRPass
-  OMSupport
-  )
+    LINK_LIBS PUBLIC
+    OMONNXOps
+    MLIRPass
+    OMSupport
+    )
+endif()
 
 add_onnx_mlir_library(OMONNXSimplifyShapeRelatedOps
   SimplifyShapeRelatedOps.cpp

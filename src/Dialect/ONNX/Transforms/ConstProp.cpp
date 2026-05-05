@@ -11,9 +11,14 @@
 // This file implements a set of rewriters to constprop an ONNX operation into
 // composition of other ONNX operations.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
+#include "mlir/Dialect/Utils/IndexingUtils.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -80,11 +85,18 @@ bool ConstPropONNXToONNXPassConfiguration::constantPropIsDisabled = false;
 // Precondition: result has ranked tensor type with static shape and int or
 // float element type.
 bool satisfiesExpansionBound(Value result) {
+  auto resultType = dyn_cast<RankedTensorType>(result.getType());
+  if (!resultType || !resultType.hasStaticShape())
+    return true;
+  // SmallVector<WideNum> uses uint32_t for capacity when sizeof(WideNum) >= 4
+  // thus capping at UINT32_MAX elements.
+  constexpr auto kMaxConstPropElements =
+      static_cast<int64_t>(std::numeric_limits<uint32_t>::max());
+  if (resultType.getNumElements() > kMaxConstPropElements)
+    return false;
   if (ConstPropONNXToONNXPassConfiguration::expansionBound < 0) {
     return true; // -1 == no bound
   }
-  auto resultType = cast<RankedTensorType>(result.getType());
-  assert(resultType.hasStaticShape() && "expansion bound needs static shape");
   int64_t sum = 0;
   for (auto operand : result.getDefiningOp()->getOperands()) {
     if (auto type = dyn_cast<RankedTensorType>(operand.getType()))
@@ -93,6 +105,58 @@ bool satisfiesExpansionBound(Value result) {
   }
   return sum * ConstPropONNXToONNXPassConfiguration::expansionBound >=
          getSizeInBytes(resultType);
+}
+
+/// True if the transpose result's element type matches the constant input's
+/// element type after remapping per-axis quantization through `perm` (same
+/// rule as ConvertToChannelLast: output axis i reads input axis perm[i]).
+/// Requires an explicit `perm` attribute; ONNX's default (reverse axes) is
+/// expected to be materialized during import or canonicalization.
+bool valuesHaveSameDTypeForTransposeOfConst(
+    Value transposeResult, Value input) {
+  auto transposeOp = dyn_cast<ONNXTransposeOp>(transposeResult.getDefiningOp());
+  if (!transposeOp)
+    return false;
+
+  auto inRanked = dyn_cast<RankedTensorType>(input.getType());
+  auto outRanked = dyn_cast<RankedTensorType>(transposeResult.getType());
+  if (!inRanked || !outRanked)
+    return false;
+
+  Type inElem = inRanked.getElementType();
+  Type outElem = outRanked.getElementType();
+
+  if (!transposeOp.getPermAttr())
+    return false;
+  SmallVector<int64_t, 8> perm;
+  for (int64_t p :
+      extractFromIntegerArrayAttr<int64_t>(transposeOp.getPermAttr()))
+    perm.push_back(p);
+  // Ranked input: perm length must match tensor rank (ONNX Transpose).
+  if (static_cast<int64_t>(perm.size()) != inRanked.getRank())
+    return false;
+
+  Type transposedInElem = inElem;
+  if (auto perAxis =
+          dyn_cast<mlir::quant::UniformQuantizedPerAxisType>(inElem)) {
+    int32_t oldAxis = perAxis.getQuantizedDimension();
+    if (oldAxis < 0 || oldAxis >= inRanked.getRank())
+      return false;
+    // ONNX: output axis i reads input axis perm[i]; inverse maps input axis
+    // -> output axis (same as ConvertToChannelLast::remapPerAxisQuantType).
+    SmallVector<int64_t> invPerm = invertPermutationVector(perm);
+    int32_t newAxis =
+        static_cast<int32_t>(invPerm[static_cast<size_t>(oldAxis)]);
+    if (newAxis != oldAxis) {
+      transposedInElem =
+          mlir::quant::UniformQuantizedPerAxisType::get(perAxis.getFlags(),
+              perAxis.getStorageType(), perAxis.getExpressedType(),
+              perAxis.getScales(), perAxis.getZeroPoints(), newAxis,
+              perAxis.getStorageTypeMin(), perAxis.getStorageTypeMax());
+    }
+  }
+
+  return transposedInElem == outElem;
 }
 
 // We want to disable Constant Propagation when a user
@@ -524,6 +588,10 @@ Value ConstPropElementwiseUnary(
     PatternRewriter &rewriter, Value replacingValue, Value constValue) {
   Type replacingElemType =
       mlir::cast<ShapedType>(replacingValue.getType()).getElementType();
+
+  if (auto quantType =
+          mlir::dyn_cast<mlir::quant::QuantizedType>(replacingElemType))
+    replacingElemType = quantType.getStorageType();
 
   ElementsAttr constElements = getConstValueElements(constValue);
   assert(replacingElemType == constElements.getElementType() &&
@@ -1070,6 +1138,42 @@ Value ConstPropExpand(
 }
 
 //===----------------------------------------------------------------------===//
+// Code to perform constant propagation for ShapeOp.
+//===----------------------------------------------------------------------===//
+
+/// Folds onnx.Shape(input) into a constant int64 tensor when the input has a
+/// statically known shape. The optional start/end attributes are respected.
+Value ConstPropShape(
+    PatternRewriter &rewriter, Value replacingValue, Value inputValue) {
+  auto inputType = mlir::cast<ShapedType>(inputValue.getType());
+  assert(inputType.hasStaticShape() && "expected statically shaped input");
+
+  int64_t rank = inputType.getRank();
+  Operation *op = replacingValue.getDefiningOp();
+  ONNXShapeOp shapeOp = cast<ONNXShapeOp>(op);
+
+  // Normalize start: default 0, support negative indices.
+  int64_t start = shapeOp.getStart();
+  if (start < 0)
+    start += rank;
+  start = std::clamp(start, int64_t(0), rank);
+
+  // Normalize end: default rank, support negative indices.
+  int64_t end = rank;
+  if (auto endAttr = shapeOp.getEnd())
+    end = *endAttr < 0 ? *endAttr + rank : *endAttr;
+  end = std::clamp(end, int64_t(0), rank);
+
+  auto shape =
+      inputType.getShape().slice(start, std::max(end - start, int64_t(0)));
+  auto resultType = RankedTensorType::get(
+      {static_cast<int64_t>(shape.size())}, rewriter.getI64Type());
+  auto elements = DenseElementsAttr::get(
+      resultType, ArrayRef<int64_t>(shape.begin(), shape.end()));
+  return createReplacingConstantOp(rewriter, replacingValue, elements);
+}
+
+//===----------------------------------------------------------------------===//
 // Code to perform constant propagation for GatherOp.
 //===----------------------------------------------------------------------===//
 
@@ -1220,6 +1324,216 @@ public:
   }
 };
 
+//===----------------------------------------------------------------------===//
+// Loop unrolling: LoopUnroll.
+//
+// Unrolls an onnx.Loop with a statically-known, bounded trip count into N
+// copies of the loop body inlined into the parent block.  After unrolling,
+// the standard constprop patterns (ConstPropRange, ConstPropGather, …) handle
+// the folding of the resulting ops automatically, without any per-op special
+// casing here.
+//
+// Match conditions:
+//   • NoneType condition input (always run for exactly M trips)
+//   • Constant dense trip-count M in (0, kMaxUnrollCount]
+//===----------------------------------------------------------------------===//
+
+class LoopUnroll : public OpRewritePattern<ONNXLoopOp> {
+  static constexpr int64_t kMaxUnrollCount = 64;
+
+public:
+  using OpRewritePattern<ONNXLoopOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXLoopOp loopOp, PatternRewriter &rewriter) const override {
+    // The loop unrolling works only if MaxTripCount is a constant i64 scalar
+    // (as required by the ONNX spec: M is tensor of int64).
+    SmallVector<int64_t, 1> mVals;
+    if (!getI64ValuesFromONNXConstantOp(loopOp.getM(), mVals))
+      return rewriter.notifyMatchFailure(
+          loopOp, "trip count must be a constant i64 scalar");
+    int64_t M = mVals[0];
+
+    if (M < 0 || M > kMaxUnrollCount)
+      return rewriter.notifyMatchFailure(
+          loopOp, "M is out of the unrollable range (0, kMaxUnrollCount]");
+
+    MLIRContext *ctx = rewriter.getContext();
+    Location loc = loopOp.getLoc();
+    Block &body = loopOp.getRegion().front();
+    auto yieldOp = cast<ONNXYieldOp>(body.getTerminator());
+
+    // Determine whether the loop is guaranteed to run exactly M iterations.
+    // Two accepted forms:
+    //   1. NoneType condition: ONNX spec says the loop runs exactly M trips.
+    //   2. Constant-true initial condition AND body always yields constant
+    //   true:
+    //      semantically equivalent to NoneType when both are statically known.
+    bool condIsNone = isa<NoneType>(loopOp.getCond().getType());
+    auto getConstBool = [](Value v) -> std::optional<bool> {
+      if (!isDenseONNXConstant(v))
+        return std::nullopt;
+      auto elems = getConstValueElements(v);
+      return (*elems.value_begin<APInt>()).getBoolValue();
+    };
+    // The body's yielded condition (operand 0) guarantees always-true when it
+    // is either a constant true, or the same block argument the body received
+    // (passthrough) — in which case the initial true propagates unchanged.
+    Value yieldedCond = yieldOp.getOperand(0);
+    bool yieldAlwaysTrue =
+        getConstBool(yieldedCond) == std::optional<bool>(true) ||
+        yieldedCond == body.getArgument(1);
+    bool condIsAlwaysTrue =
+        getConstBool(loopOp.getCond()) == std::optional<bool>(true) &&
+        yieldAlwaysTrue;
+    if (!condIsNone && !condIsAlwaysTrue)
+      return rewriter.notifyMatchFailure(loopOp,
+          "Condition must be NoneType or a constant-true value with the body "
+          "always yielding true");
+    const auto numCarried = static_cast<int64_t>(loopOp.getVInitial().size());
+    const auto numResults = static_cast<int64_t>(loopOp.getNumResults());
+    const int64_t numScanOutputs = numResults - numCarried;
+
+    // M = 0: the loop body never executes.
+    // Carried outputs are the unchanged v_initial values.
+    // Scan outputs are zero-element tensors with the correct element type.
+    if (M == 0) {
+      rewriter.setInsertionPoint(loopOp);
+      OnnxBuilder ob0(rewriter, loc);
+      SmallVector<Value> zeroOutputs(
+          loopOp.getVInitial().begin(), loopOp.getVInitial().end());
+      for (int64_t k = 0; k < numScanOutputs; ++k) {
+        Type scanResultTy = loopOp.getResult(numCarried + k).getType();
+        Type elemTy = rewriter.getF32Type(); // fallback
+        SmallVector<int64_t> shape = {0};
+        if (auto rt = dyn_cast<RankedTensorType>(scanResultTy)) {
+          elemTy = rt.getElementType();
+          // Shape: [0, D1, ..., Dn] (leading dim = 0, inner dims preserved).
+          shape.append(rt.getShape().begin() + 1, rt.getShape().end());
+        } else if (auto st = dyn_cast<ShapedType>(scanResultTy)) {
+          elemTy = st.getElementType();
+        }
+        auto emptyTy = RankedTensorType::get(shape, elemTy);
+        zeroOutputs.push_back(ob0.constant(
+            DenseElementsAttr::get(emptyTy, llvm::ArrayRef<Attribute>{})));
+      }
+      rewriter.replaceOp(loopOp, zeroOutputs);
+      return success();
+    }
+
+    OnnxBuilder ob(rewriter, loc);
+
+    // Helper: scalar i64 constant for the loop-iteration counter.
+    auto makeIterConst = [&ob, ctx](int64_t i) -> Value {
+      auto ty = RankedTensorType::get({}, IntegerType::get(ctx, 64));
+      return ob.constant(
+          DenseElementsAttr::get(ty, APInt(64, i, /*isSigned=*/true)));
+    };
+    // Helper: scalar bool constant (true) for the loop condition arg.
+    auto makeTrueConst = [&ob, ctx]() -> Value {
+      auto ty = RankedTensorType::get({}, IntegerType::get(ctx, 1));
+      return ob.constant(DenseElementsAttr::get(ty, APInt(1, 1)));
+    };
+
+    // Current loop-carried values start as the loop's v_initial operands.
+    SmallVector<Value> carried(
+        loopOp.getVInitial().begin(), loopOp.getVInitial().end());
+
+    // Per-scan-output: one Value per iteration, to be concatenated afterwards.
+    SmallVector<SmallVector<Value>> scanContribs(numScanOutputs);
+
+    // --- Unroll M iterations ---
+    rewriter.setInsertionPoint(loopOp);
+    for (int64_t i = 0; i < M; ++i) {
+      IRMapping map;
+      // arg0 = iteration counter (i64 scalar)
+      // arg1 = loop condition (always true for NoneType cond loops)
+      // arg2 … = loop-carried values
+      map.map(body.getArgument(0), makeIterConst(i));
+      map.map(body.getArgument(1), makeTrueConst());
+      for (int64_t j = 0; j < numCarried; ++j)
+        map.map(body.getArgument(2 + j), carried[j]);
+
+      // Clone every op in the body except the yield terminator.
+      // Set each cloned op's location to the original loop's location so that
+      // diagnostic messages and debug info refer to the loop, not the body op.
+      for (Operation &op : body.getOperations()) {
+        if (&op == yieldOp.getOperation())
+          break;
+        Operation *cloned = rewriter.clone(op, map);
+        cloned->setLoc(loc);
+      }
+
+      // Advance carried values and record scan contributions.
+      // Yield operand layout: [cond, carried…, scan…]
+      for (int64_t j = 0; j < numCarried; ++j)
+        carried[j] = map.lookupOrDefault(yieldOp.getOperand(1 + j));
+      for (int64_t k = 0; k < numScanOutputs; ++k)
+        scanContribs[k].push_back(
+            map.lookupOrDefault(yieldOp.getOperand(1 + numCarried + k)));
+    }
+
+    // --- Build replacement values ---
+    // Loop-carried results: the final `carried` values after M iterations.
+    SmallVector<Value> outputs(carried.begin(), carried.end());
+
+    // Scan outputs: unsqueeze each per-iteration contribution (adding a
+    // leading axis-0 dimension) then concatenate into one tensor.
+    // These Unsqueeze/Concat ops will be folded by subsequent constprop
+    // passes if the contributions turn out to be constants.
+    //
+    // Type strategy: anchor on the original loop result type so downstream
+    // ops see the same static type they had before unrolling, without waiting
+    // for shape inference to propagate through the new Unsqueeze/Concat.
+    //   loopResultTy  = tensor<M x D1 x ... x Dn>  (concat output)
+    //   unsqueezedTy  = tensor<1 x D1 x ... x Dn>  (each iteration's slice)
+    // Fall back to contribution-derived or unranked types when the loop
+    // result type isn't ranked (should not happen in practice).
+    Value axes0 = ob.constantInt64({0}); // axes = [0] for unsqueeze
+    for (int64_t k = 0; k < numScanOutputs; ++k) {
+      SmallVector<Value> &contribs = scanContribs[k];
+      assert(!contribs.empty() &&
+             "scan output must have at least one contribution");
+
+      // Derive types from the original loop result.
+      Type loopResultTy = loopOp.getResult(numCarried + k).getType();
+      Type concatTy = loopResultTy;
+
+      // Each per-iteration contribution, after unsqueeze(axes=[0]), has the
+      // same shape as loopResultTy but with the leading dim clamped to 1.
+      Type unsqueezedTy;
+      if (auto rt = dyn_cast<RankedTensorType>(loopResultTy)) {
+        SmallVector<int64_t> sliceShape = {1};
+        sliceShape.append(rt.getShape().begin() + 1, rt.getShape().end());
+        unsqueezedTy = RankedTensorType::get(sliceShape, rt.getElementType());
+      } else if (auto st = dyn_cast<ShapedType>(contribs[0].getType())) {
+        // Contribution is already ranked: derive unsqueezed shape from it.
+        SmallVector<int64_t> sliceShape = {1};
+        sliceShape.append(st.getShape().begin(), st.getShape().end());
+        unsqueezedTy = RankedTensorType::get(sliceShape, st.getElementType());
+        concatTy = UnrankedTensorType::get(st.getElementType());
+      } else {
+        Type fallback = UnrankedTensorType::get(rewriter.getF32Type());
+        unsqueezedTy = fallback;
+        concatTy = fallback;
+      }
+
+      SmallVector<Value> unsqueezed;
+      unsqueezed.reserve(contribs.size());
+      for (Value contrib : contribs)
+        unsqueezed.push_back(ob.unsqueeze(unsqueezedTy, contrib, axes0));
+
+      Value scanOut = (unsqueezed.size() == 1)
+                          ? unsqueezed[0]
+                          : ob.concat(concatTy, unsqueezed, /*axis=*/0);
+      outputs.push_back(scanOut);
+    }
+
+    rewriter.replaceOp(loopOp, outputs);
+    return success();
+  }
+};
+
 class IfOfConst : public OpRewritePattern<ONNXIfOp> {
 public:
   using OpRewritePattern<ONNXIfOp>::OpRewritePattern;
@@ -1253,6 +1567,80 @@ public:
     rewriter.eraseOp(yieldOp);
     rewriter.inlineBlockBefore(newBlock, ifOp);
     rewriter.replaceOp(ifOp, outputs);
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Constant propagation for ConcatFromSequenceOp.
+//
+// When the input sequence is built entirely from constant tensors via a
+// SequenceEmpty → SequenceInsert … chain, fold the whole ConcatFromSequence
+// into a single constant tensor.
+//===----------------------------------------------------------------------===//
+
+/// Walk a SequenceInsert chain and collect element ElementsAttrs in order
+/// (first-inserted first).  Only handles append-mode inserts (NoneType
+/// position).  Returns false on failure.
+static bool collectConstSequenceElems(
+    Value seq, SmallVectorImpl<ElementsAttr> &elems) {
+  SmallVector<Value> elemsRev;
+  while (true) {
+    if (isa_and_nonnull<ONNXSequenceEmptyOp>(seq.getDefiningOp()))
+      break;
+    auto ins = dyn_cast_or_null<ONNXSequenceInsertOp>(seq.getDefiningOp());
+    if (!ins)
+      return false;
+    if (!isa<NoneType>(ins.getPosition().getType()))
+      return false; // only handle append, not random-access insert
+    if (!isDenseONNXConstant(ins.getTensor()))
+      return false;
+    elemsRev.push_back(ins.getTensor());
+    seq = ins.getInputSequence();
+  }
+  for (Value v : llvm::reverse(elemsRev))
+    elems.push_back(getConstValueElements(v));
+  return true;
+}
+
+class ConstPropConcatFromSequence
+    : public OpRewritePattern<ONNXConcatFromSequenceOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXConcatFromSequenceOp op, PatternRewriter &rewriter) const override {
+    SmallVector<ElementsAttr> elems;
+    if (!collectConstSequenceElems(op.getInputSequence(), elems))
+      return failure();
+    if (elems.empty())
+      return failure();
+
+    int64_t axis = op.getAxis();
+    bool newAxisFlag = op.getNewAxis() != 0;
+    int64_t rank = cast<ShapedType>(elems[0].getType()).getRank();
+    if (axis < 0)
+      axis += rank + (newAxisFlag ? 1 : 0);
+
+    OnnxElementsAttrBuilder elemBuilder(rewriter.getContext());
+    SmallVector<ElementsAttr> toConcat;
+    toConcat.reserve(elems.size());
+    for (auto &e : elems) {
+      if (newAxisFlag) {
+        // Stack: insert a size-1 dimension at `axis`.
+        auto shape = cast<ShapedType>(e.getType()).getShape();
+        SmallVector<int64_t> newShape(shape.begin(), shape.begin() + axis);
+        newShape.push_back(1);
+        newShape.append(shape.begin() + axis, shape.end());
+        toConcat.push_back(elemBuilder.reshape(e, newShape));
+      } else {
+        toConcat.push_back(e);
+      }
+    }
+    ElementsAttr result = elemBuilder.concat(toConcat, (unsigned)axis);
+    Value constVal =
+        createReplacingConstantOp(rewriter, op.getResult(), result);
+    rewriter.replaceOp(op, constVal);
+    return success();
   }
 };
 
@@ -1294,6 +1682,8 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns) {
   if (isNotDisabled("SplitOfConst"))
     patterns.insert<SplitOfConst>(patterns.getContext());
   patterns.insert<IfOfConst>(patterns.getContext());
+  patterns.insert<LoopUnroll>(patterns.getContext());
+  patterns.insert<ConstPropConcatFromSequence>(patterns.getContext());
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,

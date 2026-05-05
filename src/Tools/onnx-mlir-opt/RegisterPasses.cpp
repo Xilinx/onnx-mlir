@@ -85,6 +85,14 @@ void registerOMPasses(int optLevel) {
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createReplaceErfToGeluPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createReplaceQDQSigmoidPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createMergeStridedSliceConcatConvPass();
   });
 
@@ -102,6 +110,10 @@ void registerOMPasses(int optLevel) {
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createTransferReduceMeanSumToConvPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createTransferReduceHdimToReduceCdimPass();
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
@@ -132,6 +144,14 @@ void registerOMPasses(int optLevel) {
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createFuseConvActivationPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createNormalizeConvActivationPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createConvertMulToDepthwiseConv2dPass();
   });
 
@@ -141,6 +161,10 @@ void registerOMPasses(int optLevel) {
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createReplaceQDQEltwisePass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createReplaceQuantizedTileToAddPass();
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
@@ -259,12 +283,14 @@ void registerOMPasses(int optLevel) {
     return createQDQCanonicalizePass();
   });
 
+#ifdef ONNX_MLIR_ENABLE_KRNL
   mlir::registerPass(
       []() -> std::unique_ptr<mlir::Pass> { return createInstrumentPass(); });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createInstrumentCleanupPass();
   });
+#endif
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createInstrumentONNXSignaturePass("NONE", "NONE");
@@ -274,6 +300,7 @@ void registerOMPasses(int optLevel) {
     return createSetONNXNodeNamePass();
   });
 
+#ifdef ONNX_MLIR_ENABLE_KRNL
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createONNXPreKrnlVerifyPass();
   });
@@ -309,6 +336,7 @@ void registerOMPasses(int optLevel) {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return krnl::createConvertKrnlToLLVMPass();
   });
+#endif
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createSimplifyShapeRelatedOpsPass();
@@ -331,6 +359,11 @@ void registerOMPasses(int optLevel) {
   });
 
   mlir::registerPass(createQuantTypesPass);
+  mlir::registerPass(createONNXCSEPass);
+  mlir::registerPass(createFixNegScalePass);
+  mlir::registerPass(createInferTensorNames);
+  mlir::registerPass(createCanonicalizeWithResultNamesPass);
+  mlir::registerPass(createFoldQuantizedBinary);
 
   mlir::PassPipelineRegistration<>("xmc-passes", "Run all XMC xcompiler passes",
       [](mlir::OpPassManager &pm) { addXmcMlirPasses(pm); });

@@ -10,11 +10,17 @@
 //
 // This file contains helper functions for lowering ONNX ops to Krnl Dialect.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef ONNX_MLIR_OPS_HELPER_H
 #define ONNX_MLIR_OPS_HELPER_H
 
+#include <optional>
+
+#include "mlir/Dialect/Quant/IR/QuantTypes.h"
 #include "mlir/Dialect/Traits.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
@@ -193,6 +199,16 @@ mlir::ONNXConstantOp getONNXConstantOp(mlir::Value value);
 bool getI64ValuesFromONNXConstantOp(
     mlir::Value val, mlir::SmallVectorImpl<int64_t> &iRes);
 
+// Read a single-element i64 ONNX constant `v` into `out`. Returns false if
+// the value is not a 1-element i64 constant.
+[[nodiscard]] bool extractI64Scalar(mlir::Value v, int64_t &out);
+
+// Destructure a single-axis onnx.Slice into (axis, start, end, step). Returns
+// false if any of starts/ends/axes/steps is not a single-element i64 constant
+// or if axes/steps were NoneType.
+[[nodiscard]] bool extractSlice1DConst(mlir::ONNXSliceOp sliceOp, int64_t &axis,
+    int64_t &start, int64_t &end, int64_t &step);
+
 // Test if the value is none. Since none is a unit value it never makes a
 // difference whether it's a constant (the result of ONNXNoneOp) or the
 // optional result of some other op (e.g. ONNXDropoutOp mask result).
@@ -261,7 +277,10 @@ mlir::ArrayAttr createArrayAttrFromConstantOp(mlir::ONNXConstantOp constOp);
 // Check whether a value is produced by a dense ONNXConstantOp.
 bool isDenseONNXConstant(mlir::Value result);
 
-// Get scalar value when it is a constant.
+// Get scalar value when it is a constant. If \p type is a shaped type whose
+// element type is `!quant.uniform<...>`, reads storage from \p denseAttr and
+// returns the expressed value `(storage - zp) * scale` (dense storage element
+// type must match the quant type's storage type).
 template <typename RESULT_TYPE>
 RESULT_TYPE getScalarValue(mlir::ElementsAttr denseAttr, mlir::Type type);
 
@@ -295,10 +314,16 @@ mlir::LogicalResult verifyElementTypeFromDtypeWithFallBackToInputType(OP op) {
   const auto elementType =
       getResultElementTypeFromDtypeWithFallBackToInputType(op);
   const auto resultType = mlir::cast<mlir::ShapedType>(op.getType());
-  if (resultType.getElementType() != elementType) {
+  auto resultElemType = resultType.getElementType();
+  if (resultElemType != elementType) {
+    if (auto qType =
+            mlir::dyn_cast<mlir::quant::QuantizedType>(resultElemType)) {
+      if (qType.getExpressedType() == elementType)
+        return mlir::success();
+    }
     return op->emitOpError(llvm::formatv(
         "result element type {0} does not match the expected type {1}",
-        resultType.getElementType(), elementType));
+        resultElemType, elementType));
   }
   return mlir::success();
 }
@@ -465,6 +490,13 @@ bool isIdentityReshape(mlir::Value input, mlir::Value output,
 
 bool isDequantQuantSame(
     mlir::ONNXDequantizeLinearOp dqOp, mlir::ONNXQuantizeLinearOp qOp);
+
+/// Return true if the (element) type carries a `quant::QuantizedType`.
+/// Convenient for guarding rewrite patterns that are not valid on quantized
+/// values. Accepts either a raw `Type` (in which case `getElementTypeOrSelf`
+/// is applied) or a `Value` (whose type is inspected the same way).
+bool hasQuantizedElementType(mlir::Type type);
+bool hasQuantizedElementType(mlir::Value value);
 //===----------------------------------------------------------------------===//
 // Support for location.
 //===----------------------------------------------------------------------===//

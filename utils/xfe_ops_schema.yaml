@@ -62,7 +62,8 @@
     type_str: T
   - name: B
     description: Optional 1D bias tensor
-    type_str: T
+    type_str: T_bias
+    optional: True
   outputs:
   - name: Y
     description: Output data tensor with channel-last layout
@@ -88,6 +89,22 @@
   - name: strides
     description: Stride along each spatial axis
     type: list(int)
+  - name: activation
+    description: Fused activation function type (NONE, RELU, LEAKYRELU, PRELU, HSIGMOID, RELU6, SIGMOID). Defaults to NONE (no activation).
+    type: string
+    default_value: NONE
+  - name: leakyrelu_alpha
+    description: Alpha value for LEAKYRELU when activation is LEAKYRELU. Optional.
+    type: float
+    optional: True
+  - name: prelu_in
+    description: Fixed-point multiplier M for PRELU (alpha ≈ M/2^prelu_shift). Meaningful when activation is PRELU.
+    type: int
+    optional: True
+  - name: prelu_shift
+    description: Fixed-point shift N for PRELU (alpha ≈ prelu_in/2^N). Meaningful when activation is PRELU.
+    type: int
+    optional: True
   type_constraints:
   - type_param: T
     description: Constrain input and output types to float tensors.
@@ -96,6 +113,109 @@
     - tensor(float)
     - tensor(double)
     - tensor(bfloat16)
+    - tensor(int8)
+    - tensor(uint8)
+  - type_param: T_bias
+    description: Constrain bias type to float tensors.
+    allowed_types:
+    - tensor(float16)
+    - tensor(float)
+    - tensor(double)
+    - tensor(bfloat16)
+    - tensor(int32)
+  min_input: 2
+  max_input: 3
+  min_output: 1
+  max_output: 1
+
+# ==============================================================================
+# ConvTranspose: N-D Transposed Convolution with channel-last data layout
+# ==============================================================================
+- name: ConvTranspose
+  domain: com.amd.xfe
+  since_version: 1
+  support_level: COMMON
+  description: 'Transpose convolution operator with channel-last layout (channels innermost). Similar to ONNX ConvTranspose but expects input/output tensors in channel-last format instead of NCHW.'
+  meta_attributes:
+  - onnx_opset: 11
+  - verify: True
+  - fold: False
+  inputs:
+  - name: X
+    description: Input data tensor with channel-last layout (batch, spatial_dims..., channels)
+    type_str: T
+  - name: W
+    description: Weight tensor with filter layout
+    type_str: T
+  - name: B
+    description: Optional 1D bias tensor
+    type_str: T_bias
+    optional: True
+  outputs:
+  - name: Y
+    description: Output data tensor with channel-last layout
+    type_str: T
+  attributes:
+  - name: auto_pad
+    description: Auto padding strategy (NOTSET, SAME_UPPER, SAME_LOWER, VALID)
+    type: string
+    default_value: NOTSET
+  - name: dilations
+    description: Dilation value along each spatial axis
+    type: list(int)
+  - name: group
+    description: Number of groups for grouped convolution
+    type: int
+    default_value: 1
+  - name: kernel_shape
+    description: Shape of the convolution kernel
+    type: list(int)
+  - name: output_padding
+    description: Additional size added to one side of the output shape for each spatial axis
+    type: list(int)
+  - name: output_shape
+    description: Shape of the output for each spatial axis
+    type: list(int)
+  - name: pads
+    description: Padding for the beginning and ending along each spatial axis
+    type: list(int)
+  - name: strides
+    description: Stride along each spatial axis
+    type: list(int)
+  - name: activation
+    description: Fused activation function type (NONE, RELU, LEAKYRELU, PRELU, HSIGMOID, RELU6, SIGMOID). Defaults to NONE (no activation).
+    type: string
+    default_value: NONE
+  - name: leakyrelu_alpha
+    description: Alpha value for LEAKYRELU when activation is LEAKYRELU. Optional.
+    type: float
+    optional: True
+  - name: prelu_in
+    description: Fixed-point multiplier M for PRELU (alpha ≈ M/2^prelu_shift). Meaningful when activation is PRELU.
+    type: int
+    optional: True
+  - name: prelu_shift
+    description: Fixed-point shift N for PRELU (alpha ≈ prelu_in/2^N). Meaningful when activation is PRELU.
+    type: int
+    optional: True
+  type_constraints:
+  - type_param: T
+    description: Constrain input and output types to float tensors.
+    allowed_types:
+    - tensor(float16)
+    - tensor(float)
+    - tensor(double)
+    - tensor(bfloat16)
+    - tensor(int8)
+    - tensor(uint8)
+  - type_param: T_bias
+    description: Constrain bias type to float tensors.
+    allowed_types:
+    - tensor(float16)
+    - tensor(float)
+    - tensor(double)
+    - tensor(bfloat16)
+    - tensor(int32)
   min_input: 2
   max_input: 3
   min_output: 1
@@ -108,7 +228,7 @@
   domain: com.amd.xfe
   since_version: 1
   support_level: COMMON
-  description: 'AveragePool with channel-last layout (channels innermost). Applies average pooling with input/output tensors in channel-last format. Equivalent to AveragePool with kernel size equal to the spatial dimensions. Supports N-D input tensors.'
+  description: 'AveragePool with channel-last layout (channels innermost). Applies average pooling with input/output tensors in channel-last format. Supports N-D input tensors.'
   meta_attributes:
   - onnx_opset: 11
   - verify: True
@@ -129,11 +249,12 @@
   - name: ceil_mode
     description: Whether to use ceil or floor to compute output shape
     type: int
-    default_value: 0
   - name: count_include_pad
     description: Whether include pad pixels when calculating values for the edges
     type: int
-    default_value: 0
+  - name: dilations
+    description: Dilation value
+    type: list(int)
   - name: kernel_shape
     description: Shape of the pooling kernel
     type: list(int)
@@ -145,12 +266,14 @@
     type: list(int)
   type_constraints:
   - type_param: T
-    description: Constrain input and output types to float tensors.
+    description: Constrain input types.
     allowed_types:
     - tensor(float16)
     - tensor(float)
     - tensor(double)
     - tensor(bfloat16)
+    - tensor(int8)
+    - tensor(uint8)
   min_input: 1
   max_input: 1
   min_output: 1
@@ -184,7 +307,6 @@
   - name: ceil_mode
     description: Whether to use ceil or floor to compute output shape
     type: int
-    default_value: 0
   - name: dilations
     description: Dilation value along each spatial axis
     type: list(int)
@@ -197,7 +319,6 @@
   - name: storage_order
     description: The storage order of the tensor (0 for row major, 1 for column major)
     type: int
-    default_value: 0
   - name: strides
     description: Stride along each spatial axis
     type: list(int)
@@ -209,6 +330,8 @@
     - tensor(float)
     - tensor(double)
     - tensor(bfloat16)
+    - tensor(int8)
+    - tensor(uint8)
   min_input: 1
   max_input: 1
   min_output: 1
@@ -243,6 +366,8 @@
     - tensor(float)
     - tensor(double)
     - tensor(bfloat16)
+    - tensor(int8)
+    - tensor(uint8)
   min_input: 1
   max_input: 1
   min_output: 1
@@ -277,8 +402,74 @@
     - tensor(float)
     - tensor(double)
     - tensor(bfloat16)
+    - tensor(int8)
+    - tensor(uint8)
   min_input: 1
   max_input: 1
+  min_output: 1
+  max_output: 1
+
+# ==============================================================================
+# BatchNormalization: Batch normalization with channel-last (NHWC) layout
+# Normalizes along the channel (last) dimension: y = scale * (x - mean) / sqrt(var + epsilon) + B
+# ==============================================================================
+- name: BatchNormalization
+  domain: com.amd.xfe
+  since_version: 1
+  support_level: COMMON
+  description: 'Batch normalization with channel-last layout (channels innermost). Carries out batch normalization with input/output tensors in channel-last format instead of NCHW. Uses pre-computed mean and variance for inference mode.'
+  meta_attributes:
+  - onnx_opset: 15
+  - verify: True
+  - fold: False
+  inputs:
+  - name: X
+    description: Input data tensor with channel-last layout (batch, spatial_dims..., channels)
+    type_str: T
+  - name: scale
+    description: 1D scale tensor of size C (number of channels)
+    type_str: T
+  - name: B
+    description: 1D bias tensor of size C (number of channels)
+    type_str: T
+  - name: input_mean
+    description: 1D running mean tensor of size C
+    type_str: U
+  - name: input_var
+    description: 1D running variance tensor of size C
+    type_str: U
+  outputs:
+  - name: Y
+    description: Output data tensor with channel-last layout, same shape as input
+    type_str: T
+  attributes:
+  - name: epsilon
+    description: Small value to add to variance to avoid division by zero
+    type: float
+    default_value: 1e-05
+  - name: momentum
+    description: Factor used in computing the running mean and variance (unused in inference)
+    type: float
+    default_value: 0.9
+  type_constraints:
+  - type_param: T
+    description: Constrain input and output types to float tensors.
+    allowed_types:
+    - tensor(float16)
+    - tensor(float)
+    - tensor(double)
+    - tensor(bfloat16)
+    - tensor(int8)
+    - tensor(uint8)
+  - type_param: U
+    description: Constrain mean and var types to float tensors.
+    allowed_types:
+    - tensor(float16)
+    - tensor(float)
+    - tensor(double)
+    - tensor(bfloat16)
+  min_input: 5
+  max_input: 5
   min_output: 1
   max_output: 1
 
@@ -322,6 +513,8 @@
     - tensor(float)
     - tensor(double)
     - tensor(bfloat16)
+    - tensor(int8)
+    - tensor(uint8)
   min_input: 3
   max_input: 3
   min_output: 1
@@ -424,6 +617,57 @@
   max_output: 1
 
 # ==============================================================================
+# GroupNormalization: Group normalization with channel-last layout
+# Normalizes per group of channels: y = scale * (x - mean) / sqrt(variance + epsilon) + B
+# ==============================================================================
+- name: GroupNormalization
+  domain: com.amd.xfe
+  since_version: 1
+  support_level: COMMON
+  description: 'Group normalization with channel-last layout (channels innermost). Carries out group normalization with input/output tensors in channel-last format instead of NCHW. Divides channels into groups and normalizes within each group per instance.'
+  meta_attributes:
+  - onnx_opset: 21
+  - verify: True
+  - fold: False
+  inputs:
+  - name: X
+    description: Input data tensor with channel-last layout (batch, spatial_dims..., channels)
+    type_str: T
+  - name: scale
+    description: 1D scale tensor of size C (number of channels)
+    type_str: T
+  - name: bias
+    description: 1D bias tensor of size C (number of channels)
+    type_str: T
+  outputs:
+  - name: Y
+    description: Output data tensor with channel-last layout, same shape as input
+    type_str: T
+  attributes:
+  - name: epsilon
+    description: Small value to add to variance to avoid division by zero
+    type: float
+    default_value: 1e-05
+  - name: num_groups
+    description: Number of groups to divide channels into for normalization
+    type: int
+    required: true
+  type_constraints:
+  - type_param: T
+    description: Constrain input and output types to float tensors.
+    allowed_types:
+    - tensor(float16)
+    - tensor(float)
+    - tensor(double)
+    - tensor(bfloat16)
+    - tensor(int8)
+    - tensor(uint8)
+  min_input: 3
+  max_input: 3
+  min_output: 1
+  max_output: 1
+
+# ==============================================================================
 # Resize: Resize tensor with channel-last layout
 # Supports nearest, linear, and cubic interpolation modes
 # ==============================================================================
@@ -443,12 +687,15 @@
   - name: roi
     description: Region of interest for coordinate transformation (optional, use empty tensor if not needed)
     type_str: T2
+    optional: True
   - name: scales
     description: Scale factors for each dimension (optional if sizes is provided)
     type_str: tensor(float)
+    optional: True
   - name: sizes
     description: Output sizes for each dimension (optional if scales is provided)
     type_str: tensor(int64)
+    optional: True
   outputs:
   - name: Y
     description: Output data tensor with channel-last layout, resized spatial dimensions
@@ -517,5 +764,74 @@
     - tensor(double)
   min_input: 4
   max_input: 4
+  min_output: 1
+  max_output: 1
+
+# ==============================================================================
+# GridSample: channel-last layout; rank R >= 3 (ONNX GridSample ND semantics)
+# Grid last dim = number of spatial axes (R - 2).
+# ==============================================================================
+- name: GridSample
+  domain: com.amd.xfe
+  since_version: 1
+  support_level: COMMON
+  description: 'GridSample with channel-last layout. All tensor ranks R >= 3: X is [N, spatial..., C]; grid is [N, out_spatial..., (R-2)] per ONNX. Examples: R=3 (1 spatial), R=4 NHWC, R=5 NDHWC, and higher-D. Typical lowering uses NCHW-to-channel-last transposes around onnx.GridSample.'
+  meta_attributes:
+  - onnx_opset: 22
+  - verify: True
+  - fold: False
+  inputs:
+  - name: X
+    description: Input in channel-last layout [N, spatial..., C] for rank R >= 3 (e.g. NLC for R=3, NHWC for R=4, NDHWC for R=5)
+    type_str: T1
+  - name: grid
+    description: ONNX grid [N, out_spatial..., (R-2)] with normalized coordinates (e.g. last dim 1, 2, or 3 for 1D, 2D, or 3D spatial sampling)
+    type_str: T2
+  outputs:
+  - name: Y
+    description: Sampled output in channel-last layout (batch, then output spatial dims, then channels)
+    type_str: T1
+  attributes:
+  - name: align_corners
+    description: If 1, corner pixels align to corners; if 0, align to centers
+    type: int
+    default_value: 0
+  - name: mode
+    description: Interpolation mode (linear for bilinear, nearest, cubic)
+    type: string
+    default_value: linear
+  - name: padding_mode
+    description: Padding for out-of-bounds grid coordinates (zeros, border, reflection)
+    type: string
+    default_value: zeros
+  type_constraints:
+  - type_param: T1
+    description: Constrain input and output types to all tensor types supported by XFEGridSample.
+    allowed_types:
+    - tensor(uint8)
+    - tensor(uint16)
+    - tensor(uint32)
+    - tensor(uint64)
+    - tensor(int8)
+    - tensor(int16)
+    - tensor(int32)
+    - tensor(int64)
+    - tensor(bfloat16)
+    - tensor(float16)
+    - tensor(float)
+    - tensor(double)
+    - tensor(string)
+    - tensor(bool)
+    - tensor(complex64)
+    - tensor(complex128)
+  - type_param: T2
+    description: Constrain grid to floating-point or quantized types (matches ONNX GridSample grid).
+    allowed_types:
+    - tensor(bfloat16)
+    - tensor(float16)
+    - tensor(float)
+    - tensor(double)
+  min_input: 2
+  max_input: 2
   min_output: 1
   max_output: 1

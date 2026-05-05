@@ -8,6 +8,7 @@ dialect_op_version_map_[""]["Abs"] = {13};
 dialect_op_version_map_[""]["Acos"] = {22};
 dialect_op_version_map_[""]["Acosh"] = {22};
 dialect_op_version_map_[""]["Add"] = {14};
+dialect_op_version_map_[""]["AffineGrid"] = {20};
 dialect_op_version_map_[""]["And"] = {7};
 dialect_op_version_map_[""]["ArgMax"] = {13};
 dialect_op_version_map_[""]["ArgMin"] = {13};
@@ -80,6 +81,7 @@ dialect_op_version_map_[""]["Hardmax"] = {13};
 dialect_op_version_map_[""]["HardSwish"] = {22};
 dialect_op_version_map_[""]["Identity"] = {21};
 dialect_op_version_map_[""]["If"] = {21};
+dialect_op_version_map_[""]["ImageDecoder"] = {20};
 dialect_op_version_map_[""]["InstanceNormalization"] = {22};
 dialect_op_version_map_[""]["IsInf"] = {20};
 dialect_op_version_map_[""]["IsNaN"] = {20};
@@ -122,7 +124,7 @@ dialect_op_version_map_[""]["PRelu"] = {16};
 dialect_op_version_map_[""]["Pad"] = {21, 18, 13, 11, 2};
 dialect_op_version_map_[""]["Pow"] = {15};
 dialect_op_version_map_[""]["QLinearConv"] = {10};
-dialect_op_version_map_[""]["QLinearMatMul"] = {10};
+dialect_op_version_map_[""]["QLinearMatMul"] = {21};
 dialect_op_version_map_[""]["QuantizeLinear"] = {21};
 dialect_op_version_map_[""]["RNN"] = {22};
 dialect_op_version_map_[""]["RandomNormal"] = {22};
@@ -141,6 +143,7 @@ dialect_op_version_map_[""]["ReduceMin"] = {20, 18, 13};
 dialect_op_version_map_[""]["ReduceProd"] = {18, 13};
 dialect_op_version_map_[""]["ReduceSum"] = {13, 11};
 dialect_op_version_map_[""]["ReduceSumSquare"] = {18, 13};
+dialect_op_version_map_[""]["RegexFullMatch"] = {20};
 dialect_op_version_map_[""]["Relu"] = {14};
 dialect_op_version_map_[""]["Reshape"] = {21};
 dialect_op_version_map_[""]["Resize"] = {19, 18, 13, 11, 10};
@@ -177,7 +180,9 @@ dialect_op_version_map_[""]["Split"] = {18, 13, 11};
 dialect_op_version_map_[""]["SplitToSequence"] = {11};
 dialect_op_version_map_[""]["Sqrt"] = {13};
 dialect_op_version_map_[""]["Squeeze"] = {21, 11};
+dialect_op_version_map_[""]["StringConcat"] = {20};
 dialect_op_version_map_[""]["StringNormalizer"] = {10};
+dialect_op_version_map_[""]["StringSplit"] = {20};
 dialect_op_version_map_[""]["STFT"] = {17};
 dialect_op_version_map_[""]["Sub"] = {14};
 dialect_op_version_map_[""]["Sum"] = {13};
@@ -186,7 +191,7 @@ dialect_op_version_map_[""]["Tanh"] = {13};
 dialect_op_version_map_[""]["TfIdfVectorizer"] = {9};
 dialect_op_version_map_[""]["ThresholdedRelu"] = {22};
 dialect_op_version_map_[""]["Tile"] = {13};
-dialect_op_version_map_[""]["TopK"] = {11};
+dialect_op_version_map_[""]["TopK"] = {24};
 dialect_op_version_map_[""]["Transpose"] = {21};
 dialect_op_version_map_[""]["Trilu"] = {14};
 dialect_op_version_map_[""]["Unique"] = {11};
@@ -201,7 +206,7 @@ dialect_op_version_map_["ai.onnx.ml"]["CategoryMapper"] = {1};
 dialect_op_version_map_["ai.onnx.ml"]["DictVectorizer"] = {1};
 dialect_op_version_map_["ai.onnx.ml"]["FeatureVectorizer"] = {1};
 dialect_op_version_map_["ai.onnx.ml"]["Imputer"] = {1};
-dialect_op_version_map_["ai.onnx.ml"]["LabelEncoder"] = {2};
+dialect_op_version_map_["ai.onnx.ml"]["LabelEncoder"] = {4};
 dialect_op_version_map_["ai.onnx.ml"]["LinearClassifier"] = {1};
 dialect_op_version_map_["ai.onnx.ml"]["LinearRegressor"] = {1};
 dialect_op_version_map_["ai.onnx.ml"]["Normalizer"] = {1};
@@ -209,8 +214,9 @@ dialect_op_version_map_["ai.onnx.ml"]["OneHotEncoder"] = {1};
 dialect_op_version_map_["ai.onnx.ml"]["SVMClassifier"] = {1};
 dialect_op_version_map_["ai.onnx.ml"]["SVMRegressor"] = {1};
 dialect_op_version_map_["ai.onnx.ml"]["Scaler"] = {1};
-dialect_op_version_map_["ai.onnx.ml"]["TreeEnsembleClassifier"] = {1};
-dialect_op_version_map_["ai.onnx.ml"]["TreeEnsembleRegressor"] = {1};
+dialect_op_version_map_["ai.onnx.ml"]["TreeEnsemble"] = {5};
+dialect_op_version_map_["ai.onnx.ml"]["TreeEnsembleClassifier"] = {5};
+dialect_op_version_map_["ai.onnx.ml"]["TreeEnsembleRegressor"] = {5};
 dialect_op_version_map_["ai.onnx.ml"]["ZipMap"] = {1};
 dialect_op_version_map_["ai.onnx.preview.training"]["Adagrad"] = {1};
 dialect_op_version_map_["ai.onnx.preview.training"]["Adam"] = {1};
@@ -218,29 +224,41 @@ dialect_op_version_map_["ai.onnx.preview.training"]["Gradient"] = {1};
 dialect_op_version_map_["ai.onnx.preview.training"]["Momentum"] = {1};
 dialect_op_version_map_["com.amd.xcompiler"]["FusedEltwise"] = {1};
 dialect_op_version_map_["com.amd.xcompiler"]["DepthwiseConv"] = {1};
+dialect_op_version_map_["com.amd.xcompiler"]["Requantize"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["MatMulBias"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["Conv"] = {1};
+dialect_op_version_map_["com.amd.xfe"]["ConvTranspose"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["AveragePool"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["MaxPool"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["GlobalAveragePool"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["GlobalMaxPool"] = {1};
+dialect_op_version_map_["com.amd.xfe"]["BatchNormalization"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["InstanceNormalization"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["DepthToSpace"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["SpaceToDepth"] = {1};
+dialect_op_version_map_["com.amd.xfe"]["GroupNormalization"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["Resize"] = {1};
+dialect_op_version_map_["com.amd.xfe"]["GridSample"] = {1};
 dialect_op_version_map_["com.amd.quark"]["BFPQuantizeDequantize"] = {1};
+dialect_op_version_map_["com.amd.quark"]["ExtendedQuantizeLinear"] = {1};
+dialect_op_version_map_["com.amd.quark"]["ExtendedDequantizeLinear"] = {1};
 dialect_op_version_map_["com.amd.xcompiler"]["FusedEltwise"] = {1};
 dialect_op_version_map_["com.amd.xcompiler"]["DepthwiseConv"] = {1};
+dialect_op_version_map_["com.amd.xcompiler"]["Requantize"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["MatMulBias"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["Conv"] = {1};
+dialect_op_version_map_["com.amd.xfe"]["ConvTranspose"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["AveragePool"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["MaxPool"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["GlobalAveragePool"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["GlobalMaxPool"] = {1};
+dialect_op_version_map_["com.amd.xfe"]["BatchNormalization"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["InstanceNormalization"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["DepthToSpace"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["SpaceToDepth"] = {1};
+dialect_op_version_map_["com.amd.xfe"]["GroupNormalization"] = {1};
 dialect_op_version_map_["com.amd.xfe"]["Resize"] = {1};
+dialect_op_version_map_["com.amd.xfe"]["GridSample"] = {1};
 import_handler_map_[""]["Abs"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXAbsOp>;
 import_handler_map_[""]["Acos"] = 
@@ -249,6 +267,8 @@ import_handler_map_[""]["Acosh"] =
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXAcoshOp>;
 import_handler_map_[""]["Add"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXAddOp>;
+import_handler_map_[""]["AffineGrid"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXAffineGridOp>;
 import_handler_map_[""]["And"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXAndOp>;
 import_handler_map_[""]["ArgMax"] = 
@@ -409,6 +429,8 @@ import_handler_map_[""]["Identity"] =
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXIdentityOp>;
 import_handler_map_[""]["If"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXIfOp>;
+import_handler_map_[""]["ImageDecoder"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXImageDecoderOp>;
 import_handler_map_[""]["InstanceNormalization"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXInstanceNormalizationOp>;
 import_handler_map_[""]["IsInf"] = 
@@ -563,6 +585,8 @@ import_handler_map_[""]["ReduceSumSquare"] =
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXReduceSumSquareOp>;
 import_handler_map_[""]["ReduceSumSquareV13"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXReduceSumSquareV13Op>;
+import_handler_map_[""]["RegexFullMatch"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXRegexFullMatchOp>;
 import_handler_map_[""]["Relu"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXReluOp>;
 import_handler_map_[""]["Reshape"] = 
@@ -653,8 +677,12 @@ import_handler_map_[""]["Squeeze"] =
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXSqueezeOp>;
 import_handler_map_[""]["SqueezeV11"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXSqueezeV11Op>;
+import_handler_map_[""]["StringConcat"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXStringConcatOp>;
 import_handler_map_[""]["StringNormalizer"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXStringNormalizerOp>;
+import_handler_map_[""]["StringSplit"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXStringSplitOp>;
 import_handler_map_[""]["Sub"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXSubOp>;
 import_handler_map_[""]["Sum"] = 
@@ -719,6 +747,8 @@ import_handler_map_["ai.onnx.ml"]["SVMRegressor"] =
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXSVMRegressorOp>;
 import_handler_map_["ai.onnx.ml"]["Scaler"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXScalerOp>;
+import_handler_map_["ai.onnx.ml"]["TreeEnsemble"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXTreeEnsembleOp>;
 import_handler_map_["ai.onnx.ml"]["TreeEnsembleClassifier"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXTreeEnsembleClassifierOp>;
 import_handler_map_["ai.onnx.ml"]["TreeEnsembleRegressor"] = 
@@ -737,34 +767,76 @@ import_handler_map_["com.amd.xcompiler"]["DepthwiseConv"] =
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XCOMPILERDepthwiseConvOp>;
 import_handler_map_["com.amd.xcompiler"]["FusedEltwise"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XCOMPILERFusedEltwiseOp>;
-import_handler_map_["com.amd.xfe"]["MatMulBias"] = 
-   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEMatMulBiasOp>;
-import_handler_map_["com.amd.quark"]["BFPQuantizeDequantize"] = 
-   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::AMDQuarkBFPQuantizeDequantizeOp>;
-import_handler_map_["com.amd.xcompiler"]["FusedEltwise"] = 
-   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XCOMPILERFusedEltwiseOp>;
-import_handler_map_["com.amd.xcompiler"]["DepthwiseConv"] = 
-   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XCOMPILERDepthwiseConvOp>;
-import_handler_map_["com.amd.xfe"]["MatMulBias"] = 
-   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEMatMulBiasOp>;
-import_handler_map_["com.amd.xfe"]["Conv"] = 
-   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEConvOp>;
+import_handler_map_["com.amd.xcompiler"]["Requantize"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XCOMPILERRequantizeOp>;
 import_handler_map_["com.amd.xfe"]["AveragePool"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEAveragePoolOp>;
-import_handler_map_["com.amd.xfe"]["MaxPool"] = 
-   &onnx_mlir::detail::FrontendGenImpl::ImportNodeMaxPool;
+import_handler_map_["com.amd.xfe"]["BatchNormalization"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEBatchNormalizationOp>;
+import_handler_map_["com.amd.xfe"]["Conv"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEConvOp>;
+import_handler_map_["com.amd.xfe"]["ConvTranspose"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEConvTransposeOp>;
+import_handler_map_["com.amd.xfe"]["DepthToSpace"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEDepthToSpaceOp>;
 import_handler_map_["com.amd.xfe"]["GlobalAveragePool"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEGlobalAveragePoolOp>;
 import_handler_map_["com.amd.xfe"]["GlobalMaxPool"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEGlobalMaxPoolOp>;
+import_handler_map_["com.amd.xfe"]["GridSample"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEGridSampleOp>;
+import_handler_map_["com.amd.xfe"]["GroupNormalization"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEGroupNormalizationOp>;
+import_handler_map_["com.amd.xfe"]["InstanceNormalization"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEInstanceNormalizationOp>;
+import_handler_map_["com.amd.xfe"]["MatMulBias"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEMatMulBiasOp>;
+import_handler_map_["com.amd.xfe"]["MaxPool"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEMaxPoolOp>;
+import_handler_map_["com.amd.xfe"]["Resize"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEResizeOp>;
+import_handler_map_["com.amd.xfe"]["SpaceToDepth"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFESpaceToDepthOp>;
+import_handler_map_["com.amd.quark"]["BFPQuantizeDequantize"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::AMDQuarkBFPQuantizeDequantizeOp>;
+import_handler_map_["com.amd.quark"]["ExtendedQuantizeLinear"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::AMDQuarkExtendedQuantizeLinearOp>;
+import_handler_map_["com.amd.quark"]["ExtendedDequantizeLinear"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::AMDQuarkExtendedDequantizeLinearOp>;
+import_handler_map_["com.amd.xcompiler"]["FusedEltwise"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XCOMPILERFusedEltwiseOp>;
+import_handler_map_["com.amd.xcompiler"]["DepthwiseConv"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XCOMPILERDepthwiseConvOp>;
+import_handler_map_["com.amd.xcompiler"]["Requantize"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XCOMPILERRequantizeOp>;
+import_handler_map_["com.amd.xfe"]["MatMulBias"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEMatMulBiasOp>;
+import_handler_map_["com.amd.xfe"]["Conv"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEConvOp>;
+import_handler_map_["com.amd.xfe"]["ConvTranspose"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEConvTransposeOp>;
+import_handler_map_["com.amd.xfe"]["AveragePool"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEAveragePoolOp>;
+import_handler_map_["com.amd.xfe"]["MaxPool"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEMaxPoolOp>;
+import_handler_map_["com.amd.xfe"]["GlobalAveragePool"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEGlobalAveragePoolOp>;
+import_handler_map_["com.amd.xfe"]["GlobalMaxPool"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEGlobalMaxPoolOp>;
+import_handler_map_["com.amd.xfe"]["BatchNormalization"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEBatchNormalizationOp>;
 import_handler_map_["com.amd.xfe"]["InstanceNormalization"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEInstanceNormalizationOp>;
 import_handler_map_["com.amd.xfe"]["DepthToSpace"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEDepthToSpaceOp>;
 import_handler_map_["com.amd.xfe"]["SpaceToDepth"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFESpaceToDepthOp>;
+import_handler_map_["com.amd.xfe"]["GroupNormalization"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEGroupNormalizationOp>;
 import_handler_map_["com.amd.xfe"]["Resize"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEResizeOp>;
+import_handler_map_["com.amd.xfe"]["GridSample"] = 
+   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEGridSampleOp>;
 dialect_op_opsets_map_[""]["Abs"] = {13, 6, 1};
 dialect_op_opsets_map_[""]["Acos"] = {22, 7};
 dialect_op_opsets_map_[""]["Acosh"] = {22, 9};
@@ -988,26 +1060,38 @@ dialect_op_opsets_map_["ai.onnx.preview.training"]["Gradient"] = {1};
 dialect_op_opsets_map_["ai.onnx.preview.training"]["Momentum"] = {1};
 dialect_op_opsets_map_["com.amd.xcompiler"]["DepthwiseConv"] = {1};
 dialect_op_opsets_map_["com.amd.xcompiler"]["FusedEltwise"] = {1};
+dialect_op_opsets_map_["com.amd.xcompiler"]["Requantize"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["AveragePool"] = {1};
+dialect_op_opsets_map_["com.amd.xfe"]["BatchNormalization"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["Conv"] = {1};
+dialect_op_opsets_map_["com.amd.xfe"]["ConvTranspose"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["DepthToSpace"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["GlobalAveragePool"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["GlobalMaxPool"] = {1};
+dialect_op_opsets_map_["com.amd.xfe"]["GridSample"] = {1};
+dialect_op_opsets_map_["com.amd.xfe"]["GroupNormalization"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["InstanceNormalization"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["MatMulBias"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["MaxPool"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["Resize"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["SpaceToDepth"] = {1};
 dialect_op_opsets_map_["com.amd.quark"]["BFPQuantizeDequantize"] = {1};
+dialect_op_opsets_map_["com.amd.quark"]["ExtendedQuantizeLinear"] = {1};
+dialect_op_opsets_map_["com.amd.quark"]["ExtendedDequantizeLinear"] = {1};
 dialect_op_opsets_map_["com.amd.xcompiler"]["FusedEltwise"] = {1};
 dialect_op_opsets_map_["com.amd.xcompiler"]["DepthwiseConv"] = {1};
+dialect_op_opsets_map_["com.amd.xcompiler"]["Requantize"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["MatMulBias"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["Conv"] = {1};
+dialect_op_opsets_map_["com.amd.xfe"]["ConvTranspose"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["AveragePool"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["MaxPool"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["GlobalAveragePool"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["GlobalMaxPool"] = {1};
+dialect_op_opsets_map_["com.amd.xfe"]["BatchNormalization"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["InstanceNormalization"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["DepthToSpace"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["SpaceToDepth"] = {1};
+dialect_op_opsets_map_["com.amd.xfe"]["GroupNormalization"] = {1};
 dialect_op_opsets_map_["com.amd.xfe"]["Resize"] = {1};
+dialect_op_opsets_map_["com.amd.xfe"]["GridSample"] = {1};

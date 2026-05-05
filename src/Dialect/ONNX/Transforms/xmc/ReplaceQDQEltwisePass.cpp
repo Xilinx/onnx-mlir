@@ -17,6 +17,10 @@
 //      LeakyRelu are fused into a single onnx.XCOMPILERFusedEltwise.
 // 3. BFloat16 with ReLU (4 combinations)
 // 4. Post-Quantized ReLU for IPU Strix (2 combinations)
+// 5. Replace Expand with Eltwise ADD
+//    - Quantized Expand ops are replaced by XCOMPILERFusedEltwise ADD with a
+//      zero constant at the target shape. No spatial constraints (matches
+//      xcompiler's ReplaceQDQExpandToEltwisePass behavior for quantized ops).
 //
 // Note: This pass assumes quant-types pass has already run, so operations
 // already have !quant.uniform types instead of explicit Q/DQ operations.
@@ -25,6 +29,7 @@
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
+#include "mlir/Dialect/Traits.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
@@ -66,12 +71,133 @@ static IntegerAttr getSI64Attr(PatternRewriter &rewriter, int64_t value) {
   return rewriter.getIntegerAttr(si64, value);
 }
 
-// Check if type is quantized
-bool isQuantizedType(Type type) {
-  if (auto tensorType = mlir::dyn_cast<RankedTensorType>(type)) {
-    return mlir::isa<mlir::quant::QuantizedType>(tensorType.getElementType());
+// Canonicalize activation op types following the xcompiler ReplaceQDQConvPass
+// Canonicalize LeakyReLU op type to LEAKYRELU with alpha and prelu factors.
+// Returns {mappedOpType, leakyrelu_alpha, prelu_in, prelu_shift}.
+// mappedOpType is empty when no remapping is needed.
+
+// ReLU on UINT8 with zero_point=0 is a no-op: unsigned values are already
+// non-negative, so clamping at zero has no effect.
+static bool isReluNoOp(Operation *op) {
+  if (!isa<ONNXReluOp>(op))
+    return false;
+  auto resultType = op->getResult(0).getType();
+  auto tensorType = mlir::dyn_cast<RankedTensorType>(resultType);
+  if (!tensorType)
+    return false;
+  auto uq = mlir::dyn_cast<mlir::quant::UniformQuantizedType>(
+      tensorType.getElementType());
+  if (!uq)
+    return false;
+
+  return uq.getStorageType().isUnsignedInteger(8) && uq.getZeroPoint() == 0;
+}
+
+static std::tuple<StringRef, FloatAttr, IntegerAttr, IntegerAttr>
+computeActivationMapping(Operation *op, PatternRewriter &rewriter) {
+  if (auto leakyOp = dyn_cast<ONNXLeakyReluOp>(op)) {
+    FloatAttr alphaAttr = leakyOp.getAlphaAttr();
+    float alpha = alphaAttr ? alphaAttr.getValue().convertToFloat() : 0.01f;
+    if (!alphaAttr)
+      alphaAttr = rewriter.getFloatAttr(rewriter.getF32Type(), alpha);
+    auto [M, N] = getLeakyReluAlphaToPreluFactor(alpha);
+    return {"LEAKYRELU", alphaAttr, getSI64Attr(rewriter, M),
+        getSI64Attr(rewriter, N)};
   }
+  return {"", FloatAttr(), IntegerAttr(), IntegerAttr()};
+}
+
+// Forward declare for use before definition.
+bool isFloat32Type(Type type);
+
+// Extract element type from ranked or unranked tensor.
+static Type getElementTypeFromTensor(Type type) {
+  if (auto rt = mlir::dyn_cast<RankedTensorType>(type))
+    return rt.getElementType();
+  if (auto ut = mlir::dyn_cast<UnrankedTensorType>(type))
+    return ut.getElementType();
+  return {};
+}
+
+// Check if two quantized types have matching scale and zero_point.
+static bool hasMatchingQuantParams(Type typeA, Type typeB) {
+  Type elemA = getElementTypeFromTensor(typeA);
+  Type elemB = getElementTypeFromTensor(typeB);
+  if (!elemA || !elemB)
+    return false;
+  auto qA = mlir::dyn_cast<mlir::quant::UniformQuantizedType>(elemA);
+  auto qB = mlir::dyn_cast<mlir::quant::UniformQuantizedType>(elemB);
+  if (!qA || !qB)
+    return false;
+  return std::fabs(qA.getScale() - qB.getScale()) <= 1e-6 &&
+         qA.getZeroPoint() == qB.getZeroPoint();
+}
+
+// True if value is produced by an eltwise op that Pattern 2 can fuse with
+// Relu/LeakyRelu. Pattern 1 should not fuse standalone Relu/LeakyRelu in that
+// case. However, if the quantization parameters between the eltwise output and
+// the activation output don't match, Pattern 2 will reject the fusion, so
+// Pattern 1 should handle it.
+static bool isInputFromPattern2Eltwise(Value v) {
+  Operation *def = v.getDefiningOp();
+  if (!def)
+    return false;
+  if (!isa<ONNXAddOp, ONNXSubOp, ONNXMulOp, ONNXDivOp, ONNXTanhOp, ONNXSqrtOp>(
+          def))
+    return false;
+  // Check that the activation (user of def's result) has matching quant params.
+  // If not, Pattern 2 will reject, so don't defer.
+  // When eltwise output is f32 (mixed-precision boundary), Pattern 2 can
+  // handle it, so always defer.
+  if (isFloat32Type(def->getResult(0).getType()))
+    return true;
+  for (Operation *user : def->getResult(0).getUsers()) {
+    if (isa<ONNXReluOp, ONNXLeakyReluOp>(user)) {
+      if (!hasMatchingQuantParams(
+              def->getResult(0).getType(), user->getResult(0).getType()))
+        return false;
+    }
+  }
+  return true;
+}
+
+// Check if type is quantized (handles both ranked and unranked tensors).
+bool isQuantizedType(Type type) {
+  if (auto tensorType = mlir::dyn_cast<RankedTensorType>(type))
+    return mlir::isa<mlir::quant::QuantizedType>(tensorType.getElementType());
+  if (auto tensorType = mlir::dyn_cast<UnrankedTensorType>(type))
+    return mlir::isa<mlir::quant::QuantizedType>(tensorType.getElementType());
   return false;
+}
+
+// Recover a ranked result type for an eltwise op whose result became unranked
+// due to upstream shape inference issues with mismatched quantized element
+// types. For binary ops (e.g. ADD with broadcast), the result shape is the
+// broadcast of both inputs, not one operand's shape.
+static Type recoverRankedResultType(Type resultType, Value a, Value b) {
+  if (mlir::isa<RankedTensorType>(resultType))
+    return resultType;
+  auto unrankedType = mlir::dyn_cast<UnrankedTensorType>(resultType);
+  if (!unrankedType)
+    return resultType;
+  auto aType = mlir::dyn_cast<RankedTensorType>(a.getType());
+  auto bType = b ? mlir::dyn_cast<RankedTensorType>(b.getType()) : nullptr;
+  if (aType && bType) {
+    // Binary op: result shape is the broadcast of a and b.
+    llvm::SmallVector<int64_t> broadcastedShape;
+    if (OpTrait::util::getBroadcastedShape(
+            aType.getShape(), bType.getShape(), broadcastedShape))
+      return RankedTensorType::get(
+          broadcastedShape, unrankedType.getElementType());
+    // Incompatible shapes: fall through to single-operand fallback.
+  }
+  if (aType)
+    return RankedTensorType::get(
+        aType.getShape(), unrankedType.getElementType());
+  if (bType)
+    return RankedTensorType::get(
+        bType.getShape(), unrankedType.getElementType());
+  return resultType;
 }
 
 // Check if type is BFloat16
@@ -183,6 +309,14 @@ struct FuseQuantizedEltwiseWithoutActivation
       return rewriter.notifyMatchFailure(
           eltwiseOp, "operands/result are not quantized");
 
+    // Standalone Relu/LeakyRelu: do not fuse here if input is from an eltwise
+    // that Pattern 2 can fuse with us (Add/Sub/Mul/Div/Tanh/Sqrt+Activation).
+    if (isUnary &&
+        (isa<ONNXReluOp, ONNXLeakyReluOp>(eltwiseOp.getOperation())) &&
+        isInputFromPattern2Eltwise(a))
+      return rewriter.notifyMatchFailure(
+          eltwiseOp, "eltwise+activation fused by Pattern 2");
+
     // If this eltwise feeds an activation (ReLU/LeakyReLU/PReLU), don't fuse
     // here. Either Pattern 2 will fuse it (ReLU/LeakyReLU) or we want to keep
     // the original eltwise op intact (PReLU is not modeled by
@@ -203,17 +337,27 @@ struct FuseQuantizedEltwiseWithoutActivation
     if (isUnary)
       b = rewriter.create<ONNXNoneOp>(eltwiseOp.getLoc()).getResult();
 
+    auto [mappedOpType, leakyAlpha, preluIn, preluShift] =
+        computeActivationMapping(eltwiseOp.getOperation(), rewriter);
+    if (!mappedOpType.empty())
+      opType = mappedOpType;
+
+    StringRef nonlinear = "NONE";
+
+    Type resultType = recoverRankedResultType(eltwiseOp.getType(), a, b);
+
     auto fusedOp = rewriter.create<XCOMPILERFusedEltwiseOp>(eltwiseOp.getLoc(),
-        eltwiseOp.getType(), // result type (quantized)
-        a, b,
+        resultType, a, b,
         /*clip_max=*/IntegerAttr(),
         /*clip_min=*/IntegerAttr(),
-        /*leakyrelu_alpha=*/FloatAttr(),
-        /*nonlinear=*/rewriter.getStringAttr("NONE"),
+        /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),
+        /*leakyrelu_alpha=*/leakyAlpha,
+        /*mul_y=*/FloatAttr(),
+        /*nonlinear=*/rewriter.getStringAttr(nonlinear),
         /*nonlinear_in_scales=*/FloatAttr(),
         /*nonlinear_in_zeropoints=*/IntegerAttr(),
-        /*prelu_in=*/IntegerAttr(),
-        /*prelu_shift=*/IntegerAttr(),
+        /*prelu_in=*/preluIn,
+        /*prelu_shift=*/preluShift,
         /*type=*/rewriter.getStringAttr(opType));
 
     rewriter.replaceOp(eltwiseOp, fusedOp.getResult());
@@ -263,7 +407,9 @@ struct FuseQuantizedClipWithoutActivation
         clipOp.getInput(), noneB,
         /*clip_max=*/clipMaxAttr,
         /*clip_min=*/clipMinAttr,
+        /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),
         /*leakyrelu_alpha=*/FloatAttr(),
+        /*mul_y=*/FloatAttr(),
         /*nonlinear=*/rewriter.getStringAttr("NONE"),
         /*nonlinear_in_scales=*/FloatAttr(),
         /*nonlinear_in_zeropoints=*/IntegerAttr(),
@@ -316,6 +462,24 @@ static llvm::StringRef getEltwiseTypeString() {
     return "ABS";
   else if constexpr (std::is_same_v<EltwiseOp, ONNXSoftplusOp>)
     return "SOFTPLUS";
+  else if constexpr (std::is_same_v<EltwiseOp, ONNXEqualOp>)
+    return "EQUAL";
+  else if constexpr (std::is_same_v<EltwiseOp, ONNXLessOp>)
+    return "LESS";
+  else if constexpr (std::is_same_v<EltwiseOp, ONNXGreaterOp>)
+    return "GREATER";
+  else if constexpr (std::is_same_v<EltwiseOp, ONNXLessOrEqualOp>)
+    return "LESS_EQUAL";
+  else if constexpr (std::is_same_v<EltwiseOp, ONNXGreaterOrEqualOp>)
+    return "GREATER_EQUAL";
+  else if constexpr (std::is_same_v<EltwiseOp, ONNXModOp>)
+    return "MOD";
+  else if constexpr (std::is_same_v<EltwiseOp, ONNXReluOp>)
+    return "RELU";
+  else if constexpr (std::is_same_v<EltwiseOp, ONNXLeakyReluOp>)
+    return "LEAKYRELU";
+  else if constexpr (std::is_same_v<EltwiseOp, ONNXSigmoidOp>)
+    return "SIGMOID";
   else
     return "";
 }
@@ -346,21 +510,35 @@ struct FuseQuantizedEltwiseActivation : public OpRewritePattern<ActivationOp> {
           activationOp, "eltwise op is not unary/binary");
     }
 
-    // Check that eltwise inputs and output are quantized
-    if (!isQuantizedType(eltwiseOp.getResult().getType()))
-      return rewriter.notifyMatchFailure(
-          activationOp, "eltwise output not quantized");
-
+    // Check that eltwise inputs are quantized
     for (auto operand : eltwiseOp->getOperands()) {
       if (!isQuantizedType(operand.getType()))
         return rewriter.notifyMatchFailure(
             activationOp, "eltwise input not quantized");
     }
 
+    // Eltwise output can be quantized or f32 (mixed-precision boundary).
+    // When f32, the activation bridges back to quantized.
+    bool eltwiseOutputIsFloat = isFloat32Type(eltwiseOp.getResult().getType());
+    if (!eltwiseOutputIsFloat &&
+        !isQuantizedType(eltwiseOp.getResult().getType()))
+      return rewriter.notifyMatchFailure(
+          activationOp, "eltwise output not quantized or f32");
+
     // Check activation output is quantized
     if (!isQuantizedType(activationOp.getResult().getType()))
       return rewriter.notifyMatchFailure(
           activationOp, "activation output not quantized");
+
+    // When eltwise output is quantized, verify scale/zp consistency with
+    // activation output. If they differ, there's an implicit requantization
+    // that would be lost by fusing. When eltwise output is f32, skip this
+    // check since there are no quant params to compare.
+    if (!eltwiseOutputIsFloat &&
+        !hasMatchingQuantParams(eltwiseOp.getResult().getType(),
+            activationOp.getResult().getType()))
+      return rewriter.notifyMatchFailure(activationOp,
+          "eltwise and activation have different quantization parameters");
 
     LLVM_DEBUG(llvm::dbgs() << "Fusing quantized eltwise+activation into "
                                "onnx.XCOMPILERFusedEltwise: "
@@ -372,6 +550,30 @@ struct FuseQuantizedEltwiseActivation : public OpRewritePattern<ActivationOp> {
     if (opType.empty())
       return rewriter.notifyMatchFailure(
           activationOp, "unsupported eltwise op");
+
+    // ReLU on UINT8 with zero_point=0 is a no-op. Fuse the eltwise without
+    // any activation (nonlinear="NONE"), effectively dropping the ReLU.
+    if (isReluNoOp(activationOp.getOperation())) {
+      if (isUnary)
+        b = rewriter.create<ONNXNoneOp>(eltwiseOp.getLoc()).getResult();
+      auto fusedOp = rewriter.create<XCOMPILERFusedEltwiseOp>(
+          eltwiseOp.getLoc(), activationOp.getType(), a, b,
+          /*clip_max=*/IntegerAttr(),
+          /*clip_min=*/IntegerAttr(),
+          /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),
+          /*leakyrelu_alpha=*/FloatAttr(),
+          /*mul_y=*/FloatAttr(),
+          /*nonlinear=*/rewriter.getStringAttr("NONE"),
+          /*nonlinear_in_scales=*/FloatAttr(),
+          /*nonlinear_in_zeropoints=*/IntegerAttr(),
+          /*prelu_in=*/IntegerAttr(),
+          /*prelu_shift=*/IntegerAttr(),
+          /*type=*/rewriter.getStringAttr(opType));
+      rewriter.replaceOp(activationOp, fusedOp.getResult());
+      if (eltwiseOp->use_empty())
+        rewriter.eraseOp(eltwiseOp);
+      return success();
+    }
 
     // Determine nonlinear type and collect attributes
     StringRef nonlinear;
@@ -406,7 +608,9 @@ struct FuseQuantizedEltwiseActivation : public OpRewritePattern<ActivationOp> {
         a, b,
         /*clip_max=*/IntegerAttr(),
         /*clip_min=*/IntegerAttr(),
+        /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),
         /*leakyrelu_alpha=*/alphaAttr,
+        /*mul_y=*/FloatAttr(),
         /*nonlinear=*/rewriter.getStringAttr(nonlinear),
         /*nonlinear_in_scales=*/FloatAttr(),
         /*nonlinear_in_zeropoints=*/IntegerAttr(),
@@ -564,6 +768,74 @@ struct FusePostQuantizedReLUStrix : public OpRewritePattern<ONNXReluOp> {
 };
 
 //===----------------------------------------------------------------------===//
+// Pattern 5: Replace Expand with Eltwise ADD
+// Quantized Expand(input, shape) -> XCOMPILERFusedEltwise(input, zeros, "ADD")
+// Mirrors xcompiler's ReplaceQDQExpandToEltwisePass: no spatial constraints
+// since we already gate on quantized types.
+//===----------------------------------------------------------------------===//
+
+struct ReplaceExpandWithEltwise : public OpRewritePattern<ONNXExpandOp> {
+  using OpRewritePattern<ONNXExpandOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXExpandOp expandOp, PatternRewriter &rewriter) const override {
+    Value input = expandOp.getInput();
+    Type resultType = expandOp.getOutput().getType();
+
+    if (!isQuantizedType(input.getType()) || !isQuantizedType(resultType))
+      return rewriter.notifyMatchFailure(expandOp, "not quantized");
+
+    auto inputRankedType = mlir::dyn_cast<RankedTensorType>(input.getType());
+    auto outputRankedType = mlir::dyn_cast<RankedTensorType>(resultType);
+    if (!inputRankedType || !outputRankedType)
+      return rewriter.notifyMatchFailure(expandOp, "not ranked tensors");
+
+    auto inputShape = inputRankedType.getShape();
+    if (inputShape.size() == 4 && inputShape[2] != 1)
+      return rewriter.notifyMatchFailure(
+          expandOp, "4D input requires dim[2] == 1");
+
+    LLVM_DEBUG(llvm::dbgs() << "Replacing quantized Expand with eltwise ADD: "
+                            << expandOp->getName() << "\n");
+
+    auto outputShape = outputRankedType.getShape();
+    Type elemType = outputRankedType.getElementType();
+
+    // Build a zero constant with the output shape and storage type.
+    Type storageType = elemType;
+    if (auto qType =
+            mlir::dyn_cast<mlir::quant::UniformQuantizedType>(elemType))
+      storageType = qType.getStorageType();
+
+    auto zeroAttr =
+        DenseElementsAttr::get(RankedTensorType::get(outputShape, storageType),
+            rewriter.getZeroAttr(storageType));
+
+    auto valueNamedAttr = rewriter.getNamedAttr("value", zeroAttr);
+    auto zeroConst = rewriter.create<ONNXConstantOp>(expandOp.getLoc(),
+        outputRankedType, mlir::ValueRange{},
+        mlir::ArrayRef<mlir::NamedAttribute>{valueNamedAttr});
+
+    auto fusedOp = rewriter.create<XCOMPILERFusedEltwiseOp>(expandOp.getLoc(),
+        resultType, input, zeroConst.getResult(),
+        /*clip_max=*/IntegerAttr(),
+        /*clip_min=*/IntegerAttr(),
+        /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),
+        /*leakyrelu_alpha=*/FloatAttr(),
+        /*mul_y=*/FloatAttr(),
+        /*nonlinear=*/rewriter.getStringAttr("NONE"),
+        /*nonlinear_in_scales=*/FloatAttr(),
+        /*nonlinear_in_zeropoints=*/IntegerAttr(),
+        /*prelu_in=*/IntegerAttr(),
+        /*prelu_shift=*/IntegerAttr(),
+        /*type=*/rewriter.getStringAttr("ADD"));
+
+    rewriter.replaceOp(expandOp, fusedOp.getResult());
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // Pass Definition
 //===----------------------------------------------------------------------===//
 
@@ -612,7 +884,19 @@ struct ReplaceQDQEltwisePass
     patterns.add<FuseQuantizedEltwiseWithoutActivation<ONNXAbsOp>>(context);
     patterns.add<FuseQuantizedEltwiseWithoutActivation<ONNXSoftplusOp>>(
         context);
+    patterns.add<FuseQuantizedEltwiseWithoutActivation<ONNXEqualOp>>(context);
+    patterns.add<FuseQuantizedEltwiseWithoutActivation<ONNXLessOp>>(context);
+    patterns.add<FuseQuantizedEltwiseWithoutActivation<ONNXGreaterOp>>(context);
+    patterns.add<FuseQuantizedEltwiseWithoutActivation<ONNXLessOrEqualOp>>(
+        context);
+    patterns.add<FuseQuantizedEltwiseWithoutActivation<ONNXGreaterOrEqualOp>>(
+        context);
+    patterns.add<FuseQuantizedEltwiseWithoutActivation<ONNXModOp>>(context);
+    patterns.add<FuseQuantizedEltwiseWithoutActivation<ONNXReluOp>>(context);
+    patterns.add<FuseQuantizedEltwiseWithoutActivation<ONNXLeakyReluOp>>(
+        context);
     patterns.add<FuseQuantizedClipWithoutActivation>(context);
+    patterns.add<FuseQuantizedEltwiseWithoutActivation<ONNXSigmoidOp>>(context);
 
     //========================================================================
     // Pattern 2: Element-wise with Activation Fusion.
@@ -674,6 +958,12 @@ struct ReplaceQDQEltwisePass
       patterns.add<FusePostQuantizedReLUStrix<ONNXAddOp>>(context, true);
       patterns.add<FusePostQuantizedReLUStrix<ONNXMulOp>>(context, true);
     }
+
+    //========================================================================
+    // Pattern 5: Replace Expand with Eltwise ADD
+    //========================================================================
+
+    patterns.add<ReplaceExpandWithEltwise>(context);
 
     //========================================================================
     // Apply patterns with greedy rewriter

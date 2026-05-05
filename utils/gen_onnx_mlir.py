@@ -3,6 +3,10 @@
 # After modifying this file, the script will need to run to rebuild the
 # onnx-mlir ONNX Dialect. This is performed by calling
 # `make OMONNXOpsIncTranslation` in the build dir.
+# Alternatively, gen_onnx_mlir_multiple_custom_ops.sh can be used to generate
+# the ONNX Dialect with custom dialect extensions.
+# Before running these scripts, ensure that onnx==1.19.1 is installed
+# in the python environment.
 # If the changes are not seen, then you need to rebuild the entire onnx-mlir.
 
 # After changes that impact the documentation of the ops, run
@@ -108,6 +112,7 @@ version_dict = {
         "Acos": [22],
         "Acosh": [22],
         "Add": [14],
+        "AffineGrid": [20],
         "And": [7],
         "ArgMax": [13],
         "ArgMin": [13],
@@ -180,6 +185,7 @@ version_dict = {
         "HardSwish": [22],
         "Identity": [21],
         "If": [21],
+        "ImageDecoder": [20],
         "InstanceNormalization": [22],
         "IsInf": [20],
         "IsNaN": [20],
@@ -222,7 +228,7 @@ version_dict = {
         "Pad": [21, 18, 13, 11, 2],
         "Pow": [15],
         "QLinearConv": [10],
-        "QLinearMatMul": [10],
+        "QLinearMatMul": [21],
         "QuantizeLinear": [21],
         "RNN": [22],
         "RandomNormal": [22],
@@ -241,6 +247,7 @@ version_dict = {
         "ReduceProd": [18, 13],
         "ReduceSum": [13, 11],
         "ReduceSumSquare": [18, 13],
+        "RegexFullMatch": [20],
         "Relu": [14],
         "Reshape": [21],
         "Resize": [19, 18, 13, 11, 10],
@@ -277,7 +284,9 @@ version_dict = {
         "SplitToSequence": [11],
         "Sqrt": [13],
         "Squeeze": [21, 11],
+        "StringConcat": [20],
         "StringNormalizer": [10],
+        "StringSplit": [20],
         "STFT": [17],
         "Sub": [14],
         "Sum": [13],
@@ -286,7 +295,7 @@ version_dict = {
         "TfIdfVectorizer": [9],
         "ThresholdedRelu": [22],
         "Tile": [13],
-        "TopK": [11],
+        "TopK": [24],
         "Transpose": [21],
         "Trilu": [14],
         "Unique": [11],
@@ -303,7 +312,7 @@ version_dict = {
         "DictVectorizer": [1],
         "FeatureVectorizer": [1],
         "Imputer": [1],
-        "LabelEncoder": [2],
+        "LabelEncoder": [4],
         "LinearClassifier": [1],
         "LinearRegressor": [1],
         "Normalizer": [1],
@@ -311,8 +320,9 @@ version_dict = {
         "SVMClassifier": [1],
         "SVMRegressor": [1],
         "Scaler": [1],
-        "TreeEnsembleClassifier": [1],
-        "TreeEnsembleRegressor": [1],
+        "TreeEnsemble": [5],
+        "TreeEnsembleClassifier": [5],
+        "TreeEnsembleRegressor": [5],
         "ZipMap": [1],
     },
     "ai.onnx.preview.training": {
@@ -325,6 +335,8 @@ version_dict = {
 additional_op_version_dict = {
     "com.amd.quark": {
         "BFPQuantizeDequantize": [1],
+        "ExtendedQuantizeLinear": [1],
+        "ExtendedDequantizeLinear": [1],
     }
 }
 
@@ -380,10 +392,10 @@ class CustomOpSchema:
                 "list(int)": OpSchema.AttrType.INTS,
                 "list(float)": OpSchema.AttrType.FLOATS,
                 "list(string)": OpSchema.AttrType.STRINGS,
+                "bool": OpSchema.AttrType.INT,
             }
-            self.type = type_map.get(
-                attr_dict.get("type", "int"), OpSchema.AttrType.INT
-            )
+            self.type_str = attr_dict.get("type", "int")
+            self.type = type_map.get(self.type_str, OpSchema.AttrType.INT)
 
     class TypeConstraint:
         def __init__(self, tc_dict):
@@ -459,6 +471,19 @@ def load_custom_ops_from_yaml(yaml_paths: List[str]) -> List[CustomOpSchema]:
     return custom_schemas
 
 
+# Extra tensor types patched into ops' ONNX type constraints after parsing.
+# Keyed by op name. Value is a dict of type_param -> extra allowed type strings:
+#   "*" applies to all type params, named keys (e.g. "T4") target one param.
+special_type_constraints = {
+    "QLinearConv": {
+        "*": ["tensor(uint16)"],
+        "T4": ["tensor(int16)", "tensor(int8)"],
+    },
+    "QLinearMatMul": {
+        "*": ["tensor(int16)", "tensor(uint16)"],
+    },
+}
+
 # Manual specification of attribute type.
 special_attr_types = dict([("Cast.to", "type")])
 
@@ -489,6 +514,7 @@ OpsWithCustomAssemblyFormat = [
 
 # Operations supporting canonicalization (alphabetical order).
 OpsWithCanonicalizer = [
+    "Abs",
     "Add",
     "And",
     "AveragePool",
@@ -506,22 +532,23 @@ OpsWithCanonicalizer = [
     "GlobalAveragePool",
     "GlobalMaxPool",
     "Greater",
-    "GroupNormalization",
-    "GroupNormalizationV18",
     "GRU",
     "Identity",
+    "LeakyRelu",
     "Less",
     "Loop",
     "LSTM",
     "Mul",
     "Or",
     "Pow",
+    "ReduceMean",
     "Reshape",
     "Resize",
     "RNN",
     "Shape",
     "Split",
     "Size",
+    "Softmax",
     "SoftmaxV11",
     "SpaceToDepth",
     "Squeeze",
@@ -625,11 +652,7 @@ OpsWithVerifier = [
 ]
 
 # Op with fold function
-OpsWithFolder = ["Constant", "Squeeze", "SqueezeV11", "ReduceMean", "Slice"]
-
-# Dynamic lists for custom ops with verify and fold (populated at runtime)
-CustomOpsWithVerifier = []
-CustomOpsWithFolder = []
+OpsWithFolder = ["Constant", "Squeeze", "SqueezeV11", "ReduceMean", "Slice", "Clip"]
 
 # Op with ConstantLike trait
 OpsWithConstantLike = ["Constant"]
@@ -700,6 +723,7 @@ OpsWithResultTypeInference = [
     "Constant",
     "Cast",
     "CastLike",
+    "ConcatFromSequence",
     "ConstantOfShape",
     "EyeLike",
     "If",
@@ -709,10 +733,14 @@ OpsWithResultTypeInference = [
     "RandomUniform",
     "RandomUniformLike",
     "Scan",
+    "SequenceAt",
+    "SequenceConstruct",
     "SequenceEmpty",
+    "SequenceMap",
+    "SplitToSequence",
 ]
 
-FloatTypes = {"TensorOf<[F32]>", "TensorOf<[F16]>", "TensorOf<[BF16]>"}
+FloatTypes = {"TensorOf<[F32]>"}
 
 # Add an Op in this list if the Op needs result type deduction which is required
 # when writing declarative rewriting rules. Deduced type is always
@@ -963,6 +991,8 @@ def onnx_attr_type_to_mlir_attr_type(t):
         mlir_attr_type = "StrAttr"
     elif onnx_attr_type == "strings":
         mlir_attr_type = "StrArrayAttr"
+    elif onnx_attr_type == "bool":
+        mlir_attr_type = "BoolAttr"
     elif onnx_attr_type in {"type", "type_proto"}:
         # 'type' is the attribute type used in special_attr_types,
         # 'type_proto' is Optional op's type attribute's type
@@ -983,6 +1013,8 @@ def tblgen_attr_type_to_cpp_type(t):
         cpp_type = "ArrayAttr"
     elif "StrAttr" in t:
         cpp_type = "StringAttr"
+    elif "BoolAttr" in t:
+        cpp_type = "BoolAttr"
     elif "strings" in t:
         cpp_type = "ArrayAttr"
     else:
@@ -1157,6 +1189,32 @@ def get_attrs(schema):
     if not schema.attributes:
         return OrderedDict()
 
+    def get_default_value_if_present(attr):
+        """Return (has_default, default_value).
+
+        For real ONNX schemas, `attr.default_value` is an AttributeProto. Its
+        `name` may be populated even when no default literal exists, so use the
+        proto `type` to detect real defaults.
+        For YAML custom ops, the default is stored directly in `.name`.
+        """
+        default_proto_or_obj = attr.default_value
+
+        # Real ONNX AttributeProto path.
+        if isinstance(default_proto_or_obj, onnx.AttributeProto):
+            if default_proto_or_obj.type == onnx.AttributeProto.UNDEFINED:
+                return False, None
+            default_value = helper.get_attribute_value(default_proto_or_obj)
+            # Be defensive: if decoder yields None, treat as no default.
+            if default_value is None:
+                return False, None
+            return True, default_value
+
+        # CustomOpSchema path.
+        default_value = getattr(default_proto_or_obj, "name", None)
+        if default_value is None:
+            return False, None
+        return True, default_value
+
     name_to_type = OrderedDict()
     for _, attr in sorted(schema.attributes.items()):
         if attr.type == OpSchema.AttrType.GRAPH:
@@ -1170,7 +1228,17 @@ def get_attrs(schema):
         # Option holds either required or default value.
         elif attr.required:
             name_to_type[attr.name] = onnx_attr_type_to_mlir_attr_type(attr.type)
-        elif attr.default_value.name:
+        else:
+            has_default, default_value = get_default_value_if_present(attr)
+            if not has_default:
+                # Optional attribute; use type_str for custom ops
+                # (e.g. bool -> BoolAttr).
+                type_str = getattr(attr, "type_str", None)
+                if type_str == "bool":
+                    name_to_type[attr.name] = "OptionalAttr<BoolAttr>"
+                else:
+                    name_to_type[attr.name] = get_attr_type_optional(attr.type)
+                continue
 
             def format_value(value):  # type: (Any) -> Text
                 if isinstance(value, float):
@@ -1182,15 +1250,6 @@ def get_attrs(schema):
                 elif isinstance(value, (bytes, bytearray)) and sys.version_info[0] == 3:
                     return str(value.decode("utf-8"))
                 return str(value)
-
-            # Check if this is a CustomOpSchema attribute (from YAML)
-            # CustomOpSchema stores the default value directly in attr.default_value.name
-            if hasattr(attr.default_value, "ref_attr_name"):
-                # This is a real ONNX AttributeProto
-                default_value = helper.get_attribute_value(attr.default_value)
-            else:
-                # This is from CustomOpSchema, default value is already in .name
-                default_value = attr.default_value.name
 
             if isinstance(default_value, list):
                 default_value = [format_value(val) for val in default_value]
@@ -1205,11 +1264,17 @@ def get_attrs(schema):
                 default_value = format_value(default_value)
                 default_value_str = default_value
 
-            name_to_type[attr.name] = get_attr_type_with_default(
-                attr.type, default_value_str
-            )
-        else:
-            name_to_type[attr.name] = get_attr_type_optional(attr.type)
+            # Custom ops may use type_str (e.g. bool -> BoolAttr)
+            type_str = getattr(attr, "type_str", None)
+            if type_str == "bool":
+                default_value_str = str(default_value).lower()
+                name_to_type[attr.name] = 'DefaultValuedAttr<BoolAttr, "{}">'.format(
+                    default_value_str
+                )
+            else:
+                name_to_type[attr.name] = get_attr_type_with_default(
+                    attr.type, default_value_str
+                )
     return name_to_type
 
 
@@ -1367,6 +1432,14 @@ def parse_type_constraints(schema):
         type_str_dict[type_constraint.type_param_str] = parse_a_type_constraint(
             type_constraint
         )
+    if schema.name in special_type_constraints:
+        patches = special_type_constraints[schema.name]
+        for type_param, types in type_str_dict.items():
+            extra = patches.get(type_param, []) + patches.get("*", [])
+            for t in extra:
+                mlir_t = parse_type_str(t)
+                if mlir_t not in types:
+                    types.append(mlir_t)
     return type_str_dict
 
 
@@ -1460,11 +1533,11 @@ def gen_op_def(schema, with_version=False):
     traits = ["Pure", f"OpVersionTrait<{schema.since_version}>"]
 
     # Generate SameOperandsAndResultShape traits.
-    if opName in OpsWithSameOperandsAndResultShape:
+    if mlir_op_name in OpsWithSameOperandsAndResultShape:
         traits.append("SameOperandsAndResultShape")
 
     # Generate ConstantLike traits.
-    if opName in OpsWithConstantLike:
+    if mlir_op_name in OpsWithConstantLike:
         traits.append("ConstantLike")
 
     # OpsWithShapeInference:
@@ -1473,7 +1546,7 @@ def gen_op_def(schema, with_version=False):
     # Error will be report if these operations are encountered at runtime.
     traits.append("DeclareOpInterfaceMethods<ShapeInferenceOpInterface>")
     traits.append("DeclareOpInterfaceMethods<ShapeHelperOpInterface>")
-    if opName in OpsWithResultTypeInference:
+    if mlir_op_name in OpsWithResultTypeInference:
         traits.append("DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>")
     if len(regions):
         traits.append('OpInterface<"HasOnnxSubgraphOpInterface">')
@@ -1482,11 +1555,11 @@ def gen_op_def(schema, with_version=False):
     indent = inc_indent(indent)
 
     # Generate decl for custom assembly format.
-    if opName in OpsWithCustomAssemblyFormat:
+    if mlir_op_name in OpsWithCustomAssemblyFormat:
         s += indent + "let hasCustomAssemblyFormat = 1;\n"
 
     # Generate decl for canonicalizer.
-    if opName in OpsWithCanonicalizer:
+    if mlir_op_name in OpsWithCanonicalizer:
         s += indent + "let hasCanonicalizer = 1;\n"
 
     # Generate decl for summary.
@@ -1540,7 +1613,7 @@ def gen_op_def(schema, with_version=False):
     # Add custom builders.
     # Use element type of the first operand to construct an UnrankedTensorType
     # for the output.
-    if opName in custom_builder_ops_list:
+    if mlir_op_name in custom_builder_ops_list:
         if len(ins) == 0:
             raise RuntimeWarning(
                 "warning: not generate custom build methods for "
@@ -1549,11 +1622,11 @@ def gen_op_def(schema, with_version=False):
             )
 
         r = ""  # r is the resultType, use it with r.format(*operands, indent=indent)
-        if opName in custom_builder_broadcast_ops_list:
+        if mlir_op_name in custom_builder_broadcast_ops_list:
             numOperands = 2
             r += "{indent}auto lhsTy = {0}.getType();\n"
             r += "{indent}auto rhsTy = {1}.getType();\n"
-            if opName in custom_builder_broadcast_to_bool_ops_list:
+            if mlir_op_name in custom_builder_broadcast_to_bool_ops_list:
                 r += "{indent}auto elTy = $_builder.getI1Type();\n"
                 elTy = "elTy"
             else:
@@ -1634,8 +1707,8 @@ def gen_op_def(schema, with_version=False):
     # Generate input/output number and output type mapping
     s = get_numberof_inout(s, indent, schema)
 
-    if opName in OpsWithHelpers:
-        s += OpsWithHelpers[opName]
+    if mlir_op_name in OpsWithHelpers:
+        s += OpsWithHelpers[mlir_op_name]
 
     if len(regions):
         s += indent + "int64_t getSubgraphRegionIdx(const std::string& name) {\n"
@@ -1659,14 +1732,18 @@ def gen_op_def(schema, with_version=False):
 
     s += indent + "}];\n"
 
-    if opName in custom_definition_misc:
-        s += custom_definition_misc[opName] + "\n"
+    if mlir_op_name in custom_definition_misc:
+        s += custom_definition_misc[mlir_op_name] + "\n"
 
     ###########################################
-    # Generate decl for verifier.
-    if opName in OpsWithVerifier or opName in CustomOpsWithVerifier:
+    # Generate decl for verifier/folder.
+    custom_meta = getattr(schema, "meta_attributes", {})
+    custom_has_verifier = bool(custom_meta.get("verify", False))
+    custom_has_folder = bool(custom_meta.get("fold", False))
+
+    if opName in OpsWithVerifier or custom_has_verifier:
         s += indent + "let hasVerifier = 1;\n"
-    if opName in OpsWithFolder or opName in CustomOpsWithFolder:
+    if opName in OpsWithFolder or custom_has_folder:
         s += indent + "let hasFolder = 1;\n"
     s += "}\n\n"
     return s
@@ -1708,13 +1785,17 @@ def gen_op_importer(domain, name, file, since_version=None):
 
     mappedName = map_op_name_to_onnx_mlir_name(opName, domain)
     s = indent + 'import_handler_map_["{}"]["{}"] = \n '.format(domain, opName)
+    if domain and domain not in ["", "ai.onnx.ml", "ai.onnx.preview.training"]:
+        mlir_op_name = domain_abrv_dict[domain] + opName
+    else:
+        mlir_op_name = opName
 
     # Only support special op handler for the op without version.
     if since_version is not None:
         handler_func = "buildOperation<mlir::{}>".format(mappedName)
     else:
         handler_func = special_op_handler.get(
-            name, "buildOperation<mlir::{}>".format(mappedName)
+            mlir_op_name, "buildOperation<mlir::{}>".format(mappedName)
         )
 
     s += inc_indent(indent) + "&onnx_mlir::detail::FrontendGenImpl::"
@@ -1741,7 +1822,7 @@ def build_operator_schemas(custom_ops=None):
     operator_schemas = (
         list()
     )  # type: List[Tuple[Text, List[Tuple[int, List[Tuple[Text, OpSchema, List[OpSchema]]]]]]]
-    existing_ops = set()  # type: Set[Text]
+    existing_ops = set()  # type: Set[Tuple[Text, Text]]
     # Domain, name, versions
     opsets: dict[str, dict[str, list[int]]] = defaultdict(
         lambda: defaultdict(list)
@@ -1756,12 +1837,12 @@ def build_operator_schemas(custom_ops=None):
                 versions = sorted(unsorted_versions, key=lambda s: s.since_version)
                 opsets[domain][n].extend(reversed([s.since_version for s in versions]))
                 schema = versions[-1]
-                if schema.name in existing_ops:
+                if (domain, schema.name) in existing_ops:
                     continue
 
                 if check_operation_version:
                     # Generate operation of the latest version of your onnx.
-                    existing_ops.add(schema.name)
+                    existing_ops.add((domain, schema.name))
                     processed_name_map.append((n, schema, versions))
                     if domain not in version_dict:
                         continue
@@ -1794,7 +1875,7 @@ def build_operator_schemas(custom_ops=None):
                         # Check the version number against the version_dict.
                         specified_version = version_dict[domain][schema.name][v_counter]
                         if schema.since_version == specified_version:
-                            existing_ops.add(schema.name)
+                            existing_ops.add((domain, schema.name))
                             processed_name_map.append((n, schema, versions))
                             found = True
                             v_counter += 1
@@ -1825,7 +1906,7 @@ def main(args):  # type: (Type[Args]) -> None
         custom_ops = load_custom_ops_from_yaml(args.custom_ops_yaml)
         print(f"Loaded {len(custom_ops)} custom operations from {args.custom_ops_yaml}")
 
-        # Build version dict for custom ops and populate verifier/folder lists
+        # Build version dict for custom ops.
         for op in custom_ops:
             if op.domain not in custom_version_dict:
                 custom_version_dict[op.domain] = {}
@@ -1839,16 +1920,10 @@ def main(args):  # type: (Type[Args]) -> None
                 domain_abrv_dict[op.domain] = abbrev
                 print(f"Registered new domain: {op.domain} -> {abbrev}")
 
-            # Check meta_attributes for verify and fold
-            domain_abbrev = domain_abrv_dict.get(op.domain, op.domain.upper())
-            op_name = f"{domain_abbrev}{op.name}Op"
-
             if op.meta_attributes.get("verify", False):
-                CustomOpsWithVerifier.append(op.name)
                 print(f"  {op.name}: verify enabled")
 
             if op.meta_attributes.get("fold", False):
-                CustomOpsWithFolder.append(op.name)
                 print(f"  {op.name}: fold enabled")
 
         # Merge custom_version_dict into version_dict so custom ops are generated

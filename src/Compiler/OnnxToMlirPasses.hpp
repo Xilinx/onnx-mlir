@@ -1,3 +1,14 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+//===------------------ OnnxToMlirPasses.hpp ------------------------------===//
+//
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
+//===----------------------------------------------------------------------===//
+
 #ifndef ONNX_MLIR_ONNX_TO_MLIR_PASSES_H
 #define ONNX_MLIR_ONNX_TO_MLIR_PASSES_H
 
@@ -18,18 +29,28 @@ struct OnnxToMlirOptions {
   bool enableConvTransposeDecomposeToPhasedConv = false;
   bool enableConvTranspose1dDecomposeToPhasedConv = false;
   bool enableInstanceNormDecompose = true;
+  bool enableGroupNormDecompose = true;
+  bool enableReduceL2Decompose = true;
   bool enableMatmulNBitsDecompose = false;
+  bool enableGroupQueryAttentionDecompose = true;
+  bool enableConcatFuse = true;
   bool enableRemoveDqQAroundOp = false;
   bool enableRemoveBinary = false;
   bool enableFusePadIntoAvgpool = false;
   bool enableXMCPasses = false;
   bool enableSplitToSliceDecompose = false;
+  bool enableLstmSeqDecompose = false;
+  bool enableGatherToSlice = true;
+  bool enableRotaryEmbeddingRecompose = false;
 
+  bool disableBatchNormDecompose = false;
   bool disableRecomposeOption = false;
   bool enableONNXHybridPass = true;
   bool enableConvOptPass = true;
   bool enableSimdDataLayout = false;
   bool disableSimdOption = false;
+  bool enableGAPToReduceMean = true;
+
   int onnxOpTransformThreshold = 3;
   bool onnxOpTransformReport = false;
   int repeatOnnxTransform = 0;

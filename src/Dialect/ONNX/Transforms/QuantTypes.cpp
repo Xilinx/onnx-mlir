@@ -65,6 +65,9 @@ std::variant<quant::QuantizedType, StringLiteral> getQuantType(QDQOp op) {
     ();
   }
 
+  if (auto qType = dyn_cast<quant::QuantizedType>(expressedType))
+    return qType;
+
   bool isSigned =
       storageType.isSignedInteger() || storageType.isSignlessInteger();
 
@@ -72,9 +75,8 @@ std::variant<quant::QuantizedType, StringLiteral> getQuantType(QDQOp op) {
     return quant::UniformQuantizedType::get(isSigned, storageType,
         expressedType,
         scale.template getSplatValue<APFloat>().convertToDouble(),
-        storageType.isSignedInteger()
-            ? zeropoint.template getSplatValue<APInt>().getSExtValue()
-            : zeropoint.template getSplatValue<APInt>().getZExtValue(),
+        isSigned ? zeropoint.template getSplatValue<APInt>().getSExtValue()
+                 : zeropoint.template getSplatValue<APInt>().getZExtValue(),
         quant::QuantizedType::getDefaultMinimumForInteger(
             isSigned, storageType.getIntOrFloatBitWidth()),
         quant::QuantizedType::getDefaultMaximumForInteger(
@@ -85,9 +87,8 @@ std::variant<quant::QuantizedType, StringLiteral> getQuantType(QDQOp op) {
         [](APFloat apFloat) { return apFloat.convertToDouble(); });
     SmallVector<int64_t> zeropoints(zeropoint.getNumElements());
     llvm::transform(zeropoint.template getValues<APInt>(), zeropoints.begin(),
-        [storageType](APInt apInt) {
-          return storageType.isSignedInteger() ? apInt.getSExtValue()
-                                               : apInt.getZExtValue();
+        [isSigned](APInt apInt) {
+          return isSigned ? apInt.getSExtValue() : apInt.getZExtValue();
         });
     return quant::UniformQuantizedPerAxisType::get(isSigned, storageType,
         expressedType, scales, zeropoints, op.getAxis(),
@@ -109,11 +110,24 @@ public:
 
   LogicalResult matchAndRewrite(
       ONNXDequantizeLinearOp dqOp, PatternRewriter &rewriter) const override {
-    if (llvm::any_of(dqOp.getY().getUsers(), [](Operation *op) {
-          return op->hasTrait<OpTrait::IsTerminator>();
-        })) {
+    bool hasTermUser = llvm::any_of(dqOp.getY().getUsers(),
+        [](Operation *op) { return op->hasTrait<OpTrait::IsTerminator>(); });
+    bool hasNonTermUser = llvm::any_of(dqOp.getY().getUsers(),
+        [](Operation *op) { return !op->hasTrait<OpTrait::IsTerminator>(); });
+
+    // If only terminators use this DQ, keep it as float for the return.
+    if (hasTermUser && !hasNonTermUser)
       return rewriter.notifyMatchFailure(
           dqOp, "Cannot convert DQ output to function return");
+
+    // If both terminator and non-terminator users exist, split: clone the
+    // DQ for the return branch so the original can be converted to scast
+    // for internal (non-terminator) users that should stay quantized.
+    if (hasTermUser && hasNonTermUser) {
+      auto *clonedDQ = rewriter.clone(*dqOp);
+      for (auto &use : llvm::make_early_inc_range(dqOp.getY().getUses()))
+        if (use.getOwner()->hasTrait<OpTrait::IsTerminator>())
+          use.set(clonedDQ->getResult(0));
     }
 
     auto qTypeErr = getQuantType(dqOp);
@@ -123,12 +137,29 @@ public:
 
     auto qType = std::get<quant::QuantizedType>(qTypeErr);
     auto qTensorType = cast<TensorType>(dqOp.getType()).clone(qType);
-    if (auto constOp = dqOp.getX().getDefiningOp<ONNXConstantOp>();
-        constOp && constOp.getResult().hasOneUse()) {
-      rewriter.modifyOpInPlace(
-          constOp, [&]() { constOp.getResult().setType(qTensorType); });
-      rewriter.replaceOp(dqOp, constOp);
-      return success();
+
+    // Constants handling
+    if (auto constOp = dqOp.getX().getDefiningOp<ONNXConstantOp>()) {
+      Operation *dqRepl = nullptr;
+
+      // Single-use constants are directly replaced in place of DQ
+      if (constOp->hasOneUse())
+        dqRepl = constOp;
+
+      // Multi-use constants are duplicated (only if they are small)
+      else if (auto constVal = dyn_cast_if_present<DenseElementsAttr>(
+                   constOp.getValueAttr());
+               constVal &&
+               (constVal.isSplat() || constVal.getRawData().size() < 32))
+        dqRepl = rewriter.clone(*constOp);
+
+      if (dqRepl) {
+        // Update the result type to be quantized type
+        rewriter.modifyOpInPlace(
+            dqRepl, [&]() { dqRepl->getResult(0).setType(qTensorType); });
+        rewriter.replaceOp(dqOp, dqRepl);
+        return success();
+      }
     }
 
     auto scast = rewriter.create<quant::StorageCastOp>(

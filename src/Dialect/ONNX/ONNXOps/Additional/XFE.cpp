@@ -57,6 +57,12 @@ LogicalResult XFEGlobalMaxPoolOp::inferShapes(
       this->getOperation(), doShapeInference);
 }
 
+LogicalResult XFEBatchNormalizationOp::inferShapes(
+    std::function<void(Region &)> doShapeInference) {
+  return XFEBatchNormalizationOpShapeInference(
+      this->getOperation(), doShapeInference);
+}
+
 LogicalResult XFEInstanceNormalizationOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
   return XFEInstanceNormalizationOpShapeInference(
@@ -75,9 +81,20 @@ LogicalResult XFESpaceToDepthOp::inferShapes(
       this->getOperation(), doShapeInference);
 }
 
+LogicalResult XFEGroupNormalizationOp::inferShapes(
+    std::function<void(Region &)> doShapeInference) {
+  return XFEGroupNormalizationOpShapeInference(
+      this->getOperation(), doShapeInference);
+}
+
 LogicalResult XFEResizeOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
   return XFEResizeOpShapeInference(this->getOperation(), doShapeInference);
+}
+
+LogicalResult XFEGridSampleOp::inferShapes(
+    std::function<void(Region &)> doShapeInference) {
+  return XFEGridSampleOpShapeInference(this->getOperation(), doShapeInference);
 }
 
 // ============================================================
@@ -112,6 +129,10 @@ LogicalResult XFEGlobalMaxPoolOp::verify() {
   return XFEGlobalMaxPoolOpVerify(this->getOperation());
 }
 
+LogicalResult XFEBatchNormalizationOp::verify() {
+  return XFEBatchNormalizationOpVerify(this->getOperation());
+}
+
 LogicalResult XFEInstanceNormalizationOp::verify() {
   return XFEInstanceNormalizationOpVerify(this->getOperation());
 }
@@ -124,6 +145,14 @@ LogicalResult XFESpaceToDepthOp::verify() {
   return XFESpaceToDepthOpVerify(this->getOperation());
 }
 
+LogicalResult XFEGroupNormalizationOp::verify() {
+  return XFEGroupNormalizationOpVerify(this->getOperation());
+}
+
 LogicalResult XFEResizeOp::verify() {
   return XFEResizeOpVerify(this->getOperation());
+}
+
+LogicalResult XFEGridSampleOp::verify() {
+  return XFEGridSampleOpVerify(this->getOperation());
 }

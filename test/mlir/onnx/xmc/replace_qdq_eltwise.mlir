@@ -404,6 +404,190 @@ func.func @test_quantized_cos_no_activation(
 }
 
 // -----
+// Test Pattern 1: Mod (no activation) -> fused MOD
+// CHECK-LABEL: func.func @test_quantized_mod_no_activation
+func.func @test_quantized_mod_no_activation(
+    %arg0: tensor<1x4x8x8x!quant.uniform<u8:f32, 0.1:128>>,
+    %arg1: tensor<1x4x8x8x!quant.uniform<u8:f32, 0.1:128>>)
+    -> tensor<1x4x8x8x!quant.uniform<u8:f32, 0.1:128>> {
+  %mod = "onnx.Mod"(%arg0, %arg1) :
+      (tensor<1x4x8x8x!quant.uniform<u8:f32, 0.1:128>>,
+       tensor<1x4x8x8x!quant.uniform<u8:f32, 0.1:128>>)
+      -> tensor<1x4x8x8x!quant.uniform<u8:f32, 0.1:128>>
+  return %mod : tensor<1x4x8x8x!quant.uniform<u8:f32, 0.1:128>>
+
+  // CHECK: "onnx.XCOMPILERFusedEltwise"(%arg0, %arg1)
+  // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: type = "MOD"
+  // CHECK-NOT: onnx.Mod
+}
+
+// -----
+// Test Pattern 1: Standalone Relu (u8, zp!=0) -> fused RELU
+// CHECK-LABEL: func.func @test_quantized_relu_standalone
+func.func @test_quantized_relu_standalone(
+    %arg0: tensor<1x8x8x8x!quant.uniform<u8:f32, 0.02:128>>)
+    -> tensor<1x8x8x8x!quant.uniform<u8:f32, 0.02:128>> {
+  %relu = "onnx.Relu"(%arg0) :
+      (tensor<1x8x8x8x!quant.uniform<u8:f32, 0.02:128>>)
+      -> tensor<1x8x8x8x!quant.uniform<u8:f32, 0.02:128>>
+  return %relu : tensor<1x8x8x8x!quant.uniform<u8:f32, 0.02:128>>
+
+  // CHECK: %[[NOVAL:.*]] = "onnx.NoValue"()
+  // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[NOVAL]])
+  // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: type = "RELU"
+  // CHECK: return %[[FUSED]]
+}
+
+// -----
+// Test Pattern 1: Standalone LeakyRelu -> fused LEAKYRELU with alpha attrs
+// CHECK-LABEL: func.func @test_quantized_leakyrelu_standalone
+func.func @test_quantized_leakyrelu_standalone(
+    %arg0: tensor<1x8x8x8x!quant.uniform<u8:f32, 0.02:128>>)
+    -> tensor<1x8x8x8x!quant.uniform<u8:f32, 0.02:128>> {
+  %leaky = "onnx.LeakyRelu"(%arg0) {alpha = 0.01 : f32} :
+      (tensor<1x8x8x8x!quant.uniform<u8:f32, 0.02:128>>)
+      -> tensor<1x8x8x8x!quant.uniform<u8:f32, 0.02:128>>
+  return %leaky : tensor<1x8x8x8x!quant.uniform<u8:f32, 0.02:128>>
+
+  // CHECK: %[[NOVAL:.*]] = "onnx.NoValue"()
+  // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[NOVAL]])
+  // CHECK-SAME: leakyrelu_alpha = {{[0-9.e+-]+}} : f32
+  // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: prelu_in = 3 : si64
+  // CHECK-SAME: prelu_shift = 8 : si64
+  // CHECK-SAME: type = "LEAKYRELU"
+  // CHECK: return %[[FUSED]]
+}
+
+// -----
+// Test Pattern 1: Quantized Sigmoid  -> fused QLINEARSIGMOID
+// (moved from replace-qdq-sigmoid; simple case handled by replace-qdq-eltwise.)
+// CHECK-LABEL: func.func @test_quantized_sigmoid
+func.func @test_quantized_sigmoid(%arg0: tensor<1x16x32x32x!quant.uniform<u8:f32, 0.08:128>>)
+    -> tensor<1x16x32x32x!quant.uniform<u8:f32, 0.00392157:0>> {
+
+  %0 = "onnx.Sigmoid"(%arg0) :
+      (tensor<1x16x32x32x!quant.uniform<u8:f32, 0.08:128>>)
+      -> tensor<1x16x32x32x!quant.uniform<u8:f32, 0.00392157:0>>
+
+  return %0 : tensor<1x16x32x32x!quant.uniform<u8:f32, 0.00392157:0>>
+
+  // CHECK-NOT: "onnx.Sigmoid"
+  // CHECK: %[[NONE:.*]] = "onnx.NoValue"
+  // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[NONE]])
+  // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: type = "SIGMOID"
+  // CHECK: return %[[FUSED]]
+}
+
+// -----
+// Negative: non-quantized Sigmoid is not replaced by replace-qdq-eltwise
+// CHECK-LABEL: func.func @test_sigmoid_float_not_replaced
+func.func @test_sigmoid_float_not_replaced(%arg0: tensor<1x8x8xf32>) -> tensor<1x8x8xf32> {
+
+  %0 = "onnx.Sigmoid"(%arg0) :
+      (tensor<1x8x8xf32>) -> tensor<1x8x8xf32>
+
+  return %0 : tensor<1x8x8xf32>
+
+  // CHECK: "onnx.Sigmoid"(%arg0)
+  // CHECK-NOT: "onnx.XCOMPILERFusedEltwise"
+}
+
+// -----
+// Test Pattern 1: Equal - quantized inputs, bool output (standard ONNX).
+// Pass does not fuse (result not quantized); op remains.
+// CHECK-LABEL: func.func @test_quantized_equal_no_activation
+func.func @test_quantized_equal_no_activation(
+    %arg0: tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>,
+    %arg1: tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>)
+    -> tensor<1x4x4x4xi1> {
+  %eq = "onnx.Equal"(%arg0, %arg1) :
+      (tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>,
+       tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>)
+      -> tensor<1x4x4x4xi1>
+  return %eq : tensor<1x4x4x4xi1>
+
+  // Result is bool, so pass does not fuse (requires quantized result).
+  // CHECK: "onnx.Equal"(%arg0, %arg1)
+  // CHECK: return
+}
+
+// -----
+// Test Pattern 1: Less - quantized inputs, bool output (standard ONNX).
+// Pass does not fuse (result not quantized); op remains.
+// CHECK-LABEL: func.func @test_quantized_less_no_activation
+func.func @test_quantized_less_no_activation(
+    %arg0: tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>,
+    %arg1: tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>)
+    -> tensor<1x4x4x4xi1> {
+  %less = "onnx.Less"(%arg0, %arg1) :
+      (tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>,
+       tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>)
+      -> tensor<1x4x4x4xi1>
+  return %less : tensor<1x4x4x4xi1>
+
+  // CHECK: "onnx.Less"(%arg0, %arg1)
+  // CHECK: return
+}
+
+// -----
+// Test Pattern 1: Greater - quantized inputs, bool output (standard ONNX).
+// Pass does not fuse (result not quantized); op remains.
+// CHECK-LABEL: func.func @test_quantized_greater_no_activation
+func.func @test_quantized_greater_no_activation(
+    %arg0: tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>,
+    %arg1: tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>)
+    -> tensor<1x4x4x4xi1> {
+  %greater = "onnx.Greater"(%arg0, %arg1) :
+      (tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>,
+       tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>)
+      -> tensor<1x4x4x4xi1>
+  return %greater : tensor<1x4x4x4xi1>
+
+  // CHECK: "onnx.Greater"(%arg0, %arg1)
+  // CHECK: return
+}
+
+// -----
+// Test Pattern 1: LessOrEqual - quantized inputs, bool output (standard ONNX).
+// Pass does not fuse (result not quantized); op remains.
+// CHECK-LABEL: func.func @test_quantized_less_or_equal_no_activation
+func.func @test_quantized_less_or_equal_no_activation(
+    %arg0: tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>,
+    %arg1: tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>)
+    -> tensor<1x4x4x4xi1> {
+  %le = "onnx.LessOrEqual"(%arg0, %arg1) :
+      (tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>,
+       tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>)
+      -> tensor<1x4x4x4xi1>
+  return %le : tensor<1x4x4x4xi1>
+
+  // CHECK: "onnx.LessOrEqual"(%arg0, %arg1)
+  // CHECK: return
+}
+
+// -----
+// Test Pattern 1: GreaterOrEqual - quantized inputs, bool output (standard ONNX).
+// Pass does not fuse (result not quantized); op remains.
+// CHECK-LABEL: func.func @test_quantized_greater_or_equal_no_activation
+func.func @test_quantized_greater_or_equal_no_activation(
+    %arg0: tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>,
+    %arg1: tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>)
+    -> tensor<1x4x4x4xi1> {
+  %ge = "onnx.GreaterOrEqual"(%arg0, %arg1) :
+      (tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>,
+       tensor<1x4x4x4x!quant.uniform<u8:f32, 0.1:128>>)
+      -> tensor<1x4x4x4xi1>
+  return %ge : tensor<1x4x4x4xi1>
+
+  // CHECK: "onnx.GreaterOrEqual"(%arg0, %arg1)
+  // CHECK: return
+}
+
+// -----
 // Test: Pattern 1 + Pattern 2 in same function
 //  - Exp (no activation) should fuse with nonlinear="NONE", type="EXP"
 //  - Add + Relu should fuse with nonlinear="RELU", type="ADD"
@@ -510,4 +694,136 @@ func.func @test_multiple_fusions(
   // CHECK-SAME: nonlinear = "RELU"
   // CHECK-SAME: type = "MUL"
   // CHECK: return %[[FUSED_ADD]], %[[FUSED_MUL]]
+}
+
+// -----
+// Test Pattern 5: Replace quantized Expand with Eltwise ADD (4D, C=1, W=1)
+// Input shape [1,1,1,1] -> Expand to [1,1,32,32]
+// Should create XCOMPILERFusedEltwise(input, zeros, type="ADD")
+// CHECK-LABEL: func.func @test_expand_to_eltwise_4d
+func.func @test_expand_to_eltwise_4d(
+    %arg0: tensor<1x1x1x1x!quant.uniform<u8:f32, 0.05:128>>)
+    -> tensor<1x1x32x32x!quant.uniform<u8:f32, 0.05:128>> {
+  %shape = "onnx.Constant"() {value = dense<[1, 1, 32, 32]> : tensor<4xi64>} : () -> tensor<4xi64>
+  %expand = "onnx.Expand"(%arg0, %shape) :
+      (tensor<1x1x1x1x!quant.uniform<u8:f32, 0.05:128>>, tensor<4xi64>)
+      -> tensor<1x1x32x32x!quant.uniform<u8:f32, 0.05:128>>
+  return %expand : tensor<1x1x32x32x!quant.uniform<u8:f32, 0.05:128>>
+
+  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<0> : tensor<1x1x32x32xui8>}
+  // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
+  // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: type = "ADD"
+  // CHECK: return %[[FUSED]]
+}
+
+// -----
+// Test Pattern 5: Replace quantized Expand with i8 quantized type (4D, C=1, W=1)
+// CHECK-LABEL: func.func @test_expand_to_eltwise_i8
+func.func @test_expand_to_eltwise_i8(
+    %arg0: tensor<1x1x1x1x!quant.uniform<i8:f32, 0.03:0>>)
+    -> tensor<1x1x16x16x!quant.uniform<i8:f32, 0.03:0>> {
+  %shape = "onnx.Constant"() {value = dense<[1, 1, 16, 16]> : tensor<4xi64>} : () -> tensor<4xi64>
+  %expand = "onnx.Expand"(%arg0, %shape) :
+      (tensor<1x1x1x1x!quant.uniform<i8:f32, 0.03:0>>, tensor<4xi64>)
+      -> tensor<1x1x16x16x!quant.uniform<i8:f32, 0.03:0>>
+  return %expand : tensor<1x1x16x16x!quant.uniform<i8:f32, 0.03:0>>
+
+  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<0> : tensor<1x1x16x16xi8>}
+  // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
+  // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: type = "ADD"
+  // CHECK: return %[[FUSED]]
+}
+
+// -----
+// Pattern 5: 4D input with dim[2] == 1 should fire even if W (dim 3) != 1
+// (gate is now only on dim[2]; matches xcompiler's ReplaceQDQExpandToEltwisePass)
+// CHECK-LABEL: func.func @test_expand_match_w_not_one
+func.func @test_expand_match_w_not_one(
+    %arg0: tensor<1x1x1x4x!quant.uniform<u8:f32, 0.05:128>>)
+    -> tensor<1x1x8x4x!quant.uniform<u8:f32, 0.05:128>> {
+  %shape = "onnx.Constant"() {value = dense<[1, 1, 8, 4]> : tensor<4xi64>} : () -> tensor<4xi64>
+  %expand = "onnx.Expand"(%arg0, %shape) :
+      (tensor<1x1x1x4x!quant.uniform<u8:f32, 0.05:128>>, tensor<4xi64>)
+      -> tensor<1x1x8x4x!quant.uniform<u8:f32, 0.05:128>>
+  return %expand : tensor<1x1x8x4x!quant.uniform<u8:f32, 0.05:128>>
+
+  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<0> : tensor<1x1x8x4xui8>}
+  // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
+  // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: type = "ADD"
+  // CHECK: return %[[FUSED]]
+}
+
+// -----
+// Pattern 5: 4D input with dim[2] == 1 should fire even if C (dim 1) != 1
+// (gate is now only on dim[2]; matches xcompiler's ReplaceQDQExpandToEltwisePass)
+// CHECK-LABEL: func.func @test_expand_match_c_not_one
+func.func @test_expand_match_c_not_one(
+    %arg0: tensor<1x16x1x1x!quant.uniform<u8:f32, 0.05:128>>)
+    -> tensor<1x16x32x32x!quant.uniform<u8:f32, 0.05:128>> {
+  %shape = "onnx.Constant"() {value = dense<[1, 16, 32, 32]> : tensor<4xi64>} : () -> tensor<4xi64>
+  %expand = "onnx.Expand"(%arg0, %shape) :
+      (tensor<1x16x1x1x!quant.uniform<u8:f32, 0.05:128>>, tensor<4xi64>)
+      -> tensor<1x16x32x32x!quant.uniform<u8:f32, 0.05:128>>
+  return %expand : tensor<1x16x32x32x!quant.uniform<u8:f32, 0.05:128>>
+
+  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<0> : tensor<1x16x32x32xui8>}
+  // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
+  // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: type = "ADD"
+  // CHECK: return %[[FUSED]]
+}
+
+// -----
+// Negative: Pattern 5 should NOT fire when 4D input has dim[2] != 1
+// (only dim[2] is gated under the new behavior)
+// CHECK-LABEL: func.func @test_expand_no_match_dim2_not_one
+func.func @test_expand_no_match_dim2_not_one(
+    %arg0: tensor<1x1x4x1x!quant.uniform<u8:f32, 0.05:128>>)
+    -> tensor<1x1x4x8x!quant.uniform<u8:f32, 0.05:128>> {
+  %shape = "onnx.Constant"() {value = dense<[1, 1, 4, 8]> : tensor<4xi64>} : () -> tensor<4xi64>
+  %expand = "onnx.Expand"(%arg0, %shape) :
+      (tensor<1x1x4x1x!quant.uniform<u8:f32, 0.05:128>>, tensor<4xi64>)
+      -> tensor<1x1x4x8x!quant.uniform<u8:f32, 0.05:128>>
+  return %expand : tensor<1x1x4x8x!quant.uniform<u8:f32, 0.05:128>>
+
+  // CHECK: "onnx.Expand"
+  // CHECK-NOT: "onnx.XCOMPILERFusedEltwise"
+}
+
+// -----
+// Negative: Pattern 5 should NOT fire on non-quantized Expand
+// CHECK-LABEL: func.func @test_expand_float_not_replaced
+func.func @test_expand_float_not_replaced(
+    %arg0: tensor<1x16x1x1xf32>)
+    -> tensor<1x16x32x32xf32> {
+  %shape = "onnx.Constant"() {value = dense<[1, 16, 32, 32]> : tensor<4xi64>} : () -> tensor<4xi64>
+  %expand = "onnx.Expand"(%arg0, %shape) :
+      (tensor<1x16x1x1xf32>, tensor<4xi64>)
+      -> tensor<1x16x32x32xf32>
+  return %expand : tensor<1x16x32x32xf32>
+
+  // CHECK: "onnx.Expand"
+  // CHECK-NOT: "onnx.XCOMPILERFusedEltwise"
+}
+
+// -----
+// Test Pattern 5: Non-4D tensor (3D) should also be replaced
+// CHECK-LABEL: func.func @test_expand_to_eltwise_3d
+func.func @test_expand_to_eltwise_3d(
+    %arg0: tensor<1x1x8x!quant.uniform<i8:f32, 0.02:0>>)
+    -> tensor<4x16x8x!quant.uniform<i8:f32, 0.02:0>> {
+  %shape = "onnx.Constant"() {value = dense<[4, 16, 8]> : tensor<3xi64>} : () -> tensor<3xi64>
+  %expand = "onnx.Expand"(%arg0, %shape) :
+      (tensor<1x1x8x!quant.uniform<i8:f32, 0.02:0>>, tensor<3xi64>)
+      -> tensor<4x16x8x!quant.uniform<i8:f32, 0.02:0>>
+  return %expand : tensor<4x16x8x!quant.uniform<i8:f32, 0.02:0>>
+
+  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<0> : tensor<4x16x8xi8>}
+  // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
+  // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: type = "ADD"
+  // CHECK: return %[[FUSED]]
 }

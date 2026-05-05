@@ -11,6 +11,7 @@
 // Becomes: input → reshape → depthwise-conv2d [→ activation] → reshape → output
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Quant/IR/QuantTypes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
@@ -182,6 +183,17 @@ struct ScaleToDwConv2dPattern : public OpRewritePattern<ONNXMulOp> {
       return failure();
     }
 
+    // Skip for quantized models (matches golden TransferScaleToDwConv2dPass
+    // which returns early when qdq_enabled). Check if input or output carries
+    // a quantized element type.
+    auto isQuant = [](Type t) -> bool {
+      if (auto rtt = dyn_cast<RankedTensorType>(t))
+        return isa<quant::QuantizedType>(rtt.getElementType());
+      return false;
+    };
+    if (isQuant(input.getType()) || isQuant(mulOp.getResult().getType()))
+      return failure();
+
     // Get types
     auto inputType = dyn_cast<RankedTensorType>(input.getType());
     auto scaleType = dyn_cast<RankedTensorType>(scale.getType());
@@ -244,8 +256,10 @@ struct ScaleToDwConv2dPattern : public OpRewritePattern<ONNXMulOp> {
     auto stridesAttr = rewriter.getI64ArrayAttr({1, 1});
 
     auto dwConvOp = rewriter.create<XFEConvOp>(loc, convOutputType,
-        reshapedInput, reshapedWeight, bias, autoPadAttr, dilationsAttr,
-        groupAttr, kernelShapeAttr, padsAttr, stridesAttr);
+        reshapedInput, reshapedWeight, bias, rewriter.getStringAttr("NONE"),
+        autoPadAttr, dilationsAttr, groupAttr, kernelShapeAttr,
+        /*leakyrelu_alpha=*/FloatAttr(), padsAttr,
+        /*prelu_in=*/IntegerAttr(), /*prelu_shift=*/IntegerAttr(), stridesAttr);
 
     transferOnnxNodeName(mulOp, dwConvOp);
 
