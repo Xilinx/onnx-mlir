@@ -79,8 +79,8 @@ LogicalResult ONNXDequantizeLinearOpShapeHelper::computeShape() {
   }
 
   // Get values.
-  // Save the final result.
-  setOutputDims(outputDims);
+  // Save the final result and leave inference-derived dims unchanged
+  setOutputDims(outputDims, /*n=*/0, /*refineShape=*/false);
   return success();
 }
 
