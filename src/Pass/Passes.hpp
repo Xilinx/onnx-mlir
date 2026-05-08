@@ -57,7 +57,8 @@ std::unique_ptr<mlir::Pass> createShapeInferencePass();
 void configureConstPropONNXToONNXPass(bool roundFPToInt, int expansionBound,
     llvm::ArrayRef<std::string> disabledPatterns, bool constantPropIsDisabled);
 
-std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass();
+std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(
+    bool enableQDQ = false);
 
 std::unique_ptr<mlir::Pass> createQDQCanonicalizePass(
     bool removeBinary = false, bool removeQDQAroundOps = false);
