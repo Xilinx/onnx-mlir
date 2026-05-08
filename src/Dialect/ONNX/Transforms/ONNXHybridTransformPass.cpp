@@ -140,6 +140,13 @@ struct ONNXHybridTransformPass
           "Enable canonicalize from GlobalAveragePool to ReduceMean"),
       ::llvm::cl::init(true)};
 
+  Option<bool> enableGroupQueryAttentionCacheSlicing{*this,
+      "enable-groupqueryattention-cache-slicing",
+      llvm::cl::desc("Enable slicing of cos/sin caches during decomposing "
+                     "GroupQueryAttention. Set to false for keeping cache "
+                     "and synthesize position_ids instead."),
+      ::llvm::cl::init(true)};
+
   FrozenRewritePatternSet patterns;
 
   ONNXHybridTransformPass(bool enableRecomposition,
@@ -149,7 +156,7 @@ struct ONNXHybridTransformPass
       bool enableConvTranspose1dDecomposeToPhasedConv,
       bool enableInstanceNormDecompose, bool enableMatmulNBitsDecompose,
       bool enableGroupQueryAttentionDecompose, bool enableSplitToSliceDecompose,
-      bool enablGAPToReduceMean) {
+      bool enablGAPToReduceMean, bool enableGroupQueryAttentionCacheSlicing) {
     this->recomposition = enableRecomposition;
     this->quarkQuantizedOpsLegalization = enableQuarkQuantizedOpsLegalization;
     this->enableConvTransposeDecompose = enableConvTransposeDecompose;
@@ -163,6 +170,8 @@ struct ONNXHybridTransformPass
         enableGroupQueryAttentionDecompose;
     this->enableSplitToSliceDecompose = enableSplitToSliceDecompose;
     this->enablGAPToReduceMean = enablGAPToReduceMean;
+    this->enableGroupQueryAttentionCacheSlicing =
+        enableGroupQueryAttentionCacheSlicing;
   }
 
   ONNXHybridTransformPass(const ONNXHybridTransformPass &pass)
@@ -218,7 +227,8 @@ struct ONNXHybridTransformPass
           enableConvTransposeDecomposeToPhasedConv,
           enableConvTranspose1dDecomposeToPhasedConv,
           enableInstanceNormDecompose, enableMatmulNBitsDecompose,
-          enableGroupQueryAttentionDecompose, enableSplitToSliceDecompose);
+          enableGroupQueryAttentionDecompose, enableSplitToSliceDecompose,
+          enableGroupQueryAttentionCacheSlicing);
     }
 
     if (recomposition) {
@@ -266,11 +276,12 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createONNXHybridTransformPass(
     bool enableConvTranspose1dDecomposeToPhasedConv,
     bool enableInstanceNormDecompose, bool enableMatmulNBitsDecompose,
     bool enableGroupQueryAttentionDecompose, bool enableSplitToSliceDecompose,
-    bool enablGAPToReduceMean) {
+    bool enablGAPToReduceMean, bool enableGroupQueryAttentionCacheSlicing) {
   return std::make_unique<ONNXHybridTransformPass>(enableRecomposition,
       enableQuarkQuantizedOpsLegalization, enableConvTransposeDecompose,
       enableConvTransposeDecomposeToPhasedConv,
       enableConvTranspose1dDecomposeToPhasedConv, enableInstanceNormDecompose,
       enableMatmulNBitsDecompose, enableGroupQueryAttentionDecompose,
-      enableSplitToSliceDecompose, enablGAPToReduceMean);
+      enableSplitToSliceDecompose, enablGAPToReduceMean,
+      enableGroupQueryAttentionCacheSlicing);
 }

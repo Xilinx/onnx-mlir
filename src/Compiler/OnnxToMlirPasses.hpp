@@ -20,6 +20,7 @@ struct OnnxToMlirOptions {
   bool enableInstanceNormDecompose = true;
   bool enableMatmulNBitsDecompose = false;
   bool enableGroupQueryAttentionDecompose = true;
+  bool enableGroupQueryAttentionCacheSlicing = true;
   bool enableRemoveDqQAroundOp = false;
   bool enableRemoveBinary = false;
   bool enableFusePadIntoAvgpool = false;
