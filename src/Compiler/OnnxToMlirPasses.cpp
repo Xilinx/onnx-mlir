@@ -147,7 +147,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
       opts.enableGatherToSlice));
   if (!opts.disableRecomposeOption)
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createRecomposeONNXToONNXPass(
-        /*target=*/"", opts.enableRotaryEmbeddingRecompose));
+        /*target=*/"", opts.enableRotaryEmbeddingRecompose,
+        /*enableReduceL2Recompositions=*/true));
 
   if (opts.enableONNXHybridPass) {
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createONNXHybridTransformPass(

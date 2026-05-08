@@ -173,6 +173,13 @@ struct ONNXHybridTransformPass
                      "into onnx.RotaryEmbedding"),
       ::llvm::cl::init(false)};
 
+  Option<bool> enableReduceL2Recompositions{*this,
+      "enable-reducel2-recompositions",
+      llvm::cl::desc(
+          "When recomposition is enabled, also run ReduceL2-related patterns "
+          "(e.g. fold Mul+ReduceSum+Sqrt/PowHalf back to onnx.ReduceL2)"),
+      ::llvm::cl::init(true)};
+
   FrozenRewritePatternSet patterns;
 
   ONNXHybridTransformPass(bool enableRecomposition,
@@ -267,8 +274,8 @@ struct ONNXHybridTransformPass
     }
 
     if (recomposition) {
-      getRecomposeONNXToONNXPatterns(
-          cumulativePatterns, enableRotaryEmbeddingRecompose);
+      getRecomposeONNXToONNXPatterns(cumulativePatterns,
+          enableRotaryEmbeddingRecompose, enableReduceL2Recompositions);
     }
 
     patterns = FrozenRewritePatternSet(std::move(cumulativePatterns));

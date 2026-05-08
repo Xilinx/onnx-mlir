@@ -11,6 +11,9 @@
 // This file implements a combined pass that dynamically invoke several
 // transformation on ONNX ops.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "mlir/IR/OperationSupport.h"
@@ -87,7 +90,10 @@ void ONNXOpTransformPass::runOnOperation() {
         onnx_mlir::createDecomposeONNXToONNXPass());
     if (enableRecomposeOptPass)
       dynamicPM.addNestedPass<func::FuncOp>(
-          onnx_mlir::createRecomposeONNXToONNXPass());
+          onnx_mlir::createRecomposeONNXToONNXPass(
+              /*target=*/"",
+              /*enableRotaryEmbeddingRecompose=*/false,
+              /*enableReduceL2Recompositions=*/true));
     dynamicPM.addNestedPass<func::FuncOp>(
         onnx_mlir::createShapeInferencePass());
     dynamicPM.addPass(mlir::createCanonicalizerPass());
