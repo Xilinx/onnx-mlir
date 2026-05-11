@@ -113,8 +113,7 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
       opts.enableConvTransposeDecomposeToPhasedConv,
       opts.enableConvTranspose1dDecomposeToPhasedConv,
       opts.enableInstanceNormDecompose, opts.enableMatmulNBitsDecompose,
-      opts.enableGroupQueryAttentionDecompose,
-      opts.enableSplitToSliceDecompose,
+      opts.enableGroupQueryAttentionDecompose, opts.enableSplitToSliceDecompose,
       opts.enableGroupQueryAttentionCacheSlicing));
   if (!opts.disableRecomposeOption)
     pm.addNestedPass<func::FuncOp>(
