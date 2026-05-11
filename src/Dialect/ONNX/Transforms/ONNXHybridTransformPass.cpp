@@ -73,6 +73,10 @@ struct ONNXHybridTransformPass
       llvm::cl::desc("Enable constant propagation in hybrid transform"),
       llvm::cl::init(true)};
 
+  Option<bool> qdqConstProp{*this, "qdq-const-prop",
+      llvm::cl::desc("Enable constant propagation for QDQ"),
+      llvm::cl::init(false)};
+
   Option<bool> decomposition{*this, "decomposition",
       llvm::cl::desc("Enable decomposition in hybrid transform"),
       llvm::cl::init(true)};
@@ -156,7 +160,8 @@ struct ONNXHybridTransformPass
       bool enableConvTranspose1dDecomposeToPhasedConv,
       bool enableInstanceNormDecompose, bool enableMatmulNBitsDecompose,
       bool enableGroupQueryAttentionDecompose, bool enableSplitToSliceDecompose,
-      bool enablGAPToReduceMean, bool enableGroupQueryAttentionCacheSlicing) {
+      bool enablGAPToReduceMean, bool enableGroupQueryAttentionCacheSlicing,
+      bool enableQDQConstProp = false) {
     this->recomposition = enableRecomposition;
     this->quarkQuantizedOpsLegalization = enableQuarkQuantizedOpsLegalization;
     this->enableConvTransposeDecompose = enableConvTransposeDecompose;
@@ -172,6 +177,7 @@ struct ONNXHybridTransformPass
     this->enablGAPToReduceMean = enablGAPToReduceMean;
     this->enableGroupQueryAttentionCacheSlicing =
         enableGroupQueryAttentionCacheSlicing;
+    this->qdqConstProp = enableQDQConstProp;
   }
 
   ONNXHybridTransformPass(const ONNXHybridTransformPass &pass)
@@ -218,7 +224,7 @@ struct ONNXHybridTransformPass
     }
 
     if (constantPropagation) {
-      getConstPropONNXToONNXPatterns(cumulativePatterns);
+      getConstPropONNXToONNXPatterns(cumulativePatterns, qdqConstProp);
     }
 
     if (decomposition) {
@@ -276,12 +282,13 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createONNXHybridTransformPass(
     bool enableConvTranspose1dDecomposeToPhasedConv,
     bool enableInstanceNormDecompose, bool enableMatmulNBitsDecompose,
     bool enableGroupQueryAttentionDecompose, bool enableSplitToSliceDecompose,
-    bool enablGAPToReduceMean, bool enableGroupQueryAttentionCacheSlicing) {
+    bool enablGAPToReduceMean, bool enableGroupQueryAttentionCacheSlicing,
+    bool enableQDQConstProp) {
   return std::make_unique<ONNXHybridTransformPass>(enableRecomposition,
       enableQuarkQuantizedOpsLegalization, enableConvTransposeDecompose,
       enableConvTransposeDecomposeToPhasedConv,
       enableConvTranspose1dDecomposeToPhasedConv, enableInstanceNormDecompose,
       enableMatmulNBitsDecompose, enableGroupQueryAttentionDecompose,
       enableSplitToSliceDecompose, enablGAPToReduceMean,
-      enableGroupQueryAttentionCacheSlicing);
+      enableGroupQueryAttentionCacheSlicing, enableQDQConstProp);
 }

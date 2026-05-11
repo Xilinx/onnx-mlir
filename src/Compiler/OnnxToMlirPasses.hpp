@@ -26,6 +26,7 @@ struct OnnxToMlirOptions {
   bool enableFusePadIntoAvgpool = false;
   bool enableXMCPasses = false;
   bool enableSplitToSliceDecompose = false;
+  bool enableQDQConstProp = false;
 
   bool disableRecomposeOption = false;
   bool enableONNXHybridPass = true;

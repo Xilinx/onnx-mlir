@@ -58,7 +58,8 @@ std::unique_ptr<mlir::Pass> createShapeInferencePass();
 void configureConstPropONNXToONNXPass(bool roundFPToInt, int expansionBound,
     llvm::ArrayRef<std::string> disabledPatterns, bool constantPropIsDisabled);
 
-std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass();
+std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(
+    bool enableQDQ = false);
 
 std::unique_ptr<mlir::Pass> createQDQCanonicalizePass(
     bool removeBinary = false, bool removeQDQAroundOps = false);
@@ -96,7 +97,8 @@ std::unique_ptr<mlir::Pass> createONNXHybridTransformPass(
     bool enableMatmulNBitsDecompose = false,
     bool enableGroupQueryAttentionDecompose = true,
     bool enableSplitToSliceDecompose = false, bool enablGAPToReduceMean = true,
-    bool enableGroupQueryAttentionCacheSlicing = true);
+    bool enableGroupQueryAttentionCacheSlicing = true,
+    bool enableQDQConstProp = false);
 
 /// Pass for analyzing unknown dimension in ONNX operations.
 std::unique_ptr<mlir::Pass> createONNXDimAnalysisPass();
