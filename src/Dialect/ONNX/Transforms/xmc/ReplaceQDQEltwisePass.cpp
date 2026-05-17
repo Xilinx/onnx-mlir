@@ -105,9 +105,15 @@ computeActivationMapping(Operation *op, PatternRewriter &rewriter) {
     float alpha = alphaAttr ? alphaAttr.getValue().convertToFloat() : 0.01f;
     if (!alphaAttr)
       alphaAttr = rewriter.getFloatAttr(rewriter.getF32Type(), alpha);
-    auto [M, N] = getLeakyReluAlphaToPreluFactor(alpha);
-    return {"LEAKYRELU", alphaAttr, getSI64Attr(rewriter, M),
-        getSI64Attr(rewriter, N)};
+    // FIX (phase-3 accuracy regression): do NOT bake prelu_in/prelu_shift into
+    // the IR here. The phase-3 device kernel applies these baked 8-bit
+    // integer factors incorrectly relative to phase-2, producing a global PSNR
+    // collapse. Returning IntegerAttr() makes the standalone LeakyReLU
+    // eltwise carry only the float LEAKYRELU_alpha; the BE/kernel computes
+    // its own fixed-point approximation (matching phase-2 behavior, where
+    // this pass does not run and these attrs are never set).
+    (void)getLeakyReluAlphaToPreluFactor; // keep helper referenced
+    return {"LEAKYRELU", alphaAttr, IntegerAttr(), IntegerAttr()};
   }
   return {"", FloatAttr(), IntegerAttr(), IntegerAttr()};
 }
@@ -593,11 +599,15 @@ struct FuseQuantizedEltwiseActivation : public OpRewritePattern<ActivationOp> {
           mlir::cast<ONNXLeakyReluOp>(activationOp.getOperation());
       alphaAttr = leakyReluOp.getAlphaAttr();
 
-      // Convert to fixed-point representation (M, N)
-      float alpha = alphaAttr.getValue().convertToFloat();
-      auto [M, N] = getLeakyReluAlphaToPreluFactor(alpha);
-      preluInAttr = getSI64Attr(rewriter, M);
-      preluShiftAttr = getSI64Attr(rewriter, N);
+      // FIX (phase-3 accuracy regression): do NOT bake prelu_in/prelu_shift
+      // into the fused eltwise IR here. The phase-3 device kernel applies
+      // these baked 8-bit integer factors incorrectly relative to phase-2,
+      // producing a global PSNR collapse. Leave preluInAttr/preluShiftAttr
+      // empty; the BE/kernel will compute its own (higher precision)
+      // fixed-point approximation from the float leakyrelu_alpha attribute.
+      (void)getLeakyReluAlphaToPreluFactor; // keep helper referenced
+      (void)getSI64Attr;                    // keep helper referenced
+      // preluInAttr / preluShiftAttr remain default-constructed (empty)
     } else {
       // NOTE: XCOMPILERFusedEltwise does not model PReLU slope.
       return rewriter.notifyMatchFailure(

@@ -185,11 +185,17 @@ static void normalizeActivation(ConvOp convOp, OpBuilder &builder) {
                  << "NormalizeConvActivation: " << convOp->getName()
                  << " LEAKYRELU (alpha=26/256) -> LEAKYRELU (standard)\n");
     } else {
-      auto [M, N] = applyPreluFixedPointForAlpha(convOp, builder, alpha);
+      // FIX (phase-3 accuracy regression): do NOT lower LEAKYRELU(α≠26/256) to
+      // PRELU + prelu_in/prelu_shift here. The phase-3 device kernel applies
+      // these baked integer factors incorrectly relative to phase-2, producing
+      // a global PSNR collapse. Leave activation as LEAKYRELU with the float
+      // LEAKYRELU_alpha attribute; the BE/kernel will compute its own (higher
+      // precision) fixed-point approximation, matching the phase-2 codepath
+      // where this pass does not run at all and prelu_in/shift are never set.
       LLVM_DEBUG(llvm::dbgs()
                  << "NormalizeConvActivation: " << convOp->getName()
-                 << " LEAKYRELU (alpha=" << alpha << ") -> PRELU (M=" << M
-                 << ", N=" << N << ")\n");
+                 << " LEAKYRELU (alpha=" << alpha
+                 << ") kept as LEAKYRELU (PRELU lowering disabled)\n");
     }
     return;
   }
