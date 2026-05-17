@@ -236,6 +236,20 @@ struct FuseConvActivation : public OpRewritePattern<ConvOp> {
       return rewriter.notifyMatchFailure(
           convOp, "single user is not a fuseable activation");
 
+    // Native HW LeakyReLU α: (x * 26) >> 8 ≈ x * 0.1015625. Only α exactly 0
+    // (RELU) or 26/256 (native LRELU) can be fused without precision loss:
+    // the fused conv kernel applies activation in int8. For any other α, the
+    // kernel must approximate via internal fixed-point and PSNR collapses on
+    // every such site. Bail out so the standalone leakyrelu op (which
+    // lowers to QDQ_ElementwiseLeakyReLUA8Wrapper running in FLOAT32) is
+    // preserved — matches phase-2 behavior.
+    constexpr float kNativeLeakyReluAlpha = 26.0f / 256.0f;
+    if (actInfo.activationType == "LEAKYRELU" && actInfo.alpha != 0.0f &&
+        actInfo.alpha != kNativeLeakyReluAlpha)
+      return rewriter.notifyMatchFailure(
+          convOp,
+          "non-native LeakyReLU alpha — keep standalone FLOAT32 op for PSNR");
+
     // Verify the user's input comes from this conv (not from a different
     // operand position for multi-input ops like FusedEltwise)
     bool inputFromConv = false;
