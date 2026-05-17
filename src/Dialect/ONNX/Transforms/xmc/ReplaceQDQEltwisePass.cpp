@@ -55,6 +55,22 @@ namespace {
 // Helper Functions
 //===----------------------------------------------------------------------===//
 
+// Convert LeakyReLU alpha to fixed-point representation.
+// Returns (M, N) where alpha ≈ M / 2^N for efficient hardware computation.
+static std::pair<int64_t, int64_t> getLeakyReluAlphaToPreluFactor(float alpha) {
+  int64_t N = 8;
+  int64_t M = static_cast<int64_t>(std::llround(std::exp2(N) * alpha));
+  return {M, N};
+}
+
+// XCOMPILERFusedEltwise requires signed i64 attrs (si64) for prelu_in/shift.
+static IntegerAttr getSI64Attr(PatternRewriter &rewriter, int64_t value) {
+  MLIRContext *ctx = rewriter.getContext();
+  auto si64 =
+      IntegerType::get(ctx, 64, IntegerType::SignednessSemantics::Signed);
+  return rewriter.getIntegerAttr(si64, value);
+}
+
 // XCOMPILERFusedEltwise CLAMP min/max are signless i32 (matches XIR/xmodel).
 static IntegerAttr getI32Attr(PatternRewriter &rewriter, int64_t value) {
   return rewriter.getI32IntegerAttr(static_cast<int32_t>(value));
@@ -89,10 +105,14 @@ computeActivationMapping(Operation *op, PatternRewriter &rewriter) {
     float alpha = alphaAttr ? alphaAttr.getValue().convertToFloat() : 0.01f;
     if (!alphaAttr)
       alphaAttr = rewriter.getFloatAttr(rewriter.getF32Type(), alpha);
-    // Carry only the float LEAKYRELU_alpha; do not bake prelu_in/prelu_shift
-    // into the IR. The phase-3 device kernel mishandles the baked integer
-    // factor and collapses model PSNR; the BE/kernel must compute its own
-    // fixed-point approximation (same behavior phase-2 has always had).
+    // Phase-3 accuracy fix: keep only the float LEAKYRELU_alpha; do not bake
+    // prelu_in/prelu_shift into the IR. The phase-3 device kernel mishandles
+    // the baked 8-bit integer factor (M=51,N=8 for alpha=0.2) and collapses
+    // model PSNR. With these absent the BE/kernel computes its own higher-
+    // precision fixed-point approximation. Matches the corresponding patch
+    // in xcompiler-mlir's MergeConvReluLikePattern for the conv-fused case.
+    (void)getLeakyReluAlphaToPreluFactor; // helper kept for future use
+    (void)getSI64Attr;                    // helper kept for future use
     return {"LEAKYRELU", alphaAttr, IntegerAttr(), IntegerAttr()};
   }
   return {"", FloatAttr(), IntegerAttr(), IntegerAttr()};
@@ -578,8 +598,9 @@ struct FuseQuantizedEltwiseActivation : public OpRewritePattern<ActivationOp> {
       auto leakyReluOp =
           mlir::cast<ONNXLeakyReluOp>(activationOp.getOperation());
       alphaAttr = leakyReluOp.getAlphaAttr();
-      // Carry only the float leakyrelu_alpha; preluInAttr/preluShiftAttr
-      // remain default-constructed (empty). See computeActivationMapping().
+      // Phase-3 accuracy fix: leave preluInAttr/preluShiftAttr default-
+      // constructed (empty). See computeActivationMapping() above for the
+      // detailed reason.
     } else {
       // NOTE: XCOMPILERFusedEltwise does not model PReLU slope.
       return rewriter.notifyMatchFailure(
