@@ -55,22 +55,6 @@ namespace {
 // Helper Functions
 //===----------------------------------------------------------------------===//
 
-// Convert LeakyReLU alpha to fixed-point representation.
-// Returns (M, N) where alpha ≈ M / 2^N for efficient hardware computation.
-static std::pair<int64_t, int64_t> getLeakyReluAlphaToPreluFactor(float alpha) {
-  int64_t N = 8;
-  int64_t M = static_cast<int64_t>(std::llround(std::exp2(N) * alpha));
-  return {M, N};
-}
-
-// XCOMPILERFusedEltwise requires signed i64 attrs (si64) for prelu_in/shift.
-static IntegerAttr getSI64Attr(PatternRewriter &rewriter, int64_t value) {
-  MLIRContext *ctx = rewriter.getContext();
-  auto si64 =
-      IntegerType::get(ctx, 64, IntegerType::SignednessSemantics::Signed);
-  return rewriter.getIntegerAttr(si64, value);
-}
-
 // XCOMPILERFusedEltwise CLAMP min/max are signless i32 (matches XIR/xmodel).
 static IntegerAttr getI32Attr(PatternRewriter &rewriter, int64_t value) {
   return rewriter.getI32IntegerAttr(static_cast<int32_t>(value));
@@ -105,14 +89,10 @@ computeActivationMapping(Operation *op, PatternRewriter &rewriter) {
     float alpha = alphaAttr ? alphaAttr.getValue().convertToFloat() : 0.01f;
     if (!alphaAttr)
       alphaAttr = rewriter.getFloatAttr(rewriter.getF32Type(), alpha);
-    // FIX (phase-3 accuracy regression): do NOT bake prelu_in/prelu_shift into
-    // the IR here. The phase-3 device kernel applies these baked 8-bit
-    // integer factors incorrectly relative to phase-2, producing a global PSNR
-    // collapse. Returning IntegerAttr() makes the standalone LeakyReLU
-    // eltwise carry only the float LEAKYRELU_alpha; the BE/kernel computes
-    // its own fixed-point approximation (matching phase-2 behavior, where
-    // this pass does not run and these attrs are never set).
-    (void)getLeakyReluAlphaToPreluFactor; // keep helper referenced
+    // Carry only the float LEAKYRELU_alpha; do not bake prelu_in/prelu_shift
+    // into the IR. The phase-3 device kernel mishandles the baked integer
+    // factor and collapses model PSNR; the BE/kernel must compute its own
+    // fixed-point approximation (same behavior phase-2 has always had).
     return {"LEAKYRELU", alphaAttr, IntegerAttr(), IntegerAttr()};
   }
   return {"", FloatAttr(), IntegerAttr(), IntegerAttr()};
@@ -598,16 +578,8 @@ struct FuseQuantizedEltwiseActivation : public OpRewritePattern<ActivationOp> {
       auto leakyReluOp =
           mlir::cast<ONNXLeakyReluOp>(activationOp.getOperation());
       alphaAttr = leakyReluOp.getAlphaAttr();
-
-      // FIX (phase-3 accuracy regression): do NOT bake prelu_in/prelu_shift
-      // into the fused eltwise IR here. The phase-3 device kernel applies
-      // these baked 8-bit integer factors incorrectly relative to phase-2,
-      // producing a global PSNR collapse. Leave preluInAttr/preluShiftAttr
-      // empty; the BE/kernel will compute its own (higher precision)
-      // fixed-point approximation from the float leakyrelu_alpha attribute.
-      (void)getLeakyReluAlphaToPreluFactor; // keep helper referenced
-      (void)getSI64Attr;                    // keep helper referenced
-      // preluInAttr / preluShiftAttr remain default-constructed (empty)
+      // Carry only the float leakyrelu_alpha; preluInAttr/preluShiftAttr
+      // remain default-constructed (empty). See computeActivationMapping().
     } else {
       // NOTE: XCOMPILERFusedEltwise does not model PReLU slope.
       return rewriter.notifyMatchFailure(

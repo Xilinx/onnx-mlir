@@ -61,36 +61,8 @@ namespace {
 
 /// The standard LeakyReLU alpha for hardware (26/256 ≈ 0.1015625).
 /// When alpha matches this value exactly, the hardware supports it natively
-/// as "LEAKYRELU". Any other alpha requires the PRELU fixed-point path.
+/// as "LEAKYRELU".
 static constexpr float kStandardLeakyReluAlpha = 26.0f / 256.0f;
-
-/// Convert LeakyReLU alpha to fixed-point PRELU representation.
-/// Returns (M, N) where alpha ≈ M / 2^N.
-/// This matches xcompiler's get_leakyrelu_alpha_to_prelu_factor().
-static std::pair<int64_t, int64_t> getPreluFactor(float alpha) {
-  int64_t N = 8;
-  int64_t M = static_cast<int64_t>(std::llround(std::exp2(N) * alpha));
-  return {M, N};
-}
-
-/// Create a signed i64 integer attribute (si64).
-static IntegerAttr getSI64Attr(OpBuilder &builder, int64_t value) {
-  auto si64 = IntegerType::get(
-      builder.getContext(), 64, IntegerType::SignednessSemantics::Signed);
-  return builder.getIntegerAttr(si64, value);
-}
-
-/// LEAKYRELU with non-native α: set PRELU + (prelu_in, prelu_shift) from \p
-/// alpha.
-template <typename ConvOp>
-static std::pair<int64_t, int64_t> applyPreluFixedPointForAlpha(
-    ConvOp convOp, OpBuilder &builder, float alpha) {
-  auto [M, N] = getPreluFactor(alpha);
-  convOp.setActivationAttr(builder.getStringAttr("PRELU"));
-  convOp.setPreluInAttr(getSI64Attr(builder, M));
-  convOp.setPreluShiftAttr(getSI64Attr(builder, N));
-  return {M, N};
-}
 
 /// Check if the output type is unsigned 8-bit quantized with zero_point == 0.
 /// When this is true, ReLU is implicit (unsigned representation cannot
@@ -180,23 +152,14 @@ static void normalizeActivation(ConvOp convOp, OpBuilder &builder) {
     if (auto alphaAttr = convOp.getLeakyreluAlphaAttr())
       alpha = alphaAttr.getValue().convertToFloat();
 
-    if (alpha == kStandardLeakyReluAlpha) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "NormalizeConvActivation: " << convOp->getName()
-                 << " LEAKYRELU (alpha=26/256) -> LEAKYRELU (standard)\n");
-    } else {
-      // FIX (phase-3 accuracy regression): do NOT lower LEAKYRELU(α≠26/256) to
-      // PRELU + prelu_in/prelu_shift here. The phase-3 device kernel applies
-      // these baked integer factors incorrectly relative to phase-2, producing
-      // a global PSNR collapse. Leave activation as LEAKYRELU with the float
-      // LEAKYRELU_alpha attribute; the BE/kernel will compute its own (higher
-      // precision) fixed-point approximation, matching the phase-2 codepath
-      // where this pass does not run at all and prelu_in/shift are never set.
-      LLVM_DEBUG(llvm::dbgs()
-                 << "NormalizeConvActivation: " << convOp->getName()
-                 << " LEAKYRELU (alpha=" << alpha
-                 << ") kept as LEAKYRELU (PRELU lowering disabled)\n");
-    }
+    // Keep LEAKYRELU + float LEAKYRELU_alpha for all alphas. Do not lower
+    // LEAKYRELU(α≠26/256) to PRELU + prelu_in/prelu_shift: the phase-3 device
+    // kernel mishandles the baked integer factor and collapses model PSNR.
+    // Phase-2 already takes this codepath implicitly (its FE never sets
+    // prelu_in/shift); this keeps phase-3 behavior consistent with it.
+    LLVM_DEBUG(llvm::dbgs() << "NormalizeConvActivation: " << convOp->getName()
+                            << " LEAKYRELU (alpha=" << alpha
+                            << ") kept as LEAKYRELU\n");
     return;
   }
 
