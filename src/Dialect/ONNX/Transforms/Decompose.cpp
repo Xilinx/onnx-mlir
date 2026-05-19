@@ -3353,7 +3353,7 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     // Check pastKey shape requirements early, before any IR modifications.
     auto doRotary = customOp->getAttrOfType<IntegerAttr>("do_rotary");
     bool hasSeqLenInputs =
-        !isNoneValue(seqlens_k) && !isNoneValue(total_sequence_length);                           
+        !isNoneValue(seqlens_k) && !isNoneValue(total_sequence_length);
     if (doRotary && doRotary.getSInt() > 0 &&
         (numIn < 10 || isNoneValue(positionIds))) {
       // When seqlen_k/total_sequence_length are provided we can skip the
