@@ -518,6 +518,8 @@ def ONNXAttentionOp:ONNX_Op<"Attention",
     AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[I1]>, TensorOf<[quant_QuantizedType]>, NoneType]>:$attn_mask,
     AnyTypeOf<[TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[quant_QuantizedType]>, NoneType]>:$past_key,
     AnyTypeOf<[TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[quant_QuantizedType]>, NoneType]>:$past_value,
+    AnyTypeOf<[TensorOf<[I32]>, TensorOf<[I64]>, NoneType]>:$seqlen_k,
+    AnyTypeOf<[TensorOf<[I32]>, TensorOf<[I64]>, NoneType]>:$total_seq_len,
     DefaultValuedAttr<SI64Attr, "0">:$is_causal,
     OptionalAttr<SI64Attr>:$kv_num_heads,
     OptionalAttr<SI64Attr>:$q_num_heads,
@@ -531,7 +533,7 @@ def ONNXAttentionOp:ONNX_Op<"Attention",
     AnyTypeOf<[TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[quant_QuantizedType]>, NoneType]>:$qk_matmul_output);
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
-      return 6;
+      return 8;
     }
     static int getNumberOfResults() {
       return 4;
