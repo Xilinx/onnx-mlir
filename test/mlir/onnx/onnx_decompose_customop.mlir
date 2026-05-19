@@ -639,9 +639,9 @@ func.func @minimal_gqa(%q: tensor<1x128x3072xf32>, %k: tensor<1x128x1536xf32>, %
 // CHECK-SAME:                           %[[VAL_0:.*]]: tensor<1x128x3072xf32>,
 // CHECK-SAME:                           %[[VAL_1:.*]]: tensor<1x128x1536xf32>,
 // CHECK-SAME:                           %[[VAL_2:.*]]: tensor<1x128x1536xf32>) -> tensor<1x128x3072xf32> {
-// CHECK-DAG:       %[[SEQLENS:.*]] = onnx.Constant dense<255> : tensor<1x1xi32>
-// CHECK-DAG:       %[[TOTAL_SEQ:.*]] = onnx.Constant dense<256> : tensor<i32>
 // CHECK:           %[[VAL_3:.*]] = "onnx.NoValue"() {value} : () -> none
+// CHECK-DAG:       %[[TOTAL_SEQ:.*]] = onnx.Constant dense<256> : tensor<i32>
+// CHECK-DAG:       %[[SEQLENS:.*]] = onnx.Constant dense<255> : tensor<1x1xi32>
 // CHECK:           %[[VAL_4:.*]], %[[VAL_5:.*]], %[[VAL_6:.*]], %[[VAL_7:.*]] = "onnx.Attention"(%[[VAL_0]], %[[VAL_1]], %[[VAL_2]], %[[VAL_3]], %[[VAL_3]], %[[VAL_3]], %[[SEQLENS]], %[[TOTAL_SEQ]])
 // CHECK-SAME:         {is_causal = 1 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:         : (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, none, none, none, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x128x3072xf32>, none, none, none)
@@ -1012,9 +1012,8 @@ func.func @gqa_rotary_no_position_ids_dynamic_past_key(
   return %out, %present_k, %present_v : tensor<1x128x3072xf32>, tensor<?x16x?x96xf32>, tensor<?x16x?x48xf32>
 }
 // CHECK-LABEL: func.func @gqa_rotary_no_position_ids_dynamic_past_key
-// CHECK-NOT: "onnx.Attention"
-// CHECK: "onnx.Custom"
-// CHECK-SAME: function_name = "GroupQueryAttention"
+// CHECK: "onnx.Attention"
+// CHECK=NOT: "onnx.Custom"
 
 // -----
 
