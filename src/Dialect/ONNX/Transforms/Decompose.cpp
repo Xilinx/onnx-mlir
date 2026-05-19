@@ -3309,9 +3309,9 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     Value pastKey = customOp.getOperand(3);
     Value pastValue = customOp.getOperand(4);
 
-    // These inputs are not needed for onnx.Attention:
-    // Value seqlens_k = customOp.getOperand(5);
-    // Value total_sequence_length = customOp.getOperand(6);
+    // These inputs are forwarded to onnx.Attention:
+    Value seqlens_k = customOp.getOperand(5);
+    Value total_sequence_length = customOp.getOperand(6);
 
     Value cosCache;
     Value sinCache;
@@ -3352,18 +3352,21 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     assert(queryType.getRank() == 3 && "Query input must have rank 3");
     // Check pastKey shape requirements early, before any IR modifications.
     auto doRotary = customOp->getAttrOfType<IntegerAttr>("do_rotary");
+    bool hasSeqLenInputs = !isNoneValue(seqlens_k) &&
+                           !isNoneValue(total_sequence_length);
     if (doRotary && doRotary.getSInt() > 0 &&
         (numIn < 10 || isNoneValue(positionIds))) {
-      // We need to know the past sequence length to find the total sequence
-      // length (or vice versa). We could get the total sequence length from
-      // seqlens_k, but only if this input is a constant that we can read.
-      if (isNoneValue(pastKey))
-        return rewriter.notifyMatchFailure(
-            customOp, "expected 'past_ks' input to be provided");
-      auto pastKeyType = cast<ShapedType>(pastKey.getType());
-      if (!pastKeyType.hasStaticShape())
-        return rewriter.notifyMatchFailure(
-            customOp, "expected 'past_ks' input to have static type");
+      // When seqlen_k/total_sequence_length are provided we can skip the
+      // static-shape requirement — the values carry the sequence lengths.
+      if (!hasSeqLenInputs) {
+        if (isNoneValue(pastKey))
+          return rewriter.notifyMatchFailure(
+              customOp, "expected 'past_ks' input to be provided");
+        auto pastKeyType = cast<ShapedType>(pastKey.getType());
+        if (!pastKeyType.hasStaticShape())
+          return rewriter.notifyMatchFailure(
+              customOp, "expected 'past_ks' input to have static type");
+      }
     }
 
     auto none = rewriter.create<ONNXNoneOp>(loc);
@@ -3424,7 +3427,50 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       if (numIn < 10 || isNoneValue(positionIds)) {
         positionIds = none;
 
-        if (enableCacheSlicing) {
+        bool canSlice = !isNoneValue(pastKey) &&
+                        cast<ShapedType>(pastKey.getType()).hasStaticShape();
+
+        if (hasSeqLenInputs && !canSlice) {
+          // Dynamic past_key with explicit seqlen_k/total_sequence_length:
+          // pass the full cos/sin caches unchanged and compute positionIds
+          // from seqlens_k so the RotaryEmbedding op is well-formed.
+          // positionIds = seqlens_k + [0, 1, ..., seqLen-1]
+          onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+              rewriter, loc);
+          const int64_t seqLen = queryType.getShape()[1];
+          const int64_t batchSize = queryType.getShape()[0];
+          auto i64Type = rewriter.getIntegerType(64);
+
+          // Reshape seqlens_k to [batchSize, 1] for broadcasting.
+          auto reshapedType = RankedTensorType::get(
+              {batchSize, 1}, getElementTypeOrSelf(seqlens_k.getType()));
+          auto reshapeShape = create.onnx.constantInt64({batchSize, 1});
+          auto seqLenKReshaped =
+              create.onnx.reshape(reshapedType, seqlens_k, reshapeShape);
+
+          // Cast to i64.
+          auto castType = RankedTensorType::get({batchSize, 1}, i64Type);
+          auto seqLenKI64 = rewriter.create<ONNXCastOp>(
+              loc, castType, seqLenKReshaped, 1, i64Type);
+
+          // Static range [0, ..., seqLen-1] of shape [1, seqLen].
+          SmallVector<Attribute> rangeElems;
+          rangeElems.reserve(seqLen);
+          for (int64_t i = 0; i < seqLen; ++i)
+            rangeElems.push_back(rewriter.getI64IntegerAttr(i));
+          auto rangeType = RankedTensorType::get({1, seqLen}, i64Type);
+          auto rangeConst = rewriter.create<ONNXConstantOp>(loc, Attribute(),
+              DenseElementsAttr::get(rangeType, ArrayRef<Attribute>(rangeElems)));
+
+          // positionIds = seqLenK + range → [batchSize, seqLen].
+          auto posIdsType =
+              RankedTensorType::get({batchSize, seqLen}, i64Type);
+          positionIds = rewriter.create<ONNXAddOp>(
+              loc, posIdsType, Value(seqLenKI64), Value(rangeConst));
+
+          toCheck.append({reshapeShape, seqLenKReshaped, seqLenKI64, rangeConst,
+              positionIds});
+        } else if (enableCacheSlicing) {
           auto pastKeyType = cast<ShapedType>(pastKey.getType());
 
           // Assuming the sequence length is the same kv_sequence_length
@@ -3532,7 +3578,8 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       attentionResultTypes.push_back(rewriter.getNoneType());
 
     auto attention = rewriter.create<ONNXAttentionOp>(loc, attentionResultTypes,
-        ValueRange{query, key, value, attentionBias, pastKey, pastValue});
+        ValueRange{query, key, value, attentionBias, pastKey, pastValue,
+                   seqlens_k, total_sequence_length});
 
     attention.setQNumHeadsAttr(qNumHeads);
     attention.setKvNumHeadsAttr(kvNumHeads);
