@@ -3352,8 +3352,8 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     assert(queryType.getRank() == 3 && "Query input must have rank 3");
     // Check pastKey shape requirements early, before any IR modifications.
     auto doRotary = customOp->getAttrOfType<IntegerAttr>("do_rotary");
-    bool hasSeqLenInputs = !isNoneValue(seqlens_k) &&
-                           !isNoneValue(total_sequence_length);
+    bool hasSeqLenInputs =
+        !isNoneValue(seqlens_k) && !isNoneValue(total_sequence_length);                           
     if (doRotary && doRotary.getSInt() > 0 &&
         (numIn < 10 || isNoneValue(positionIds))) {
       // When seqlen_k/total_sequence_length are provided we can skip the
@@ -3460,11 +3460,11 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
             rangeElems.push_back(rewriter.getI64IntegerAttr(i));
           auto rangeType = RankedTensorType::get({1, seqLen}, i64Type);
           auto rangeConst = rewriter.create<ONNXConstantOp>(loc, Attribute(),
-              DenseElementsAttr::get(rangeType, ArrayRef<Attribute>(rangeElems)));
+              DenseElementsAttr::get(
+                  rangeType, ArrayRef<Attribute>(rangeElems)));
 
           // positionIds = seqLenK + range → [batchSize, seqLen].
-          auto posIdsType =
-              RankedTensorType::get({batchSize, seqLen}, i64Type);
+          auto posIdsType = RankedTensorType::get({batchSize, seqLen}, i64Type);
           positionIds = rewriter.create<ONNXAddOp>(
               loc, posIdsType, Value(seqLenKI64), Value(rangeConst));
 
@@ -3579,7 +3579,7 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
 
     auto attention = rewriter.create<ONNXAttentionOp>(loc, attentionResultTypes,
         ValueRange{query, key, value, attentionBias, pastKey, pastValue,
-                   seqlens_k, total_sequence_length});
+            seqlens_k, total_sequence_length});
 
     attention.setQNumHeadsAttr(qNumHeads);
     attention.setKvNumHeadsAttr(kvNumHeads);
