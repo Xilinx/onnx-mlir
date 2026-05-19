@@ -255,7 +255,6 @@ func.func @fusedconv_leakyrelu(%x: tensor<1x3x8x8xf32>, %w: tensor<4x3x3x3xf32>)
                                 pads = [1, 1, 1, 1], strides = [1, 1]} :
           (tensor<1x3x8x8xf32>, tensor<4x3x3x3xf32>) -> tensor<1x4x8x8xf32>
   onnx.Return %res : tensor<1x4x8x8xf32>
-// CHECK:         }
 // CHECK-LABEL:  func.func @fusedconv_leakyrelu
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x8x8xf32>, [[PARAM_1_:%.+]]: tensor<4x3x3x3xf32>) -> tensor<1x4x8x8xf32> {
 // CHECK:           [[VAR_1_:%.+]] = "onnx.Conv"
