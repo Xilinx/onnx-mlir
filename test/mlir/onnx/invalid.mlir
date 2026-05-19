@@ -976,7 +976,7 @@ func.func @test_rotary_embedding_2d_caches_no_num_heads(%data: tensor<1x128x3072
 func.func @test_attention_bad_q_rank(%q: tensor<1x2x32x128x96xf32>, %k: tensor<1x16x128x96xf32>, %v: tensor<1x16x128x48xf32>) -> tensor<*xf32> {
   %none = "onnx.NoValue"() {value} : () -> none
   // expected-error @+1 {{onnx.Attention: operand '<block argument> of type 'tensor<1x2x32x128x96xf32>' at index: 0' has rank 5, rank should be 3 or 4}}
-  %out, %present_k, %present_v, %qk_out = "onnx.Attention"(%q, %k, %v, %none, %none, %none) : (tensor<1x2x32x128x96xf32>, tensor<1x16x128x96xf32>, tensor<1x16x128x48xf32>, none, none, none) -> (tensor<*xf32>, none, none, none)
+  %out, %present_k, %present_v, %qk_out = "onnx.Attention"(%q, %k, %v, %none, %none, %none, %none, %none) : (tensor<1x2x32x128x96xf32>, tensor<1x16x128x96xf32>, tensor<1x16x128x48xf32>, none, none, none, none, none) -> (tensor<*xf32>, none, none, none)
   return %out : tensor<*xf32>
 }
 
@@ -985,7 +985,7 @@ func.func @test_attention_bad_q_rank(%q: tensor<1x2x32x128x96xf32>, %k: tensor<1
 func.func @test_attention_missing_q_num_heads(%q: tensor<1x128x3072xf32>, %k: tensor<1x128x1536xf32>, %v: tensor<1x128x768xf32>) -> tensor<*xf32> {
   %none = "onnx.NoValue"() {value} : () -> none
   // expected-error @+1 {{'onnx.Attention' op attribute 'q_num_heads' must be provided when input 'q' is a 3D tensor.}}
-  %out, %present_k, %present_v, %qk_out = "onnx.Attention"(%q, %k, %v, %none, %none, %none) {kv_num_heads = 16: si64} : (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x768xf32>, none, none, none) -> (tensor<*xf32>, none, none, none)
+  %out, %present_k, %present_v, %qk_out = "onnx.Attention"(%q, %k, %v, %none, %none, %none, %none, %none) {kv_num_heads = 16: si64} : (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x768xf32>, none, none, none, none, none) -> (tensor<*xf32>, none, none, none)
   return %out : tensor<*xf32>
 }
 
@@ -994,7 +994,7 @@ func.func @test_attention_missing_q_num_heads(%q: tensor<1x128x3072xf32>, %k: te
 func.func @test_attention_missing_kv_num_heads(%q: tensor<1x128x3072xf32>, %k: tensor<1x128x1536xf32>, %v: tensor<1x128x768xf32>) -> tensor<*xf32> {
   %none = "onnx.NoValue"() {value} : () -> none
   // expected-error @+1 {{'onnx.Attention' op attribute 'kv_num_heads' must be provided when inputs 'k' or 'v' are 3D tensors.}}
-  %out, %present_k, %present_v, %qk_out = "onnx.Attention"(%q, %k, %v, %none, %none, %none) {q_num_heads = 32: si64} : (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x768xf32>, none, none, none) -> (tensor<*xf32>, none, none, none)
+  %out, %present_k, %present_v, %qk_out = "onnx.Attention"(%q, %k, %v, %none, %none, %none, %none, %none) {q_num_heads = 32: si64} : (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x768xf32>, none, none, none, none, none) -> (tensor<*xf32>, none, none, none)
   return %out : tensor<*xf32>
 }
 
@@ -1003,7 +1003,7 @@ func.func @test_attention_missing_kv_num_heads(%q: tensor<1x128x3072xf32>, %k: t
 func.func @test_attention_bad_q_num_heads(%q: tensor<1x128x3072xf32>, %k: tensor<1x128x1536xf32>, %v: tensor<1x128x768xf32>) -> tensor<*xf32> {
   %none = "onnx.NoValue"() {value} : () -> none
   // expected-error @+1 {{onnx.Attention: operand '<block argument> of type 'tensor<1x128x3072xf32>' at index: 0' has dimension at index 2 with value 3072, value should be divisible by 31}}
-  %out, %present_k, %present_v, %qk_out = "onnx.Attention"(%q, %k, %v, %none, %none, %none) {q_num_heads = 31: si64, kv_num_heads = 16: si64} : (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x768xf32>, none, none, none) -> (tensor<*xf32>, none, none, none)
+  %out, %present_k, %present_v, %qk_out = "onnx.Attention"(%q, %k, %v, %none, %none, %none, %none, %none) {q_num_heads = 31: si64, kv_num_heads = 16: si64} : (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x768xf32>, none, none, none, none, none) -> (tensor<*xf32>, none, none, none)
   return %out : tensor<*xf32>
 }
 
@@ -1012,7 +1012,7 @@ func.func @test_attention_bad_q_num_heads(%q: tensor<1x128x3072xf32>, %k: tensor
 func.func @test_attention_bad_kv_num_heads(%q: tensor<1x128x3072xf32>, %k: tensor<1x128x1536xf32>, %v: tensor<1x128x768xf32>) -> tensor<*xf32> {
   %none = "onnx.NoValue"() {value} : () -> none
   // expected-error @+1 {{onnx.Attention: operand '<block argument> of type 'tensor<1x128x1536xf32>' at index: 1' has dimension at index 2 with value 1536, value should be divisible by 15}}
-  %out, %present_k, %present_v, %qk_out = "onnx.Attention"(%q, %k, %v, %none, %none, %none) {q_num_heads = 32: si64, kv_num_heads = 15: si64} : (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x768xf32>, none, none, none) -> (tensor<*xf32>, none, none, none)
+  %out, %present_k, %present_v, %qk_out = "onnx.Attention"(%q, %k, %v, %none, %none, %none, %none, %none) {q_num_heads = 32: si64, kv_num_heads = 15: si64} : (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x768xf32>, none, none, none, none, none) -> (tensor<*xf32>, none, none, none)
   return %out : tensor<*xf32>
 }
 
