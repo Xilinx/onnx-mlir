@@ -118,6 +118,8 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   //     onnx_mlir::createTransferReduceHdimToReduceCdimPass());
 
   pm.addNestedPass<func::FuncOp>(
+      onnx_mlir::createAddRequantForOutputConvPass());
+  pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createConvertSCastPairToRequantizePass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
 }
