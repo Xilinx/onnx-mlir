@@ -57,6 +57,8 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createOptimizeSliceReshapeTransposeBlockPass());
   pm.addNestedPass<func::FuncOp>(
+      onnx_mlir::createTransferQDQPixelUnshuffleChainToConv2dPass());
+  pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createTransferSpaceToDepthToConv2dPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createMergeBatchnormToConvPass());
   pm.addNestedPass<func::FuncOp>(
