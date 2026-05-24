@@ -64,24 +64,22 @@ func.func @test_slice_concat_instancenorm_conv_nchw(%arg0: tensor<1x64x56x56xf32
 
 // -----
 
-// Test with 3 slices in NCHW layout
-// Slices: [0:16], [16:48], [48:64] - in original order (identity)
+// Negative test: Identity reorder (first slice starts at channel 0)
+// Slices: [0:16], [16:48], [48:64] - in original order
+// Golden xcompiler rejects this (begin[axis]==0 → no optimization needed)
 
-// CHECK-LABEL: func @test_three_slices_nchw
-func.func @test_three_slices_nchw(%arg0: tensor<1x64x28x28xf32>) -> tensor<1x64x28x28xf32> {
-  // Slice 1: [channels 0:16]
+// CHECK-LABEL: func @test_identity_reorder_rejected
+func.func @test_identity_reorder_rejected(%arg0: tensor<1x64x28x28xf32>) -> tensor<1x64x28x28xf32> {
   %starts1 = onnx.Constant dense<[0, 0, 0, 0]> : tensor<4xi64>
   %ends1 = onnx.Constant dense<[1, 16, 28, 28]> : tensor<4xi64>
   %axes1 = onnx.Constant dense<[0, 1, 2, 3]> : tensor<4xi64>
   %steps1 = onnx.Constant dense<[1, 1, 1, 1]> : tensor<4xi64>
 
-  // Slice 2: [channels 16:48]
   %starts2 = onnx.Constant dense<[0, 16, 0, 0]> : tensor<4xi64>
   %ends2 = onnx.Constant dense<[1, 48, 28, 28]> : tensor<4xi64>
   %axes2 = onnx.Constant dense<[0, 1, 2, 3]> : tensor<4xi64>
   %steps2 = onnx.Constant dense<[1, 1, 1, 1]> : tensor<4xi64>
 
-  // Slice 3: [channels 48:64]
   %starts3 = onnx.Constant dense<[0, 48, 0, 0]> : tensor<4xi64>
   %ends3 = onnx.Constant dense<[1, 64, 28, 28]> : tensor<4xi64>
   %axes3 = onnx.Constant dense<[0, 1, 2, 3]> : tensor<4xi64>
@@ -91,28 +89,21 @@ func.func @test_three_slices_nchw(%arg0: tensor<1x64x28x28xf32>) -> tensor<1x64x
   %slice2 = "onnx.Slice"(%arg0, %starts2, %ends2, %axes2, %steps2) : (tensor<1x64x28x28xf32>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>) -> tensor<1x32x28x28xf32>
   %slice3 = "onnx.Slice"(%arg0, %starts3, %ends3, %axes3, %steps3) : (tensor<1x64x28x28xf32>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>, tensor<4xi64>) -> tensor<1x16x28x28xf32>
 
-  // Concat in original order (identity)
   %concat = "onnx.Concat"(%slice1, %slice2, %slice3) {axis = 1 : si64} : (tensor<1x16x28x28xf32>, tensor<1x32x28x28xf32>, tensor<1x16x28x28xf32>) -> tensor<1x64x28x28xf32>
 
-  // InstanceNorm with f32 params
   %scale = onnx.Constant dense<2.1> : tensor<64xf32>
   %bias_in = onnx.Constant dense<0.6> : tensor<64xf32>
 
-  // CHECK-NOT: onnx.Slice
-  // CHECK-NOT: onnx.Concat
-  // CHECK-DAG: onnx.Constant dense<{{.*}}> : tensor<64x64x1x1xf32>
-  // CHECK-DAG: onnx.Constant dense<{{.*}}> : tensor<64xf32>
-  // CHECK-DAG: onnx.Constant dense<{{.*}}> : tensor<64xf32>
-  // CHECK: "onnx.InstanceNormalization"(%arg0
+  // Should NOT optimize - first slice starts at channel 0 (identity reorder)
+  // CHECK: onnx.Slice
+  // CHECK: onnx.Concat
   %in = "onnx.InstanceNormalization"(%concat, %scale, %bias_in) {
     epsilon = 1.0e-5 : f32
   } : (tensor<1x64x28x28xf32>, tensor<64xf32>, tensor<64xf32>) -> tensor<1x64x28x28xf32>
 
-  // Conv with f32 OIHW weights
   %weights = onnx.Constant dense<3.2> : tensor<64x64x1x1xf32>
   %bias_conv = "onnx.NoValue"() {value} : () -> none
 
-  // CHECK: "onnx.Conv"
   %conv = "onnx.Conv"(%in, %weights, %bias_conv) {
     auto_pad = "NOTSET",
     dilations = [1, 1],
