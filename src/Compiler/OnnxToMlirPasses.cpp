@@ -120,6 +120,9 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
 
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createAddRequantForOutputConvPass());
+
+  pm.addNestedPass<func::FuncOp>(onnx_mlir::createRedundantOpReductionPass());
+
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
 }
 

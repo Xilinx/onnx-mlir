@@ -151,6 +151,10 @@ std::unique_ptr<mlir::Pass> createMergeStridedSliceConcatConvPass();
 /// Pass for merging continuous chained Slice operations with quantized types.
 std::unique_ptr<mlir::Pass> createMergeContinuousStridedSlicePass();
 
+/// Combined redundant-op reduction pass (mirrors xcompiler
+/// RedundantOpReductionPass for QDQ models).
+std::unique_ptr<mlir::Pass> createRedundantOpReductionPass();
+
 std::unique_ptr<mlir::Pass> createONNXTransposeOptimizationPass();
 
 /// Pass to combine two transpose with same input and same perm.
