@@ -507,6 +507,20 @@ bool hasShapeAndRank(Operation *op) {
   return true;
 }
 
+bool isInQuantizedDomain(Operation *op, Value result) {
+  auto hasQuantElt = [](Type t) {
+    if (auto shaped = mlir::dyn_cast<ShapedType>(t))
+      return mlir::isa<mlir::quant::QuantizedType>(shaped.getElementType());
+    return false;
+  };
+  if (hasQuantElt(result.getType()))
+    return true;
+  for (Value operand : op->getOperands())
+    if (hasQuantElt(operand.getType()))
+      return true;
+  return false;
+}
+
 /// Test if a value has only one use except ONNXDimOp.
 bool hasOneUseExceptDimOp(Value val) {
   int64_t numOfUsersExceptDim = 0;
