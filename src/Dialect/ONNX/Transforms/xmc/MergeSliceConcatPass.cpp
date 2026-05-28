@@ -143,13 +143,21 @@ struct MergeSliceConcatInstanceNormConv : public OpRewritePattern<ONNXConvOp> {
           convOp, "concat axis attribute missing");
     int64_t concatAxis = axisAttr.getValue().getSExtValue();
 
-    // Handle channel concatenation (axis 1 for NCHW, axis 3 for NHWC)
+    // Only support channel-dimension concat. Golden xcompiler uses axis=3
+    // (NHWC) because its layout conversion runs earlier. In onnx-mlir this
+    // pass runs before ConvertToChannelLastPass, so data is NCHW (axis=1).
     bool isNCHW = (concatAxis == 1);
     bool isNHWC = (concatAxis == 3);
     if (!isNCHW && !isNHWC)
       return rewriter.notifyMatchFailure(convOp,
           "concat axis is not channel axis (expected 1 for NCHW or 3 "
           "for NHWC)");
+
+    // Concat output must be 4D (golden constraint).
+    auto concatResultType =
+        mlir::dyn_cast<RankedTensorType>(concatOp.getType());
+    if (!concatResultType || concatResultType.getRank() != 4)
+      return rewriter.notifyMatchFailure(convOp, "concat output must be 4D");
 
     auto concatInputs = concatOp.getInputs();
     if (concatInputs.size() < 2)
@@ -214,6 +222,13 @@ struct MergeSliceConcatInstanceNormConv : public OpRewritePattern<ONNXConvOp> {
     if (commonInputType.getShape() != concatOutputType.getShape())
       return rewriter.notifyMatchFailure(
           convOp, "common input shape does not match concat output shape");
+
+    // The first slice's begin on the channel axis must NOT be 0.
+    // This avoids matching identity reorders and prevents duplicate
+    // pattern matches (golden xcompiler constraint).
+    if (!sliceInfos.empty() && sliceInfos[0].beginChannel == 0)
+      return rewriter.notifyMatchFailure(
+          convOp, "first slice starts at channel 0 (identity or duplicate)");
 
     // Compute channel reordering
     SmallVector<std::pair<int64_t, size_t>> sortedIndices;
