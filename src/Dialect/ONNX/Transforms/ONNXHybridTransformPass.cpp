@@ -22,6 +22,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 
+#include "src/Compiler/CompilerOptions.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/Transforms/ConstProp.hpp"
 #include "src/Dialect/ONNX/Transforms/ConvOpt.hpp"
@@ -182,6 +183,13 @@ struct ONNXHybridTransformPass
                      "x * HardSigmoid(x) (alpha=1/6, beta=0.5)"),
       ::llvm::cl::init(true)};
 
+  Option<bool> enableDepthToSpaceForConvTranspose{*this,
+      "enable-depth2space-for-convtranspose",
+      llvm::cl::desc("In 4-phase ConvTranspose decomposition, force 4 "
+                     "separate Conv ops and use DepthToSpace instead of "
+                     "Reshape-Transpose-Reshape."),
+      ::llvm::cl::init(false)};
+
   FrozenRewritePatternSet patterns;
 
   ONNXHybridTransformPass(bool enableRecomposition,
@@ -195,7 +203,8 @@ struct ONNXHybridTransformPass
       bool enableGAPToReduceMean, bool enableLstmSeqDecompose = false,
       bool enableGatherToSlice = true, bool enableReduceL2Decompose = true,
       bool enableRotaryEmbeddingRecompose = false,
-      bool enableQDQConstProp = false, bool enableHardSwishDecompose = true) {
+      bool enableQDQConstProp = false, bool enableHardSwishDecompose = true,
+      bool enableDepthToSpaceForConvTranspose = false) {
     this->recomposition = enableRecomposition;
     this->quarkQuantizedOpsLegalization = enableQuarkQuantizedOpsLegalization;
     this->enableConvTransposeDecompose = enableConvTransposeDecompose;
@@ -217,6 +226,8 @@ struct ONNXHybridTransformPass
     this->enableRotaryEmbeddingRecompose = enableRotaryEmbeddingRecompose;
     this->qdqConstProp = enableQDQConstProp;
     this->enableHardSwishDecompose = enableHardSwishDecompose;
+    this->enableDepthToSpaceForConvTranspose =
+        enableDepthToSpaceForConvTranspose;
   }
 
   ONNXHybridTransformPass(const ONNXHybridTransformPass &pass)
@@ -291,6 +302,8 @@ struct ONNXHybridTransformPass
   void runOnOperation() override {
     func::FuncOp f = getOperation();
     Region &body = f.getBody();
+    onnx_mlir::enableDepthToSpaceForConvTranspose =
+        this->enableDepthToSpaceForConvTranspose.getValue();
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
@@ -333,7 +346,8 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createONNXHybridTransformPass(
     bool enableGAPToReduceMean, bool enableLstmSeqDecompose,
     bool enableGatherToSlice, bool enableReduceL2Decompose,
     bool enableRotaryEmbeddingRecompose, bool enableQDQConstProp,
-    bool enableHardSwishDecompose) {
+    bool enableHardSwishDecompose,
+    bool enableDepthToSpaceForConvTranspose) {
   return std::make_unique<ONNXHybridTransformPass>(enableRecomposition,
       enableQuarkQuantizedOpsLegalization, enableConvTransposeDecompose,
       enableConvTransposeDecomposeToPhasedConv,
@@ -343,5 +357,5 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createONNXHybridTransformPass(
       enableConcatFuse, enableGAPToReduceMean, enableLstmSeqDecompose,
       enableGatherToSlice, enableReduceL2Decompose,
       enableRotaryEmbeddingRecompose, enableQDQConstProp,
-      enableHardSwishDecompose);
+      enableHardSwishDecompose, enableDepthToSpaceForConvTranspose);
 }

@@ -49,6 +49,7 @@ bool disableQuantZeroPoint;                            // common for both
 bool enableUnsafeMathOptimizations;                    // common for both
 bool enableKrnlBufferReuse;                            // common for both
 bool enableConvTransposeDecomposeToPhasedConv;         // common for both
+bool enableDepthToSpaceForConvTranspose;               // common for both
 bool enableConvTranspose1dDecomposeToPhasedConv;       // common for both
 bool enableQuarkQuantizerLegalization;                 // common for both
 bool disableBatchNormDecompose;                        // common for both
@@ -318,6 +319,14 @@ static llvm::cl::opt<bool, true> enableConvTransposeDecomposeTo4ConvOptionOpt(
     llvm::cl::desc("Enable decomposition of ONNX ConvTranspose operator to 4 "
                    "phased Conv."),
     llvm::cl::location(enableConvTransposeDecomposeToPhasedConv),
+    llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableDepthToSpaceForConvTransposeOpt(
+    "enable-depth2space-for-convtranspose",
+    llvm::cl::desc("In 4-phase ConvTranspose decomposition, force 4 separate "
+                   "Conv ops and use DepthToSpace instead of "
+                   "Reshape-Transpose-Reshape."),
+    llvm::cl::location(enableDepthToSpaceForConvTranspose),
     llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true>

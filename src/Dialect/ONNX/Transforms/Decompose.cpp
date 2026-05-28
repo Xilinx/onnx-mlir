@@ -1655,7 +1655,8 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     };
     auto stridesArrayAttr = rewriter.getI64ArrayAttr({1, 1});
     Value conv;
-    if (needWeightsPadding || (kernelShape[0] == 4)) {
+    if (needWeightsPadding || (kernelShape[0] == 4) ||
+        enableDepthToSpaceForConvTranspose) {
       Value conv1 = getActivationAppliedToConv(
           addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
               convOutputType, input, addDequantizeNodeIfNeeded(weightSlices[3]),
@@ -1790,13 +1791,26 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
           combinedConvOutputType);
     }
 
-    // Here we are reshaping the concatenated conv channels of 4*Conv_channels
-    // into groups of 2x2 channels. This can be visualized as
-    // H_chan(2) * W_Chan(2) * C_real,  then doing the transpose into
-    // Conv_channels H H_chan W W_chan. The adjecent H and H_chan will be merged
+    SmallVector<int64_t> outputShapeForResult = {
+        1, convOutputShape[1], convOutputShape[2] * 2, convOutputShape[3] * 2};
+    auto finalOutputType =
+        RankedTensorType::get(outputShapeForResult, elementType);
+
+    if (enableDepthToSpaceForConvTranspose) {
+      auto si64Ty = rewriter.getIntegerType(64, /*isSigned=*/true);
+      auto finalOutput = rewriter.create<ONNXDepthToSpaceOp>(loc,
+          finalOutputType, conv,
+          rewriter.getIntegerAttr(si64Ty, stridesShape[0]),
+          rewriter.getStringAttr("DCR"));
+      return finalOutput;
+    }
+
+    // Reshape the concatenated conv channels of 4*Conv_channels into groups
+    // of 2x2 channels. This can be visualized as
+    // H_chan(2) * W_Chan(2) * C_real, then doing the transpose into
+    // Conv_channels H H_chan W W_chan. Adjacent H and H_chan will be merged
     // into H, same way W and W_chan will be merged into W. This leads to
     // doubling of the H and W. Keeping the channels same.
-
     SmallVector<int64_t> outputShapeForDimAdjust = {
         2, 2, convOutputShape[1], convOutputShape[2], convOutputShape[3]};
 
@@ -1819,16 +1833,9 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     auto transpose = rewriter.create<ONNXTransposeOp>(
         loc, transposeOutputType, reshapeOutputDimAdjust, permArrayAttr);
 
-    SmallVector<int64_t> outputShapeForResult = {
-        1, convOutputShape[1], convOutputShape[2] * 2, convOutputShape[3] * 2};
-
     auto onnxConstForLastReshape =
         getONNXConstOpFromVector(rewriter, loc, outputShapeForResult);
 
-    auto finalOutputType =
-        RankedTensorType::get(outputShapeForResult, elementType);
-    // Result is reshaped back to match the original convtranspose output
-    // dimensions
     auto finalOutput = rewriter.create<ONNXReshapeOp>(
         loc, finalOutputType, transpose, onnxConstForLastReshape);
     return finalOutput;
@@ -4705,7 +4712,8 @@ struct DecomposeONNXToONNXPass
       bool enableGroupQueryAttentionDecompose = true,
       bool enableSplitToSliceDecompose = false, bool enableConcatFuse = true,
       bool enableLstmSeqDecompose = false, bool enableReduceL2Decompose = true,
-      bool enableGatherToSlice = true, bool enableHardSwishDecompose = true) {
+      bool enableGatherToSlice = true, bool enableHardSwishDecompose = true,
+      bool enableDepthToSpaceForConvTranspose = false) {
     this->target = target;
     this->enableConvTransposeDecompose = enableConvTransposeDecompose;
     this->enableConvTransposeDecomposeToPhasedConv =
@@ -4723,6 +4731,8 @@ struct DecomposeONNXToONNXPass
     this->enableReduceL2Decompose = enableReduceL2Decompose;
     this->enableGatherToSlice = enableGatherToSlice;
     this->enableHardSwishDecompose = enableHardSwishDecompose;
+    this->enableDepthToSpaceForConvTranspose =
+        enableDepthToSpaceForConvTranspose;
   }
 
   DecomposeONNXToONNXPass(const DecomposeONNXToONNXPass &pass)
@@ -4747,6 +4757,8 @@ struct DecomposeONNXToONNXPass
     this->enableReduceL2Decompose = pass.enableReduceL2Decompose.getValue();
     this->enableGatherToSlice = pass.enableGatherToSlice.getValue();
     this->enableHardSwishDecompose = pass.enableHardSwishDecompose.getValue();
+    this->enableDepthToSpaceForConvTranspose =
+        pass.enableDepthToSpaceForConvTranspose.getValue();
   }
 
   StringRef getArgument() const override { return "decompose-onnx"; }
@@ -4826,6 +4838,13 @@ struct DecomposeONNXToONNXPass
                      "x * HardSigmoid(x) (alpha=1/6, beta=0.5)"),
       ::llvm::cl::init(true)};
 
+  Option<bool> enableDepthToSpaceForConvTranspose{*this,
+      "enable-depth2space-for-convtranspose",
+      llvm::cl::desc("In 4-phase ConvTranspose decomposition, force 4 "
+                     "separate Conv ops and use DepthToSpace instead of "
+                     "Reshape-Transpose-Reshape."),
+      ::llvm::cl::init(false)};
+
   void runOnOperation() final;
 
   typedef PassWrapper<DecomposeONNXToONNXPass, OperationPass<func::FuncOp>>
@@ -4835,6 +4854,8 @@ struct DecomposeONNXToONNXPass
 void DecomposeONNXToONNXPass::runOnOperation() {
   func::FuncOp function = getOperation();
   MLIRContext *context = &getContext();
+  onnx_mlir::enableDepthToSpaceForConvTranspose =
+      this->enableDepthToSpaceForConvTranspose.getValue();
   RewritePatternSet patterns(context);
   onnx_mlir::getDecomposeONNXToONNXPatterns(patterns,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
@@ -4952,12 +4973,14 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createDecomposeONNXToONNXPass(
     bool enableMatmulNBitsDecompose, bool enableGroupQueryAttentionDecompose,
     bool enableSplitToSliceDecompose, bool enableConcatFuse,
     bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
-    bool enableGatherToSlice, bool enableHardSwishDecompose) {
+    bool enableGatherToSlice, bool enableHardSwishDecompose,
+    bool enableDepthToSpaceForConvTranspose) {
   return std::make_unique<DecomposeONNXToONNXPass>(target,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
       enableConvTranspose1dDecomposeToPhasedConv, enableInstanceNormDecompose,
       enableGroupNormDecompose, enableMatmulNBitsDecompose,
       enableGroupQueryAttentionDecompose, enableSplitToSliceDecompose,
       enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
-      enableGatherToSlice, enableHardSwishDecompose);
+      enableGatherToSlice, enableHardSwishDecompose,
+      enableDepthToSpaceForConvTranspose);
 }
