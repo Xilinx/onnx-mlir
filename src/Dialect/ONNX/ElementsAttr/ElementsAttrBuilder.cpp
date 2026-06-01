@@ -10,7 +10,9 @@
 
 #include "src/Dialect/ONNX/ElementsAttr/ElementsAttrBuilder.hpp"
 #include "mlir/Dialect/Traits.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Threading.h"
+#include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
@@ -1406,6 +1408,37 @@ ElementsAttr ElementsAttrBuilder::nonZero(ElementsAttr elms) {
         dst[j * count + i] = indices[i * rank + j];
     }
   });
+}
+
+ElementsAttr ElementsAttrBuilder::dequantize(
+    ElementsAttr src, float scale, int64_t zeropoint) {
+  auto storageType = src.getElementType();
+  return fromArray<float>(
+      src.getShapedType().clone(Float32Type::get(src.getContext())),
+      [&](MutableArrayRef<float> dst) {
+        for (const auto &[s, d] : llvm::zip(src.getValues<APInt>(), dst)) {
+          int64_t sVal = storageType.isUnsignedInteger() ? s.getZExtValue()
+                                                         : s.getSExtValue();
+          d = (sVal - zeropoint) * scale;
+        }
+      });
+}
+
+DenseIntElementsAttr ElementsAttrBuilder::quantize(
+    ElementsAttr src, APFloat scale, APSInt zeropoint) {
+  auto storageType = IntegerType::get(src.getContext(), zeropoint.getBitWidth(),
+      zeropoint.isUnsigned() ? IntegerType::SignednessSemantics::Unsigned
+                             : IntegerType::SignednessSemantics::Signless);
+  SmallVector<APInt> dst(src.getNumElements());
+  mlir::APSInt dVal(
+      storageType.getIntOrFloatBitWidth(), storageType.isUnsignedInteger());
+  bool isExact;
+  for (const auto &[s, d] : llvm::zip(src.getValues<APFloat>(), dst)) {
+    (s / scale).convertToInteger(
+        dVal, llvm::RoundingMode::NearestTiesToEven, &isExact);
+    d = dVal + zeropoint;
+  }
+  return DenseIntElementsAttr::get(src.getShapedType().clone(storageType), dst);
 }
 
 /*static*/
