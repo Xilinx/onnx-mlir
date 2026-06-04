@@ -178,11 +178,6 @@ public:
           qOp, "Cannot convert Q input from BlockArg");
     }
 
-    if (!qOp.getOperand(0).hasOneUse()) {
-      return rewriter.notifyMatchFailure(
-          qOp, "Cannot convert Q whose operand has multiple uses");
-    }
-
     auto qTypeErr = getQuantType(qOp);
     if (std::holds_alternative<StringLiteral>(qTypeErr))
       return rewriter.notifyMatchFailure(
@@ -190,7 +185,17 @@ public:
 
     auto qType = std::get<quant::QuantizedType>(qTypeErr);
     auto qTensorType = cast<TensorType>(qOp.getType()).clone(qType);
-    rewriter.modifyOpInPlace(qOp, [&]() { qOp.getX().setType(qTensorType); });
+
+    // If the operand is already quant-typed, fold to scast directly; otherwise
+    // retype the producer in place (only safe when it has a single use).
+    bool operandAlreadyQuant = qOp.getX().getType() == qTensorType;
+    if (!operandAlreadyQuant) {
+      if (!qOp.getOperand(0).hasOneUse()) {
+        return rewriter.notifyMatchFailure(
+            qOp, "Cannot convert Q whose operand has multiple uses");
+      }
+      rewriter.modifyOpInPlace(qOp, [&]() { qOp.getX().setType(qTensorType); });
+    }
 
     // Copy the ResultName of qOp to parentOp
     ResultNamesUpdater().notifyOperationReplaced(qOp, qOp.getX());
