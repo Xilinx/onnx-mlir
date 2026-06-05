@@ -133,23 +133,24 @@ struct RecomposeLayerNormFromDivPattern : public OpRewritePattern<DivOperator> {
     if (!isa<ShapedType>(xType))
       return failure();
 
-    const auto shapedXType = mlir::cast<ShapedType>(xType);
-    const auto xShape = shapedXType.getShape();
-    const int64_t xInnerMostDim = xShape[xShape.size() - 1];
+    auto xShape = mlir::cast<ShapedType>(xType).getShape();
+    auto xInnerMostDim = xShape[xShape.size() - 1];
 
     // Inner most dim is required
     if (xInnerMostDim <= 0)
       return failure();
 
-    const Type elementType = shapedXType.getElementType();
-    const auto scaleType =
-        mlir::RankedTensorType::get({xInnerMostDim}, elementType);
+    auto scaleType = mlir::RankedTensorType::get(
+        {xInnerMostDim}, getElementTypeOrSelf(xType));
 
-    if (!isa<BFloat16Type, Float64Type, Float32Type, Float16Type>(elementType))
+    // For now only float32 type supported
+    mlir::DenseElementsAttr attr;
+    if (onnx_mlir::getEltSizeInBytes(scaleType) == sizeof(float)) {
+      auto scaleVal = SmallVector<float>(xInnerMostDim, 1.0f);
+      attr = mlir::DenseElementsAttr::get(scaleType, ArrayRef(scaleVal));
+    } else {
       return failure();
-
-    const auto oneAttr = builder.getBuilder().getFloatAttr(elementType, 1.0);
-    const auto attr = mlir::DenseElementsAttr::get(scaleType, oneAttr);
+    }
 
     scale = builder.onnx.constant(attr);
     return success(scale);
