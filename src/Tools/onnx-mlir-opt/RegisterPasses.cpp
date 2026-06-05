@@ -404,6 +404,8 @@ void registerOMPasses(int optLevel) {
   mlir::registerPass(createFoldQuantizedBinary);
   mlir::registerPass(createTransferScalarConstInputDivToRequantizePass);
 
+  mlir::registerPass(createRedundantOpReductionPass);
+
   mlir::PassPipelineRegistration<>("xmc-passes", "Run all XMC xcompiler passes",
       [](mlir::OpPassManager &pm) { addXmcMlirPasses(pm); });
 
