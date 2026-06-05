@@ -359,9 +359,6 @@ struct ReduceMeanToConvPattern : public OpRewritePattern<ReduceMeanOpTy> {
     if (inputShape.empty() || inputShape.size() < 2)
       return mlir::failure();
 
-    if (!op.getReduced().hasOneUse())
-      return mlir::failure();
-
     // onnx.Conv only supports float/quantized types, not integer types.
     auto inputElemType =
         mlir::cast<mlir::ShapedType>(input.getType()).getElementType();
@@ -426,10 +423,7 @@ struct ReduceMeanSpatialAxisToConvPattern
     mlir::Value input = op.getData();
 
     auto inputShape = getShape(input);
-    if (inputShape.empty() || inputShape.size() < 4)
-      return mlir::failure();
-
-    if (!op.getReduced().hasOneUse())
+    if (inputShape.empty() || inputShape.size() < 3)
       return mlir::failure();
 
     int64_t rank = inputShape.size();
@@ -568,9 +562,6 @@ struct ReduceSumToConvPattern : public OpRewritePattern<ONNXReduceSumOp> {
     if (inputShape.empty() || inputShape.size() < 2)
       return mlir::failure();
 
-    if (!op.getReduced().hasOneUse())
-      return mlir::failure();
-
     // onnx.Conv only supports float/quantized types, not integer types.
     auto inputElemType =
         mlir::cast<mlir::ShapedType>(input.getType()).getElementType();
@@ -642,10 +633,7 @@ struct ReduceSumSpatialAxisToConvPattern
     mlir::Value axesInput = op.getAxes();
 
     auto inputShape = getShape(input);
-    if (inputShape.empty() || inputShape.size() < 4)
-      return mlir::failure();
-
-    if (!op.getReduced().hasOneUse())
+    if (inputShape.empty() || inputShape.size() < 3)
       return mlir::failure();
 
     int64_t rank = inputShape.size();
@@ -657,12 +645,6 @@ struct ReduceSumSpatialAxisToConvPattern
     int64_t axis = normalizeAxis(axes[0], rank);
 
     if (axis == 0 || axis == 1)
-      return mlir::failure();
-
-    auto inputElemType =
-        mlir::cast<mlir::ShapedType>(input.getType()).getElementType();
-    if (op.getKeepdims() != 0 && rank == 4 &&
-        mlir::isa<mlir::quant::QuantizedType>(inputElemType))
       return mlir::failure();
 
     int64_t reductionDimSize = inputShape[axis];
