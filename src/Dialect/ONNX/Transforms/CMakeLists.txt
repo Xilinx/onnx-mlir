@@ -123,6 +123,7 @@ add_onnx_mlir_library(OMONNXRewrite
   LINK_LIBS PUBLIC
   MLIRTransformUtils
   OMONNXOps
+  OMCompilerOptions
   )
 
 add_onnx_mlir_library(OMOpTransform
@@ -143,6 +144,7 @@ add_onnx_mlir_library(OMHybridTransform
   OMONNXOps
   OMShapeInferenceOpInterface
   OMONNXRewrite
+  OMCompilerOptions
   MLIRPass
   MLIRTransforms
   OMShapeInference

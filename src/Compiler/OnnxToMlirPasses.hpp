@@ -27,6 +27,7 @@ struct OnnxToMlirOptions {
   bool enableQuarkQuantizedLegalization = false;
   bool enableConvTransposeDecompose = false;
   bool enableConvTransposeDecomposeToPhasedConv = false;
+  bool enableDepthToSpaceForConvTranspose = false;
   bool enableConvTranspose1dDecomposeToPhasedConv = false;
   bool enableInstanceNormDecompose = true;
   bool enableGroupNormDecompose = true;
