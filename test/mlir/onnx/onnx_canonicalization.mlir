@@ -347,6 +347,58 @@ func.func @test_no_remove_redundant_resize_tf_crop_and_resize(%arg0: tensor<1x25
 
 // -----
 
+// roi is ignored unless coordinate_transformation_mode is "tf_crop_and_resize",
+// so a non-crop Resize gets its roi operand dropped (replaced with none).
+
+// CHECK-LABEL: func @test_resize_drop_roi_non_crop
+func.func @test_resize_drop_roi_non_crop(%arg0: tensor<1x256x56x56xf32>) -> tensor<1x256x112x112xf32> {
+  %roi = "onnx.Constant"() {value = dense<[0.0, 0.0, 0.2, 0.2, 1.0, 1.0, 0.8, 0.8]> : tensor<8xf32>} : () -> tensor<8xf32>
+  %noval = "onnx.NoValue"() {value} : () -> none
+  %shape = "onnx.Constant"() {value = dense<[1, 256, 112, 112]> : tensor<4xi64>} : () -> tensor<4xi64>
+  %0 = "onnx.Resize"(%arg0, %roi, %noval, %shape)
+  {
+    antialias = 0 : si64,
+    coordinate_transformation_mode = "half_pixel",
+    cubic_coeff_a = -7.500000e-01 : f32,
+    exclude_outside = 0 : si64,
+    extrapolation_value = 0.000000e+00 : f32,
+    keep_aspect_ratio_policy = "stretch",
+    mode = "nearest",
+    nearest_mode = "floor"
+  } : (tensor<1x256x56x56xf32>, tensor<8xf32>, none, tensor<4xi64>) -> tensor<1x256x112x112xf32>
+  "onnx.Return"(%0) : (tensor<1x256x112x112xf32>) -> ()
+  // roi (operand 2) is dropped to none: signature becomes (..., none, none, ...).
+  // CHECK: "onnx.Resize"(%arg0, {{.*}} : (tensor<1x256x56x56xf32>, none, none, tensor<4xi64>) -> tensor<1x256x112x112xf32>
+}
+
+// -----
+
+// roi must be preserved when coordinate_transformation_mode is
+// "tf_crop_and_resize" (it actually crops to a sub-region).
+
+// CHECK-LABEL: func @test_resize_keep_roi_tf_crop_and_resize
+func.func @test_resize_keep_roi_tf_crop_and_resize(%arg0: tensor<1x256x56x56xf32>) -> tensor<1x256x112x112xf32> {
+  %roi = "onnx.Constant"() {value = dense<[0.0, 0.0, 0.2, 0.2, 1.0, 1.0, 0.8, 0.8]> : tensor<8xf32>} : () -> tensor<8xf32>
+  %noval = "onnx.NoValue"() {value} : () -> none
+  %shape = "onnx.Constant"() {value = dense<[1, 256, 112, 112]> : tensor<4xi64>} : () -> tensor<4xi64>
+  %0 = "onnx.Resize"(%arg0, %roi, %noval, %shape)
+  {
+    antialias = 0 : si64,
+    coordinate_transformation_mode = "tf_crop_and_resize",
+    cubic_coeff_a = -7.500000e-01 : f32,
+    exclude_outside = 0 : si64,
+    extrapolation_value = 0.000000e+00 : f32,
+    keep_aspect_ratio_policy = "stretch",
+    mode = "nearest",
+    nearest_mode = "floor"
+  } : (tensor<1x256x56x56xf32>, tensor<8xf32>, none, tensor<4xi64>) -> tensor<1x256x112x112xf32>
+  "onnx.Return"(%0) : (tensor<1x256x112x112xf32>) -> ()
+  // roi (operand 2) is preserved: signature keeps (..., tensor<8xf32>, none, ...).
+  // CHECK: "onnx.Resize"(%arg0, {{.*}} : (tensor<1x256x56x56xf32>, tensor<8xf32>, none, tensor<4xi64>) -> tensor<1x256x112x112xf32>
+}
+
+// -----
+
 // Check the combining of transposes into a simple transpose.
 // CHECK-LABEL: func @test_transpose_fusion(%arg0: tensor<10x11x12x13xf32>) -> tensor<11x10x13x12xf32> {
 func.func @test_transpose_fusion(%arg0: tensor<10x11x12x13xf32>) -> tensor<11x10x13x12xf32> {

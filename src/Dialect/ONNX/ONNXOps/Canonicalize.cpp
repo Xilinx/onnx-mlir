@@ -1088,6 +1088,29 @@ private:
   }
 };
 
+// Drop the roi input unless it is actually used. Per the ONNX Resize spec, roi
+// only takes effect when coordinate_transformation_mode == "tf_crop_and_resize";
+// for every other mode it is ignored, so null it out to canonicalize the op.
+class DropResizeRoiWithoutCropPattern : public OpRewritePattern<ONNXResizeOp> {
+public:
+  using OpRewritePattern<ONNXResizeOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXResizeOp onnxResizeOp, PatternRewriter &rewriter) const override {
+    // Already dropped.
+    if (mlir::isa<NoneType>(onnxResizeOp.getRoi().getType()))
+      return failure();
+    // roi is meaningful only for tf_crop_and_resize.
+    if (onnxResizeOp.getCoordinateTransformationMode() == "tf_crop_and_resize")
+      return failure();
+    rewriter.modifyOpInPlace(onnxResizeOp, [&] {
+      OnnxBuilder createONNX(rewriter, onnxResizeOp.getLoc());
+      onnxResizeOp.getRoiMutable().assign(createONNX.none());
+    });
+    return success();
+  }
+};
+
 // =============================================================================
 // Rewrite pattern for redundant resize (scale=1 or same input/output size)
 // =============================================================================
@@ -3893,6 +3916,7 @@ void ONNXReshapeOp::getCanonicalizationPatterns(
 void ONNXResizeOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<EmptyTensorInputsResizePattern>(context);
+  result.insert<DropResizeRoiWithoutCropPattern>(context);
   result.insert<RemoveRedundantResizePattern>(context);
 }
 
