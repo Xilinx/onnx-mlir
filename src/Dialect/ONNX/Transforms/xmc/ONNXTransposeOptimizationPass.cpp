@@ -2001,7 +2001,7 @@ struct ONNXTransposeOptimizationPass
     // patterns.add<PushTransposeThroughWhere>(context);
 
     patterns.add<PushTransposeThroughAxisOp<ONNXPadOp>>(context);
-    patterns.add<PushTransposeThroughAxisOp<ONNXSliceOp>>(context);
+    // patterns.add<PushTransposeThroughAxisOp<ONNXSliceOp>>(context);
     patterns.add<PushTransposeThroughAxisOp<ONNXTileOp>>(context);
     patterns.add<PushTransposeThroughAxisOp<ONNXExpandOp>>(context);
 
