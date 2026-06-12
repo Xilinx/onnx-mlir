@@ -147,6 +147,9 @@ struct ONNXHybridTransformPass
         }
         op.getCanonicalizationPatterns(cumulativePatterns, context);
       }
+
+      if (isQDQDataMovementCanonicalizationEnabled())
+        populateQDQDataMovementCanonicalizationPatterns(cumulativePatterns);
     }
 
     if (constantPropagation) {

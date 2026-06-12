@@ -68,6 +68,8 @@ void configurePasses() {
       onnxConstPropExpansionBound, onnxConstPropDisablePatterns,
       disableConstantProp);
   configureUnsafeMathCanonicalization(enableUnsafeMathOptimizations);
+  configureQDQDataMovementCanonicalization(
+      enableQDQDataMovementCanonicalization);
 #ifdef ONNX_MLIR_ENABLE_KRNL
   configureOnnxToKrnlLoweringPass(optReport == OptReport::Parallel,
       enableParallel, parallelizeOps, optReport == OptReport::Simd,
@@ -244,6 +246,8 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.hybrid.recomposition &= !disableRecomposeOption;
     opts.disableBatchNormDecompose = disableBatchNormDecompose;
     opts.enableUnsafeMathOptimizations = enableUnsafeMathOptimizations;
+    opts.enableQDQDataMovementCanonicalization =
+        enableQDQDataMovementCanonicalization;
     opts.enableONNXHybridPass = enableONNXHybridPass;
     opts.enableConvOptPass = enableConvOptPass;
     opts.enableSimdDataLayout = enableSimdDataLayout;

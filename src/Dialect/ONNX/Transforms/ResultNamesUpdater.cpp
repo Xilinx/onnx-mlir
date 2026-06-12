@@ -15,6 +15,7 @@
 
 #include "src/Dialect/ONNX/TensorName.hpp"
 #include "src/Dialect/ONNX/Transforms/ResultNamesUpdater.hpp"
+#include "src/Pass/Passes.hpp"
 
 using namespace mlir;
 
@@ -164,6 +165,9 @@ struct CanonicalizeWithResultNamesPass
       dialect->getCanonicalizationPatterns(patterns);
     for (auto regOp : ctx->getRegisteredOperations())
       regOp.getCanonicalizationPatterns(patterns, ctx);
+
+    if (isQDQDataMovementCanonicalizationEnabled())
+      populateQDQDataMovementCanonicalizationPatterns(patterns);
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
