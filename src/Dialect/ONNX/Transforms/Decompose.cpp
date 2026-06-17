@@ -61,6 +61,11 @@ using namespace mlir;
 
 namespace onnx_mlir {
 
+// Storage for the pass->pattern flag declared in Decompose.hpp. Owned by
+// OMONNXRewrite so the rewrite/transform libraries do not need to link
+// OMCompilerOptions (see Decompose.hpp for the rationale).
+bool separatePhasedConvsForConvTransposeActive = false;
+
 // Create an DenseElementsAttr of ArrayAttr.
 // This function is used to get Value Type of an EXISTING ArrayAttr for Scaler
 // function.
@@ -1611,21 +1616,27 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
       convOutputShape[convOutputShape.size() - 2] / stridesShape[0];
   ShapedType convTransposeOutputType =
       mlir::cast<ShapedType>(op.getY().getType());
-  // In the case where weights are padded, we will get the extra output from
-  // conv.
   auto convOutputType = RankedTensorType::get(
-      (needWeightsPadding)
-          ? SmallVector<int64_t>({convOutputShape[0], convOutputShape[1],
-                convOutputShape[2] + 1, convOutputShape[3] + 1})
-          : convOutputShape,
-      convTransposeOutputType.getElementType());
+      convOutputShape, convTransposeOutputType.getElementType());
   if (numPhases == 4) {
     auto getPadsArrayAttr = [&](int64_t kernelSize, int64_t convSequence,
                                 bool weightsPadded) {
       // weights are padded for case, kernel[3,3], stride[2,2] and pads either
-      // [0,0,1,1] or [1,1,0,0]
+      // [0,0,1,1] or [1,1,0,0]. Use same non-uniform per-phase padding as k4x4
+      // so each conv directly produces the correct output size (no slicing).
       if (weightsPadded) {
-        return rewriter.getI64ArrayAttr({1, 1, 1, 1});
+        switch (convSequence) {
+        case 1:
+          return rewriter.getI64ArrayAttr({0, 0, 1, 1});
+        case 2:
+          return rewriter.getI64ArrayAttr({1, 1, 0, 0});
+        case 3:
+          return rewriter.getI64ArrayAttr({0, 1, 1, 0});
+        case 4:
+          return rewriter.getI64ArrayAttr({1, 0, 0, 1});
+        default:
+          llvm_unreachable("Invalid conv sequence.");
+        }
       }
       // for kernel [2,2], stride [2,2] and pads [0,0,0,0]
       if (kernelSize == 2)
@@ -1655,7 +1666,20 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     };
     auto stridesArrayAttr = rewriter.getI64ArrayAttr({1, 1});
     Value conv;
-    if (needWeightsPadding || (kernelShape[0] == 4)) {
+    // When conv output channels are not DMA aligned, the individual conv
+    // outputs contain padding garbage in the channel dimension, making
+    // channel-wise concat of 4 convs inefficient. For the
+    // enableSeparatePhasedConvsForConvTranspose path, only use the 4-conv
+    // decomposition when output channels are DMA-aligned.
+    const int64_t dmaWidthInBytes = 32;
+    const int64_t elementSizeInBytes =
+        convTransposeOutputType.getElementType().getIntOrFloatBitWidth() / 8;
+    const int64_t dmaAlignmentInChannels = dmaWidthInBytes / elementSizeInBytes;
+    const bool isConvOutChannelsDmaAligned =
+        (convOutputShape[1] % dmaAlignmentInChannels == 0);
+    if (needWeightsPadding || (kernelShape[0] == 4) ||
+        (separatePhasedConvsForConvTransposeActive &&
+            isConvOutChannelsDmaAligned)) {
       Value conv1 = getActivationAppliedToConv(
           addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
               convOutputType, input, addDequantizeNodeIfNeeded(weightSlices[3]),
@@ -1688,46 +1712,6 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
               getPadsArrayAttr(kernelShape[0], 4, needWeightsPadding),
               stridesArrayAttr)),
           convOutputType);
-      // Need to remove excess the ofm  when weights are padded.
-
-      if (needWeightsPadding) {
-        auto startOnnxConstant =
-            getONNXConstOpFromVector(rewriter, loc, {1, 1});
-        auto endOnnxConstant = getONNXConstOpFromVector(rewriter, loc,
-            {convOutputShape[convOutputShape.size() - 2] + 2,
-                convOutputShape[convOutputShape.size() - 1] + 2});
-        auto axisOnnxConstant = getONNXConstOpFromVector(rewriter, loc, {2, 3});
-        auto stepOnnxConstant = getONNXConstOpFromVector(rewriter, loc, {1, 1});
-        auto convSliceOutputType = RankedTensorType::get(
-            convOutputShape, convTransposeOutputType.getElementType());
-        conv1 = rewriter.create<ONNXSliceOp>(loc, convSliceOutputType, conv1,
-            startOnnxConstant, endOnnxConstant, axisOnnxConstant,
-            stepOnnxConstant);
-
-        startOnnxConstant = getONNXConstOpFromVector(rewriter, loc, {0, 0});
-        endOnnxConstant = getONNXConstOpFromVector(rewriter, loc,
-            {convOutputShape[convOutputShape.size() - 2],
-                convOutputShape[convOutputShape.size() - 1]});
-        conv2 = rewriter.create<ONNXSliceOp>(loc, convSliceOutputType, conv2,
-            startOnnxConstant, endOnnxConstant, axisOnnxConstant,
-            stepOnnxConstant);
-
-        startOnnxConstant = getONNXConstOpFromVector(rewriter, loc, {1, 0});
-        endOnnxConstant = getONNXConstOpFromVector(rewriter, loc,
-            {convOutputShape[convOutputShape.size() - 2] + 2,
-                convOutputShape[convOutputShape.size() - 1]});
-        conv3 = rewriter.create<ONNXSliceOp>(loc, convSliceOutputType, conv3,
-            startOnnxConstant, endOnnxConstant, axisOnnxConstant,
-            stepOnnxConstant);
-
-        startOnnxConstant = getONNXConstOpFromVector(rewriter, loc, {0, 1});
-        endOnnxConstant = getONNXConstOpFromVector(rewriter, loc,
-            {convOutputShape[convOutputShape.size() - 2],
-                convOutputShape[convOutputShape.size() - 1] + 2});
-        conv4 = rewriter.create<ONNXSliceOp>(loc, convSliceOutputType, conv4,
-            startOnnxConstant, endOnnxConstant, axisOnnxConstant,
-            stepOnnxConstant);
-      }
       // Four conv outputs are merged in channel dim
       SmallVector<int64_t> outputShapeOfConcat = {
           1, convOutputShape[1] * 4, convOutputShape[2], convOutputShape[3]};
@@ -1790,13 +1774,17 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
           combinedConvOutputType);
     }
 
-    // Here we are reshaping the concatenated conv channels of 4*Conv_channels
-    // into groups of 2x2 channels. This can be visualized as
-    // H_chan(2) * W_Chan(2) * C_real,  then doing the transpose into
-    // Conv_channels H H_chan W W_chan. The adjecent H and H_chan will be merged
+    SmallVector<int64_t> outputShapeForResult = {
+        1, convOutputShape[1], convOutputShape[2] * 2, convOutputShape[3] * 2};
+    auto finalOutputType =
+        RankedTensorType::get(outputShapeForResult, elementType);
+
+    // Reshape the concatenated conv channels of 4*Conv_channels into groups
+    // of 2x2 channels. This can be visualized as
+    // H_chan(2) * W_Chan(2) * C_real, then doing the transpose into
+    // Conv_channels H H_chan W W_chan. Adjacent H and H_chan will be merged
     // into H, same way W and W_chan will be merged into W. This leads to
     // doubling of the H and W. Keeping the channels same.
-
     SmallVector<int64_t> outputShapeForDimAdjust = {
         2, 2, convOutputShape[1], convOutputShape[2], convOutputShape[3]};
 
@@ -1819,16 +1807,9 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     auto transpose = rewriter.create<ONNXTransposeOp>(
         loc, transposeOutputType, reshapeOutputDimAdjust, permArrayAttr);
 
-    SmallVector<int64_t> outputShapeForResult = {
-        1, convOutputShape[1], convOutputShape[2] * 2, convOutputShape[3] * 2};
-
     auto onnxConstForLastReshape =
         getONNXConstOpFromVector(rewriter, loc, outputShapeForResult);
 
-    auto finalOutputType =
-        RankedTensorType::get(outputShapeForResult, elementType);
-    // Result is reshaped back to match the original convtranspose output
-    // dimensions
     auto finalOutput = rewriter.create<ONNXReshapeOp>(
         loc, finalOutputType, transpose, onnxConstForLastReshape);
     return finalOutput;
@@ -2142,6 +2123,11 @@ Value normalizeConstantOp(
 
 } // namespace onnx_mlir
 
+namespace onnx_mlir {
+#define GEN_PASS_DEF_DECOMPOSEONNXTOONNXPASS
+#include "src/Dialect/ONNX/Transforms/Passes.h.inc"
+} // namespace onnx_mlir
+
 namespace {
 /// Include the patterns defined in the Declarative Rewrite framework.
 #include "src/Dialect/ONNX/Transforms/ONNXDecompose.inc"
@@ -2215,10 +2201,14 @@ struct SoftmaxPattern : public OpRewritePattern<ONNXSoftmaxOp> {
   }
 };
 
-void populateDecomposingONNXBeforeStablehloPatterns(
+} // namespace
+
+void onnx_mlir::populateDecomposingONNXBeforeStablehloPatterns(
     RewritePatternSet &patterns, MLIRContext *ctx) {
   patterns.add<SoftmaxPattern>(ctx);
 }
+
+namespace {
 
 #endif
 
@@ -4725,161 +4715,17 @@ public:
 };
 
 struct DecomposeONNXToONNXPass
-    : public PassWrapper<DecomposeONNXToONNXPass, OperationPass<func::FuncOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(DecomposeONNXToONNXPass)
-
-  DecomposeONNXToONNXPass(const std::string &target,
-      bool enableConvTransposeDecompose = false,
-      bool enableConvTransposeDecomposeToPhasedConv = false,
-      bool enableConvTranspose1dDecomposeToPhasedConv = false,
-      bool enableInstanceNormDecompose = true,
-      bool enableGroupNormDecompose = true,
-      bool enableMatmulNBitsDecompose = false,
-      bool enableGroupQueryAttentionDecompose = true,
-      bool enableSplitToSliceDecompose = false, bool enableConcatFuse = true,
-      bool enableLstmSeqDecompose = false, bool enableReduceL2Decompose = true,
-      bool enableGatherToSlice = true, bool enableHardSwishDecompose = true,
-      bool enableGroupQueryAttentionCacheSlicing = true) {
-    this->target = target;
-    this->enableConvTransposeDecompose = enableConvTransposeDecompose;
-    this->enableConvTransposeDecomposeToPhasedConv =
-        enableConvTransposeDecomposeToPhasedConv;
-    this->enableConvTranspose1dDecomposeToPhasedConv =
-        enableConvTranspose1dDecomposeToPhasedConv;
-    this->enableInstanceNormDecompose = enableInstanceNormDecompose;
-    this->enableGroupNormDecompose = enableGroupNormDecompose;
-    this->enableMatmulNBitsDecompose = enableMatmulNBitsDecompose;
-    this->enableGroupQueryAttentionDecompose =
-        enableGroupQueryAttentionDecompose;
-    this->enableSplitToSliceDecompose = enableSplitToSliceDecompose;
-    this->enableConcatFuse = enableConcatFuse;
-    this->enableLstmSeqDecompose = enableLstmSeqDecompose;
-    this->enableReduceL2Decompose = enableReduceL2Decompose;
-    this->enableGatherToSlice = enableGatherToSlice;
-    this->enableHardSwishDecompose = enableHardSwishDecompose;
-    this->enableGroupQueryAttentionCacheSlicing =
-        enableGroupQueryAttentionCacheSlicing;
-  }
-
-  DecomposeONNXToONNXPass(const DecomposeONNXToONNXPass &pass)
-      : mlir::PassWrapper<DecomposeONNXToONNXPass,
-            OperationPass<func::FuncOp>>() {
-    this->target = pass.target.getValue();
-    this->enableConvTransposeDecompose =
-        pass.enableConvTransposeDecompose.getValue();
-    this->enableConvTransposeDecomposeToPhasedConv =
-        pass.enableConvTransposeDecomposeToPhasedConv.getValue();
-    this->enableInstanceNormDecompose =
-        pass.enableInstanceNormDecompose.getValue();
-    this->enableGroupNormDecompose = pass.enableGroupNormDecompose.getValue();
-    this->enableMatmulNBitsDecompose =
-        pass.enableMatmulNBitsDecompose.getValue();
-    this->enableGroupQueryAttentionDecompose =
-        pass.enableGroupQueryAttentionDecompose.getValue();
-    this->enableSplitToSliceDecompose =
-        pass.enableSplitToSliceDecompose.getValue();
-    this->enableConcatFuse = pass.enableConcatFuse.getValue();
-    this->enableLstmSeqDecompose = pass.enableLstmSeqDecompose.getValue();
-    this->enableReduceL2Decompose = pass.enableReduceL2Decompose.getValue();
-    this->enableGatherToSlice = pass.enableGatherToSlice.getValue();
-    this->enableHardSwishDecompose = pass.enableHardSwishDecompose.getValue();
-    this->enableGroupQueryAttentionCacheSlicing =
-        pass.enableGroupQueryAttentionCacheSlicing.getValue();
-  }
-
-  StringRef getArgument() const override { return "decompose-onnx"; }
-
-  StringRef getDescription() const override {
-    return "Decompose ONNX operations into composition of other ONNX "
-           "operations.";
-  }
-
-  Option<std::string> target{*this, "target",
-      llvm::cl::desc("Target Dialect to decompose into"), ::llvm::cl::init("")};
-
-  Option<bool> enableConvTransposeDecompose{*this, "enable-convtranspose",
-      llvm::cl::desc("Enable decomposition of ConvTranspose"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableConvTransposeDecomposeToPhasedConv{*this,
-      "enable-convtranspose-phased",
-      llvm::cl::desc("Enable decomposition of ONNX ConvTranspose operator to 4 "
-                     "phased Conv"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableConvTranspose1dDecomposeToPhasedConv{*this,
-      "enable-convtranspose-1d-phased",
-      llvm::cl::desc(
-          "Enable decomposition of ONNX ConvTranspose 1D operator to "
-          "phased Conv"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableInstanceNormDecompose{*this,
-      "enable-instancenorm-decompose",
-      llvm::cl::desc("Enable decomposition of InstanceNormalization to "
-                     "LayerNormalization"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableGroupNormDecompose{*this, "enable-groupnorm-decompose",
-      llvm::cl::desc("Enable decomposition of GroupNormalization to "
-                     "LayerNormalization"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableMatmulNBitsDecompose{*this, "enable-matmulnbits-decompose",
-      llvm::cl::desc("Enable decomposition of Microsoft MatmulNBits to "
-                     "dequantize linear and matmul ops"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableGroupQueryAttentionDecompose{*this,
-      "enable-groupqueryattention-decompose",
-      llvm::cl::desc("Enable decomposition of Microsoft GroupQueryAttention to "
-                     "onnx.Attention and onnx.RotaryEmbedding ops"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableSplitToSliceDecompose{*this, "enable-split-to-slice",
-      llvm::cl::desc("Enable decomposition of Split to Slice operations"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableConcatFuse{*this, "enable-concat-fuse",
-      llvm::cl::desc("Enable ConcatFusePattern rewriter"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableLstmSeqDecompose{*this, "enable-lstm-seq-decomposition",
-      llvm::cl::desc("Enable sequence-length decomposition of LSTM (unroll a "
-                     "seq_len>1 LSTM into a chain of seq_len=1 LSTMs)"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableReduceL2Decompose{*this, "enable-reducel2-decompose",
-      llvm::cl::desc("Enable decomposition of ReduceL2 to "
-                     "Sqrt(ReduceSumSquare(x))"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableGatherToSlice{*this, "enable-gather-to-slice",
-      llvm::cl::desc(
-          "Enable decomposition of Gather with scalar index to Slice+Reshape"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableHardSwishDecompose{*this, "enable-hardswish-decompose",
-      llvm::cl::desc("Enable decomposition of HardSwish into "
-                     "x * HardSigmoid(x) (alpha=1/6, beta=0.5)"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableGroupQueryAttentionCacheSlicing{*this,
-      "enable-groupqueryattention-cache-slicing",
-      llvm::cl::desc("Enable slicing of cos/sin caches during decomposing "
-                     "GroupQueryAttention. Set to false for keeping cache "
-                     "and synthesize position_ids instead."),
-      ::llvm::cl::init(true)};
-
+    : public onnx_mlir::impl::DecomposeONNXToONNXPassBase<
+          DecomposeONNXToONNXPass> {
+  using Base::Base;
   void runOnOperation() final;
-
-  typedef PassWrapper<DecomposeONNXToONNXPass, OperationPass<func::FuncOp>>
-      BaseType;
 };
 
 void DecomposeONNXToONNXPass::runOnOperation() {
   func::FuncOp function = getOperation();
   MLIRContext *context = &getContext();
+  onnx_mlir::separatePhasedConvsForConvTransposeActive =
+      this->enableSeparatePhasedConvsForConvTranspose.getValue();
   RewritePatternSet patterns(context);
   onnx_mlir::getDecomposeONNXToONNXPatterns(patterns,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
@@ -4889,7 +4735,6 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
       /*disableGenericDecompositions=*/false, enableGatherToSlice,
       enableHardSwishDecompose, enableGroupQueryAttentionCacheSlicing);
-  patterns.insert<ReplaceCastLikeByCastPattern>(context);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
   if (this->target == "stablehlo") {
@@ -4984,28 +4829,11 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   if (enableGatherToSlice)
     patterns.insert<DecomposeGatherToSlicePattern>(context);
 
+  patterns.insert<ReplaceCastLikeByCastPattern>(context);
+
   // TODO: consider whether to include SoftmaxPattern here
 }
 
-/*!
- * Create a DecomposeONNX pass.
- */
-std::unique_ptr<mlir::Pass> onnx_mlir::createDecomposeONNXToONNXPass(
-    const std::string &target, bool enableConvTransposeDecompose,
-    bool enableConvTransposeDecomposeToPhasedConv,
-    bool enableConvTranspose1dDecomposeToPhasedConv,
-    bool enableInstanceNormDecompose, bool enableGroupNormDecompose,
-    bool enableMatmulNBitsDecompose, bool enableGroupQueryAttentionDecompose,
-    bool enableSplitToSliceDecompose, bool enableConcatFuse,
-    bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
-    bool enableGatherToSlice, bool enableHardSwishDecompose,
-    bool enableGroupQueryAttentionCacheSlicing) {
-  return std::make_unique<DecomposeONNXToONNXPass>(target,
-      enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
-      enableConvTranspose1dDecomposeToPhasedConv, enableInstanceNormDecompose,
-      enableGroupNormDecompose, enableMatmulNBitsDecompose,
-      enableGroupQueryAttentionDecompose, enableSplitToSliceDecompose,
-      enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
-      enableGatherToSlice, enableHardSwishDecompose,
-      enableGroupQueryAttentionCacheSlicing);
-}
+// createDecomposeONNXToONNXPass() and createDecomposeONNXToONNXPass(options)
+// are auto-generated by GEN_PASS_DEF_DECOMPOSEONNXTOONNXPASS above; no
+// manual definition is needed here.
