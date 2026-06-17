@@ -66,6 +66,10 @@ void configureBatchNormCanonicalization(bool disableBatchNormDecompose);
 // Configure patterns that are not numerically safe.
 void configureUnsafeMathCanonicalization(bool enableUnsafeMathOptimizations);
 
+// Configure whether Flatten/Squeeze/Unsqueeze-to-Reshape canonicalization is
+// enabled.
+void configureReshapeCanonicalization(bool enableReshapeCanonicalization);
+
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(
     bool enableQDQ = false);
 

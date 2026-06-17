@@ -51,6 +51,7 @@ bool enableKrnlBufferReuse;                            // common for both
 std::string onnxTransformOptions;                      // onnx-mlir only
 bool enableQuarkQuantizerLegalization;                 // common for both
 bool disableBatchNormDecompose;                        // common for both
+bool enableReshapeCanonicalization;                    // common for both
 bool enableSafeCodeGen;                                // common for both
 bool disableMemRefPrefetch;                            // common for both
 uint64_t compilationNumThreads;                        // common for both
@@ -327,6 +328,14 @@ static llvm::cl::opt<bool, true> disableBatchNormDecomposeOpt(
         "patterns (default=false). Set to 'true' to keep BatchNorm as a "
         "single op."),
     llvm::cl::location(disableBatchNormDecompose), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableReshapeCanonicalizationOpt(
+    "enable-reshape-canonicalization",
+    llvm::cl::desc(
+        "Enable canonicalization of Flatten/Squeeze/Unsqueeze to Reshape "
+        "(default=true, i.e. the rewrite is enabled by default)."),
+    llvm::cl::location(enableReshapeCanonicalization), llvm::cl::init(true),
     llvm::cl::cat(OnnxMlirCommonOptions));
 
 // Options for onnx-mlir only

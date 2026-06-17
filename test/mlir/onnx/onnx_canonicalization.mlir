@@ -777,9 +777,9 @@ func.func @test_should_not_remove_unsqueeze_squeeze(%arg0 : tensor<10x10xf32>) -
   %3 = "onnx.Squeeze"(%2, %1) : (tensor<1x10x1x10xf32>, tensor<1xi64>) -> tensor<10x1x10xf32>
   onnx.Return %3: tensor<10x1x10xf32>
   // CHECK-LABEL: test_should_not_remove_unsqueeze_squeeze
-  // CHECK: {{.*}} = "onnx.Unsqueeze"{{.*}}
-  // CHECK: {{.*}} = "onnx.Squeeze"{{.*}}
-  // CHECK: onnx.Return {{.*}}
+  // CHECK: [[CST:%.+]] = onnx.Constant dense<[10, 1, 10]> : tensor<3xi64>
+  // CHECK: [[RES:%.+]] = "onnx.Reshape"(%arg0, [[CST]]) {allowzero = 0 : si64}
+  // CHECK: onnx.Return [[RES]]
 }
 
 // -----
@@ -845,9 +845,9 @@ func.func @test_should_not_remove_squeeze_unsqueeze(%arg0 : tensor<1x10x1x10xf32
   %3 = "onnx.Unsqueeze"(%2, %1) : (tensor<10x1x10xf32>, tensor<1xi64>) -> tensor<10x1x10x1xf32>
   onnx.Return %3: tensor<10x1x10x1xf32>
   // CHECK-LABEL: test_should_not_remove_squeeze_unsqueeze
-  // CHECK: {{.*}} = "onnx.Squeeze"{{.*}}
-  // CHECK: {{.*}} = "onnx.Unsqueeze"{{.*}}
-  // CHECK: onnx.Return {{.*}}
+  // CHECK: [[CST:%.+]] = onnx.Constant dense<[10, 1, 10, 1]> : tensor<4xi64>
+  // CHECK: [[RES:%.+]] = "onnx.Reshape"(%arg0, [[CST]]) {allowzero = 0 : si64}
+  // CHECK: onnx.Return [[RES]]
 }
 
 // -----
@@ -871,9 +871,9 @@ func.func @test_should_not_remove_null_axes_squeeze_unsqueeze(%arg0 : tensor<1x1
   %2 = "onnx.Unsqueeze"(%1, %0) : (tensor<10x10xf32>, tensor<2xi64>) -> tensor<10x1x10x1xf32>
   onnx.Return %2: tensor<10x1x10x1xf32>
   // CHECK-LABEL: test_should_not_remove_null_axes_squeeze_unsqueeze
-  // CHECK: {{.*}} = "onnx.Squeeze"{{.*}}
-  // CHECK: {{.*}} = "onnx.Unsqueeze"{{.*}}
-  // CHECK: onnx.Return {{.*}}
+  // CHECK: [[CST:%.+]] = onnx.Constant dense<[10, 1, 10, 1]> : tensor<4xi64>
+  // CHECK: [[RES:%.+]] = "onnx.Reshape"(%arg0, [[CST]]) {allowzero = 0 : si64}
+  // CHECK: onnx.Return [[RES]]
 }
 
 // -----
@@ -2169,8 +2169,8 @@ func.func @mul_broadcast_axis_unsqueeze(%279: tensor<1x64x112x112xf32>, %138: te
 
 // CHECK-LABEL:  func.func @mul_broadcast_axis_unsqueeze
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x64x112x112xf32>, [[PARAM_1_:%.+]]: tensor<64xf32>) -> tensor<1x64x112x112xf32> {
-// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[1, 2]> : tensor<2xi64>
-// CHECK:           [[VAR_1_:%.+]] = "onnx.Unsqueeze"([[PARAM_1_]], [[VAR_0_]]) : (tensor<64xf32>, tensor<2xi64>) -> tensor<64x1x1xf32>
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[64, 1, 1]> : tensor<3xi64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Reshape"([[PARAM_1_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<64xf32>, tensor<3xi64>) -> tensor<64x1x1xf32>
 // CHECK:           [[VAR_2_:%.+]] = "onnx.Mul"([[PARAM_0_]], [[VAR_1_]]) : (tensor<1x64x112x112xf32>, tensor<64x1x1xf32>) -> tensor<1x64x112x112xf32>
 // CHECK:           onnx.Return [[VAR_2_]] : tensor<1x64x112x112xf32>
 // CHECK:         }

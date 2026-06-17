@@ -68,6 +68,7 @@ void configurePasses() {
       onnxConstPropExpansionBound, onnxConstPropDisablePatterns,
       disableConstantProp);
   configureUnsafeMathCanonicalization(enableUnsafeMathOptimizations);
+  configureReshapeCanonicalization(enableReshapeCanonicalization);
 #ifdef ONNX_MLIR_ENABLE_KRNL
   configureOnnxToKrnlLoweringPass(optReport == OptReport::Parallel,
       enableParallel, parallelizeOps, optReport == OptReport::Simd,
