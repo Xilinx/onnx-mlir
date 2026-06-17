@@ -2925,8 +2925,7 @@ public:
 template <typename OpT>
 struct ReshapeFamilyToReshapePattern : public OpRewritePattern<OpT> {
   using OpRewritePattern<OpT>::OpRewritePattern;
-  LogicalResult matchAndRewrite(
-      OpT op, PatternRewriter &rewriter) const final {
+  LogicalResult matchAndRewrite(OpT op, PatternRewriter &rewriter) const final {
     auto resultType =
         mlir::dyn_cast<RankedTensorType>(op->getResult(0).getType());
     if (!resultType || !resultType.hasStaticShape())
@@ -2942,9 +2941,10 @@ struct ReshapeFamilyToReshapePattern : public OpRewritePattern<OpT> {
   }
 };
 
-using FlattenToReshapePattern   = ReshapeFamilyToReshapePattern<ONNXFlattenOp>;
-using SqueezeToReshapePattern   = ReshapeFamilyToReshapePattern<ONNXSqueezeOp>;
-using UnsqueezeToReshapePattern = ReshapeFamilyToReshapePattern<ONNXUnsqueezeOp>;
+using FlattenToReshapePattern = ReshapeFamilyToReshapePattern<ONNXFlattenOp>;
+using SqueezeToReshapePattern = ReshapeFamilyToReshapePattern<ONNXSqueezeOp>;
+using UnsqueezeToReshapePattern =
+    ReshapeFamilyToReshapePattern<ONNXUnsqueezeOp>;
 
 // Rewrite pattern for BatchNormalization
 // =============================================================================
@@ -3915,7 +3915,7 @@ void ONNXReduceMeanOp::getCanonicalizationPatterns(
 
 /// Simplify Reshape(Cast(Reshape(x, s1)), s2) to Cast(x) when the outer
 /// Reshape's result shape equals the inner Reshape's input shape (i.e., the
-/// two Reshapes together form an identity). 
+/// two Reshapes together form an identity).
 struct FuseCastBetweenReshapesPattern : public OpRewritePattern<ONNXReshapeOp> {
   using OpRewritePattern::OpRewritePattern;
   LogicalResult matchAndRewrite(
@@ -3925,8 +3925,8 @@ struct FuseCastBetweenReshapesPattern : public OpRewritePattern<ONNXReshapeOp> {
       return rewriter.notifyMatchFailure(outerReshape, "input is not Cast");
     auto innerReshape = castOp.getInput().getDefiningOp<ONNXReshapeOp>();
     if (!innerReshape)
-      return rewriter.notifyMatchFailure(outerReshape,
-          "Cast input is not Reshape");
+      return rewriter.notifyMatchFailure(
+          outerReshape, "Cast input is not Reshape");
     // Both result and inner input must be static ranked tensors with the
     // same shape
     auto outerTy =
@@ -3938,8 +3938,8 @@ struct FuseCastBetweenReshapesPattern : public OpRewritePattern<ONNXReshapeOp> {
     if (!outerTy.hasStaticShape() || !innerInTy.hasStaticShape())
       return rewriter.notifyMatchFailure(outerReshape, "types not static");
     if (outerTy.getShape() != innerInTy.getShape())
-      return rewriter.notifyMatchFailure(outerReshape,
-          "outer result shape != inner input shape");
+      return rewriter.notifyMatchFailure(
+          outerReshape, "outer result shape != inner input shape");
     Location fusedLoc = rewriter.getFusedLoc(
         {innerReshape.getLoc(), castOp.getLoc(), outerReshape.getLoc()});
     Value newCast = rewriter.create<ONNXCastOp>(fusedLoc, outerTy,

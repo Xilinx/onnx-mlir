@@ -49,6 +49,7 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // this function.
   configureBatchNormCanonicalization(opts.disableBatchNormDecompose);
   configureUnsafeMathCanonicalization(opts.enableUnsafeMathOptimizations);
+  configureReshapeCanonicalization(opts.enableReshapeCanonicalization);
 
   if (!donotScrubDisposableElementsAttr)
     pm.addInstrumentation(
@@ -147,6 +148,9 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // Set onnx_node_name if it is missing. Keep this pass at the end of this
   // function and just before instrumentation.
   pm.addPass(createSetONNXNodeNamePass());
+
+  if (opts.enableVerifyXFEDialect)
+    pm.addNestedPass<func::FuncOp>(onnx_mlir::createVerifyXFEDialectPass());
 
 #ifdef ONNX_MLIR_ENABLE_KRNL
   // Add instrumentation for Onnx Ops (requires Krnl dialect for

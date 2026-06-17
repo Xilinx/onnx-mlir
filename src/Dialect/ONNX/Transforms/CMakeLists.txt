@@ -184,6 +184,19 @@ if (ONNX_MLIR_ENABLE_KRNL)
     )
 endif()
 
+add_onnx_mlir_library(OMVerifyXFEDialect
+  VerifyXFEDialectPass.cpp
+
+  DEPENDS
+  OMONNXTransformsIncGen
+
+  LINK_LIBS PUBLIC
+  OMONNXOps
+  OMMlirUtilities
+  MLIRFuncDialect
+  MLIRPass
+  )
+
 add_onnx_mlir_library(OMONNXSimplifyShapeRelatedOps
   SimplifyShapeRelatedOps.cpp
 

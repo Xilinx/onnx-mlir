@@ -167,3 +167,17 @@ def ONNXHybridTransformPass
   let options =
       ONNXHybridTransformOptions.options # ONNXDecomposePatternOptions.options;
 }
+
+def VerifyXFEDialectPass
+    : Pass<"verify-xfe-dialect", "::mlir::func::FuncOp"> {
+  let summary = "Verify XFE dialect constraints on ONNX ops.";
+  let description = [{
+    Verifies that the ops inside a function match the XFE dialect constraints.
+    Currently implements a check for disallowed ops.
+  }];
+  let options = [
+    Option<"disallowedOps", "disallowed-ops", "std::string",
+           /*default=*/"\"Flatten,Squeeze,Unsqueeze\"",
+           "Comma-separated bare ONNX op names that must not appear. Skips ops with non-static shapes.">
+  ];
+}
