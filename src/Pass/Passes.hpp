@@ -134,6 +134,10 @@ std::unique_ptr<mlir::Pass> createONNXTransposeOptimizationPass();
 /// Pass to combine two transpose with same input and same perm.
 std::unique_ptr<mlir::Pass> createCombineTransposePairPass();
 
+/// Pass to duplicate a fan-out Transpose so each consumer gets its own copy
+/// (inverse of CombineTransposePair; matches xmodel per-branch transposes).
+std::unique_ptr<mlir::Pass> createDuplicateTransposeForEachConsumerPass();
+
 /// Pass to remove redundant Transpose-Reshape-Transpose sequences.
 std::unique_ptr<mlir::Pass> createRemoveContinuousTransposeWithReshapePass();
 

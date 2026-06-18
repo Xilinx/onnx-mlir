@@ -131,6 +131,12 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
 
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createAddRequantForOutputConvPass());
+  // Materialize a private Transpose per consumer for fan-out transposes, to
+  // match the xmodel/VAIP layout (e.g. the shared QKV-split transpose feeding
+  // the Q/K/V strided_slice ops in attention). Must stay after
+  // CombineTransposePair/CSE so the copies are not merged back.
+  pm.addNestedPass<func::FuncOp>(
+      onnx_mlir::createDuplicateTransposeForEachConsumerPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
 }
 
