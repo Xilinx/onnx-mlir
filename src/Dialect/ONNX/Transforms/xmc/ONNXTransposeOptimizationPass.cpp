@@ -2001,7 +2001,9 @@ struct ONNXTransposeOptimizationPass
     // patterns.add<PushTransposeThroughWhere>(context);
 
     patterns.add<PushTransposeThroughAxisOp<ONNXPadOp>>(context);
-    patterns.add<PushTransposeThroughAxisOp<ONNXSliceOp>>(context);
+    // Disabled: pushing transpose through Slice folds away the reshape that the
+    // xmodel flow keeps around strided_slice. Keep Slice transposes intact.
+    // patterns.add<PushTransposeThroughAxisOp<ONNXSliceOp>>(context);
     patterns.add<PushTransposeThroughAxisOp<ONNXTileOp>>(context);
     patterns.add<PushTransposeThroughAxisOp<ONNXExpandOp>>(context);
 
