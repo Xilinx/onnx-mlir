@@ -330,15 +330,14 @@ static llvm::cl::opt<bool, true>
         llvm::cl::location(enableConvTranspose1dDecomposeToPhasedConv),
         llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
 
-static llvm::cl::opt<bool, true>
-    enableSeparatePhasedConvsForConvTransposeOpt(
-        "enable-separate-phased-convs-for-convtranspose",
-        llvm::cl::desc(
-            "In 4-phase ConvTranspose decomposition, force 4 separate Conv "
-            "ops (concatenated) instead of combining the phased weights into "
-            "a single Conv, when the conv output channels are DMA-aligned."),
-        llvm::cl::location(enableSeparatePhasedConvsForConvTranspose),
-        llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
+static llvm::cl::opt<bool, true> enableSeparatePhasedConvsForConvTransposeOpt(
+    "enable-separate-phased-convs-for-convtranspose",
+    llvm::cl::desc(
+        "In 4-phase ConvTranspose decomposition, force 4 separate Conv "
+        "ops (concatenated) instead of combining the phased weights into "
+        "a single Conv, when the conv output channels are DMA-aligned."),
+    llvm::cl::location(enableSeparatePhasedConvsForConvTranspose),
+    llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true> enableQuarkQuantizerLegalizationOptionOpt(
     "enable-quark-quantizer-legalization",
