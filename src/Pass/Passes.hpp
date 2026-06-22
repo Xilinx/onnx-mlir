@@ -35,9 +35,6 @@ namespace onnx_mlir {
 #include "src/Dialect/ONNX/Transforms/Passes.h.inc"
 #undef GEN_PASS_DECL
 
-[[nodiscard]] std::optional<ONNXHybridTransformPassOptions>
-parseONNXHybridTransformPassOptions(const std::string &options);
-
 /// Pass for removing DisposableElementsAttr attributes.
 std::unique_ptr<mlir::Pass> createScrubDisposablePass(bool closeAfter = true);
 
