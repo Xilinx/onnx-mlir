@@ -66,41 +66,6 @@ namespace onnx_mlir {
 // OMCompilerOptions (see Decompose.hpp for the rationale).
 bool separatePhasedConvsForConvTransposeActive = false;
 
-// Create an DenseElementsAttr of ArrayAttr.
-// This function is used to get Value Type of an EXISTING ArrayAttr for Scaler
-// function.
-DenseElementsAttr createDenseArrayAttr(
-    PatternRewriter &rewriter, ArrayAttr origAttrs) {
-  assert(origAttrs && "handle EXISTING ArrayAttr only");
-
-  if (mlir::dyn_cast<FloatAttr>(origAttrs.getValue()[0])) {
-    Type elementType = rewriter.getF32Type();
-    int nElements = origAttrs.getValue().size();
-    SmallVector<float, 4> wrapper(nElements, 0);
-    for (int i = 0; i < nElements; ++i)
-      wrapper[i] =
-          mlir::cast<FloatAttr>(origAttrs.getValue()[i]).getValueAsDouble();
-
-    return DenseElementsAttr::get(
-        RankedTensorType::get(wrapper.size(), elementType),
-        llvm::ArrayRef(wrapper));
-  }
-
-  if (mlir::dyn_cast<IntegerAttr>(origAttrs.getValue()[0])) {
-    Type elementType = rewriter.getIntegerType(64);
-    int nElements = origAttrs.getValue().size();
-    SmallVector<int64_t, 4> wrapper(nElements, 0);
-    for (int i = 0; i < nElements; ++i)
-      wrapper[i] = mlir::cast<IntegerAttr>(origAttrs.getValue()[i]).getInt();
-
-    return DenseElementsAttr::get(
-        RankedTensorType::get(wrapper.size(), elementType),
-        llvm::ArrayRef(wrapper));
-  }
-
-  llvm_unreachable("unexpected attribute type");
-}
-
 /// Create an Scalar DenseElementsAttr from FloatAttr or IntegerAttr.
 /// This is used to create an ONNXConstant of rank 0, e.g. tensor<f32>.
 DenseElementsAttr createScalarDenseAttr(
