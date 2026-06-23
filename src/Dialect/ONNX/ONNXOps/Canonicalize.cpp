@@ -27,12 +27,15 @@
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
 #include "src/Dialect/Mlir/DialectBuilder.hpp"
@@ -50,6 +53,9 @@ static bool disableBatchNormDecompose = false;
 
 // Populated by configureUnsafeMathCanonicalization().
 static bool enableUnsafeMath = true;
+
+// Populated by configureQDQDataMovementCanonicalization().
+static bool enableQDQDataMovementCanonicalization = false;
 
 using namespace mlir;
 using namespace onnx_mlir;
@@ -3641,6 +3647,194 @@ public:
     return success();
   }
 };
+namespace {
+bool hasScalarConstantQDQParams(ONNXDequantizeLinearOp op) {
+  return isScalarConstantTensor(op.getXScale()) &&
+         isScalarConstantTensor(op.getXZeroPoint());
+}
+
+bool hasScalarConstantQDQParams(ONNXQuantizeLinearOp op) {
+  return isScalarConstantTensor(op.getYScale()) &&
+         isScalarConstantTensor(op.getYZeroPoint());
+}
+
+bool sameConstantValue(Value lhs, Value rhs) {
+  ElementsAttr lhsAttr = getElementAttributeFromONNXValue(lhs);
+  ElementsAttr rhsAttr = getElementAttributeFromONNXValue(rhs);
+  return lhsAttr && rhsAttr &&
+         compareValueFromElementAttribute(lhsAttr, rhsAttr);
+}
+
+bool haveSamePerTensorQuantizationParams(
+    ONNXDequantizeLinearOp lhs, ONNXDequantizeLinearOp rhs) {
+  return hasScalarConstantQDQParams(lhs) && hasScalarConstantQDQParams(rhs) &&
+         sameConstantValue(lhs.getXScale(), rhs.getXScale()) &&
+         sameConstantValue(lhs.getXZeroPoint(), rhs.getXZeroPoint()) &&
+         getElementType(lhs.getX().getType()) ==
+             getElementType(rhs.getX().getType()) &&
+         getElementType(lhs.getY().getType()) ==
+             getElementType(rhs.getY().getType());
+}
+
+void getDataInputs(Operation *op, SmallVectorImpl<Value> &dataInputs) {
+  llvm::TypeSwitch<Operation *>(op)
+      .Case<ONNXConcatOp>([&](ONNXConcatOp concatOp) {
+        llvm::copy(concatOp.getInputs(), std::back_inserter(dataInputs));
+      })
+      .Case<ONNXExpandOp, ONNXPadOp, ONNXReshapeOp, ONNXSliceOp, ONNXTileOp,
+          ONNXTransposeOp>([&](Operation *movementOp) {
+        dataInputs.push_back(movementOp->getOperand(0));
+      });
+}
+
+bool doesDataMovementOpUseQuantizedElementType(Operation *op) {
+  for (Value operand : op->getOperands())
+    if (onnx_mlir::hasQuantizedElementType(operand))
+      return true;
+  for (Value result : op->getResults())
+    if (onnx_mlir::hasQuantizedElementType(result))
+      return true;
+  return false;
+}
+
+LogicalResult hasSupportedQDQMovementSemantics(
+    Operation *op, PatternRewriter &rewriter) {
+  if (auto padOp = dyn_cast<ONNXPadOp>(op)) {
+    // Constant-mode Pad needs fill-value quantization, not implemented yet
+    if (padOp.getMode() == "constant" || !isNoneValue(padOp.getConstantValue()))
+      return rewriter.notifyMatchFailure(
+          padOp, "constant-mode Pad movement needs fill value quantization");
+    return success();
+  }
+
+  if (isa<ONNXConcatOp, ONNXExpandOp, ONNXReshapeOp, ONNXSliceOp, ONNXTileOp,
+          ONNXTransposeOp>(op))
+    return success();
+
+  return rewriter.notifyMatchFailure(
+      op, "QDQ movement semantics are not explicitly supported for this op");
+}
+
+} // namespace
+
+template <typename T>
+class SinkDequantLinearOpAfterDataMovementOp : public OpRewritePattern<T> {
+public:
+  using OpRewritePattern<T>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      T op, PatternRewriter &rewriter) const override {
+
+    if (failed(hasSupportedQDQMovementSemantics(op.getOperation(), rewriter)))
+      return failure();
+    if (doesDataMovementOpUseQuantizedElementType(op.getOperation()))
+      return rewriter.notifyMatchFailure(
+          op, "data movement op uses quantized element types");
+
+    SmallVector<Value> dataInputs;
+    getDataInputs(op.getOperation(), dataInputs);
+
+    IRMapping mapping;
+    ONNXDequantizeLinearOp commonDQOp;
+    SmallVector<Location> fusedLoc{op.getLoc()};
+    for (Value dataInput : dataInputs) {
+      auto dqOp = dataInput.getDefiningOp<ONNXDequantizeLinearOp>();
+      if (!dqOp || !hasScalarConstantQDQParams(dqOp))
+        return rewriter.notifyMatchFailure(
+            op, "data input is not per-tensor DequantizeLinear");
+      if (commonDQOp && !haveSamePerTensorQuantizationParams(commonDQOp, dqOp))
+        return rewriter.notifyMatchFailure(
+            op, "data input DequantizeLinear parameters differ by value");
+      commonDQOp = commonDQOp ? commonDQOp : dqOp;
+      fusedLoc.push_back(dqOp.getLoc());
+      mapping.map(dqOp.getY(), dqOp.getX());
+    }
+    if (!commonDQOp)
+      return rewriter.notifyMatchFailure(op, "no DequantizeLinear inputs");
+
+    SmallVector<Value> newInputs;
+    for (Value operand : op->getOperands())
+      newInputs.push_back(mapping.lookupOrDefault(operand));
+
+    auto opShapedType = dyn_cast<ShapedType>(op.getType());
+    if (!opShapedType)
+      return rewriter.notifyMatchFailure(op, "op result is not shaped");
+
+    const Location newLoc = rewriter.getFusedLoc(fusedLoc);
+    auto newOp = rewriter.create<T>(newLoc,
+        TypeRange{
+            opShapedType.clone(getElementType(commonDQOp.getX().getType()))},
+        ValueRange{newInputs}, op->getAttrs());
+
+    auto newDQOp = rewriter.create<ONNXDequantizeLinearOp>(newLoc, op.getType(),
+        newOp.getResult(), commonDQOp.getXScale(), commonDQOp.getXZeroPoint(),
+        commonDQOp.getAxisAttr(), commonDQOp.getBlockSizeAttr());
+
+    rewriter.replaceOp(op, newDQOp.getResult());
+    return success();
+  }
+};
+
+template <typename T>
+class BubbleUpQuantLinearOpBeforeDataMovementOp
+    : public OpRewritePattern<ONNXQuantizeLinearOp> {
+public:
+  using OpRewritePattern<ONNXQuantizeLinearOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXQuantizeLinearOp quantOp, PatternRewriter &rewriter) const override {
+    auto dataMovementOp = quantOp.getX().getDefiningOp<T>();
+    if (!dataMovementOp)
+      return rewriter.notifyMatchFailure(
+          quantOp, "QuantizeLinear input is not a supported data movement op");
+
+    Value dataMovementResult = quantOp.getX();
+    if (!dataMovementResult.hasOneUse())
+      return rewriter.notifyMatchFailure(
+          quantOp, "data movement result has multiple users");
+    if (!hasScalarConstantQDQParams(quantOp))
+      return rewriter.notifyMatchFailure(
+          quantOp, "QuantizeLinear parameters are not per-tensor constants");
+    if (failed(hasSupportedQDQMovementSemantics(
+            dataMovementOp.getOperation(), rewriter)))
+      return failure();
+    if (doesDataMovementOpUseQuantizedElementType(
+            dataMovementOp.getOperation()))
+      return rewriter.notifyMatchFailure(
+          quantOp, "data movement op uses quantized element types");
+
+    SmallVector<Value> dataInputs;
+    getDataInputs(dataMovementOp.getOperation(), dataInputs);
+
+    Type quantizedElementType = getElementType(quantOp.getY().getType());
+    IRMapping mapping;
+    SmallVector<Location> fusedLoc{quantOp.getLoc(), dataMovementOp.getLoc()};
+    const Location newLoc = rewriter.getFusedLoc(fusedLoc);
+    for (Value dataInput : dataInputs) {
+      auto dataInputShapedType = dyn_cast<ShapedType>(dataInput.getType());
+      if (!dataInputShapedType)
+        return rewriter.notifyMatchFailure(
+            quantOp, "data movement input is not shaped");
+
+      auto newQOp = rewriter.create<ONNXQuantizeLinearOp>(newLoc,
+          dataInputShapedType.clone(quantizedElementType), dataInput,
+          quantOp.getYScale(), quantOp.getYZeroPoint(), quantOp.getAxisAttr(),
+          quantOp.getBlockSizeAttr(), quantOp.getOutputDtypeAttr(),
+          quantOp.getSaturateAttr());
+      mapping.map(dataInput, newQOp.getResult());
+    }
+
+    SmallVector<Value> newInputs;
+    for (Value operand : dataMovementOp->getOperands())
+      newInputs.push_back(mapping.lookupOrDefault(operand));
+
+    auto newOp = rewriter.create<T>(newLoc, TypeRange{quantOp.getType()},
+        ValueRange{newInputs}, dataMovementOp->getAttrs());
+
+    rewriter.replaceOp(quantOp, newOp.getResult());
+    return success();
+  }
+};
 
 // =============================================================================
 /// Register optimization patterns as "canonicalization" patterns.
@@ -4055,6 +4249,27 @@ void ONNXWhereOp::getCanonicalizationPatterns(
 void ONNXDequantizeLinearOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {}
 
+void onnx_mlir::populateQDQDataMovementCanonicalizationPatterns(
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<SinkDequantLinearOpAfterDataMovementOp<ONNXConcatOp>,
+      SinkDequantLinearOpAfterDataMovementOp<ONNXExpandOp>,
+      SinkDequantLinearOpAfterDataMovementOp<ONNXPadOp>,
+      SinkDequantLinearOpAfterDataMovementOp<ONNXReshapeOp>,
+      SinkDequantLinearOpAfterDataMovementOp<ONNXSliceOp>,
+      SinkDequantLinearOpAfterDataMovementOp<ONNXTileOp>,
+      SinkDequantLinearOpAfterDataMovementOp<ONNXTransposeOp>>(
+      patterns.getContext(), benefit);
+
+  patterns.add<BubbleUpQuantLinearOpBeforeDataMovementOp<ONNXConcatOp>,
+      BubbleUpQuantLinearOpBeforeDataMovementOp<ONNXExpandOp>,
+      BubbleUpQuantLinearOpBeforeDataMovementOp<ONNXPadOp>,
+      BubbleUpQuantLinearOpBeforeDataMovementOp<ONNXReshapeOp>,
+      BubbleUpQuantLinearOpBeforeDataMovementOp<ONNXSliceOp>,
+      BubbleUpQuantLinearOpBeforeDataMovementOp<ONNXTileOp>,
+      BubbleUpQuantLinearOpBeforeDataMovementOp<ONNXTransposeOp>>(
+      patterns.getContext(), benefit);
+}
+
 void onnx_mlir::configureBatchNormCanonicalization(
     bool disableBatchNormDecomposeOption) {
   disableBatchNormDecompose = disableBatchNormDecomposeOption;
@@ -4063,4 +4278,14 @@ void onnx_mlir::configureBatchNormCanonicalization(
 void onnx_mlir::configureUnsafeMathCanonicalization(
     bool enableUnsafeMathOptimizations) {
   enableUnsafeMath = enableUnsafeMathOptimizations;
+}
+
+void onnx_mlir::configureQDQDataMovementCanonicalization(
+    bool enableQDQDataMovementCanonicalizationOption) {
+  enableQDQDataMovementCanonicalization =
+      enableQDQDataMovementCanonicalizationOption;
+}
+
+bool onnx_mlir::isQDQDataMovementCanonicalizationEnabled() {
+  return enableQDQDataMovementCanonicalization;
 }

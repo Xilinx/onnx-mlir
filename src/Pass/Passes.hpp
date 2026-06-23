@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 
+#include "mlir/IR/PatternMatch.h"
 #include "llvm/ADT/ArrayRef.h"
 
 namespace mlir {
@@ -65,6 +66,15 @@ void configureBatchNormCanonicalization(bool disableBatchNormDecompose);
 
 // Configure patterns that are not numerically safe.
 void configureUnsafeMathCanonicalization(bool enableUnsafeMathOptimizations);
+
+// Configure QDQ canonicalizations for data-movement/view ONNX ops.
+void configureQDQDataMovementCanonicalization(
+    bool enableQDQDataMovementCanonicalization);
+
+bool isQDQDataMovementCanonicalizationEnabled();
+
+void populateQDQDataMovementCanonicalizationPatterns(
+    mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
 
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(
     bool enableQDQ = false);
