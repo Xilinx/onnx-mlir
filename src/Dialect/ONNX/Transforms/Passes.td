@@ -166,4 +166,6 @@ def ONNXHybridTransformPass
 
   let options =
       ONNXHybridTransformOptions.options # ONNXDecomposePatternOptions.options;
+
+  let genOptionsParser = 1;
 }
