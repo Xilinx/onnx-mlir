@@ -82,7 +82,13 @@ func.func @test_quantized_sub_relu(%arg0: tensor<1x4x8x8x!quant.uniform<u8:f32, 
 }
 
 // -----
-// Test Pattern 2: Add + LeakyReLU with quantized types
+// Test Pattern 2: Add + LeakyReLU with quantized (integer) types.
+// Integer add + leaky-relu is NOT fused: this mirrors xcompiler's
+// ReplaceQDQEltwisePass, whose integer eltwise+activation template
+// (get_template_with_relu) excludes leaky-relu (leaky-relu is only fused via
+// the float/bf16 bridge). Fusing it in the integer path would force a
+// fixed-point PReLU-slope approximation (alpha 0.1 -> 26/256) that diverges
+// from the float reference, so the Add and LeakyRelu are left unfused.
 // CHECK-LABEL: func.func @test_quantized_add_leakyrelu
 func.func @test_quantized_add_leakyrelu(%arg0: tensor<1x16x32x32x!quant.uniform<u8:f32, 0.08:128>>,
                                          %arg1: tensor<1x16x32x32x!quant.uniform<u8:f32, 0.08:128>>)
@@ -99,14 +105,39 @@ func.func @test_quantized_add_leakyrelu(%arg0: tensor<1x16x32x32x!quant.uniform<
 
   return %leaky : tensor<1x16x32x32x!quant.uniform<u8:f32, 0.08:128>>
 
-  // CHECK: "onnx.XCOMPILERFusedEltwise"(%arg0, %arg1)
-  // CHECK-SAME: leakyrelu_alpha = 1.000000e-01
-  // CHECK-SAME: nonlinear = "LEAKYRELU"
-  // CHECK-SAME: prelu_in = 26 : si64
-  // CHECK-SAME: prelu_shift = 8 : si64
-  // CHECK-SAME: type = "ADD"
-  // CHECK-NOT: "onnx.Add"
-  // CHECK-NOT: "onnx.LeakyRelu"
+  // CHECK: %[[ADD:.*]] = "onnx.Add"(%arg0, %arg1)
+  // CHECK: "onnx.LeakyRelu"(%[[ADD]])
+  // CHECK-NOT: "onnx.XCOMPILERFusedEltwise"
+  // CHECK-NOT: nonlinear = "LEAKYRELU"
+}
+
+// -----
+// Test Pattern 2: Add + LeakyReLU at the f32 mixed-precision boundary.
+// The eltwise inputs are quantized (i16) but the Add result is f32 (the
+// pre-quant-types boundary), and the LeakyRelu bridges back to i16. This is
+// the real pipeline shape that previously slipped through the integer-only
+// guard. Leaky-relu must still NOT be fused (only relu fuses at this
+// boundary), so the Add and LeakyRelu remain separate.
+// CHECK-LABEL: func.func @test_quantized_add_leakyrelu_f32_boundary
+func.func @test_quantized_add_leakyrelu_f32_boundary(
+    %arg0: tensor<1x16x32x32x!quant.uniform<i16:f32, 0.08:0>>,
+    %arg1: tensor<1x16x32x32x!quant.uniform<i16:f32, 0.08:0>>)
+    -> tensor<1x16x32x32x!quant.uniform<i16:f32, 0.09:0>> {
+
+  %add = "onnx.Add"(%arg0, %arg1) :
+      (tensor<1x16x32x32x!quant.uniform<i16:f32, 0.08:0>>,
+       tensor<1x16x32x32x!quant.uniform<i16:f32, 0.08:0>>)
+      -> tensor<1x16x32x32xf32>
+
+  %leaky = "onnx.LeakyRelu"(%add) {alpha = 0.1 : f32} :
+      (tensor<1x16x32x32xf32>)
+      -> tensor<1x16x32x32x!quant.uniform<i16:f32, 0.09:0>>
+
+  return %leaky : tensor<1x16x32x32x!quant.uniform<i16:f32, 0.09:0>>
+
+  // CHECK: %[[ADD:.*]] = "onnx.Add"(%arg0, %arg1)
+  // CHECK: "onnx.LeakyRelu"(%[[ADD]])
+  // CHECK-NOT: nonlinear = "LEAKYRELU"
 }
 
 // -----

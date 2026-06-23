@@ -707,6 +707,11 @@ struct FuseQuantizedEltwiseActivation : public OpRewritePattern<ActivationOp> {
       return rewriter.notifyMatchFailure(
           activationOp, "activation output not quantized");
 
+    if (std::is_same<ActivationOp, ONNXLeakyReluOp>::value)
+      return rewriter.notifyMatchFailure(activationOp,
+          "leaky-relu is not fused into an eltwise here (matches xcompiler "
+          "get_template_with_relu); bf16 bridge is handled separately");
+
     // When eltwise output is quantized, verify scale/zp consistency with
     // activation output. If they differ, there's an implicit requantization
     // that would be lost by fusing. When eltwise output is f32, skip this
