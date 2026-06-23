@@ -35,6 +35,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
 #include "src/Dialect/Mlir/DialectBuilder.hpp"
@@ -3676,34 +3677,15 @@ bool haveSamePerTensorQuantizationParams(
              getElementType(rhs.getY().getType());
 }
 
-void getDataInputs(ONNXConcatOp concatOp, SmallVectorImpl<Value> &dataInputs) {
-  llvm::copy(concatOp.getInputs(), std::back_inserter(dataInputs));
-}
-
-void getDataInputs(ONNXExpandOp expandOp, SmallVectorImpl<Value> &dataInputs) {
-  dataInputs.push_back(expandOp.getInput());
-}
-
-void getDataInputs(ONNXPadOp padOp, SmallVectorImpl<Value> &dataInputs) {
-  dataInputs.push_back(padOp.getData());
-}
-
-void getDataInputs(
-    ONNXReshapeOp reshapeOp, SmallVectorImpl<Value> &dataInputs) {
-  dataInputs.push_back(reshapeOp.getData());
-}
-
-void getDataInputs(ONNXSliceOp sliceOp, SmallVectorImpl<Value> &dataInputs) {
-  dataInputs.push_back(sliceOp.getData());
-}
-
-void getDataInputs(ONNXTileOp tileOp, SmallVectorImpl<Value> &dataInputs) {
-  dataInputs.push_back(tileOp.getInput());
-}
-
-void getDataInputs(
-    ONNXTransposeOp transposeOp, SmallVectorImpl<Value> &dataInputs) {
-  dataInputs.push_back(transposeOp.getData());
+void getDataInputs(Operation *op, SmallVectorImpl<Value> &dataInputs) {
+  llvm::TypeSwitch<Operation *>(op)
+      .Case<ONNXConcatOp>([&](ONNXConcatOp concatOp) {
+        llvm::copy(concatOp.getInputs(), std::back_inserter(dataInputs));
+      })
+      .Case<ONNXExpandOp, ONNXPadOp, ONNXReshapeOp, ONNXSliceOp, ONNXTileOp,
+          ONNXTransposeOp>([&](Operation *movementOp) {
+        dataInputs.push_back(movementOp->getOperand(0));
+      });
 }
 
 bool doesDataMovementOpUseQuantizedElementType(Operation *op) {
@@ -3751,7 +3733,7 @@ public:
           op, "data movement op uses quantized element types");
 
     SmallVector<Value> dataInputs;
-    getDataInputs(op, dataInputs);
+    getDataInputs(op.getOperation(), dataInputs);
 
     IRMapping mapping;
     ONNXDequantizeLinearOp commonDQOp;
@@ -3823,7 +3805,7 @@ public:
           quantOp, "data movement op uses quantized element types");
 
     SmallVector<Value> dataInputs;
-    getDataInputs(dataMovementOp, dataInputs);
+    getDataInputs(dataMovementOp.getOperation(), dataInputs);
 
     Type quantizedElementType = getElementType(quantOp.getY().getType());
     IRMapping mapping;
