@@ -237,7 +237,7 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     OnnxToMlirOptions opts;
     std::string error;
     llvm::raw_string_ostream errorStream(error);
-    auto errorHandler = [&](const Twine &message) {
+    auto errorHandler = [&errorStream](const Twine &message) {
       errorStream << message;
       return failure();
     };
