@@ -858,19 +858,88 @@ public:
       if (!state.dstNode)
         return rewriter.notifyMatchFailure(op, "dstNode not set");
 
-      if constexpr (std::is_same_v<BinOp, ONNXAddOp> ||
-                    std::is_same_v<BinOp, ONNXSubOp>) {
-        // Update zero-point (for Add/Sub)
-        updateInitializer(rewriter, state.dstNode, state.dstZeroPointValue,
-            static_cast<double>(state.newZp));
-      } else if constexpr (std::is_same_v<BinOp, ONNXMulOp> ||
-                           std::is_same_v<BinOp, ONNXDivOp>) {
-        // Update scale (for Mul/Div)
-        updateInitializer(
-            rewriter, state.dstNode, state.dstScaleValue, state.newScale);
+      // Check if we're folding into a DQ that has multiple users
+      // If so, we need to duplicate the DQ before updating its scale
+      bool needDqDuplication = false;
+      ONNXDequantizeLinearOp dqToDuplicate = nullptr;
+      if (auto dstDq = llvm::dyn_cast<ONNXDequantizeLinearOp>(state.dstNode)) {
+        // Check if the DQ output has multiple users (excluding the binary op)
+        auto dqResult = dstDq.getY();
+        int userCount = 0;
+        for (auto *user : dqResult.getUsers()) {
+          if (user != op.getOperation()) {
+            userCount++;
+          }
+        }
+        if (userCount > 0) {
+          needDqDuplication = true;
+          dqToDuplicate = dstDq;
+        }
+      }
+
+      if (needDqDuplication && dqToDuplicate) {
+        // Duplicate the DQ operation with updated scale/zero-point
+        OpBuilder::InsertionGuard guard(rewriter);
+        rewriter.setInsertionPointAfter(dqToDuplicate);
+
+        // Create new scale/zero-point constants with updated values
+        mlir::Value newScaleValue = state.dstScaleValue;
+        mlir::Value newZpValue = state.dstZeroPointValue;
+
+        if constexpr (std::is_same_v<BinOp, ONNXAddOp> ||
+                      std::is_same_v<BinOp, ONNXSubOp>) {
+          // Create new zero-point constant
+          auto zpLikeTy = mlir::dyn_cast<ShapedType>(state.dstZeroPointValue.getType());
+          if (zpLikeTy) {
+            auto zpPayload = makeScalarDEA(zpLikeTy, static_cast<double>(state.newZp));
+            if (zpPayload) {
+              auto newZpCst = rewriter.create<ONNXConstantOp>(
+                  dqToDuplicate.getLoc(), mlir::Attribute(), zpPayload);
+              newZpValue = newZpCst.getOutput();
+            }
+          }
+        } else if constexpr (std::is_same_v<BinOp, ONNXMulOp> ||
+                             std::is_same_v<BinOp, ONNXDivOp>) {
+          // Create new scale constant
+          auto scaleLikeTy = mlir::dyn_cast<ShapedType>(state.dstScaleValue.getType());
+          if (scaleLikeTy) {
+            auto scalePayload = makeScalarDEA(scaleLikeTy, state.newScale);
+            if (scalePayload) {
+              auto newScaleCst = rewriter.create<ONNXConstantOp>(
+                  dqToDuplicate.getLoc(), mlir::Attribute(), scalePayload);
+              newScaleValue = newScaleCst.getOutput();
+            }
+          }
+        }
+
+        // Create the duplicated DQ with updated parameters
+        auto newDq = rewriter.create<ONNXDequantizeLinearOp>(
+            dqToDuplicate.getLoc(),
+            dqToDuplicate.getY().getType(),
+            dqToDuplicate.getX(),
+            newScaleValue,
+            newZpValue,
+            dqToDuplicate.getAxisAttr(),
+            dqToDuplicate.getBlockSizeAttr());
+
+        // Update state to use the duplicated DQ for the binary op replacement
+        state.dequantActivationOfBinOp = newDq;
+      } else {
+        // No duplication needed, update in place
+        if constexpr (std::is_same_v<BinOp, ONNXAddOp> ||
+                      std::is_same_v<BinOp, ONNXSubOp>) {
+          // Update zero-point (for Add/Sub)
+          updateInitializer(rewriter, state.dstNode, state.dstZeroPointValue,
+              static_cast<double>(state.newZp));
+        } else if constexpr (std::is_same_v<BinOp, ONNXMulOp> ||
+                             std::is_same_v<BinOp, ONNXDivOp>) {
+          // Update scale (for Mul/Div)
+          updateInitializer(
+              rewriter, state.dstNode, state.dstScaleValue, state.newScale);
+        }
       }
     }
-
+    
     // STEP 7: Remove binary op
     rewriter.replaceOp(op, state.dequantActivationOfBinOp.getResult());
 
