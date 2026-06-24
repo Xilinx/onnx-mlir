@@ -68,6 +68,8 @@ void configurePasses() {
       onnxConstPropExpansionBound, onnxConstPropDisablePatterns,
       disableConstantProp);
   configureUnsafeMathCanonicalization(enableUnsafeMathOptimizations);
+  configureQDQDataMovementCanonicalization(
+      enableQDQDataMovementCanonicalization);
 #ifdef ONNX_MLIR_ENABLE_KRNL
   configureOnnxToKrnlLoweringPass(optReport == OptReport::Parallel,
       enableParallel, parallelizeOps, optReport == OptReport::Simd,
@@ -235,15 +237,28 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
   //       the CPU specific transformations.
   if (inputIRLevel <= ONNXLevel && emissionTarget >= EmitONNXIR) {
     OnnxToMlirOptions opts;
-    if (auto parsed = parseONNXHybridTransformPassOptions(onnxTransformOptions))
+    std::string error;
+    llvm::raw_string_ostream errorStream(error);
+    auto errorHandler = [&errorStream](const Twine &message) {
+      errorStream << message;
+      return failure();
+    };
+    if (auto parsed = parseONNXHybridTransformPassOptions(
+            onnxTransformOptions, errorHandler);
+        succeeded(parsed))
       opts.hybrid = std::move(*parsed);
-    else
-      llvm::report_fatal_error("failed to parse --onnx-transform-options");
+    else {
+      llvm::report_fatal_error(
+          llvm::Twine("invalid --onnx-transform-options: ") +
+          errorStream.str());
+    }
     opts.hybrid.quarkQuantizedOpsLegalization =
         enableQuarkQuantizedLegalization;
     opts.hybrid.recomposition &= !disableRecomposeOption;
     opts.disableBatchNormDecompose = disableBatchNormDecompose;
     opts.enableUnsafeMathOptimizations = enableUnsafeMathOptimizations;
+    opts.enableQDQDataMovementCanonicalization =
+        enableQDQDataMovementCanonicalization;
     opts.enableONNXHybridPass = enableONNXHybridPass;
     opts.enableConvOptPass = enableConvOptPass;
     opts.enableSimdDataLayout = enableSimdDataLayout;

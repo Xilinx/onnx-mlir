@@ -36,6 +36,7 @@ struct OnnxToMlirOptions {
   bool enableReshapeCanonicalization = true;
   bool enableVerifyXFEDialect = true;
   bool enableUnsafeMathOptimizations = true;
+  bool enableQDQDataMovementCanonicalization = false;
   bool enableONNXHybridPass = true;
   bool enableConvOptPass = true;
   bool enableSimdDataLayout = false;

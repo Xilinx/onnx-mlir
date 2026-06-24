@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 
+#include "mlir/IR/PatternMatch.h"
 #include "llvm/ADT/ArrayRef.h"
 
 namespace mlir {
@@ -34,9 +35,6 @@ namespace onnx_mlir {
 #define GEN_PASS_DECL
 #include "src/Dialect/ONNX/Transforms/Passes.h.inc"
 #undef GEN_PASS_DECL
-
-[[nodiscard]] std::optional<ONNXHybridTransformPassOptions>
-parseONNXHybridTransformPassOptions(const std::string &options);
 
 /// Pass for removing DisposableElementsAttr attributes.
 std::unique_ptr<mlir::Pass> createScrubDisposablePass(bool closeAfter = true);
@@ -70,11 +68,20 @@ void configureUnsafeMathCanonicalization(bool enableUnsafeMathOptimizations);
 // enabled.
 void configureReshapeCanonicalization(bool enableReshapeCanonicalization);
 
+// Configure QDQ canonicalizations for data-movement/view ONNX ops.
+void configureQDQDataMovementCanonicalization(
+    bool enableQDQDataMovementCanonicalization);
+
+bool isQDQDataMovementCanonicalizationEnabled();
+
+void populateQDQDataMovementCanonicalizationPatterns(
+    mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
+
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(
     bool enableQDQ = false);
 
-std::unique_ptr<mlir::Pass> createQDQCanonicalizePass(
-    bool removeBinary = false, bool removeQDQAroundOps = false);
+std::unique_ptr<mlir::Pass> createQDQCanonicalizePass(bool removeBinary = false,
+    bool removeQDQAroundOps = false, int64_t maxRoundTripDiff = 0);
 
 std::unique_ptr<mlir::Pass> createFoldQuantizedBinary();
 
@@ -180,6 +187,11 @@ std::unique_ptr<mlir::Pass> createReplaceTanhToGeluPass();
 /// Pass for replacing quantized Sigmoid with XCOMPILERFusedEltwise
 /// QLINEARSIGMOID.
 std::unique_ptr<mlir::Pass> createReplaceQDQSigmoidPass();
+
+/// Pass for folding batch on quantized onnx.XCOMPILERFusedEltwise into
+/// reshape + eltwise + reshape (XMC; aligns with xcompiler batch-eltwise
+/// transfer).
+std::unique_ptr<mlir::Pass> createTransferBatchXCompilerFusedEltwisePass();
 
 /// Pass for transferring ReduceMean/Sum operations to Conv operations.
 std::unique_ptr<mlir::Pass> createTransferReduceMeanSumToConvPass();
@@ -320,6 +332,9 @@ std::unique_ptr<mlir::Pass> createPropagateQuantTypeThroughDataFlowPass();
 /// `OptimizeOnnxRequantizationPass`'s op set plus the extra shape-only ops
 /// Squeeze / SqueezeV11 / Unsqueeze / UnsqueezeV11 / Flatten / Identity.
 std::unique_ptr<mlir::Pass> createXmcRequantizePass();
+
+/// Pass that removes a no-op XCOMPILERRequantize (input quant == output quant).
+std::unique_ptr<mlir::Pass> createRemoveNoOpRequantizePass();
 
 /// Pass for splitting group convolutions (XMC).
 std::unique_ptr<mlir::Pass> createSplitGroupConvPass();

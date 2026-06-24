@@ -76,43 +76,6 @@ struct ONNXHybridTransformPass
     copyOptionValuesFrom(&pass);
   }
 
-  // TODO: Remove once MLIR exposes a direct way to read a pass's option struct
-  // back from its Pass::Option<T> members.
-  [[nodiscard]] onnx_mlir::ONNXHybridTransformPassOptions getOptions() const {
-    onnx_mlir::ONNXHybridTransformPassOptions options;
-    options.shapeInference = shapeInference;
-    options.canonicalization = canonicalization;
-    options.constantPropagation = constantPropagation;
-    options.qdqConstProp = qdqConstProp;
-    options.decomposition = decomposition;
-    options.recomposition = recomposition;
-    options.quarkQuantizedOpsLegalization = quarkQuantizedOpsLegalization;
-    options.maxNumRewritesOffset = maxNumRewritesOffset;
-    options.maxNumRewritesMultiplier = maxNumRewritesMultiplier;
-    options.enableGAPToReduceMean = enableGAPToReduceMean;
-    options.enableRotaryEmbeddingRecompose = enableRotaryEmbeddingRecompose;
-    options.target = target;
-    options.enableConvTransposeDecompose = enableConvTransposeDecompose;
-    options.enableConvTransposeDecomposeToPhasedConv =
-        enableConvTransposeDecomposeToPhasedConv;
-    options.enableConvTranspose1dDecomposeToPhasedConv =
-        enableConvTranspose1dDecomposeToPhasedConv;
-    options.enableInstanceNormDecompose = enableInstanceNormDecompose;
-    options.enableGroupNormDecompose = enableGroupNormDecompose;
-    options.enableMatmulNBitsDecompose = enableMatmulNBitsDecompose;
-    options.enableGroupQueryAttentionDecompose =
-        enableGroupQueryAttentionDecompose;
-    options.enableSplitToSliceDecompose = enableSplitToSliceDecompose;
-    options.enableConcatFuse = enableConcatFuse;
-    options.enableLstmSeqDecompose = enableLstmSeqDecompose;
-    options.enableReduceL2Decompose = enableReduceL2Decompose;
-    options.enableGatherToSlice = enableGatherToSlice;
-    options.enableHardSwishDecompose = enableHardSwishDecompose;
-    options.enableGroupQueryAttentionCacheSlicing =
-        enableGroupQueryAttentionCacheSlicing;
-    return options;
-  }
-
   LogicalResult initialize(MLIRContext *context) override {
     RewritePatternSet cumulativePatterns(context);
 
@@ -147,6 +110,9 @@ struct ONNXHybridTransformPass
         }
         op.getCanonicalizationPatterns(cumulativePatterns, context);
       }
+
+      if (isQDQDataMovementCanonicalizationEnabled())
+        populateQDQDataMovementCanonicalizationPatterns(cumulativePatterns);
     }
 
     if (constantPropagation) {
@@ -218,23 +184,3 @@ struct ONNXHybridTransformPass
 }; // namespace
 
 } // namespace
-
-std::optional<onnx_mlir::ONNXHybridTransformPassOptions>
-onnx_mlir::parseONNXHybridTransformPassOptions(const std::string &options) {
-  ONNXHybridTransformPass pass;
-  if (options.empty())
-    return pass.getOptions();
-
-  std::string error;
-  llvm::raw_string_ostream errorStream(error);
-  auto errorHandler = [&](const Twine &message) {
-    errorStream << message;
-    return failure();
-  };
-  if (failed(pass.initializeOptions(options, errorHandler))) {
-    llvm::errs() << "invalid --onnx-transform-options: " << errorStream.str();
-    return std::nullopt;
-  }
-
-  return pass.getOptions();
-}
