@@ -3871,6 +3871,42 @@ public:
   }
 };
 
+/// Simplify Reshape(Cast(Reshape(x, s1)), s2) to Cast(x) when the outer
+/// Reshape's result shape equals the inner Reshape's input shape (i.e., the
+/// two Reshapes together form an identity).
+struct FuseCastBetweenReshapesPattern : public OpRewritePattern<ONNXReshapeOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(
+      ONNXReshapeOp outerReshape, PatternRewriter &rewriter) const final {
+    auto castOp = outerReshape.getData().getDefiningOp<ONNXCastOp>();
+    if (!castOp)
+      return rewriter.notifyMatchFailure(outerReshape, "input is not Cast");
+    auto innerReshape = castOp.getInput().getDefiningOp<ONNXReshapeOp>();
+    if (!innerReshape)
+      return rewriter.notifyMatchFailure(
+          outerReshape, "Cast input is not Reshape");
+    // Both result and inner input must be static ranked tensors with the
+    // same shape
+    auto outerTy =
+        mlir::dyn_cast<RankedTensorType>(outerReshape.getResult().getType());
+    auto innerInTy =
+        mlir::dyn_cast<RankedTensorType>(innerReshape.getData().getType());
+    if (!outerTy || !innerInTy)
+      return rewriter.notifyMatchFailure(outerReshape, "types not ranked");
+    if (!outerTy.hasStaticShape() || !innerInTy.hasStaticShape())
+      return rewriter.notifyMatchFailure(outerReshape, "types not static");
+    if (outerTy.getShape() != innerInTy.getShape())
+      return rewriter.notifyMatchFailure(
+          outerReshape, "outer result shape != inner input shape");
+    Location fusedLoc = rewriter.getFusedLoc(
+        {innerReshape.getLoc(), castOp.getLoc(), outerReshape.getLoc()});
+    Value newCast = rewriter.create<ONNXCastOp>(fusedLoc, outerTy,
+        innerReshape.getData(), castOp.getSaturateAttr(), castOp.getToAttr());
+    rewriter.replaceOp(outerReshape, newCast);
+    return success();
+  }
+};
+
 // =============================================================================
 /// Register optimization patterns as "canonicalization" patterns.
 /// Add op to OpsWithCanonicalizer in gen_onnx_mlir.py to activate.
@@ -4106,41 +4142,18 @@ void ONNXReduceMeanOp::getCanonicalizationPatterns(
   result.insert<DropUnitAxesFromReduceMeanPattern>(context);
 }
 
-/// Simplify Reshape(Cast(Reshape(x, s1)), s2) to Cast(x) when the outer
-/// Reshape's result shape equals the inner Reshape's input shape (i.e., the
-/// two Reshapes together form an identity).
-struct FuseCastBetweenReshapesPattern : public OpRewritePattern<ONNXReshapeOp> {
-  using OpRewritePattern::OpRewritePattern;
-  LogicalResult matchAndRewrite(
-      ONNXReshapeOp outerReshape, PatternRewriter &rewriter) const final {
-    auto castOp = outerReshape.getData().getDefiningOp<ONNXCastOp>();
-    if (!castOp)
-      return rewriter.notifyMatchFailure(outerReshape, "input is not Cast");
-    auto innerReshape = castOp.getInput().getDefiningOp<ONNXReshapeOp>();
-    if (!innerReshape)
-      return rewriter.notifyMatchFailure(
-          outerReshape, "Cast input is not Reshape");
-    // Both result and inner input must be static ranked tensors with the
-    // same shape
-    auto outerTy =
-        mlir::dyn_cast<RankedTensorType>(outerReshape.getResult().getType());
-    auto innerInTy =
-        mlir::dyn_cast<RankedTensorType>(innerReshape.getData().getType());
-    if (!outerTy || !innerInTy)
-      return rewriter.notifyMatchFailure(outerReshape, "types not ranked");
-    if (!outerTy.hasStaticShape() || !innerInTy.hasStaticShape())
-      return rewriter.notifyMatchFailure(outerReshape, "types not static");
-    if (outerTy.getShape() != innerInTy.getShape())
-      return rewriter.notifyMatchFailure(
-          outerReshape, "outer result shape != inner input shape");
-    Location fusedLoc = rewriter.getFusedLoc(
-        {innerReshape.getLoc(), castOp.getLoc(), outerReshape.getLoc()});
-    Value newCast = rewriter.create<ONNXCastOp>(fusedLoc, outerTy,
-        innerReshape.getData(), castOp.getSaturateAttr(), castOp.getToAttr());
-    rewriter.replaceOp(outerReshape, newCast);
-    return success();
-  }
-};
+/// on the ONNXReduceSumV11Op.
+void ONNXReduceSumV11Op::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  result.insert<ReduceSumV11ToLatestPattern1>(context);
+  result.insert<ReduceSumV11ToLatestPattern2>(context);
+}
+
+/// on the ONNXReduceSumOp.
+void ONNXReduceSumOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  result.insert<ReduceSumKeepdimsCanonPattern>(context);
+}
 
 /// on the ONNXReshapeOp.
 void ONNXReshapeOp::getCanonicalizationPatterns(
