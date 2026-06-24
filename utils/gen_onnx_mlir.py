@@ -531,6 +531,7 @@ OpsWithCanonicalizer = [
     "Clip",
     "Concat",
     "Constant",
+    "Conv",
     "DepthToSpace",
     "DequantizeLinear",
     "Div",

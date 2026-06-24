@@ -4055,6 +4055,102 @@ void ONNXWhereOp::getCanonicalizationPatterns(
 void ONNXDequantizeLinearOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {}
 
+//===----------------------------------------------------------------------===//
+// ONNXConvOp canonicalization
+//===----------------------------------------------------------------------===//
+
+// Normalize auto_pad to NOTSET with explicit pads.
+//
+// SAME_UPPER / SAME_LOWER: compute the padding required to keep the output
+// the same spatial size as the input (with ceil-division for stride > 1).
+// VALID: all pads are zero.
+// NOTSET with no pads attribute: fill with zeros.
+//
+// Requires static input spatial dims for SAME_*
+// After the rewrite auto_pad == "NOTSET" and pads holds the explicit values.
+struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
+  using OpRewritePattern<ONNXConvOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXConvOp convOp, PatternRewriter &rewriter) const override {
+    const StringRef autoPad = convOp.getAutoPad();
+
+    // Nothing to do if already normalised.
+    if (autoPad == "NOTSET" && convOp.getPads().has_value())
+      return failure();
+
+    // Require ranked weight to derive spatial rank and kernel sizes.
+    const Value W = convOp.getW();
+    if (!hasShapeAndRank(W))
+      return failure();
+    const auto wShape = cast<ShapedType>(W.getType()).getShape();
+    const int64_t spatialRank = static_cast<int64_t>(wShape.size()) - 2;
+    if (spatialRank < 1)
+      return failure();
+
+    // Pads are stored as [x1_begin, x2_begin, ..., x1_end, x2_end, ...].
+    // Initialise to zero; VALID and NOTSET-without-pads leave them that way.
+    SmallVector<int64_t> pads(2 * spatialRank, 0);
+
+    if (autoPad == "SAME_UPPER" || autoPad == "SAME_LOWER") {
+      // Pad computation requires static input spatial dims.
+      const Value X = convOp.getX();
+      if (!hasShapeAndRank(X))
+        return failure();
+      const auto xShape = cast<ShapedType>(X.getType()).getShape();
+
+      const auto stridesOpt = convOp.getStrides();
+      const auto dilationsOpt = convOp.getDilations();
+      const auto kernelShapeOpt = convOp.getKernelShape();
+      const bool isSameUpper = (autoPad == "SAME_UPPER");
+
+      for (int64_t i = 0; i < spatialRank; ++i) {
+        const int64_t inputSize = xShape[2 + i];
+        if (inputSize == ShapedType::kDynamic)
+          return failure(); // cannot compute pads statically
+
+        const int64_t kernelSize = kernelShapeOpt.has_value()
+                                       ? ArrayAttrIntVal(kernelShapeOpt, i)
+                                       : wShape[2 + i];
+        const int64_t stride =
+            stridesOpt.has_value() ? ArrayAttrIntVal(stridesOpt, i) : 1;
+        const int64_t dilation =
+            dilationsOpt.has_value() ? ArrayAttrIntVal(dilationsOpt, i) : 1;
+
+        // ONNX SAME padding spec: outputSize = ceil(inputSize / stride).
+        const int64_t outputSize = (inputSize + stride - 1) / stride;
+        // Solve for the total pad from the output-size formula:
+        //   outputSize = floor((inputSize + totalPad - effectiveKernel) /
+        //   stride) + 1
+        // where effectiveKernel = (kernelSize - 1) * dilation + 1.
+        const int64_t sumOfPad = std::max<int64_t>(
+            0, (outputSize - 1) * stride + ((kernelSize - 1) * dilation + 1) -
+                   inputSize);
+
+        // SAME_UPPER adds the extra pad (when sumOfPad is odd) at the end;
+        // SAME_LOWER adds it at the beginning.
+        const int64_t padBegin =
+            isSameUpper ? sumOfPad / 2 : sumOfPad - sumOfPad / 2;
+        const int64_t padEnd = sumOfPad - padBegin;
+        pads[i] = padBegin;
+        pads[spatialRank + i] = padEnd;
+      }
+    }
+
+    rewriter.modifyOpInPlace(convOp, [&] {
+      convOp.setAutoPadAttr(rewriter.getStringAttr("NOTSET"));
+      convOp.setPadsAttr(rewriter.getI64ArrayAttr(pads));
+    });
+    return success();
+  }
+};
+
+/// on the ONNXConvOp.
+void ONNXConvOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<NormalizeConvAutoPadPattern>(context);
+}
+
 void onnx_mlir::configureBatchNormCanonicalization(
     bool disableBatchNormDecomposeOption) {
   disableBatchNormDecompose = disableBatchNormDecomposeOption;
