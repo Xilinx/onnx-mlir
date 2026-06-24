@@ -90,7 +90,7 @@ extern std::string onnxTransformOptions;                      // onnx-mlir only
 extern bool enableQuarkQuantizerLegalization;                 // common for both
 extern bool disableBatchNormDecompose;                        // common for both
 extern bool enableReshapeCanonicalization;                    // common for both
-extern bool enableVerifyXFEDialect;                           // common for both
+extern bool enableXFEONNXOpsetVerifier;                       // common for both
 extern uint64_t compilationNumThreads;                        // common for both
 // AMD: Decompose unconditionally
 // extern std::vector<std::string> decomposeOpsInONNX; // common for both

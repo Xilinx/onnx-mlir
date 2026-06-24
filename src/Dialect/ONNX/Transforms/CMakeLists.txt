@@ -186,8 +186,8 @@ if (ONNX_MLIR_ENABLE_KRNL)
     )
 endif()
 
-add_onnx_mlir_library(OMVerifyXFEDialect
-  VerifyXFEDialectPass.cpp
+add_onnx_mlir_library(OMXFEONNXOpsetVerifier
+  XFEONNXOpsetVerifierPass.cpp
 
   DEPENDS
   OMONNXTransformsIncGen

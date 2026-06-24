@@ -355,7 +355,7 @@ void registerOMPasses(int optLevel) {
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createVerifyXFEDialectPass();
+    return createXFEONNXOpsetVerifierPass();
   });
 
 #ifdef ONNX_MLIR_ENABLE_KRNL

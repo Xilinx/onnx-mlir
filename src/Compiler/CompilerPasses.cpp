@@ -274,7 +274,7 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.instrumentStage = instrumentStage;
     opts.enableXMCPasses = enableXMCPasses;
     opts.enableReshapeCanonicalization = enableReshapeCanonicalization;
-    opts.enableVerifyXFEDialect = enableVerifyXFEDialect;
+    opts.enableXFEONNXOpsetVerifier = enableXFEONNXOpsetVerifier;
     if (enableXMCPasses) {
       opts.hybrid.enableInstanceNormDecompose = false;
       opts.hybrid.enableGroupNormDecompose = false;

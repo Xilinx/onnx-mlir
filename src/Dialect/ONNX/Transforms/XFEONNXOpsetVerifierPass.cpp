@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//===-- VerifyXFEDialectPass.cpp - XFE dialect constraint verifier --------===//
+//===-- XFEONNXOpsetVerifierPass.cpp - XFE ONNX opset verifier -----------===//
 //
 // Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
 //
@@ -18,7 +18,7 @@
 #include "src/Support/TypeUtilities.hpp"
 
 namespace onnx_mlir {
-#define GEN_PASS_DEF_VERIFYXFEDIALECTPASS
+#define GEN_PASS_DEF_XFEONNXOPSETVERIFIERPASS
 #include "src/Dialect/ONNX/Transforms/Passes.h.inc"
 } // namespace onnx_mlir
 
@@ -26,8 +26,9 @@ using namespace mlir;
 
 namespace {
 
-struct VerifyXFEDialectPass
-    : public onnx_mlir::impl::VerifyXFEDialectPassBase<VerifyXFEDialectPass> {
+struct XFEONNXOpsetVerifierPass
+    : public onnx_mlir::impl::XFEONNXOpsetVerifierPassBase<
+          XFEONNXOpsetVerifierPass> {
   using Base::Base;
 
   void runOnOperation() override {
@@ -67,7 +68,7 @@ struct VerifyXFEDialectPass
       if (!allStatic)
         continue;
 
-      op.emitOpError("disallowed in XFE dialect");
+      op.emitOpError("disallowed in XFE ONNX opset");
       anyFailed = true;
     }
 

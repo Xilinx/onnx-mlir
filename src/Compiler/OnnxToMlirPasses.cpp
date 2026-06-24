@@ -151,8 +151,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // function and just before instrumentation.
   pm.addPass(createSetONNXNodeNamePass());
 
-  if (opts.enableVerifyXFEDialect)
-    pm.addNestedPass<func::FuncOp>(onnx_mlir::createVerifyXFEDialectPass());
+  if (opts.enableXFEONNXOpsetVerifier)
+    pm.addNestedPass<func::FuncOp>(onnx_mlir::createXFEONNXOpsetVerifierPass());
 
 #ifdef ONNX_MLIR_ENABLE_KRNL
   // Add instrumentation for Onnx Ops (requires Krnl dialect for

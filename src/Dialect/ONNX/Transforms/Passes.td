@@ -170,12 +170,12 @@ def ONNXHybridTransformPass
   let genOptionsParser = 1;
 }
 
-def VerifyXFEDialectPass
-    : Pass<"verify-xfe-dialect", "::mlir::func::FuncOp"> {
-  let summary = "Verify XFE dialect constraints on ONNX ops.";
+def XFEONNXOpsetVerifierPass
+    : Pass<"xfe-onnx-opset-verifier", "::mlir::func::FuncOp"> {
+  let summary = "Verify XFE ONNX opset constraints.";
   let description = [{
-    Verifies that the ops inside a function match the XFE dialect constraints.
-    Currently implements a check for disallowed ops.
+    Verifies that the ops inside a function match the XFE ONNX opset
+    constraints. Currently implements a check for disallowed ops.
   }];
   let options = [
     Option<"disallowedOps", "disallowed-ops", "std::string",

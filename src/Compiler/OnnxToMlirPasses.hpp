@@ -34,7 +34,7 @@ struct OnnxToMlirOptions {
   bool disableBatchNormDecompose = false;
   // Reshape-family canonicalization (Flatten/Squeeze/Unsqueeze -> Reshape).
   bool enableReshapeCanonicalization = true;
-  bool enableVerifyXFEDialect = true;
+  bool enableXFEONNXOpsetVerifier = true;
   bool enableUnsafeMathOptimizations = true;
   bool enableQDQDataMovementCanonicalization = false;
   bool enableONNXHybridPass = true;
