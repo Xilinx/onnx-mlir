@@ -2036,6 +2036,8 @@ struct RecomposeConcatPattern : public OpRewritePattern<ONNXConcatOp> {
 namespace {
 
 [[nodiscard]] bool isPlainFloatType(Type t) {
+  if (!t)
+    return false;
   Type elem = getElementTypeOrSelf(t);
   return mlir::isa<FloatType>(elem);
 }
@@ -2436,7 +2438,9 @@ struct FuseScaleIntoRotaryEmbeddingPattern
     if (!isPlainFloatType(scaleTy))
       return rewriter.notifyMatchFailure(
           mulOp, "scale element type is not a plain float");
-    if (!isPlainFloatType(mulOp.getResult().getType()))
+    auto mulResultTy =
+        dyn_cast_or_null<RankedTensorType>(mulOp.getResult().getType());
+    if (!mulResultTy || !isPlainFloatType(mulResultTy))
       return rewriter.notifyMatchFailure(
           mulOp, "Mul result element type is not a plain float");
 
