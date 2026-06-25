@@ -7490,7 +7490,6 @@ def ONNXReduceProdV13Op:ONNX_Op<"ReduceProdV13",
 
 def ONNXReduceSumOp:ONNX_Op<"ReduceSum",
   [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
-  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceSum operation";
   let description = [{
   Computes the sum of the input tensor's elements along the provided axes. The resulting
@@ -7540,7 +7539,6 @@ def ONNXReduceSumOp:ONNX_Op<"ReduceSum",
 
 def ONNXReduceSumV11Op:ONNX_Op<"ReduceSumV11",
   [Pure, OpVersionTrait<11>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
-  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceSum operation";
   let description = [{
   Computes the sum of the input tensor's element along the provided axes. The resulting

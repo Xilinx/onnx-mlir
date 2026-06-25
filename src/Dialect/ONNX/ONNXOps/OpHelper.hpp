@@ -283,10 +283,6 @@ mlir::DenseElementsAttr createDenseElementsAttrFromShapeAtIndex(
 mlir::DenseElementsAttr createDenseElementsAttrFromSize(
     mlir::PatternRewriter &rewriter, mlir::Value value);
 
-// Create a rank-1 DenseElementsAttr from an existing ArrayAttr.
-mlir::DenseElementsAttr createDenseArrayAttr(
-    mlir::PatternRewriter &rewriter, mlir::ArrayAttr origAttrs);
-
 // Create an ArrayAttr from a dense ConstantOp
 mlir::ArrayAttr createArrayAttrFromConstantOp(mlir::ONNXConstantOp constOp);
 

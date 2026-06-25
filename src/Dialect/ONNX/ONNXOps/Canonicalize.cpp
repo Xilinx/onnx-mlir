@@ -4071,19 +4071,6 @@ void ONNXReduceMeanOp::getCanonicalizationPatterns(
   result.insert<DropUnitAxesFromReduceMeanPattern>(context);
 }
 
-/// on the ONNXReduceSumV11Op.
-void ONNXReduceSumV11Op::getCanonicalizationPatterns(
-    RewritePatternSet &result, MLIRContext *context) {
-  result.insert<ReduceSumV11ToLatestPattern1>(context);
-  result.insert<ReduceSumV11ToLatestPattern2>(context);
-}
-
-/// on the ONNXReduceSumOp.
-void ONNXReduceSumOp::getCanonicalizationPatterns(
-    RewritePatternSet &result, MLIRContext *context) {
-  result.insert<ReduceSumKeepdimsCanonPattern>(context);
-}
-
 /// on the ONNXReshapeOp.
 void ONNXReshapeOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
