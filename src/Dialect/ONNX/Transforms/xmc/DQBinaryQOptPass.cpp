@@ -926,6 +926,11 @@ struct FoldBinaryIntoQ : public OpRewritePattern<BinOp> {
       return rewriter.notifyMatchFailure(
           op, "activation from DQ handled by FoldBinaryThroughQDQ");
 
+    // Preserve the Mul so the HSIGMOID fusion can keep the Q output scale.
+    if (activation.getDefiningOp<ONNXHardSigmoidOp>())
+      return rewriter.notifyMatchFailure(
+          op, "activation from HardSigmoid; preserve Mul for HSIGMOID fusion");
+
     auto kOpt = getScalarTensorValue<double>(constantOp);
     if (!kOpt)
       return rewriter.notifyMatchFailure(
