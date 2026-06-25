@@ -12,3 +12,8 @@
 src/Dialect/ONNX/Transforms/CMakeLists.txt
 src/Pass/Passes.hpp
 src/Tools/onnx-mlir-opt/RegisterPasses.cpp
+
+# Per file/folder ownership
+/src/Dialect/ONNX/Transforms/QDQCanonicalize.cpp @rachgupt-amd @jorickert @p-lanza
+/src/Dialect/ONNX/ONNXOps/Canonicalize.cpp @rachgupt-amd @jorickert @p-lanza
+/src/Dialect/ONNX/ONNXOps/Canonicalize.td @rachgupt-amd @jorickert @p-lanza
