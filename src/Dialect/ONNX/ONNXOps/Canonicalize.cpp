@@ -3929,16 +3929,19 @@ struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
 
     // Nothing to do if already normalised.
     if (autoPad == "NOTSET" && convOp.getPads().has_value())
-      return failure();
+      return rewriter.notifyMatchFailure(
+          convOp, "auto_pad is already NOTSET with explicit pads");
 
     // Require ranked weight to derive spatial rank and kernel sizes.
     const Value W = convOp.getW();
     if (!hasShapeAndRank(W))
-      return failure();
+      return rewriter.notifyMatchFailure(
+          convOp, "weight is unranked or missing shape");
     const auto wShape = cast<ShapedType>(W.getType()).getShape();
     const int64_t spatialRank = static_cast<int64_t>(wShape.size()) - 2;
     if (spatialRank < 1)
-      return failure();
+      return rewriter.notifyMatchFailure(
+          convOp, "spatial rank must be at least 1");
 
     // Pads are stored as [x1_begin, x2_begin, ..., x1_end, x2_end, ...].
     // Initialise to zero; VALID and NOTSET-without-pads leave them that way.
@@ -3948,7 +3951,8 @@ struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
       // Pad computation requires static input spatial dims.
       const Value X = convOp.getX();
       if (!hasShapeAndRank(X))
-        return failure();
+        return rewriter.notifyMatchFailure(
+            convOp, "input is unranked or missing shape");
       const auto xShape = cast<ShapedType>(X.getType()).getShape();
 
       const auto stridesOpt = convOp.getStrides();
@@ -3959,7 +3963,8 @@ struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
       for (int64_t i = 0; i < spatialRank; ++i) {
         const int64_t inputSize = xShape[2 + i];
         if (inputSize == ShapedType::kDynamic)
-          return failure(); // cannot compute pads statically
+          return rewriter.notifyMatchFailure(
+              convOp, "dynamic spatial dim: cannot compute pads statically");
 
         const int64_t kernelSize = kernelShapeOpt.has_value()
                                        ? ArrayAttrIntVal(kernelShapeOpt, i)
@@ -3996,6 +4001,243 @@ struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
     return success();
   }
 };
+
+//===----------------------------------------------------------------------===//
+// Fuse conv1x1 -> convKxK into a single convKxK.
+//
+// Fires when:
+//   - conv1 is 1x1, stride/dilation 1, group 1, zero pads.
+//   - conv2 consumes conv1's single output, same stride/dilation/group
+//     constraints.
+//   - auto_pad is NOTSET on both
+//   - No extra op is needed for the bias fold: conv2 pads are all zero OR
+//     b1 is None / all-zeros.
+//
+// The fused weight Wf[Cout,Cin,K,K] = W2 x W1 (channel contraction):
+//   Wf[n,c,i,j] = sum_m W1[m,c] * W2[n,m,i,j]
+//
+// The fused bias bf[Cout]:
+//   bf[n] = b2[n] + sum_m (sum_{i,j} W2[n,m,i,j]) * b1[m]
+//
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+// True when every element of the optional I64 array attr equals 1.
+// An absent attribute is treated as "all ones"
+bool isAllOnes(std::optional<ArrayAttr> attrOpt) {
+  if (!attrOpt.has_value())
+    return true;
+  return llvm::all_of(attrOpt->getAsValueRange<IntegerAttr>(),
+      [](const APInt &v) { return v == 1; });
+}
+
+// True when every element of the optional I64 array attr equals 0.
+// An absent attribute is treated as "all zeros"
+bool isAllZeros(std::optional<ArrayAttr> attrOpt) {
+  if (!attrOpt.has_value())
+    return true;
+  return llvm::all_of(attrOpt->getAsValueRange<IntegerAttr>(),
+      [](const APInt &v) { return v == 0; });
+}
+
+// True when val is None or a dense constant whose every element is 0.
+bool isNoneOrZero(Value val) { return isNoneValue(val) || isConstOf(val, 0.0); }
+
+struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
+  using OpRewritePattern<ONNXConvOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXConvOp conv2, PatternRewriter &rewriter) const override {
+
+    // ---- Match conv1 -------------------------------------------------
+    const Value conv2X = conv2.getX();
+    auto *defOp = conv2X.getDefiningOp();
+    if (!defOp)
+      return rewriter.notifyMatchFailure(
+          conv2, "input has no defining op (block argument)");
+    auto conv1 = dyn_cast<ONNXConvOp>(defOp);
+    if (!conv1)
+      return rewriter.notifyMatchFailure(
+          conv2, "producer of input is not an ONNXConvOp");
+    // conv1's result must be consumed only by conv2.
+    if (!conv2X.hasOneUse())
+      return rewriter.notifyMatchFailure(
+          conv2, "conv1 result has multiple uses");
+
+    // ---- Common attribute constraints --------------------------------
+    if (conv1.getAutoPad() != "NOTSET" || conv2.getAutoPad() != "NOTSET")
+      return rewriter.notifyMatchFailure(conv2,
+          "auto_pad not yet normalised to NOTSET (run "
+          "NormalizeConvAutoPadPattern first)");
+    if (conv1.getGroup() != 1 || conv2.getGroup() != 1)
+      return rewriter.notifyMatchFailure(conv2, "group != 1");
+    if (!isAllOnes(conv1.getStrides()) || !isAllOnes(conv2.getStrides()))
+      return rewriter.notifyMatchFailure(conv2, "strides != 1");
+    if (!isAllOnes(conv1.getDilations()) || !isAllOnes(conv2.getDilations()))
+      return rewriter.notifyMatchFailure(conv2, "dilations != 1");
+
+    // ---- conv1 must be 1x1 with zero pads ---------------------------
+    const Value W1 = conv1.getW();
+    if (!hasStaticShape(W1.getType()))
+      return rewriter.notifyMatchFailure(
+          conv2, "conv1 weight has dynamic or unknown shape");
+    const auto w1Shape = cast<ShapedType>(W1.getType()).getShape();
+    // w1Shape = [Cmid, Cin/group, k1, k2, ...]; all spatial dims must be 1.
+    const int64_t w1Rank = w1Shape.size();
+    if (w1Rank < 3)
+      return rewriter.notifyMatchFailure(
+          conv2, "conv1 weight rank must be at least 3");
+    for (int64_t i = 2; i < w1Rank; ++i)
+      if (w1Shape[i] != 1)
+        return rewriter.notifyMatchFailure(
+            conv2, "conv1 is not a 1x1 conv (spatial kernel dim != 1)");
+    if (!isAllZeros(conv1.getPads()))
+      return rewriter.notifyMatchFailure(conv2, "conv1 has nonzero pads");
+
+    // ---- Require conv2 weight to also have a fully static shape ------
+    const Value W2 = conv2.getW();
+    if (!hasStaticShape(W2.getType()))
+      return rewriter.notifyMatchFailure(
+          conv2, "conv2 weight has dynamic or unknown shape");
+    const auto w2Shape = cast<ShapedType>(W2.getType()).getShape();
+    // w2Shape = [Cout, Cmid, K, K]; require at least rank 3.
+    if (static_cast<int64_t>(w2Shape.size()) < 3)
+      return rewriter.notifyMatchFailure(
+          conv2, "conv2 weight rank must be at least 3");
+    // Cmid must match between W1 and W2.
+    if (w1Shape[0] != w2Shape[1])
+      return rewriter.notifyMatchFailure(
+          conv2, "Cmid mismatch between conv1 and conv2 weights");
+
+    // Element types must match.
+    const Type elemType = getElementTypeOrSelf(W1.getType());
+    if (elemType != getElementTypeOrSelf(W2.getType()))
+      return rewriter.notifyMatchFailure(
+          conv2, "weight element types do not match");
+
+    // ---- Require constant weights for fold-ability ------------------
+    if (!isDenseONNXConstant(W1))
+      return rewriter.notifyMatchFailure(
+          conv2, "conv1 weight is not a dense ONNX constant");
+    if (!isDenseONNXConstant(W2))
+      return rewriter.notifyMatchFailure(
+          conv2, "conv2 weight is not a dense ONNX constant");
+
+    // ---- Bias constraints -------------------------------------------
+    const Value b1 = conv1.getB();
+    const Value b2 = conv2.getB();
+
+    // bias fold is exact only when conv2 pads are all zero
+    // or b1 contributes nothing (None or zero).
+    const bool conv2PadsAllZero = isAllZeros(conv2.getPads());
+    if (!conv2PadsAllZero && !isNoneOrZero(b1))
+      return rewriter.notifyMatchFailure(conv2,
+          "conv2 has nonzero pads and conv1 has nonzero bias: "
+          "bias fold would require a spatially-varying correction");
+
+    if (!isNoneOrZero(b1) && !isDenseONNXConstant(b1))
+      return rewriter.notifyMatchFailure(
+          conv2, "conv1 bias is not a dense ONNX constant");
+
+    // ---- Build fused weight -----------------------------------------
+    // Wf[Cout,Cin,K...] = einsum("mc,nm...->nc...", W1_flat, W2)
+    //
+    // Using matmul:
+    //   W1_flat = reshape(W1, [Cmid, Cin])
+    //   W2_flat = reshape(W2, [Cout, Cmid, K*K])    (K*K = product of spatial
+    //   dims) W2_t    = transpose(W2_flat, [0,2,1])        [Cout, K*K, Cmid]
+    //   Wf_flat = matmul(W2_t, W1_flat)              [Cout, K*K, Cin]
+    //   Wf_perm = transpose(Wf_flat, [0,2,1])        [Cout, Cin, K*K]
+    //   Wf      = reshape(Wf_perm, [Cout, Cin, K, K, ...])
+
+    const Location fusedLoc =
+        rewriter.getFusedLoc({conv1.getLoc(), conv2.getLoc()});
+    OnnxBuilder ob(rewriter, fusedLoc);
+
+    const int64_t cin = w1Shape[1];
+    const int64_t cmid = w1Shape[0];
+    const int64_t cout = w2Shape[0];
+    const int64_t spatialRank = static_cast<int64_t>(w2Shape.size()) - 2;
+    const int64_t kProd = std::accumulate(w2Shape.begin() + 2, w2Shape.end(),
+        int64_t{1}, std::multiplies<int64_t>());
+
+    // W1_flat [Cmid, Cin]
+    const Value w1Flat =
+        ob.reshape(RankedTensorType::get({cmid, cin}, elemType), W1,
+            ob.constantInt64({cmid, cin}));
+
+    // W2_flat [Cout, Cmid, K*K]
+    const Value w2Flat =
+        ob.reshape(RankedTensorType::get({cout, cmid, kProd}, elemType), W2,
+            ob.constantInt64({cout, cmid, kProd}));
+
+    // W2_t [Cout, K*K, Cmid]
+    const Value w2T = ob.transposeInt64(w2Flat, {0, 2, 1});
+
+    // Wf_flat [Cout, K*K, Cin]
+    const Value wfFlat = ob.matmul(
+        RankedTensorType::get({cout, kProd, cin}, elemType), w2T, w1Flat);
+
+    // Wf_perm [Cout, Cin, K*K]
+    const Value wfPerm = ob.transposeInt64(wfFlat, {0, 2, 1});
+
+    // Wf [Cout, Cin, K, K, ...]
+    SmallVector<int64_t> wfShape = {cout, cin};
+    wfShape.append(w2Shape.begin() + 2, w2Shape.end());
+    const Value Wf = ob.reshape(RankedTensorType::get(wfShape, elemType),
+        wfPerm, ob.constantInt64(wfShape));
+
+    // ---- Build fused bias -------------------------------------------
+    // bf = b2  (if b1 is None/zero)
+    // bf = MatMul(ReduceSum(W2,[2..]), b1) + b2  (if b1 nonzero and pads=0)
+    Value bf;
+    if (isNoneOrZero(b1)) {
+      // b1 contributes nothing; carry b2 through unchanged (may be None).
+      bf = b2;
+    } else {
+      // conv2PadsAllZero and isDenseONNXConstant(b1) guaranteed by previous
+      // guards.
+      // S[Cout, Cmid] = ReduceSum(W2, axes=[2,3,...]) over all spatial
+      // dims.
+      SmallVector<int64_t> spatialAxes;
+      for (int64_t i = 0; i < spatialRank; ++i)
+        spatialAxes.push_back(2 + i);
+      const Value axes = ob.constantInt64(spatialAxes);
+      const Value wSum =
+          ob.reduceSum(RankedTensorType::get({cout, cmid}, elemType), W2, axes,
+              /*keepDims=*/false);
+
+      // b1_contrib[Cout] = MatMul([Cout,Cmid], [Cmid]) -> [Cout]
+      const Value b1Contrib =
+          ob.matmul(RankedTensorType::get({cout}, elemType), wSum, b1);
+
+      if (isNoneValue(b2))
+        bf = b1Contrib;
+      else
+        bf = ob.add(b1Contrib, b2);
+    }
+
+    // ---- Build attrs for the fused conv -----------------------------
+    // kernelShape and pads come from conv2; strides and dilations are
+    // always 1 (verified by isAllOnes checks above).
+    const SmallVector<int64_t> kernelShape(w2Shape.begin() + 2, w2Shape.end());
+    SmallVector<int64_t> pads(2 * spatialRank, 0);
+    if (conv2.getPads().has_value())
+      for (int64_t i = 0; i < 2 * spatialRank; ++i)
+        pads[i] = ArrayAttrIntVal(conv2.getPads(), i);
+    const SmallVector<int64_t> ones(spatialRank, 1); // strides and dilations
+
+    // ---- Create fused conv and replace conv2 ------------------------
+    const Value fusedConv = ob.conv(conv2.getY().getType(), conv1.getX(), Wf,
+        bf, "NOTSET", ones, /*group=*/1, kernelShape, pads, ones);
+
+    rewriter.replaceOp(conv2, fusedConv);
+    return success();
+  }
+};
+
+} // namespace
 
 // =============================================================================
 /// Register optimization patterns as "canonicalization" patterns.
@@ -4447,6 +4689,7 @@ void onnx_mlir::populateQDQDataMovementCanonicalizationPatterns(
 void ONNXConvOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<NormalizeConvAutoPadPattern>(context);
+  results.insert<FuseConv1x1IntoConvPattern>(context);
 }
 
 void onnx_mlir::configureBatchNormCanonicalization(
