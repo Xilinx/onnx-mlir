@@ -28,6 +28,7 @@
   - type_param: T
     description: Constrain input and output types to float/int tensors.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
@@ -35,7 +36,6 @@
     - tensor(uint64)
     - tensor(int32)
     - tensor(int64)
-    - tensor(bfloat16)
   min_input: 3
   max_input: 3
   min_output: 1
@@ -109,20 +109,17 @@
   - type_param: T
     description: Constrain input and output types to float tensors.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
-    - tensor(int8)
-    - tensor(uint8)
   - type_param: T_bias
     description: Constrain bias type to float tensors.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
-    - tensor(int32)
   min_input: 2
   max_input: 3
   min_output: 1
@@ -202,20 +199,17 @@
   - type_param: T
     description: Constrain input and output types to float tensors.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
-    - tensor(int8)
-    - tensor(uint8)
   - type_param: T_bias
     description: Constrain bias type to float tensors.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
-    - tensor(int32)
   min_input: 2
   max_input: 3
   min_output: 1
@@ -249,15 +243,18 @@
   - name: ceil_mode
     description: Whether to use ceil or floor to compute output shape
     type: int
+    default_value: 0
   - name: count_include_pad
     description: Whether include pad pixels when calculating values for the edges
     type: int
+    default_value: 0
   - name: dilations
     description: Dilation value
     type: list(int)
   - name: kernel_shape
     description: Shape of the pooling kernel
     type: list(int)
+    required: true
   - name: pads
     description: Padding for the beginning and ending along each spatial axis
     type: list(int)
@@ -268,12 +265,10 @@
   - type_param: T
     description: Constrain input types.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
-    - tensor(int8)
-    - tensor(uint8)
   min_input: 1
   max_input: 1
   min_output: 1
@@ -307,18 +302,21 @@
   - name: ceil_mode
     description: Whether to use ceil or floor to compute output shape
     type: int
+    default_value: 0
   - name: dilations
     description: Dilation value along each spatial axis
     type: list(int)
   - name: kernel_shape
     description: Shape of the pooling kernel
     type: list(int)
+    required: true
   - name: pads
     description: Padding for the beginning and ending along each spatial axis
     type: list(int)
   - name: storage_order
     description: The storage order of the tensor (0 for row major, 1 for column major)
     type: int
+    default_value: 0
   - name: strides
     description: Stride along each spatial axis
     type: list(int)
@@ -326,10 +324,10 @@
   - type_param: T
     description: Constrain input and output types to float tensors.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
     - tensor(int8)
     - tensor(uint8)
   min_input: 1
@@ -362,12 +360,10 @@
   - type_param: T
     description: Constrain input and output types to float tensors.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
-    - tensor(int8)
-    - tensor(uint8)
   min_input: 1
   max_input: 1
   min_output: 1
@@ -398,12 +394,10 @@
   - type_param: T
     description: Constrain input and output types to float tensors.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
-    - tensor(int8)
-    - tensor(uint8)
   min_input: 1
   max_input: 1
   min_output: 1
@@ -455,19 +449,17 @@
   - type_param: T
     description: Constrain input and output types to float tensors.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
-    - tensor(int8)
-    - tensor(uint8)
   - type_param: U
     description: Constrain mean and var types to float tensors.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
   min_input: 5
   max_input: 5
   min_output: 1
@@ -509,12 +501,10 @@
   - type_param: T
     description: Constrain input and output types to float tensors.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
-    - tensor(int8)
-    - tensor(uint8)
   min_input: 3
   max_input: 3
   min_output: 1
@@ -545,6 +535,7 @@
   - name: blocksize
     description: Size of the blocks to be moved. Output spatial dimensions are multiplied by this factor
     type: int
+    required: true
   - name: mode
     description: Rearrangement mode - DCR (depth-column-row) or CRD (column-row-depth)
     type: string
@@ -553,6 +544,7 @@
   - type_param: T
     description: Constrain input and output types to all tensor types.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(uint8)
     - tensor(uint16)
     - tensor(uint32)
@@ -564,7 +556,6 @@
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
   min_input: 1
   max_input: 1
   min_output: 1
@@ -595,10 +586,12 @@
   - name: blocksize
     description: Size of the blocks to be moved. Input spatial dimensions are divided by this factor
     type: int
+    required: true
   type_constraints:
   - type_param: T
     description: Constrain input and output types to all tensor types.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(uint8)
     - tensor(uint16)
     - tensor(uint32)
@@ -610,7 +603,6 @@
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
   min_input: 1
   max_input: 1
   min_output: 1
@@ -652,16 +644,18 @@
     description: Number of groups to divide channels into for normalization
     type: int
     required: true
+  - name: stash_type
+    description: The floating-point precision used in the first normalization stage (1 = float32)
+    type: int
+    default_value: 1
   type_constraints:
   - type_param: T
     description: Constrain input and output types to float tensors.
     allowed_types:
+    - tensor(bfloat16)
     - tensor(float16)
     - tensor(float)
     - tensor(double)
-    - tensor(bfloat16)
-    - tensor(int8)
-    - tensor(uint8)
   min_input: 3
   max_input: 3
   min_output: 1

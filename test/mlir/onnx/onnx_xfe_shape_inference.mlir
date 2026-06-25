@@ -218,7 +218,7 @@ func.func @test_xfe_avgpool_channel_last(%arg0: tensor<1x28x28x64xf32>) -> tenso
   onnx.Return %0 : tensor<*xf32>
 
   // CHECK-LABEL: test_xfe_avgpool_channel_last
-  // CHECK: [[RES:%.+]] = "onnx.XFEAveragePool"(%arg0) {auto_pad = "NOTSET", kernel_shape = [2, 2], pads = [0, 0, 0, 0], strides = [2, 2]} : (tensor<1x28x28x64xf32>) -> tensor<1x14x14x64xf32>
+  // CHECK: [[RES:%.+]] = "onnx.XFEAveragePool"(%arg0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, count_include_pad = 0 : si64, kernel_shape = [2, 2], pads = [0, 0, 0, 0], strides = [2, 2]} : (tensor<1x28x28x64xf32>) -> tensor<1x14x14x64xf32>
   // CHECK: onnx.Return [[RES]] : tensor<1x14x14x64xf32>
 }
 
@@ -235,7 +235,7 @@ func.func @test_xfe_maxpool_channel_last(%arg0: tensor<1x28x28x64xf32>) -> tenso
   onnx.Return %0 : tensor<*xf32>
 
   // CHECK-LABEL: test_xfe_maxpool_channel_last
-  // CHECK: [[RES:%.+]] = "onnx.XFEMaxPool"(%arg0) {auto_pad = "NOTSET", dilations = [1, 1], kernel_shape = [2, 2], pads = [0, 0, 0, 0], strides = [2, 2]} : (tensor<1x28x28x64xf32>) -> tensor<1x14x14x64xf32>
+  // CHECK: [[RES:%.+]] = "onnx.XFEMaxPool"(%arg0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, dilations = [1, 1], kernel_shape = [2, 2], pads = [0, 0, 0, 0], storage_order = 0 : si64, strides = [2, 2]} : (tensor<1x28x28x64xf32>) -> tensor<1x14x14x64xf32>
   // CHECK: onnx.Return [[RES]] : tensor<1x14x14x64xf32>
 }
 
@@ -275,7 +275,7 @@ func.func @test_xfe_avgpool_channel_last_1d(%arg0: tensor<2x128x32xf32>) -> tens
   onnx.Return %0 : tensor<*xf32>
 
   // CHECK-LABEL: test_xfe_avgpool_channel_last_1d
-  // CHECK: [[RES:%.+]] = "onnx.XFEAveragePool"(%arg0) {auto_pad = "NOTSET", kernel_shape = [3], pads = [0, 0], strides = [2]} : (tensor<2x128x32xf32>) -> tensor<2x63x32xf32>
+  // CHECK: [[RES:%.+]] = "onnx.XFEAveragePool"(%arg0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, count_include_pad = 0 : si64, kernel_shape = [3], pads = [0, 0], strides = [2]} : (tensor<2x128x32xf32>) -> tensor<2x63x32xf32>
   // CHECK: onnx.Return [[RES]] : tensor<2x63x32xf32>
 }
 
@@ -292,7 +292,7 @@ func.func @test_xfe_maxpool_channel_last_3d(%arg0: tensor<1x8x16x16x64xf32>) -> 
   onnx.Return %0 : tensor<*xf32>
 
   // CHECK-LABEL: test_xfe_maxpool_channel_last_3d
-  // CHECK: [[RES:%.+]] = "onnx.XFEMaxPool"(%arg0) {auto_pad = "NOTSET", dilations = [1, 1, 1], kernel_shape = [2, 2, 2], pads = [0, 0, 0, 0, 0, 0], strides = [2, 2, 2]} : (tensor<1x8x16x16x64xf32>) -> tensor<1x4x8x8x64xf32>
+  // CHECK: [[RES:%.+]] = "onnx.XFEMaxPool"(%arg0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, dilations = [1, 1, 1], kernel_shape = [2, 2, 2], pads = [0, 0, 0, 0, 0, 0], storage_order = 0 : si64, strides = [2, 2, 2]} : (tensor<1x8x16x16x64xf32>) -> tensor<1x4x8x8x64xf32>
   // CHECK: onnx.Return [[RES]] : tensor<1x4x8x8x64xf32>
 }
 
