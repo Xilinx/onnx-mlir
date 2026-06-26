@@ -30,6 +30,90 @@ func.func @test_fuse_conv1x1_basic(
 
 // -----
 
+func.func @test_fuse_conv1x1_without_explicit_dilations(
+    %x: tensor<1x3x8x8xf32>) -> tensor<1x8x6x6xf32> {
+  %w1 = onnx.Constant dense<1.0> : tensor<4x3x1x1xf32>
+  %b1 = onnx.Constant dense<0.5> : tensor<4xf32>
+  %w2 = onnx.Constant dense<1.0> : tensor<8x4x3x3xf32>
+  %b2 = onnx.Constant dense<2.0> : tensor<8xf32>
+  %c1 = "onnx.Conv"(%x, %w1, %b1) {
+      auto_pad = "NOTSET", group = 1 : si64,
+      kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} :
+      (tensor<1x3x8x8xf32>, tensor<4x3x1x1xf32>, tensor<4xf32>) -> tensor<1x4x8x8xf32>
+  %c2 = "onnx.Conv"(%c1, %w2, %b2) {
+      auto_pad = "NOTSET", group = 1 : si64,
+      kernel_shape = [3, 3], pads = [0, 0, 0, 0], strides = [1, 1]} :
+      (tensor<1x4x8x8xf32>, tensor<8x4x3x3xf32>, tensor<8xf32>) -> tensor<1x8x6x6xf32>
+  onnx.Return %c2 : tensor<1x8x6x6xf32>
+
+
+// CHECK-LABEL:  func.func @test_fuse_conv1x1_without_explicit_dilations
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x8x8xf32>) -> tensor<1x8x6x6xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<4.000000e+00> : tensor<8x3x3x3xf32>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<2.000000e+01> : tensor<8xf32>
+// CHECK:           [[VAR_2_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_0_]], [[VAR_1_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [3, 3], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<8x3x3x3xf32>, tensor<8xf32>) -> tensor<1x8x6x6xf32>
+// CHECK:           onnx.Return [[VAR_2_]] : tensor<1x8x6x6xf32>
+// CHECK:         }
+}
+
+// -----
+
+func.func @test_fuse_conv1x1_1d(
+    %x: tensor<1x3x8xf32>) -> tensor<1x8x6xf32> {
+  %w1 = onnx.Constant dense<1.0> : tensor<4x3x1xf32>
+  %b1 = onnx.Constant dense<0.5> : tensor<4xf32>
+  %w2 = onnx.Constant dense<1.0> : tensor<8x4x3xf32>
+  %b2 = onnx.Constant dense<2.0> : tensor<8xf32>
+  %c1 = "onnx.Conv"(%x, %w1, %b1) {
+      auto_pad = "NOTSET", dilations = [1], group = 1 : si64,
+      kernel_shape = [1], pads = [0, 0], strides = [1]} :
+      (tensor<1x3x8xf32>, tensor<4x3x1xf32>, tensor<4xf32>) -> tensor<1x4x8xf32>
+  %c2 = "onnx.Conv"(%c1, %w2, %b2) {
+      auto_pad = "NOTSET", dilations = [1], group = 1 : si64,
+      kernel_shape = [3], pads = [0, 0], strides = [1]} :
+      (tensor<1x4x8xf32>, tensor<8x4x3xf32>, tensor<8xf32>) -> tensor<1x8x6xf32>
+  onnx.Return %c2 : tensor<1x8x6xf32>
+
+
+// CHECK-LABEL:  func.func @test_fuse_conv1x1_1d
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x8xf32>) -> tensor<1x8x6xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<4.000000e+00> : tensor<8x3x3xf32>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<8.000000e+00> : tensor<8xf32>
+// CHECK:           [[VAR_2_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_0_]], [[VAR_1_]]) {auto_pad = "NOTSET", dilations = [1], group = 1 : si64, kernel_shape = [3], pads = [0, 0], strides = [1]} : (tensor<1x3x8xf32>, tensor<8x3x3xf32>, tensor<8xf32>) -> tensor<1x8x6xf32>
+// CHECK:           onnx.Return [[VAR_2_]] : tensor<1x8x6xf32>
+// CHECK:         }
+}
+
+// -----
+
+func.func @test_fuse_conv1x1_3d(
+    %x: tensor<1x3x8x8x8xf32>) -> tensor<1x8x6x6x6xf32> {
+  %w1 = onnx.Constant dense<1.0> : tensor<4x3x1x1x1xf32>
+  %b1 = onnx.Constant dense<0.5> : tensor<4xf32>
+  %w2 = onnx.Constant dense<1.0> : tensor<8x4x3x3x3xf32>
+  %b2 = onnx.Constant dense<2.0> : tensor<8xf32>
+  %c1 = "onnx.Conv"(%x, %w1, %b1) {
+      auto_pad = "NOTSET", dilations = [1, 1, 1], group = 1 : si64,
+      kernel_shape = [1, 1, 1], pads = [0, 0, 0, 0, 0, 0], strides = [1, 1, 1]} :
+      (tensor<1x3x8x8x8xf32>, tensor<4x3x1x1x1xf32>, tensor<4xf32>) -> tensor<1x4x8x8x8xf32>
+  %c2 = "onnx.Conv"(%c1, %w2, %b2) {
+      auto_pad = "NOTSET", dilations = [1, 1, 1], group = 1 : si64,
+      kernel_shape = [3, 3, 3], pads = [0, 0, 0, 0, 0, 0], strides = [1, 1, 1]} :
+      (tensor<1x4x8x8x8xf32>, tensor<8x4x3x3x3xf32>, tensor<8xf32>) -> tensor<1x8x6x6x6xf32>
+  onnx.Return %c2 : tensor<1x8x6x6x6xf32>
+
+
+// CHECK-LABEL:  func.func @test_fuse_conv1x1_3d
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x8x8x8xf32>) -> tensor<1x8x6x6x6xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<4.000000e+00> : tensor<8x3x3x3x3xf32>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<5.600000e+01> : tensor<8xf32>
+// CHECK:           [[VAR_2_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_0_]], [[VAR_1_]]) {auto_pad = "NOTSET", dilations = [1, 1, 1], group = 1 : si64, kernel_shape = [3, 3, 3], pads = [0, 0, 0, 0, 0, 0], strides = [1, 1, 1]} : (tensor<1x3x8x8x8xf32>, tensor<8x3x3x3x3xf32>, tensor<8xf32>) -> tensor<1x8x6x6x6xf32>
+// CHECK:           onnx.Return [[VAR_2_]] : tensor<1x8x6x6x6xf32>
+// CHECK:         }
+}
+
+// -----
+
 func.func @test_fuse_conv1x1_no_bias(
     %x: tensor<1x3x8x8xf32>) -> tensor<1x8x6x6xf32> {
   %w1 = onnx.Constant dense<1.0> : tensor<4x3x1x1xf32>
@@ -368,6 +452,36 @@ func.func @test_no_fuse_non_constant_b1(
 // CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<8xf32>
 // CHECK:           [[VAR_3_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_0_]], [[PARAM_1_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<4x3x1x1xf32>, tensor<4xf32>) -> tensor<1x4x8x8xf32>
 // CHECK:           [[VAR_4_:%.+]] = "onnx.Conv"([[VAR_3_]], [[VAR_1_]], [[VAR_2_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [3, 3], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x4x8x8xf32>, tensor<8x4x3x3xf32>, tensor<8xf32>) -> tensor<1x8x6x6xf32>
+// CHECK:           onnx.Return [[VAR_4_]] : tensor<1x8x6x6xf32>
+// CHECK:         }
+}
+
+// -----
+
+func.func @test_no_fuse_non_constant_b2(
+    %x: tensor<1x3x8x8xf32>,
+    %b2: tensor<8xf32>) -> tensor<1x8x6x6xf32> {
+  %w1 = onnx.Constant dense<1.0> : tensor<4x3x1x1xf32>
+  %b1 = onnx.Constant dense<0.5> : tensor<4xf32>
+  %w2 = onnx.Constant dense<1.0> : tensor<8x4x3x3xf32>
+  %c1 = "onnx.Conv"(%x, %w1, %b1) {
+      auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64,
+      kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} :
+      (tensor<1x3x8x8xf32>, tensor<4x3x1x1xf32>, tensor<4xf32>) -> tensor<1x4x8x8xf32>
+  %c2 = "onnx.Conv"(%c1, %w2, %b2) {
+      auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64,
+      kernel_shape = [3, 3], pads = [0, 0, 0, 0], strides = [1, 1]} :
+      (tensor<1x4x8x8xf32>, tensor<8x4x3x3xf32>, tensor<8xf32>) -> tensor<1x8x6x6xf32>
+  onnx.Return %c2 : tensor<1x8x6x6xf32>
+
+
+// CHECK-LABEL:  func.func @test_no_fuse_non_constant_b2
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x8x8xf32>, [[PARAM_1_:%.+]]: tensor<8xf32>) -> tensor<1x8x6x6xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<4x3x1x1xf32>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<5.000000e-01> : tensor<4xf32>
+// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<8x4x3x3xf32>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_0_]], [[VAR_1_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8xf32>, tensor<4x3x1x1xf32>, tensor<4xf32>) -> tensor<1x4x8x8xf32>
+// CHECK:           [[VAR_4_:%.+]] = "onnx.Conv"([[VAR_3_]], [[VAR_2_]], [[PARAM_1_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [3, 3], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x4x8x8xf32>, tensor<8x4x3x3xf32>, tensor<8xf32>) -> tensor<1x8x6x6xf32>
 // CHECK:           onnx.Return [[VAR_4_]] : tensor<1x8x6x6xf32>
 // CHECK:         }
 }
