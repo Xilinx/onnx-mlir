@@ -3974,15 +3974,29 @@ struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
         const int64_t dilation =
             dilationsOpt.has_value() ? ArrayAttrIntVal(dilationsOpt, i) : 1;
 
-        // ONNX SAME padding spec: outputSize = ceil(inputSize / stride).
+        // ONNX SAME padding fixes the output size first:
+        //   outputSize = ceil(inputSize / stride).
         const int64_t outputSize = (inputSize + stride - 1) / stride;
-        // Solve for the total pad from the output-size formula:
+        // The last output window starts at (outputSize - 1) * stride and spans
+        // effectiveKernel input positions. The padded input must be large
+        // enough to cover that window:
+        //
+        //   inputSize + totalPad >=
+        //     (outputSize - 1) * stride + effectiveKernel
+        //
+        // Therefore the minimum total pad is:
+        //   totalPad = max(0,
+        //       (outputSize - 1) * stride + effectiveKernel - inputSize)
+        //
+        // This is equivalent to inverting:
         //   outputSize = floor((inputSize + totalPad - effectiveKernel) /
         //   stride) + 1
-        // where effectiveKernel = (kernelSize - 1) * dilation + 1.
+        // The floor is accounted for by choosing the minimum totalPad that
+        // reaches the next output window; no extra floor is applied to
+        // totalPad itself.
+        const int64_t effectiveKernel = (kernelSize - 1) * dilation + 1;
         const int64_t sumOfPad = std::max<int64_t>(
-            0, (outputSize - 1) * stride + ((kernelSize - 1) * dilation + 1) -
-                   inputSize);
+            0, (outputSize - 1) * stride + effectiveKernel - inputSize);
 
         // SAME_UPPER adds the extra pad (when sumOfPad is odd) at the end;
         // SAME_LOWER adds it at the beginning.
