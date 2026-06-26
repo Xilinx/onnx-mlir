@@ -37,6 +37,7 @@
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/MathExtras.h"
 
 #include "src/Dialect/Mlir/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
@@ -3938,10 +3939,10 @@ struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
       return rewriter.notifyMatchFailure(
           convOp, "weight is unranked or missing shape");
     const auto wShape = cast<ShapedType>(W.getType()).getShape();
-    const int64_t spatialRank = static_cast<int64_t>(wShape.size()) - 2;
-    if (spatialRank < 1)
-      return rewriter.notifyMatchFailure(
-          convOp, "spatial rank must be at least 1");
+    const int64_t firstSpatialDimAxis = 2;
+    const int64_t spatialRank =
+        static_cast<int64_t>(wShape.size()) - firstSpatialDimAxis;
+    assert(spatialRank >= 1 && "conv must have at least one spatial dim");
 
     // Pads are stored as [x1_begin, x2_begin, ..., x1_end, x2_end, ...].
     // Initialise to zero; VALID and NOTSET-without-pads leave them that way.
@@ -3957,18 +3958,15 @@ struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
 
       const auto stridesOpt = convOp.getStrides();
       const auto dilationsOpt = convOp.getDilations();
-      const auto kernelShapeOpt = convOp.getKernelShape();
       const bool isSameUpper = (autoPad == "SAME_UPPER");
 
       for (int64_t i = 0; i < spatialRank; ++i) {
-        const int64_t inputSize = xShape[2 + i];
+        const int64_t inputSize = xShape[firstSpatialDimAxis + i];
         if (inputSize == ShapedType::kDynamic)
           return rewriter.notifyMatchFailure(
               convOp, "dynamic spatial dim: cannot compute pads statically");
 
-        const int64_t kernelSize = kernelShapeOpt.has_value()
-                                       ? ArrayAttrIntVal(kernelShapeOpt, i)
-                                       : wShape[2 + i];
+        const int64_t kernelSize = wShape[firstSpatialDimAxis + i];
         const int64_t stride =
             stridesOpt.has_value() ? ArrayAttrIntVal(stridesOpt, i) : 1;
         const int64_t dilation =
@@ -3976,7 +3974,7 @@ struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
 
         // ONNX SAME padding fixes the output size first:
         //   outputSize = ceil(inputSize / stride).
-        const int64_t outputSize = (inputSize + stride - 1) / stride;
+        const int64_t outputSize = llvm::divideCeil(inputSize, stride);
         // The last output window starts at (outputSize - 1) * stride and spans
         // effectiveKernel input positions. The padded input must be large
         // enough to cover that window:
@@ -4018,6 +4016,13 @@ struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
 
 //===----------------------------------------------------------------------===//
 // Fuse conv1x1 -> convKxK into a single convKxK.
+//
+// A 1x1 convolution only mixes channels independently at each spatial
+// position. When it feeds exactly one following convolution, the channel mixing
+// can be folded into the following convolution's weights. If the first bias is
+// nonzero, it can also be folded into the following bias as long as the second
+// convolution has no padding; with padding the first bias contribution would be
+// smaller at border pixels and could not be represented by one constant bias.
 //
 // Fires when:
 //   - conv1 is 1x1, stride/dilation 1, group 1, zero pads.
@@ -4142,8 +4147,8 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
     const Value b1 = conv1.getB();
     const Value b2 = conv2.getB();
 
-    // bias fold is exact only when conv2 pads are all zero
-    // or b1 contributes nothing (None or zero).
+    // The b1 contribution is spatially uniform only when conv2 pads are all
+    // zero, unless b1 contributes nothing (None or zero).
     const bool conv2PadsAllZero = isAllZeros(conv2.getPads());
     if (!conv2PadsAllZero && !isNoneOrZero(b1))
       return rewriter.notifyMatchFailure(conv2,
@@ -4152,15 +4157,19 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
 
     if (!isNoneOrZero(b1) && !isDenseONNXConstant(b1))
       return rewriter.notifyMatchFailure(
-          conv2, "conv1 bias is not a dense ONNX constant");
+          conv1, "conv1 bias is not a dense ONNX constant");
+    if (!isNoneOrZero(b2) && !isDenseONNXConstant(b2))
+      return rewriter.notifyMatchFailure(
+          conv2, "conv2 bias is not a dense ONNX constant");
 
     // ---- Build fused weight -----------------------------------------
     // Wf[Cout,Cin,K...] = einsum("mc,nm...->nc...", W1_flat, W2)
     //
     // Using matmul:
     //   W1_flat = reshape(W1, [Cmid, Cin])
-    //   W2_flat = reshape(W2, [Cout, Cmid, K*K])    (K*K = product of spatial
-    //   dims) W2_t    = transpose(W2_flat, [0,2,1])        [Cout, K*K, Cmid]
+    //   W2_flat = reshape(W2, [Cout, Cmid, K*K])
+    //             (K*K = product of spatial dims)
+    //   W2_t    = transpose(W2_flat, [0,2,1])        [Cout, K*K, Cmid]
     //   Wf_flat = matmul(W2_t, W1_flat)              [Cout, K*K, Cin]
     //   Wf_perm = transpose(Wf_flat, [0,2,1])        [Cout, Cin, K*K]
     //   Wf      = reshape(Wf_perm, [Cout, Cin, K, K, ...])
@@ -4210,7 +4219,7 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
       // b1 contributes nothing; carry b2 through unchanged (may be None).
       bf = b2;
     } else {
-      // conv2PadsAllZero and isDenseONNXConstant(b1) guaranteed by previous
+      // conv2PadsAllZero and dense constant biases are guaranteed by previous
       // guards.
       // S[Cout, Cmid] = ReduceSum(W2, axes=[2,3,...]) over all spatial
       // dims.

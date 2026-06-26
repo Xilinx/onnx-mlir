@@ -80,6 +80,67 @@ func.func @test_normalize_conv_autopad_same_upper_stride2(
 
 // -----
 
+// CHECK-LABEL: func.func @test_normalize_conv_autopad_same_upper_1d_stride2
+func.func @test_normalize_conv_autopad_same_upper_1d_stride2(
+    %x: tensor<1x3x28xf32>, %w: tensor<8x3x3xf32>, %b: tensor<8xf32>) -> tensor<1x8x14xf32> {
+  %0 = "onnx.Conv"(%x, %w, %b) {
+      auto_pad = "SAME_UPPER", dilations = [1], group = 1 : si64,
+      kernel_shape = [3], strides = [2]} :
+      (tensor<1x3x28xf32>, tensor<8x3x3xf32>, tensor<8xf32>) -> tensor<1x8x14xf32>
+  onnx.Return %0 : tensor<1x8x14xf32>
+  // SAME_UPPER 1D 3-wide stride-2: outputSize=ceil(28/2)=14,
+  // sumOfPad=(14-1)*2+(3-1)*1+1-28=1; extra pad goes at the end.
+  // CHECK: "onnx.Conv"({{.*}}) {auto_pad = "NOTSET"
+  // CHECK-SAME: pads = [0, 1]
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_normalize_conv_autopad_same_upper_3d
+func.func @test_normalize_conv_autopad_same_upper_3d(
+    %x: tensor<1x3x8x8x8xf32>, %w: tensor<8x3x3x3x3xf32>, %b: tensor<8xf32>) -> tensor<1x8x8x8x8xf32> {
+  %0 = "onnx.Conv"(%x, %w, %b) {
+      auto_pad = "SAME_UPPER", dilations = [1, 1, 1], group = 1 : si64,
+      kernel_shape = [3, 3, 3], strides = [1, 1, 1]} :
+      (tensor<1x3x8x8x8xf32>, tensor<8x3x3x3x3xf32>, tensor<8xf32>) -> tensor<1x8x8x8x8xf32>
+  onnx.Return %0 : tensor<1x8x8x8x8xf32>
+  // CHECK: "onnx.Conv"({{.*}}) {auto_pad = "NOTSET"
+  // CHECK-SAME: pads = [1, 1, 1, 1, 1, 1]
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_normalize_conv_autopad_same_lower_stride3
+func.func @test_normalize_conv_autopad_same_lower_stride3(
+    %x: tensor<1x3x29x29xf32>, %w: tensor<8x3x3x3xf32>, %b: tensor<8xf32>) -> tensor<1x8x10x10xf32> {
+  %0 = "onnx.Conv"(%x, %w, %b) {
+      auto_pad = "SAME_LOWER", dilations = [1, 1], group = 1 : si64,
+      kernel_shape = [3, 3], strides = [3, 3]} :
+      (tensor<1x3x29x29xf32>, tensor<8x3x3x3xf32>, tensor<8xf32>) -> tensor<1x8x10x10xf32>
+  onnx.Return %0 : tensor<1x8x10x10xf32>
+  // SAME_LOWER 3x3 stride-3: outputSize=ceil(29/3)=10,
+  // sumOfPad=(10-1)*3+(3-1)*1+1-29=1; SAME_LOWER adds extra at beginning
+  // -> pads=[1,1,0,0]
+  // CHECK: "onnx.Conv"({{.*}}) {auto_pad = "NOTSET"
+  // CHECK-SAME: pads = [1, 1, 0, 0]
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_normalize_conv_autopad_same_upper_batch2
+func.func @test_normalize_conv_autopad_same_upper_batch2(
+    %x: tensor<2x3x28x28xf32>, %w: tensor<8x3x3x3xf32>, %b: tensor<8xf32>) -> tensor<2x8x28x28xf32> {
+  %0 = "onnx.Conv"(%x, %w, %b) {
+      auto_pad = "SAME_UPPER", dilations = [1, 1], group = 1 : si64,
+      kernel_shape = [3, 3], strides = [1, 1]} :
+      (tensor<2x3x28x28xf32>, tensor<8x3x3x3xf32>, tensor<8xf32>) -> tensor<2x8x28x28xf32>
+  onnx.Return %0 : tensor<2x8x28x28xf32>
+  // CHECK: "onnx.Conv"({{.*}}) {auto_pad = "NOTSET"
+  // CHECK-SAME: pads = [1, 1, 1, 1]
+}
+
+// -----
+
 // Dynamic spatial dims: pattern must NOT fire for SAME_UPPER.
 // CHECK-LABEL: func.func @test_normalize_conv_autopad_dynamic_no_rewrite
 func.func @test_normalize_conv_autopad_dynamic_no_rewrite(
