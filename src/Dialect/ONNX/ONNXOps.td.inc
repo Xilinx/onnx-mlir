@@ -2560,6 +2560,7 @@ def ONNXEyeLikeOp:ONNX_Op<"EyeLike",
 
 def ONNXFlattenOp:ONNX_Op<"Flatten",
   [Pure, OpVersionTrait<21>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Flatten operation";
   let description = [{
   Flattens the input tensor into a 2D matrix. If input tensor has shape

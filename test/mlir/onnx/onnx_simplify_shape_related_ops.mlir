@@ -56,9 +56,9 @@ func.func @test_pass_dims_scalar(%arg0: tensor<?x?x200xf32>) -> tensor<i64> {
 
 // CHECK-LABEL:  func.func @test_pass_dims_scalar
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x?x200xf32>) -> tensor<i64> {
-// CHECK-DAG:       [[VAR_0_:%.+]] = "onnx.Dim"([[PARAM_0_]]) {axis = 0 : si64} : (tensor<?x?x200xf32>) -> tensor<1xi64>
-// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<0> : tensor<1xi64>
-// CHECK:           [[VAR_2_:%.+]] = "onnx.Squeeze"([[VAR_0_]], [[VAR_1_]]) : (tensor<1xi64>, tensor<1xi64>) -> tensor<i64>
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<> : tensor<0xi64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.Dim"([[PARAM_0_]]) {axis = 0 : si64} : (tensor<?x?x200xf32>) -> tensor<1xi64>
+// CHECK:           [[VAR_2_:%.+]] = "onnx.Reshape"([[VAR_1_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<1xi64>, tensor<0xi64>) -> tensor<i64>
 // CHECK:           onnx.Return [[VAR_2_]] : tensor<i64>
 // CHECK:         }
 }
