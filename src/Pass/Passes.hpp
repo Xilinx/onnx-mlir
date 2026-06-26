@@ -71,6 +71,10 @@ void configureUnsafeMathCanonicalization(bool enableUnsafeMathOptimizations);
 void configureConv1x1IntoConvCanonicalization(
     bool enableConv1x1IntoConvCanonicalization);
 
+// Configure whether Flatten/Squeeze/Unsqueeze-to-Reshape canonicalization is
+// enabled.
+void configureReshapeCanonicalization(bool enableReshapeCanonicalization);
+
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(
     bool enableQDQ = false, bool enableQuantConstFold = false);
 

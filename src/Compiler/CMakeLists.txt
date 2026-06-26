@@ -121,6 +121,7 @@ add_onnx_mlir_library(OMOnnxToMlirPasses
   ${OMOnnxToMlirPasses_EXTRA_LIBS}
   OMInstrumentONNX
   OMHybridTransform
+  OMXFEONNXOpsetVerifier
   OMOpTransform
   OMONNXStandardFuncReturnPass
   OMONNXSimplifyShapeRelatedOps

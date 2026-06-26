@@ -32,6 +32,9 @@ struct OnnxToMlirOptions {
   bool enableXMCPasses = false;
 
   bool disableBatchNormDecompose = false;
+  // Reshape-family canonicalization (Flatten/Squeeze/Unsqueeze -> Reshape).
+  bool enableReshapeCanonicalization = true;
+  bool enableXFEONNXOpsetVerifier = true;
   bool enableUnsafeMathOptimizations = true;
   bool enableConv1x1IntoConvCanonicalization = false;
   bool enableONNXHybridPass = true;
