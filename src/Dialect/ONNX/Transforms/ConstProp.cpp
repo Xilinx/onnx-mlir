@@ -1691,6 +1691,118 @@ public:
   }
 };
 
+// Fold Const(fp) -> QuantizeLinear into Const(int)
+class ConstFoldQuantizeLinearOnConst
+    : public OpRewritePattern<ONNXQuantizeLinearOp> {
+public:
+  using OpRewritePattern<ONNXQuantizeLinearOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXQuantizeLinearOp qOp, PatternRewriter &rewriter) const override {
+    // Blocked quantization is out of scope.
+    if (qOp.getBlockSize() != 0)
+      return rewriter.notifyMatchFailure(qOp, "blocked quantization");
+
+    // The input and quantization parameters must all be constants.
+    ElementsAttr xElems = getDenseOrDisposableConstLikeElements(qOp.getX());
+    if (!xElems)
+      return rewriter.notifyMatchFailure(qOp, "x is not a constant");
+    if (!isa<FloatType>(xElems.getElementType()))
+      return rewriter.notifyMatchFailure(qOp, "x is not floating point");
+
+    ElementsAttr scaleElems =
+        getDenseOrDisposableConstLikeElements(qOp.getYScale());
+    if (!scaleElems)
+      return rewriter.notifyMatchFailure(qOp, "y_scale is not a constant");
+
+    Value zpValue = qOp.getYZeroPoint();
+    bool hasZeroPoint = !isNoneValue(zpValue);
+    ElementsAttr zpElems;
+    if (hasZeroPoint) {
+      zpElems = getDenseOrDisposableConstLikeElements(zpValue);
+      if (!zpElems)
+        return rewriter.notifyMatchFailure(
+            qOp, "y_zero_point is not a constant");
+    }
+
+    // Output storage type must be a plain integer (skip float8).
+    Type yElemType = getElementTypeOrSelf(qOp.getY());
+    Type storageType = yElemType;
+    if (auto qType = dyn_cast<mlir::quant::QuantizedType>(yElemType))
+      storageType = qType.getStorageType();
+    auto intType = dyn_cast<IntegerType>(storageType);
+    if (!intType)
+      return rewriter.notifyMatchFailure(qOp, "non-integer output type");
+
+    auto xType = cast<ShapedType>(qOp.getX().getType());
+    if (!xType.hasStaticShape())
+      return rewriter.notifyMatchFailure(qOp, "x has dynamic shape");
+    int64_t xRank = xType.getRank();
+
+    FloatType f64Type = rewriter.getF64Type();
+    OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
+
+    // Reshape a per-axis scale/zp (1-D of length xShape[axis]) so it
+    // broadcasts against x's shape; per-tensor (scalar) needs no reshape.
+    auto broadcastToX = [&](ElementsAttr elems) -> ElementsAttr {
+      auto type = cast<ShapedType>(elems.getType());
+      int64_t numElems = type.getNumElements();
+      if (numElems == 1)
+        return elems; // Per-tensor: scalar broadcasts trivially.
+      int64_t axis = qOp.getAxis();
+      if (axis < 0)
+        axis += xRank;
+      SmallVector<int64_t> bcastShape(xRank, 1);
+      bcastShape[axis] = numElems;
+      return elementsBuilder.reshape(elems, bcastShape);
+    };
+
+    // Bail on per-axis (numElements > 1) parameters that are not 1-D, which
+    // would be blocked quantization we don't handle.
+    auto isFoldableParam = [&](ElementsAttr elems) -> bool {
+      auto type = cast<ShapedType>(elems.getType());
+      return type.getNumElements() == 1 || type.getRank() == 1;
+    };
+    if (!isFoldableParam(scaleElems) ||
+        (hasZeroPoint && !isFoldableParam(zpElems)))
+      return rewriter.notifyMatchFailure(qOp, "unsupported scale/zp shape");
+
+    ShapedType combinedType = cast<ShapedType>(
+        elementsBuilder.castToFPElementType(xElems, f64Type).getType());
+
+    // scaled = x / scale (both in f64).
+    ElementsAttr xF64 = elementsBuilder.castToFPElementType(xElems, f64Type);
+    ElementsAttr scaleF64 =
+        broadcastToX(elementsBuilder.castToFPElementType(scaleElems, f64Type));
+    ElementsAttr scaled = elementsBuilder.combine(xF64, scaleF64, combinedType,
+        elementwiseBinaryOpCombiner<ONNXDivOp>(f64Type));
+
+    // rounded = round-to-nearest-ties-to-even(scaled).
+    ElementsAttr rounded =
+        elementsBuilder.transform(scaled, f64Type, [](WideNum n) {
+          return WideNum::widen<BType::DOUBLE>(
+              std::nearbyint(n.narrow<BType::DOUBLE>()));
+        });
+
+    // shifted = rounded + zero_point (in f64). The values stay integral so
+    // the subsequent cast to the storage type is exact.
+    ElementsAttr shifted = rounded;
+    if (hasZeroPoint) {
+      ElementsAttr zpF64 =
+          broadcastToX(elementsBuilder.castToFPElementType(zpElems, f64Type));
+      shifted = elementsBuilder.combine(
+          rounded, zpF64, combinedType, addCombiner(f64Type));
+    }
+
+    ElementsAttr quantized =
+        elementsBuilder.castToIntElementType(shifted, intType, /*round=*/true);
+
+    rewriter.replaceOp(
+        qOp, createReplacingConstantOp(rewriter, qOp.getY(), quantized));
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Code to manage the pass.
 //===----------------------------------------------------------------------===//
@@ -1740,11 +1852,13 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(
   patterns.insert<IfOfConst>(patterns.getContext());
   patterns.insert<LoopUnroll>(patterns.getContext());
   patterns.insert<ConstPropConcatFromSequence>(patterns.getContext());
-  if (enableQDQ)
+  if (enableQDQ) {
     patterns.add<RemoveQDQForConst<ONNXSliceOp>,
         RemoveQDQForConst<ONNXTransposeOp>, RemoveQDQForConst<ONNXReshapeOp>,
         RemoveQDQForConst<ONNXSqueezeOp>, RemoveQDQForConst<ONNXUnsqueezeOp>,
         RemoveQDQForConst<ONNXGatherOp>>(patterns.getContext());
+    patterns.add<ConstFoldQuantizeLinearOnConst>(patterns.getContext());
+  }
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,
