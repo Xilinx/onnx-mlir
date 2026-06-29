@@ -2033,6 +2033,60 @@ struct RecomposeConcatPattern : public OpRewritePattern<ONNXConcatOp> {
   }
 };
 
+// A concat operand whose type has a statically zero-sized dimension is an
+// empty tensor and contributes nothing to the concatenation, so it can be
+// dropped. The result shape is unchanged, so the original result type is
+// reused. Only a single empty operand is removed per rewrite; when several
+// are present the greedy driver re-matches this pattern until none remain.
+// Restricted to arity > 1 so the rewrite never produces an operand-less
+// concat; a resulting single operand is folded by `ConcatSingleOperandPattern`.
+struct RemoveEmptyConcatOperandsPattern
+    : public OpRewritePattern<ONNXConcatOp> {
+  using OpRewritePattern<ONNXConcatOp>::OpRewritePattern;
+
+  static bool isEmptyTensor(Value v) {
+    auto type = mlir::dyn_cast<ShapedType>(v.getType());
+    return type && type.hasRank() && llvm::is_contained(type.getShape(), 0);
+  }
+
+  LogicalResult matchAndRewrite(
+      ONNXConcatOp concatOp, PatternRewriter &rewriter) const final {
+    if (concatOp.getNumOperands() <= 1)
+      return failure();
+
+    SmallVector<Value> keptOperands;
+    bool dropped = false;
+    for (Value operand : concatOp.getOperands()) {
+      // Drop the first 0-sized operand
+      if (!dropped && isEmptyTensor(operand)) {
+        dropped = true;
+        continue;
+      }
+      keptOperands.push_back(operand);
+    }
+
+    if (!dropped)
+      return failure();
+
+    rewriter.replaceOpWithNewOp<ONNXConcatOp>(concatOp,
+        concatOp.getResult().getType(), keptOperands, concatOp.getAxis());
+    return success();
+  }
+};
+
+// A concat with a single operand is an identity.
+struct ConcatSingleOperandPattern : public OpRewritePattern<ONNXConcatOp> {
+  using OpRewritePattern<ONNXConcatOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXConcatOp concatOp, PatternRewriter &rewriter) const final {
+    if (concatOp.getNumOperands() != 1)
+      return failure();
+    rewriter.replaceOp(concatOp, concatOp.getOperand(0));
+    return success();
+  }
+};
+
 namespace {
 
 [[nodiscard]] bool isPlainFloatType(Type t) {
@@ -3927,6 +3981,8 @@ void ONNXCastOp::getCanonicalizationPatterns(
 void ONNXConcatOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<RecomposeConcatPattern>(context);
+  results.insert<RemoveEmptyConcatOperandsPattern>(context);
+  results.insert<ConcatSingleOperandPattern>(context);
   results.insert<EliminateCarveOutAroundRotaryEmbeddingPattern>(context);
 }
 
