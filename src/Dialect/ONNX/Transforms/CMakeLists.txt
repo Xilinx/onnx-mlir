@@ -64,6 +64,7 @@ add_onnx_mlir_library(OMONNXRewrite
   FixNegScale.cpp
   ConvertToChannelLast.cpp
   ResultNamesUpdater.cpp
+  xmc/DedupDQs.cpp
   xmc/MergeSliceConcatPass.cpp
   xmc/CombineTransposePair.cpp
   xmc/MergeContinuousStridedSlice.cpp
