@@ -2031,6 +2031,31 @@ struct ONNXTransposeOptimizationPass
       return;
     }
 
+    // Reconcile graph-output tensor names deterministically, AFTER all
+    // rewriting, so transpose-fold order can no longer clobber them (the inline
+    // naming + ResultNamesUpdater listener are order-dependent and can stamp a
+    // sibling branch's name onto a shared producer). For each graph-output edge,
+    // walk back through name-transparent quant/dequant/requantize/cast ops to
+    // the producing compute op and stamp the true output tensor name there.
+    function.walk([](func::ReturnOp ret) {
+      for (Value out : ret.getOperands()) {
+        TensorName outName(out);
+        if (!outName)
+          continue;
+        Value cur = out;
+        Operation *def = cur.getDefiningOp();
+        while (def &&
+               isa<ONNXDequantizeLinearOp, ONNXQuantizeLinearOp,
+                   quant::StorageCastOp, XCOMPILERRequantizeOp>(def) &&
+               def->getNumOperands() >= 1) {
+          cur = def->getOperand(0);
+          def = cur.getDefiningOp();
+        }
+        if (def && cur != out)
+          (void)outName.setTo(cur);
+      }
+    });
+
     // Count transpose ops after
     int transposeCountAfter = 0;
     function.walk([&](ONNXTransposeOp /*op*/) { transposeCountAfter++; });
