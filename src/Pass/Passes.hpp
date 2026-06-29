@@ -92,6 +92,8 @@ std::unique_ptr<mlir::Pass> createTransferScalarConstInputDivToRequantizePass();
 
 std::unique_ptr<mlir::Pass> createONNXCSEPass();
 
+std::unique_ptr<mlir::Pass> createDedupDQsPass();
+
 std::unique_ptr<mlir::Pass> createQuantTypesPass();
 
 std::unique_ptr<mlir::Pass> createFixNegScalePass();
