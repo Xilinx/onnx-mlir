@@ -4,7 +4,7 @@
 // Positive cases.
 //===----------------------------------------------------------------------===//
 
-// Per-tensor, no zero point. 1.0/0.5=2, 2.0/0.5=4, 3.0/0.5=6.
+// Per-tensor, zero point = 0. 1.0/0.5=2, 2.0/0.5=4, 3.0/0.5=6.
 func.func @fold_q_per_tensor() -> tensor<3xui8> {
   %x = onnx.Constant dense<[1.0, 2.0, 3.0]> : tensor<3xf32>
   %scale = onnx.Constant dense<5.000000e-01> : tensor<f32>
@@ -139,4 +139,18 @@ func.func @no_fold_blocked() -> tensor<4xui8> {
 }
 
 // CHECK-LABEL: @no_fold_blocked
+// CHECK: onnx.QuantizeLinear
+
+// -----
+
+// saturate = 0: folding would clamp, changing semantics, so Q must remain.
+func.func @no_fold_no_saturate() -> tensor<2xui8> {
+  %x = onnx.Constant dense<[1000.0, -5.0]> : tensor<2xf32>
+  %scale = onnx.Constant dense<1.000000e+00> : tensor<f32>
+  %zp = onnx.Constant dense<0> : tensor<ui8>
+  %q = "onnx.QuantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 0 : si64} : (tensor<2xf32>, tensor<f32>, tensor<ui8>) -> tensor<2xui8>
+  return %q : tensor<2xui8>
+}
+
+// CHECK-LABEL: @no_fold_no_saturate
 // CHECK: onnx.QuantizeLinear

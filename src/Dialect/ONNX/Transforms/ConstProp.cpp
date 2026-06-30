@@ -1703,6 +1703,9 @@ public:
     if (qOp.getBlockSize() != 0)
       return rewriter.notifyMatchFailure(qOp, "blocked quantization");
 
+    if (!qOp.getSaturate())
+      return rewriter.notifyMatchFailure(qOp, "only saturate=1 is supported");
+
     // The input and quantization parameters must all be constants.
     ElementsAttr xElems = getDenseOrDisposableConstLikeElements(qOp.getX());
     if (!xElems)
@@ -1725,19 +1728,44 @@ public:
             qOp, "y_zero_point is not a constant");
     }
 
-    // Output storage type must be a plain integer (skip float8).
-    Type yElemType = getElementTypeOrSelf(qOp.getY());
-    Type storageType = yElemType;
-    if (auto qType = dyn_cast<mlir::quant::QuantizedType>(yElemType))
-      storageType = qType.getStorageType();
-    auto intType = dyn_cast<IntegerType>(storageType);
+    auto intType = dyn_cast<IntegerType>(getElementTypeOrSelf(qOp.getY()));
     if (!intType)
       return rewriter.notifyMatchFailure(qOp, "non-integer output type");
+    // castToIntElementType computes the saturation range with 64-bit shifts.
+    if (intType.getWidth() > 64)
+      return rewriter.notifyMatchFailure(qOp, "integer width > 64");
 
     auto xType = cast<ShapedType>(qOp.getX().getType());
     if (!xType.hasStaticShape())
       return rewriter.notifyMatchFailure(qOp, "x has dynamic shape");
     int64_t xRank = xType.getRank();
+    ArrayRef<int64_t> xShape = xType.getShape();
+
+    int64_t scaleElemCount =
+        cast<ShapedType>(scaleElems.getType()).getNumElements();
+    int64_t zpElemCount =
+        hasZeroPoint ? cast<ShapedType>(zpElems.getType()).getNumElements() : 1;
+    bool isPerAxis = scaleElemCount > 1 || zpElemCount > 1;
+
+    int64_t axis = qOp.getAxis();
+    if (isPerAxis) {
+      if (axis < 0)
+        axis += xRank;
+      if (axis < 0 || axis >= xRank)
+        return rewriter.notifyMatchFailure(qOp, "axis out of range");
+
+      auto isFoldablePerAxisParam = [&](ElementsAttr elems,
+                                        int64_t count) -> bool {
+        if (count == 1)
+          return true; // Scalar broadcasts trivially.
+        auto type = cast<ShapedType>(elems.getType());
+        return type.getRank() == 1 && count == xShape[axis];
+      };
+      if (!isFoldablePerAxisParam(scaleElems, scaleElemCount) ||
+          (hasZeroPoint && !isFoldablePerAxisParam(zpElems, zpElemCount)))
+        return rewriter.notifyMatchFailure(
+            qOp, "unsupported per-axis scale/zp");
+    }
 
     FloatType f64Type = rewriter.getF64Type();
     OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
@@ -1749,23 +1777,10 @@ public:
       int64_t numElems = type.getNumElements();
       if (numElems == 1)
         return elems; // Per-tensor: scalar broadcasts trivially.
-      int64_t axis = qOp.getAxis();
-      if (axis < 0)
-        axis += xRank;
       SmallVector<int64_t> bcastShape(xRank, 1);
       bcastShape[axis] = numElems;
       return elementsBuilder.reshape(elems, bcastShape);
     };
-
-    // Bail on per-axis (numElements > 1) parameters that are not 1-D, which
-    // would be blocked quantization we don't handle.
-    auto isFoldableParam = [&](ElementsAttr elems) -> bool {
-      auto type = cast<ShapedType>(elems.getType());
-      return type.getNumElements() == 1 || type.getRank() == 1;
-    };
-    if (!isFoldableParam(scaleElems) ||
-        (hasZeroPoint && !isFoldableParam(zpElems)))
-      return rewriter.notifyMatchFailure(qOp, "unsupported scale/zp shape");
 
     ShapedType combinedType = cast<ShapedType>(
         elementsBuilder.castToFPElementType(xElems, f64Type).getType());
@@ -1777,25 +1792,26 @@ public:
     ElementsAttr scaled = elementsBuilder.combine(xF64, scaleF64, combinedType,
         elementwiseBinaryOpCombiner<ONNXDivOp>(f64Type));
 
-    // rounded = round-to-nearest-ties-to-even(scaled).
-    ElementsAttr rounded =
-        elementsBuilder.transform(scaled, f64Type, [](WideNum n) {
-          return WideNum::widen<BType::DOUBLE>(
-              std::nearbyint(n.narrow<BType::DOUBLE>()));
-        });
-
-    // shifted = rounded + zero_point (in f64). The values stay integral so
-    // the subsequent cast to the storage type is exact.
-    ElementsAttr shifted = rounded;
+    // shifted = (x / scale) + zero_point
+    ElementsAttr shifted = scaled;
     if (hasZeroPoint) {
       ElementsAttr zpF64 =
           broadcastToX(elementsBuilder.castToFPElementType(zpElems, f64Type));
       shifted = elementsBuilder.combine(
-          rounded, zpF64, combinedType, addCombiner(f64Type));
+          scaled, zpF64, combinedType, addCombiner(f64Type));
     }
 
+    ElementsAttr rounded =
+        elementsBuilder.transform(shifted, f64Type, [](WideNum n) {
+          int savedMode = fegetround();
+          fesetround(FE_TONEAREST);
+          double r = std::nearbyint(n.narrow<BType::DOUBLE>());
+          fesetround(savedMode);
+          return WideNum::widen<BType::DOUBLE>(r);
+        });
+
     ElementsAttr quantized =
-        elementsBuilder.castToIntElementType(shifted, intType, /*round=*/true);
+        elementsBuilder.castToIntElementType(rounded, intType, /*round=*/false);
 
     rewriter.replaceOp(
         qOp, createReplacingConstantOp(rewriter, qOp.getY(), quantized));
