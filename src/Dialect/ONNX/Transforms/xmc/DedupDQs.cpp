@@ -52,29 +52,39 @@ public:
     DenseSet<ONNXDequantizeLinearOp, DQOpInfo> uniqDQs;
     DenseSet<ONNXDequantizeLinearOp> opsToErase;
 
-    auto isOutput = [](ONNXDequantizeLinearOp dqOp) {
-      return any_of(dqOp->getUsers(),
-          [](Operation *user) { return isa<func::ReturnOp>(user); });
-    };
+    for (auto currDQ : func.getOps<ONNXDequantizeLinearOp>()) {
+      if (auto foundIter = uniqDQs.find(currDQ); foundIter != uniqDQs.end()) {
+        ONNXDequantizeLinearOp &existingDQ = *foundIter;
 
-    for (auto dqOp : func.getOps<ONNXDequantizeLinearOp>()) {
-      if (auto foundIter = uniqDQs.find(dqOp); foundIter != uniqDQs.end()) {
-        if (isOutput(dqOp) && !isOutput(*foundIter)) {
-          (*foundIter)->replaceAllUsesWith(dqOp->getResults());
-          opsToErase.insert(*foundIter);
+        if (currDQ == existingDQ) {
+          // Can happen, since we're moving the DQ's around
+          continue;
+        } else if (isOutput(currDQ) && !isOutput(existingDQ)) {
+          // Prefer output DQs even if they occur second
+          // Replacing DQ should dominate all it's uses, so it's moved
+          currDQ->moveAfter(existingDQ);
+          existingDQ->replaceAllUsesWith(currDQ->getResults());
+          opsToErase.insert(existingDQ);
           uniqDQs.erase(foundIter);
-          uniqDQs.insert(dqOp);
+          uniqDQs.insert(currDQ);
         } else {
-          dqOp->replaceAllUsesWith((*foundIter)->getResults());
-          opsToErase.insert(dqOp);
+          // Usual replacement, keep the first-seen DQ
+          currDQ->replaceAllUsesWith(existingDQ->getResults());
+          opsToErase.insert(currDQ);
         }
       } else {
-        uniqDQs.insert(dqOp);
+        uniqDQs.insert(currDQ);
       }
     }
 
     for (auto dqOp : opsToErase)
       dqOp->erase();
+  }
+
+private:
+  static bool isOutput(ONNXDequantizeLinearOp dqOp) {
+    return any_of(dqOp->getUsers(),
+        [](Operation *user) { return isa_and_present<func::ReturnOp>(user); });
   }
 };
 

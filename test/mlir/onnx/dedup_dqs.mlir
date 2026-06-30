@@ -24,8 +24,8 @@ func.func @dedup_prefer_output_dq(%arg0: tensor<64xf32>) -> (tensor<64xf32>, ten
   %1 = onnx.Constant dense<127> : tensor<64xi8>
   %2 = onnx.Constant dense<0.00787401571> : tensor<f32>
   %3 = "onnx.DequantizeLinear"(%1, %2, %0) {axis = 1 : si64, block_size = 0 : si64, onnx_node_name = "a"} : (tensor<64xi8>, tensor<f32>, tensor<i8>) -> tensor<64xf32>
-  %4 = "onnx.DequantizeLinear"(%1, %2, %0) {axis = 1 : si64, block_size = 0 : si64, onnx_node_name = "b"} : (tensor<64xi8>, tensor<f32>, tensor<i8>) -> tensor<64xf32>
   %5 = "onnx.Add"(%3, %arg0) : (tensor<64xf32>, tensor<64xf32>) -> tensor<64xf32>
+  %4 = "onnx.DequantizeLinear"(%1, %2, %0) {axis = 1 : si64, block_size = 0 : si64, onnx_node_name = "b"} : (tensor<64xi8>, tensor<f32>, tensor<i8>) -> tensor<64xf32>
   return %5, %4 : tensor<64xf32>, tensor<64xf32>
 }
 
