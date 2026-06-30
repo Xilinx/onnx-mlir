@@ -543,3 +543,34 @@ func.func @test_no_fuse_dynamic_same_upper_nonzero_b1(
 // CHECK:           onnx.Return [[VAR_5_]] : tensor<1x8x?x?xf32>
 // CHECK:         }
 }
+
+// -----
+
+func.func @test_no_fuse_quantized_conv1x1(
+    %x: tensor<1x3x8x8x!quant.uniform<i8:f32, 0.1:0>>,
+    %w1: tensor<4x3x1x1x!quant.uniform<i8:f32, 0.1:0>>,
+    %w2: tensor<8x4x3x3x!quant.uniform<i8:f32, 0.1:0>>) -> tensor<1x8x6x6x!quant.uniform<i8:f32, 0.1:0>> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %c1 = "onnx.Conv"(%x, %w1, %none) {
+      auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64,
+      kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} :
+      (tensor<1x3x8x8x!quant.uniform<i8:f32, 0.1:0>>,
+       tensor<4x3x1x1x!quant.uniform<i8:f32, 0.1:0>>, none) ->
+      tensor<1x4x8x8x!quant.uniform<i8:f32, 0.1:0>>
+  %c2 = "onnx.Conv"(%c1, %w2, %none) {
+      auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64,
+      kernel_shape = [3, 3], pads = [0, 0, 0, 0], strides = [1, 1]} :
+      (tensor<1x4x8x8x!quant.uniform<i8:f32, 0.1:0>>,
+       tensor<8x4x3x3x!quant.uniform<i8:f32, 0.1:0>>, none) ->
+      tensor<1x8x6x6x!quant.uniform<i8:f32, 0.1:0>>
+  onnx.Return %c2 : tensor<1x8x6x6x!quant.uniform<i8:f32, 0.1:0>>
+
+
+// CHECK-LABEL:  func.func @test_no_fuse_quantized_conv1x1
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x8x8x!quant.uniform<i8:f32, 1.000000e-01>>, [[PARAM_1_:%.+]]: tensor<4x3x1x1x!quant.uniform<i8:f32, 1.000000e-01>>, [[PARAM_2_:%.+]]: tensor<8x4x3x3x!quant.uniform<i8:f32, 1.000000e-01>>) -> tensor<1x8x6x6x!quant.uniform<i8:f32, 1.000000e-01>> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = "onnx.NoValue"() {value} : () -> none
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[PARAM_1_]], [[VAR_0_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x3x8x8x!quant.uniform<i8:f32, 1.000000e-01>>, tensor<4x3x1x1x!quant.uniform<i8:f32, 1.000000e-01>>, none) -> tensor<1x4x8x8x!quant.uniform<i8:f32, 1.000000e-01>>
+// CHECK:           [[VAR_2_:%.+]] = "onnx.Conv"([[VAR_1_]], [[PARAM_2_]], [[VAR_0_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [3, 3], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x4x8x8x!quant.uniform<i8:f32, 1.000000e-01>>, tensor<8x4x3x3x!quant.uniform<i8:f32, 1.000000e-01>>, none) -> tensor<1x8x6x6x!quant.uniform<i8:f32, 1.000000e-01>>
+// CHECK:           onnx.Return [[VAR_2_]] : tensor<1x8x6x6x!quant.uniform<i8:f32, 1.000000e-01>>
+// CHECK:         }
+}
