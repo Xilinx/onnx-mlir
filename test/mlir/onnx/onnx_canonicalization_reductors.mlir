@@ -1,6 +1,7 @@
-// RUN: onnx-mlir-opt --canonicalize %s -split-input-file | FileCheck %s
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
+// RUN: onnx-mlir-opt --shape-inference --canonicalize="test-convergence=true" --shape-inference --cse %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --enable-reduce-keepdims-canonicalization=false --shape-inference --canonicalize="test-convergence=true" --shape-inference --cse %s -split-input-file | FileCheck %s --check-prefix=DISABLED-CHECK
 
-// -----
 
 func.func @test_reducesumv11_axes(%arg0: tensor<1x32x512x640xf32>) -> tensor<1x512x640xf32> {
   %0 = "onnx.ReduceSumV11"(%arg0) {axes = [1], keepdims = 0 : si64} : (tensor<1x32x512x640xf32>) -> tensor<1x512x640xf32>
@@ -24,4 +25,126 @@ func.func @test_reducesumv11_noaxes(%arg0: tensor<2x3x4xf32>) -> tensor<1x1x1xf3
 // CHECK:           [[VAR_1_:%.+]] = "onnx.ReduceSum"([[PARAM_0_]], [[VAR_0_]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<2x3x4xf32>, none) -> tensor<1x1x1xf32>
 // CHECK:           onnx.Return [[VAR_1_]] : tensor<1x1x1xf32>
 // CHECK:         }
+
+// -----
+
+// Rewrite keepdims=0 to keepdims=1 + Reshape for ONNX reduce ops.
+
+// CHECK-LABEL: func.func @reduce_l2_keepdims_zero
+func.func @reduce_l2_keepdims_zero(%arg0: tensor<2x3x4xf32>) -> tensor<2x4xf32> {
+  %axes = onnx.Constant dense<[1]> : tensor<1xi64>
+  %0 = "onnx.ReduceL2"(%arg0, %axes) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+      : (tensor<2x3x4xf32>, tensor<1xi64>) -> tensor<2x4xf32>
+  onnx.Return %0 : tensor<2x4xf32>
+  // CHECK-DAG: [[SHAPE:%.+]] = onnx.Constant dense<[2, 4]> : tensor<2xi64>
+  // CHECK-DAG: [[AXES:%.+]] = onnx.Constant dense<1> : tensor<1xi64>
+  // CHECK: [[REDUCE:%.+]] = "onnx.ReduceL2"(%arg0, [[AXES]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
+  // CHECK-SAME: (tensor<2x3x4xf32>, tensor<1xi64>) -> tensor<2x1x4xf32>
+  // CHECK: [[RES:%.+]] = "onnx.Reshape"([[REDUCE]], [[SHAPE]]) {allowzero = 0 : si64}
+  // CHECK-SAME: (tensor<2x1x4xf32>, tensor<2xi64>) -> tensor<2x4xf32>
+  // CHECK: onnx.Return [[RES]]
+  // CHECK-NOT: keepdims = 0
+  // DISABLED-CHECK-LABEL: func.func @reduce_l2_keepdims_zero
+  // DISABLED-CHECK: "onnx.ReduceL2"(%arg0, %{{.*}}) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+  // DISABLED-CHECK: onnx.Return %{{.*}}
+  // DISABLED-CHECK-NOT: "onnx.Reshape"
+}
+
+// -----
+// CHECK-LABEL: func.func @reduce_max_keepdims_zero
+func.func @reduce_max_keepdims_zero(%arg0: tensor<1x3x5x5xf32>) -> tensor<1x3xf32> {
+  %axes = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  %0 = "onnx.ReduceMax"(%arg0, %axes) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+      : (tensor<1x3x5x5xf32>, tensor<2xi64>) -> tensor<1x3xf32>
+  onnx.Return %0 : tensor<1x3xf32>
+  // CHECK-DAG: [[SHAPE:%.+]] = onnx.Constant dense<[1, 3]> : tensor<2xi64>
+  // CHECK-DAG: [[AXES:%.+]] = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  // CHECK: [[REDUCE:%.+]] = "onnx.ReduceMax"(%arg0, [[AXES]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
+  // CHECK-SAME: (tensor<1x3x5x5xf32>, tensor<2xi64>) -> tensor<1x3x1x1xf32>
+  // CHECK: [[RES:%.+]] = "onnx.Reshape"([[REDUCE]], [[SHAPE]]) {allowzero = 0 : si64}
+  // CHECK-SAME: (tensor<1x3x1x1xf32>, tensor<2xi64>) -> tensor<1x3xf32>
+  // CHECK: onnx.Return [[RES]]
+  // CHECK-NOT: keepdims = 0
+  // DISABLED-CHECK-LABEL: func.func @reduce_max_keepdims_zero
+  // DISABLED-CHECK: "onnx.ReduceMax"(%arg0, %{{.*}}) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+  // DISABLED-CHECK: onnx.Return %{{.*}}
+  // DISABLED-CHECK-NOT: "onnx.Reshape"
+}
+
+// -----
+// CHECK-LABEL: func.func @reduce_mean_keepdims_zero
+func.func @reduce_mean_keepdims_zero(%arg0: tensor<2x3x4x5xf32>) -> tensor<2x4xf32> {
+  %axes = onnx.Constant dense<[1, 3]> : tensor<2xi64>
+  %0 = "onnx.ReduceMean"(%arg0, %axes) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+      : (tensor<2x3x4x5xf32>, tensor<2xi64>) -> tensor<2x4xf32>
+  onnx.Return %0 : tensor<2x4xf32>
+  // CHECK-DAG: [[SHAPE:%.+]] = onnx.Constant dense<[2, 4]> : tensor<2xi64>
+  // CHECK-DAG: [[AXES:%.+]] = onnx.Constant dense<[1, 3]> : tensor<2xi64>
+  // CHECK: [[REDUCE:%.+]] = "onnx.ReduceMean"(%arg0, [[AXES]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
+  // CHECK-SAME: (tensor<2x3x4x5xf32>, tensor<2xi64>) -> tensor<2x1x4x1xf32>
+  // CHECK: [[RES:%.+]] = "onnx.Reshape"([[REDUCE]], [[SHAPE]]) {allowzero = 0 : si64}
+  // CHECK-SAME: (tensor<2x1x4x1xf32>, tensor<2xi64>) -> tensor<2x4xf32>
+  // CHECK: onnx.Return [[RES]]
+  // CHECK-NOT: keepdims = 0
+  // DISABLED-CHECK-LABEL: func.func @reduce_mean_keepdims_zero
+  // DISABLED-CHECK: "onnx.ReduceMean"(%arg0, %{{.*}}) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+  // DISABLED-CHECK: onnx.Return %{{.*}}
+  // DISABLED-CHECK-NOT: "onnx.Reshape"
+}
+
+// -----
+// CHECK-LABEL: func.func @reduce_min_keepdims_zero
+func.func @reduce_min_keepdims_zero(%arg0: tensor<2x3x4xf32>) -> tensor<3xf32> {
+  %axes = onnx.Constant dense<[0, 2]> : tensor<2xi64>
+  %0 = "onnx.ReduceMin"(%arg0, %axes) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+      : (tensor<2x3x4xf32>, tensor<2xi64>) -> tensor<3xf32>
+  onnx.Return %0 : tensor<3xf32>
+  // CHECK-DAG: [[SHAPE:%.+]] = onnx.Constant dense<3> : tensor<1xi64>
+  // CHECK-DAG: [[AXES:%.+]] = onnx.Constant dense<[0, 2]> : tensor<2xi64>
+  // CHECK: [[REDUCE:%.+]] = "onnx.ReduceMin"(%arg0, [[AXES]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
+  // CHECK-SAME: (tensor<2x3x4xf32>, tensor<2xi64>) -> tensor<1x3x1xf32>
+  // CHECK: [[RES:%.+]] = "onnx.Reshape"([[REDUCE]], [[SHAPE]]) {allowzero = 0 : si64}
+  // CHECK-SAME: (tensor<1x3x1xf32>, tensor<1xi64>) -> tensor<3xf32>
+  // CHECK: onnx.Return [[RES]]
+  // CHECK-NOT: keepdims = 0
+  // DISABLED-CHECK-LABEL: func.func @reduce_min_keepdims_zero
+  // DISABLED-CHECK: "onnx.ReduceMin"(%arg0, %{{.*}}) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+  // DISABLED-CHECK: onnx.Return %{{.*}}
+  // DISABLED-CHECK-NOT: "onnx.Reshape"
+}
+
+// -----
+// CHECK-LABEL: func.func @reduce_sum_keepdims_zero
+func.func @reduce_sum_keepdims_zero(%arg0: tensor<1x2x3x4xf32>) -> tensor<2x3xf32> {
+  %axes = onnx.Constant dense<[0, 3]> : tensor<2xi64>
+  %0 = "onnx.ReduceSum"(%arg0, %axes) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+      : (tensor<1x2x3x4xf32>, tensor<2xi64>) -> tensor<2x3xf32>
+  onnx.Return %0 : tensor<2x3xf32>
+  // CHECK-DAG: [[SHAPE:%.+]] = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  // CHECK-DAG: [[AXES:%.+]] = onnx.Constant dense<[0, 3]> : tensor<2xi64>
+  // CHECK: [[REDUCE:%.+]] = "onnx.ReduceSum"(%arg0, [[AXES]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
+  // CHECK-SAME: (tensor<1x2x3x4xf32>, tensor<2xi64>) -> tensor<1x2x3x1xf32>
+  // CHECK: [[RES:%.+]] = "onnx.Reshape"([[REDUCE]], [[SHAPE]]) {allowzero = 0 : si64}
+  // CHECK-SAME: (tensor<1x2x3x1xf32>, tensor<2xi64>) -> tensor<2x3xf32>
+  // CHECK: onnx.Return [[RES]]
+  // CHECK-NOT: keepdims = 0
+  // DISABLED-CHECK-LABEL: func.func @reduce_sum_keepdims_zero
+  // DISABLED-CHECK: "onnx.ReduceSum"(%arg0, %{{.*}}) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+  // DISABLED-CHECK: onnx.Return %{{.*}}
+  // DISABLED-CHECK-NOT: "onnx.Reshape"
+}
+
+// -----
+// CHECK-LABEL: func.func @reduce_sum_keepdims_one_unchanged
+func.func @reduce_sum_keepdims_one_unchanged(%arg0: tensor<2x3x4xf32>) -> tensor<2x1x4xf32> {
+  %axes = onnx.Constant dense<[1]> : tensor<1xi64>
+  %0 = "onnx.ReduceSum"(%arg0, %axes) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
+      : (tensor<2x3x4xf32>, tensor<1xi64>) -> tensor<2x1x4xf32>
+  onnx.Return %0 : tensor<2x1x4xf32>
+  // CHECK: "onnx.ReduceSum"(%arg0, %{{.*}}) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
+  // CHECK-NOT: "onnx.Reshape"
+  // DISABLED-CHECK-LABEL: func.func @reduce_sum_keepdims_one_unchanged
+  // DISABLED-CHECK: "onnx.ReduceSum"(%arg0, %{{.*}}) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
+  // DISABLED-CHECK: onnx.Return %{{.*}}
+  // DISABLED-CHECK-NOT: "onnx.Reshape"
 }
