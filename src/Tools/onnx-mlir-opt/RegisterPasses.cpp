@@ -354,6 +354,10 @@ void registerOMPasses(int optLevel) {
     return createSetONNXNodeNamePass();
   });
 
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createXFEONNXOpsetVerifierPass();
+  });
+
 #ifdef ONNX_MLIR_ENABLE_KRNL
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createONNXPreKrnlVerifyPass();

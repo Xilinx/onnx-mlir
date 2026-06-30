@@ -14,10 +14,10 @@ func.func @sequence_at_squeezed(%arg0 : tensor<1x1x100xf32>) -> tensor<1x100xf32
   return %33: tensor<1x100xf32>
 // CHECK-LABEL:  func.func @sequence_at_squeezed
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x1x100xf32>) -> tensor<1x100xf32> {
-// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<0> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<[1, 100]> : tensor<2xi64>
 // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<1> : tensor<1xi64>
 // CHECK:           [[VAR_2_:%.+]] = "onnx.Split"([[PARAM_0_]], [[VAR_1_]]) {axis = 0 : si64} : (tensor<1x1x100xf32>, tensor<1xi64>) -> tensor<1x1x100xf32>
-// CHECK:           [[VAR_3_:%.+]] = "onnx.Squeeze"([[VAR_2_]], [[VAR_0_]]) : (tensor<1x1x100xf32>, tensor<1xi64>) -> tensor<1x100xf32>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.Reshape"([[VAR_2_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<1x1x100xf32>, tensor<2xi64>) -> tensor<1x100xf32>
 // CHECK:           return [[VAR_3_]] : tensor<1x100xf32>
 // CHECK:         }
 }

@@ -93,7 +93,21 @@ def ONNXDecomposePatternOptions {
            "bool", /*default=*/"false",
            "In 4-phase ConvTranspose decomposition, force 4 separate Conv ops "
            "(concatenated) instead of combining the phased weights into a "
-           "single Conv, when the conv output channels are DMA-aligned.">
+           "single Conv, when the conv output channels are DMA-aligned.">,
+
+    Option<"enableConvTransposeDecomposeToDepthToSpace",
+           "enable-convtranspose-depthtospace",
+           "bool", /*default=*/"false",
+           "In the phased ConvTranspose decomposition, emit a DepthToSpace "
+           "(DCR) as the final interleave instead of "
+           "Reshape/Transpose/Reshape.">,
+
+    Option<"enableDepthToSpaceDecompose",
+           "enable-depthtospace-decompose",
+           "bool", /*default=*/"false",
+           "Decompose onnx.DepthToSpace (DCR and CRD) into "
+           "Reshape/Transpose/Reshape so backends without a DepthToSpace "
+           "kernel can run it.">
   ];
 }
 
@@ -168,4 +182,18 @@ def ONNXHybridTransformPass
       ONNXHybridTransformOptions.options # ONNXDecomposePatternOptions.options;
 
   let genOptionsParser = 1;
+}
+
+def XFEONNXOpsetVerifierPass
+    : Pass<"xfe-onnx-opset-verifier", "::mlir::func::FuncOp"> {
+  let summary = "Verify XFE ONNX opset constraints.";
+  let description = [{
+    Verifies that the ops inside a function match the XFE ONNX opset
+    constraints. Currently implements a check for disallowed ops.
+  }];
+  let options = [
+    Option<"disallowedOps", "disallowed-ops", "std::string",
+           /*default=*/"\"Flatten,Squeeze,Unsqueeze\"",
+           "Comma-separated bare ONNX op names that must not appear. Skips ops with non-static shapes.">
+  ];
 }
