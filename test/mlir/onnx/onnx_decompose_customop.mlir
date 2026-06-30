@@ -1003,6 +1003,135 @@ func.func @gqa_rotary_no_position_ids_dynamic_past_key(
 
 // -----
 
+
+// -----
+
+func.func @gqa_quantized_cache_rejected(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>) {
+  %total_seqlen = "onnx.Constant"() {value = dense<257> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<256> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_cache_bit_width = 8 : si64,
+    kv_num_heads = 16 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+}
+// CHECK-LABEL: func.func @gqa_quantized_cache_rejected
+// CHECK-NOT: "onnx.Attention"
+// CHECK: "onnx.Custom"
+// CHECK-SAME: function_name = "GroupQueryAttention"
+
+// -----
+
+func.func @gqa_quant_type_none_decomposes(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>) {
+  %total_seqlen = "onnx.Constant"() {value = dense<257> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<256> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    k_quant_type = "NONE",
+    kv_num_heads = 16 : si64,
+    num_heads = 32 : si64,
+    v_quant_type = "NONE"
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+}
+// CHECK-LABEL: func.func @gqa_quant_type_none_decomposes
+// CHECK: "onnx.Attention"
+
+// -----
+
+func.func @gqa_quantized_cache_scale_input_rejected(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>,
+  %k_scale: tensor<f32>,
+  %v_scale: tensor<f32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>) {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %total_seqlen = "onnx.Constant"() {value = dense<257> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<256> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen, %none, %none, %none, %none, %none, %k_scale, %v_scale) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>, none, none, none, none, none, tensor<f32>, tensor<f32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+}
+// CHECK-LABEL: func.func @gqa_quantized_cache_scale_input_rejected
+// CHECK-NOT: "onnx.Attention"
+// CHECK: "onnx.Custom"
+// CHECK-SAME: function_name = "GroupQueryAttention"
+
+// -----
+
+func.func @gqa_quantized_cache_type_attr_rejected(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>) {
+  %total_seqlen = "onnx.Constant"() {value = dense<257> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<256> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    k_quant_type = "PER_TENSOR",
+    kv_num_heads = 16 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+}
+// CHECK-LABEL: func.func @gqa_quantized_cache_type_attr_rejected
+// CHECK-NOT: "onnx.Attention"
+// CHECK: "onnx.Custom"
+// CHECK-SAME: function_name = "GroupQueryAttention"
+
+// -----
+
+func.func @gqa_qk_norm_rejected(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>,
+  %q_norm_weight: tensor<96xf32>,
+  %k_norm_weight: tensor<96xf32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>) {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %total_seqlen = "onnx.Constant"() {value = dense<257> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<256> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen, %none, %none, %none, %none, %none, %none, %none, %q_norm_weight, %k_norm_weight) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>, none, none, none, none, none, none, none, tensor<96xf32>, tensor<96xf32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+}
+// CHECK-LABEL: func.func @gqa_qk_norm_rejected
+// CHECK-NOT: "onnx.Attention"
+// CHECK: "onnx.Custom"
+// CHECK-SAME: function_name = "GroupQueryAttention"
+
 func.func @rotary_embedding_4d_interleaved_rotdim_16(%data: tensor<1x32x128x96xf32>, %pos_ids: tensor<1x128xi64>, %cos_cache: tensor<4096x8xf32>, %sin_cache: tensor<4096x8xf32>) -> tensor<1x32x128x96xf32> {
   %0 = "onnx.Custom"(%data, %pos_ids, %cos_cache, %sin_cache) {
     domain_name = "com.microsoft",

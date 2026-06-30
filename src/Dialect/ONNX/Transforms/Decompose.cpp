@@ -3305,13 +3305,65 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
 
   bool enableCacheSlicing;
 
+  static bool hasPresentOptionalInput(ONNXCustomOp customOp, int64_t index) {
+    return customOp.getNumOperands() > index &&
+           !onnx_mlir::isNoneValue(customOp.getOperand(index));
+  }
+
+  static bool hasNonNoneQuantType(ONNXCustomOp customOp, StringRef attrName) {
+    auto attr = customOp->getAttrOfType<StringAttr>(attrName);
+    return attr && !attr.getValue().equals_insensitive("NONE");
+  }
+
+  // Fallback: cache tensor types can reveal quantized KV cache even when attrs
+  // are absent. ORT packs 4-bit cache in uint8.
+  static bool hasQuantizedCacheElementType(Type type) {
+    auto shapedType = dyn_cast<ShapedType>(type);
+    if (!shapedType)
+      return false;
+
+    Type elementType = shapedType.getElementType();
+    if (auto intType = dyn_cast<IntegerType>(elementType))
+      return intType.getWidth() == 8;
+
+    return isa<Float8E4M3FNType>(elementType);
+  }
+
+  static bool hasUnsupportedQuantizedCacheSchema(ONNXCustomOp customOp) {
+    // Inputs 12/13 are k_scale/v_scale for quantized KV cache.
+    if (hasPresentOptionalInput(customOp, 12) ||
+        hasPresentOptionalInput(customOp, 13))
+      return true;
+
+    if (hasNonNoneQuantType(customOp, "k_quant_type") ||
+        hasNonNoneQuantType(customOp, "v_quant_type") ||
+        customOp->hasAttr("kv_cache_bit_width"))
+      return true;
+
+    // Check both past (inputs 3/4) and present (results 1/2) KV cache types.
+    return hasQuantizedCacheElementType(customOp.getOperand(3).getType()) ||
+           hasQuantizedCacheElementType(customOp.getOperand(4).getType()) ||
+           (customOp.getNumResults() > 1 &&
+               hasQuantizedCacheElementType(customOp.getResult(1).getType())) ||
+           (customOp.getNumResults() > 2 &&
+               hasQuantizedCacheElementType(customOp.getResult(2).getType()));
+  }
+
+  static bool hasUnsupportedQKNormSchema(ONNXCustomOp customOp) {
+    // Inputs 14/15 are q_norm_weight/k_norm_weight.
+    return hasPresentOptionalInput(customOp, 14) ||
+           hasPresentOptionalInput(customOp, 15);
+  }
+
   LogicalResult matchAndRewriteImpl(
       ONNXCustomOp customOp, PatternRewriter &rewriter) const final {
 
     using namespace onnx_mlir;
     const Location loc = customOp.getLoc();
     const int64_t numIn = customOp.getNumOperands();
-    assert((numIn >= 7 && numIn <= 12) && "expects 7..12 inputs");
+    if (numIn < 7 || numIn > 16 || numIn == 8)
+      return rewriter.notifyMatchFailure(
+          customOp, "GroupQueryAttention expects 7, 9, or 10..16 inputs");
     const int64_t numOut = customOp.getNumResults();
     assert((numOut >= 3 && numOut <= 4) && "expects 3..4 outputs");
 
@@ -3348,6 +3400,16 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     if (smoothSoftmax && smoothSoftmax.getSInt() == 1)
       return rewriter.notifyMatchFailure(customOp,
           "attribute 'smooth_softmax' not supported by onnx.Attention");
+
+    if (hasUnsupportedQuantizedCacheSchema(customOp))
+      return rewriter.notifyMatchFailure(customOp,
+          "quantized KV-cache GroupQueryAttention variants are not supported");
+
+    // TODO: Support q_norm_weight/k_norm_weight by applying per-head Q/K RMS
+    // norm before RoPE/Attention.
+    if (hasUnsupportedQKNormSchema(customOp))
+      return rewriter.notifyMatchFailure(customOp,
+          "Q/K-normalized GroupQueryAttention variants are not supported");
 
     auto qNumHeads = customOp->getAttrOfType<IntegerAttr>("num_heads");
     assert(qNumHeads && "Expected number of attention heads for q");
