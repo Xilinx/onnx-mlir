@@ -3301,12 +3301,8 @@ struct MicrosoftSkipSimplifiedLayerNorm : public CustomOpToOnnxOps {
 };
 
 struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
-  MicrosoftGroupQueryAttention(
-      MLIRContext *ctx, bool enableCacheSlicing = true, PatternBenefit b = 1)
-      : CustomOpToOnnxOps(ctx, MicrosoftDomainName, "GroupQueryAttention", b),
-        enableCacheSlicing(enableCacheSlicing) {}
-
-  bool enableCacheSlicing;
+  MicrosoftGroupQueryAttention(MLIRContext *ctx, PatternBenefit b = 1)
+      : CustomOpToOnnxOps(ctx, MicrosoftDomainName, "GroupQueryAttention", b) {}
 
   static bool hasPresentOptionalInput(ONNXCustomOp customOp, int64_t index) {
     return customOp.getNumOperands() > index &&
@@ -5201,8 +5197,7 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       enableGroupQueryAttentionDecompose, enableSplitToSliceDecompose,
       enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
       /*disableGenericDecompositions=*/false, enableGatherToSlice,
-      enableHardSwishDecompose, enableGroupQueryAttentionCacheSlicing,
-      enableDepthToSpaceDecompose);
+      enableHardSwishDecompose, enableDepthToSpaceDecompose);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
   if (this->target == "stablehlo") {
@@ -5227,8 +5222,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool enableSplitToSliceDecompose, bool enableConcatFuse,
     bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
     bool disableGenericDecompositions, bool enableGatherToSlice,
-    bool enableHardSwishDecompose, bool enableGroupQueryAttentionCacheSlicing,
-    bool enableDepthToSpaceDecompose) {
+    bool enableHardSwishDecompose, bool enableDepthToSpaceDecompose) {
   MLIRContext *context = patterns.getContext();
   if (!disableGenericDecompositions)
     populateWithGenerated(patterns);
@@ -5271,8 +5265,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     patterns.insert<MicrosoftSkipSimplifiedLayerNorm>(context);
   }
   if (enableGroupQueryAttentionDecompose)
-    patterns.insert<MicrosoftGroupQueryAttention>(
-        context, enableGroupQueryAttentionCacheSlicing);
+    patterns.insert<MicrosoftGroupQueryAttention>(context);
   if (!disableGenericDecompositions)
     patterns.insert<MicrosoftRotaryEmbedding>(context);
   if (enableMatmulNBitsDecompose)
