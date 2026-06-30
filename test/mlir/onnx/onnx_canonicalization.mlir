@@ -3845,9 +3845,22 @@ func.func @test_concat_drop_multiple_empty(%arg0: tensor<2x3xf32>, %arg1: tensor
 
 // -----
 
-// When every operand is empty, operands are removed one-per-rewrite down to a
-// single survivor that then folds to identity. Arity stays > 1 on each
-// rewrite, so the concat never becomes operand-less.
+// A zero on a non-concat axis does not make an operand removable: it may still
+// contribute along the concat axis.
+// CHECK-LABEL: func.func @test_concat_keep_zero_on_non_concat_axis
+// CHECK-SAME:  ([[PARAM_0_:%.+]]: tensor<2x3x0xf32>, [[PARAM_1_:%.+]]: tensor<2x5x0xf32>)
+func.func @test_concat_keep_zero_on_non_concat_axis(%arg0: tensor<2x3x0xf32>, %arg1: tensor<2x5x0xf32>) -> tensor<2x8x0xf32> {
+  %0 = "onnx.Concat"(%arg0, %arg1) {axis = 1 : si64} : (tensor<2x3x0xf32>, tensor<2x5x0xf32>) -> tensor<2x8x0xf32>
+  onnx.Return %0 : tensor<2x8x0xf32>
+  // CHECK: [[VAR_0_:%.+]] = "onnx.Concat"([[PARAM_0_]], [[PARAM_1_]]) {axis = 1 : si64} : (tensor<2x3x0xf32>, tensor<2x5x0xf32>) -> tensor<2x8x0xf32>
+  // CHECK: onnx.Return [[VAR_0_]] : tensor<2x8x0xf32>
+}
+
+// -----
+
+// When every operand is empty along the concat axis, operands are removed
+// one-per-rewrite down to a single survivor that then folds to identity.
+// Arity stays > 1 on each rewrite, so the concat never becomes operand-less.
 // CHECK-LABEL: func.func @test_concat_all_empty_collapses
 // CHECK-SAME:  ([[PARAM_0_:%.+]]: tensor<0x4xf32>, [[PARAM_1_:%.+]]: tensor<0x4xf32>)
 func.func @test_concat_all_empty_collapses(%arg0: tensor<0x4xf32>, %arg1: tensor<0x4xf32>) -> tensor<0x4xf32> {
