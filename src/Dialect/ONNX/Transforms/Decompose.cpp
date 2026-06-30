@@ -4831,6 +4831,98 @@ public:
   }
 };
 
+// Resolve a non-NOTSET onnx.Conv auto_pad into an explicit pads attribute
+struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
+  using OpRewritePattern<ONNXConvOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXConvOp convOp, PatternRewriter &rewriter) const final {
+    StringRef autoPad = convOp.getAutoPad();
+    if (autoPad == "NOTSET")
+      return failure();
+
+    Value X = convOp.getX();
+    Value W = convOp.getW();
+    if (!onnx_mlir::hasShapeAndRank(X) || !onnx_mlir::hasShapeAndRank(W))
+      return failure();
+
+    auto xType = mlir::cast<ShapedType>(X.getType());
+    auto wType = mlir::cast<ShapedType>(W.getType());
+    ArrayRef<int64_t> xShape = xType.getShape();
+    ArrayRef<int64_t> wShape = wType.getShape();
+    int64_t rank = xShape.size();
+    // Spatial dims are all but N and C: [N, C, D1, ..., Dn].
+    int64_t spatialRank = rank - 2;
+    if (spatialRank <= 0)
+      return failure();
+
+    // kernel_shape: explicit attribute, else inferred from W's spatial dims.
+    SmallVector<int64_t, 4> kernel(spatialRank);
+    if (auto kAttr = convOp.getKernelShape()) {
+      if ((int64_t)onnx_mlir::ArrayAttrSize(kAttr) != spatialRank)
+        return failure();
+      for (int64_t i = 0; i < spatialRank; ++i)
+        kernel[i] = onnx_mlir::ArrayAttrIntVal(kAttr, i);
+    } else {
+      for (int64_t i = 0; i < spatialRank; ++i)
+        kernel[i] = wShape[2 + i];
+    }
+
+    // strides default to 1.
+    SmallVector<int64_t, 4> strides(spatialRank, 1);
+    if (auto sAttr = convOp.getStrides())
+      for (int64_t i = 0; i < spatialRank; ++i)
+        strides[i] = onnx_mlir::ArrayAttrIntVal(sAttr, i);
+
+    // dilations default to 1.
+    SmallVector<int64_t, 4> dilations(spatialRank, 1);
+    if (auto dAttr = convOp.getDilations())
+      for (int64_t i = 0; i < spatialRank; ++i)
+        dilations[i] = onnx_mlir::ArrayAttrIntVal(dAttr, i);
+
+    // Compute [begin..., end...] pads per spatial axis.
+    SmallVector<int64_t, 8> pads(2 * spatialRank, 0);
+    if (autoPad == "VALID") {
+      // No padding; pads stay all zero.
+    } else if (autoPad == "SAME_UPPER" || autoPad == "SAME_LOWER") {
+      for (int64_t i = 0; i < spatialRank; ++i) {
+        int64_t inputSize = xShape[2 + i];
+        // SAME_* needs static spatial sizes to compute symmetric padding.
+        if (inputSize < 0)
+          return failure();
+        int64_t outputSize =
+            (int64_t)std::ceil((1.0 * inputSize) / (1.0 * strides[i]));
+        int64_t effKernel = (kernel[i] - 1) * dilations[i] + 1;
+        int64_t sumOfPad =
+            (outputSize - 1) * strides[i] + effKernel - inputSize;
+        if (sumOfPad < 0)
+          sumOfPad = 0;
+        int64_t begin = sumOfPad / 2;
+        int64_t end = sumOfPad / 2;
+        if (sumOfPad % 2 != 0) {
+          // Extra pixel goes to the end for SAME_UPPER, beginning for
+          // SAME_LOWER.
+          if (autoPad == "SAME_UPPER")
+            end += 1;
+          else
+            begin += 1;
+        }
+        pads[i] = begin;
+        pads[spatialRank + i] = end;
+      }
+    } else {
+      // Unknown auto_pad value: leave the op untouched.
+      return failure();
+    }
+
+    rewriter.modifyOpInPlace(convOp, [&] {
+      convOp.setPadsAttr(rewriter.getI64ArrayAttr(pads));
+      convOp.setAutoPadAttr(rewriter.getStringAttr("NOTSET"));
+    });
+    return success();
+  }
+};
+
 struct DecomposeONNXToONNXPass
     : public onnx_mlir::impl::DecomposeONNXToONNXPassBase<
           DecomposeONNXToONNXPass> {
@@ -4854,7 +4946,7 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
       /*disableGenericDecompositions=*/false, enableGatherToSlice,
       enableHardSwishDecompose, enableGroupQueryAttentionCacheSlicing,
-      enableDepthToSpaceDecompose);
+      enableDepthToSpaceDecompose, enableConvAutoPadNormalize);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
   if (this->target == "stablehlo") {
@@ -4880,7 +4972,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
     bool disableGenericDecompositions, bool enableGatherToSlice,
     bool enableHardSwishDecompose, bool enableGroupQueryAttentionCacheSlicing,
-    bool enableDepthToSpaceDecompose) {
+    bool enableDepthToSpaceDecompose, bool enableConvAutoPadNormalize) {
   MLIRContext *context = patterns.getContext();
   if (!disableGenericDecompositions)
     populateWithGenerated(patterns);
@@ -4952,6 +5044,9 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
 
   if (enableDepthToSpaceDecompose)
     populateDecomposeDepthToSpacePattern(patterns);
+
+  if (enableConvAutoPadNormalize)
+    patterns.insert<NormalizeConvAutoPadPattern>(context);
 
   patterns.insert<ReplaceCastLikeByCastPattern>(context);
 

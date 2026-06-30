@@ -107,7 +107,13 @@ def ONNXDecomposePatternOptions {
            "bool", /*default=*/"false",
            "Decompose onnx.DepthToSpace (DCR and CRD) into "
            "Reshape/Transpose/Reshape so backends without a DepthToSpace "
-           "kernel can run it.">
+           "kernel can run it.">,
+
+    Option<"enableConvAutoPadNormalize",
+           "enable-conv-autopad-normalize",
+           "bool", /*default=*/"false",
+           "Resolve a non-NOTSET onnx.Conv auto_pad into an explicit pads "
+           "attribute and reset auto_pad to NOTSET.">
   ];
 }
 
