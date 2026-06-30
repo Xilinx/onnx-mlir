@@ -23,7 +23,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <type_traits>
 
@@ -2717,7 +2719,8 @@ struct CustomOpFuseMatMulPattern : public OpRewritePattern<ONNXCustomOp> {
     Value A = customOp.getOperands()[0];
     Value B = customOp.getOperands()[1];
 
-    MultiDialectBuilder<OnnxBuilder> create(rewriter, loc);
+    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+        rewriter, loc);
     Type resType = customOp.getResult(0).getType();
     Type elementType = onnx_mlir::getElementType(resType);
     UnrankedTensorType unrankedType = UnrankedTensorType::get(elementType);
@@ -3355,6 +3358,303 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
            hasPresentOptionalInput(customOp, 15);
   }
 
+  static FailureOr<int64_t> getStaticPastSequenceLength(
+      Value pastKey, PatternRewriter &rewriter, ONNXCustomOp customOp) {
+    if (onnx_mlir::isNoneValue(pastKey))
+      return 0;
+    auto pastKeyType = dyn_cast<ShapedType>(pastKey.getType());
+    if (!pastKeyType || !pastKeyType.hasStaticShape() ||
+        pastKeyType.getRank() != 4)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'past_ks' input to have static rank-4 type");
+    return pastKeyType.getShape()[2];
+  }
+
+  // Returns true for buffer-sharing/preallocated cache, where present keeps
+  // cache capacity and GQA writes current K/V into the runtime seqlens_k slot.
+  static FailureOr<bool> hasPreallocatedCacheMode(ONNXCustomOp customOp,
+      PatternRewriter &rewriter, Value pastKey, int64_t kvSeqLen) {
+    if (onnx_mlir::isNoneValue(pastKey))
+      return false;
+    if (customOp.getNumResults() < 3)
+      return false;
+    Type presentKeyType = customOp.getResult(1).getType();
+    if (isa<NoneType>(presentKeyType))
+      return false;
+
+    auto presentKeyShapedType = dyn_cast<ShapedType>(presentKeyType);
+    if (!presentKeyShapedType || !presentKeyShapedType.hasStaticShape() ||
+        presentKeyShapedType.getRank() != 4)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'present_key' output to have static rank-4 type");
+
+    auto pastSeqLen = getStaticPastSequenceLength(pastKey, rewriter, customOp);
+    if (failed(pastSeqLen))
+      return failure();
+
+    const int64_t expectedAppendSeqLen = *pastSeqLen + kvSeqLen;
+    const int64_t presentSeqLen = presentKeyShapedType.getShape()[2];
+    if (presentSeqLen == expectedAppendSeqLen)
+      return false;
+
+    if (presentSeqLen == *pastSeqLen) {
+      if (kvSeqLen != 1)
+        return rewriter.notifyMatchFailure(customOp,
+            "preallocated KV cache is only supported for decode "
+            "GroupQueryAttention");
+      return true;
+    }
+
+    return rewriter.notifyMatchFailure(customOp,
+        "expected append-style or preallocated KV cache output shape for "
+        "GroupQueryAttention decomposition");
+  }
+
+  // Convert current K/V from GQA's 3D layout [B,S,H*D] to cache layout
+  // [B,H,S,D]. Both onnx.Attention present outputs and preallocated-cache
+  // slot writes use this rank-4 cache layout.
+  static FailureOr<Value> createCurrentKV4D(PatternRewriter &rewriter,
+      Location loc, ONNXCustomOp customOp, Value kv, int64_t batchSize,
+      int64_t kvSeqLen, int64_t kvNumHeads, SmallVector<Value> &toCheck) {
+    auto kvType = dyn_cast<ShapedType>(kv.getType());
+    if (!kvType || !kvType.hasStaticShape() || kvType.getRank() != 3)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected current K/V to have static rank-3 type");
+
+    const int64_t headSize = kvType.getShape()[2] / kvNumHeads;
+    auto reshapeShape = onnx_mlir::getONNXConstOpFromVector(
+        rewriter, loc, {batchSize, kvSeqLen, kvNumHeads, headSize});
+    auto reshapeType = RankedTensorType::get(
+        {batchSize, kvSeqLen, kvNumHeads, headSize}, kvType.getElementType());
+    Value reshaped = rewriter.create<ONNXReshapeOp>(
+        loc, reshapeType, kv, reshapeShape, nullptr);
+    auto kv4dType = RankedTensorType::get(
+        {batchSize, kvNumHeads, kvSeqLen, headSize}, kvType.getElementType());
+    Value kv4d = rewriter.create<ONNXTransposeOp>(
+        loc, kv4dType, reshaped, rewriter.getI64ArrayAttr({0, 2, 1, 3}));
+    toCheck.append({reshapeShape, reshaped, kv4d});
+    return kv4d;
+  }
+
+  static Value createScalarFloatConstant(
+      PatternRewriter &rewriter, Location loc, Type elementType, double value) {
+    auto tensorType = RankedTensorType::get({}, elementType);
+    auto attr =
+        DenseElementsAttr::get(tensorType, FloatAttr::get(elementType, value));
+    return rewriter.create<ONNXConstantOp>(loc, Attribute(), attr);
+  }
+
+  static Value createI64Range(PatternRewriter &rewriter, Location loc,
+      SmallVector<Value> &toCheck, int64_t start, int64_t limit) {
+    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+        rewriter, loc);
+    auto rangeType = RankedTensorType::get(
+        {std::max<int64_t>(limit - start, 0)}, rewriter.getIntegerType(64));
+    Value startConst = create.onnx.constantInt64({start});
+    Value limitConst = create.onnx.constantInt64({limit});
+    Value deltaConst = create.onnx.constantInt64({1});
+    Value range = rewriter.create<ONNXRangeOp>(
+        loc, rangeType, startConst, limitConst, deltaConst);
+    toCheck.append({startConst, limitConst, deltaConst, range});
+    return range;
+  }
+
+  static Value castToI64(PatternRewriter &rewriter, Location loc, Value value,
+      SmallVector<Value> &toCheck) {
+    auto valueType = cast<ShapedType>(value.getType());
+    auto i64Type =
+        valueType.clone(valueType.getShape(), rewriter.getIntegerType(64));
+    Value castValue = rewriter.create<ONNXCastOp>(loc, i64Type, value, nullptr,
+        TypeAttr::get(rewriter.getIntegerType(64)));
+    toCheck.push_back(castValue);
+    return castValue;
+  }
+
+  static Value reshapeI64(PatternRewriter &rewriter, Location loc, Value value,
+      ArrayRef<int64_t> shape, SmallVector<Value> &toCheck) {
+    auto reshapeShape =
+        onnx_mlir::getONNXConstOpFromVector(rewriter, loc, shape);
+    auto reshapedType =
+        RankedTensorType::get(shape, rewriter.getIntegerType(64));
+    Value reshaped = rewriter.create<ONNXReshapeOp>(
+        loc, reshapedType, value, reshapeShape, nullptr);
+    toCheck.append({reshapeShape, reshaped});
+    return reshaped;
+  }
+
+  // Generate RoPE position_ids from runtime seqlens_k instead of past_key
+  // shape, which may be cache capacity. Builds:
+  //   start = max((seqlens_k + 1) - seqLen, 0)
+  //   position_ids = start + range(0, seqLen)
+  static FailureOr<Value> createRuntimePositionIds(PatternRewriter &rewriter,
+      Location loc, ONNXCustomOp customOp, Value seqlensK, int64_t batchSize,
+      int64_t seqLen, SmallVector<Value> &toCheck) {
+    auto seqlensType = dyn_cast<ShapedType>(seqlensK.getType());
+    if (!seqlensType || !seqlensType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'seqlens_k' input to have static shape");
+    const int64_t seqlensBatch = seqlensType.getNumElements();
+    if (seqlensBatch != batchSize)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'seqlens_k' to have one value per batch");
+
+    Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
+    Value seqlens2d =
+        reshapeI64(rewriter, loc, seqlensI64, {seqlensBatch, 1}, toCheck);
+    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+        rewriter, loc);
+    Value one = create.onnx.constantInt64({1});
+    Value validKvLen =
+        rewriter.create<ONNXAddOp>(loc, seqlens2d.getType(), seqlens2d, one);
+    Value seqLenConst = create.onnx.constantInt64({seqLen});
+    Value rawStart = rewriter.create<ONNXSubOp>(
+        loc, seqlens2d.getType(), validKvLen, seqLenConst);
+    Value zero = create.onnx.constantInt64({0});
+    Value start = rewriter.create<ONNXMaxOp>(
+        loc, seqlens2d.getType(), ValueRange{rawStart, zero});
+    Value qRange = createI64Range(rewriter, loc, toCheck, 0, seqLen);
+    Value qRange2d = reshapeI64(rewriter, loc, qRange, {1, seqLen}, toCheck);
+    auto positionIdsType =
+        RankedTensorType::get({batchSize, seqLen}, rewriter.getIntegerType(64));
+    Value positionIds =
+        rewriter.create<ONNXAddOp>(loc, positionIdsType, start, qRange2d);
+    toCheck.append(
+        {one, validKvLen, seqLenConst, rawStart, zero, start, positionIds});
+    return positionIds;
+  }
+
+  // Builds ONNX Cast/Reshape/Range/Less/And/Where ops to materialize
+  // GQA's seqlens_k and causal visibility as an additive Attention mask.
+  static FailureOr<Value> createAdditiveAttentionMask(PatternRewriter &rewriter,
+      Location loc, ONNXCustomOp customOp, Value seqlensK, int64_t batchSize,
+      int64_t qSeqLen, int64_t maskSeqLen, int64_t pastSeqLen, Type elementType,
+      SmallVector<Value> &toCheck) {
+    auto seqlensType = dyn_cast<ShapedType>(seqlensK.getType());
+    if (!seqlensType || !seqlensType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'seqlens_k' input to have static shape");
+    const int64_t seqlensBatch = seqlensType.getNumElements();
+    if (seqlensBatch != batchSize)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'seqlens_k' to have one value per batch");
+
+    // Cast/Reshape/Add: valid KV length = seqlens_k + 1, broadcast as
+    // [B,1,1,1].
+    Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
+    Value seqlens4d =
+        reshapeI64(rewriter, loc, seqlensI64, {seqlensBatch, 1, 1, 1}, toCheck);
+    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+        rewriter, loc);
+    Value one = create.onnx.constantInt64({1});
+    Value validKvLen =
+        rewriter.create<ONNXAddOp>(loc, seqlens4d.getType(), seqlens4d, one);
+
+    // keyValid applies GQA's per-batch seqlens_k limit so keys past the
+    // valid KV length are masked out for that batch.
+    // Range/Reshape/Less: key_index < valid_kv_length.
+    Value keyRange = createI64Range(rewriter, loc, toCheck, 0, maskSeqLen);
+    Value keyRange4d =
+        reshapeI64(rewriter, loc, keyRange, {1, 1, 1, maskSeqLen}, toCheck);
+    Value keyValid = rewriter.create<ONNXLessOp>(loc, keyRange4d, validKvLen);
+
+    // causalValid preserves causal attention: query i can only see keys up to
+    // past_seq_len + i, even if seqlens_k is larger.
+    // Range/Add/Reshape/Less: key_index < past_seq_len + query_index + 1.
+    Value qRange = createI64Range(rewriter, loc, toCheck, 0, qSeqLen);
+    Value pastLimit = create.onnx.constantInt64({pastSeqLen + 1});
+    Value qLimit =
+        rewriter.create<ONNXAddOp>(loc, qRange.getType(), qRange, pastLimit);
+    Value qLimit4d =
+        reshapeI64(rewriter, loc, qLimit, {1, 1, qSeqLen, 1}, toCheck);
+    Value causalValid = rewriter.create<ONNXLessOp>(loc, keyRange4d, qLimit4d);
+    auto visibleType = RankedTensorType::get(
+        {batchSize, 1, qSeqLen, maskSeqLen}, rewriter.getI1Type());
+    Value visible =
+        rewriter.create<ONNXAndOp>(loc, visibleType, keyValid, causalValid);
+
+    // And/Where: combine visibility checks, then emit 0.0 or -inf.
+    Value zero = createScalarFloatConstant(rewriter, loc, elementType, 0.0);
+    Value negInf = createScalarFloatConstant(
+        rewriter, loc, elementType, -std::numeric_limits<double>::infinity());
+    auto maskType =
+        RankedTensorType::get({batchSize, 1, qSeqLen, maskSeqLen}, elementType);
+    Value additiveMask =
+        rewriter.create<ONNXWhereOp>(loc, maskType, visible, zero, negInf);
+    toCheck.append({one, validKvLen, keyValid, pastLimit, qLimit, causalValid,
+        visible, zero, negInf, additiveMask});
+    return additiveMask;
+  }
+
+  static FailureOr<Value> createPresentKVFromCurrentKV(
+      PatternRewriter &rewriter, Location loc, ONNXCustomOp customOp, Value kv,
+      Type presentType, int64_t batchSize, int64_t kvSeqLen, int64_t kvNumHeads,
+      SmallVector<Value> &toCheck) {
+    auto kvType = dyn_cast<ShapedType>(kv.getType());
+    if (!kvType || !kvType.hasStaticShape() || kvType.getRank() != 3)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected current K/V to have static rank-3 type");
+
+    const int64_t headSize = kvType.getShape()[2] / kvNumHeads;
+    auto reshapeShape = onnx_mlir::getONNXConstOpFromVector(
+        rewriter, loc, {batchSize, kvSeqLen, kvNumHeads, headSize});
+    auto reshapeType = RankedTensorType::get(
+        {batchSize, kvSeqLen, kvNumHeads, headSize}, kvType.getElementType());
+    Value reshaped = rewriter.create<ONNXReshapeOp>(
+        loc, reshapeType, kv, reshapeShape, nullptr);
+    Value present = rewriter.create<ONNXTransposeOp>(
+        loc, presentType, reshaped, rewriter.getI64ArrayAttr({0, 2, 1, 3}));
+    toCheck.append({reshapeShape, reshaped, present});
+    return present;
+  }
+
+  // Build preallocated-cache present K/V. GQA updates one runtime slot:
+  //   present[:, :, seqlens_k, :] = current K/V
+  // Convert current K/V from [B,1,H*D] to [B,H,1,D], expand seqlens_k to
+  // ScatterElements indices [B,H,1,D], then scatter into past K/V on axis 2.
+  // This preserves slot-write semantics that onnx.Attention's append-style
+  // present outputs cannot represent.
+  static FailureOr<Value> createPresentKVSlotWrite(PatternRewriter &rewriter,
+      Location loc, ONNXCustomOp customOp, Value pastKV, Value currentKV,
+      Value seqlensK, Type presentType, int64_t batchSize, int64_t kvSeqLen,
+      int64_t kvNumHeads, SmallVector<Value> &toCheck) {
+    auto pastType = dyn_cast<ShapedType>(pastKV.getType());
+    auto presentShapedType = dyn_cast<ShapedType>(presentType);
+    if (!pastType || !pastType.hasStaticShape() || pastType.getRank() != 4 ||
+        !presentShapedType || !presentShapedType.hasStaticShape() ||
+        presentShapedType.getRank() != 4)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected past/present K/V to have static rank-4 type");
+    if (kvSeqLen != 1)
+      return rewriter.notifyMatchFailure(customOp,
+          "preallocated KV cache is only supported for decode "
+          "GroupQueryAttention");
+
+    const int64_t headSize = pastType.getShape()[3];
+    FailureOr<Value> current4dOr = createCurrentKV4D(rewriter, loc, customOp,
+        currentKV, batchSize, kvSeqLen, kvNumHeads, toCheck);
+    if (failed(current4dOr))
+      return failure();
+    Value current4d = *current4dOr;
+
+    Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
+    Value seqlens4d =
+        reshapeI64(rewriter, loc, seqlensI64, {batchSize, 1, 1, 1}, toCheck);
+    auto indexShape = onnx_mlir::getONNXConstOpFromVector(
+        rewriter, loc, {batchSize, kvNumHeads, 1, headSize});
+    auto indexType = RankedTensorType::get(
+        {batchSize, kvNumHeads, 1, headSize}, rewriter.getIntegerType(64));
+    Value indices =
+        rewriter.create<ONNXExpandOp>(loc, indexType, seqlens4d, indexShape);
+
+    // present[:, :, seqlens_k, :] = current K/V.
+    Value present = rewriter.create<ONNXScatterElementsOp>(loc, presentType,
+        pastKV, indices, current4d,
+        rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), 2),
+        rewriter.getStringAttr("none"));
+    toCheck.append({indexShape, indices, present});
+    return present;
+  }
+
   LogicalResult matchAndRewriteImpl(
       ONNXCustomOp customOp, PatternRewriter &rewriter) const final {
 
@@ -3372,10 +3672,8 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     Value value = customOp.getOperand(2);
     Value pastKey = customOp.getOperand(3);
     Value pastValue = customOp.getOperand(4);
-
-    // These inputs are not needed for onnx.Attention:
-    // Value seqlens_k = customOp.getOperand(5);
-    // Value total_sequence_length = customOp.getOperand(6);
+    Value seqlensK = customOp.getOperand(5);
+    Value totalSequenceLength = customOp.getOperand(6);
 
     Value cosCache;
     Value sinCache;
@@ -3411,6 +3709,14 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return rewriter.notifyMatchFailure(customOp,
           "Q/K-normalized GroupQueryAttention variants are not supported");
 
+    if (!isa<ShapedType>(seqlensK.getType()))
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'seqlens_k' input to have shaped type");
+
+    if (!isa<ShapedType>(totalSequenceLength.getType()))
+      return rewriter.notifyMatchFailure(customOp,
+          "expected 'total_sequence_length' input to have shaped type");
+
     auto qNumHeads = customOp->getAttrOfType<IntegerAttr>("num_heads");
     assert(qNumHeads && "Expected number of attention heads for q");
     auto kvNumHeads = customOp->getAttrOfType<IntegerAttr>("kv_num_heads");
@@ -3424,25 +3730,31 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return rewriter.notifyMatchFailure(
           customOp, "expected 'query' input to have static type");
     assert(queryType.getRank() == 3 && "Query input must have rank 3");
-    // Check pastKey shape requirements early, before any IR modifications.
     auto doRotary = customOp->getAttrOfType<IntegerAttr>("do_rotary");
-    if (doRotary && doRotary.getSInt() > 0 &&
-        (numIn < 10 || isNoneValue(positionIds))) {
-      // We need to know the past sequence length to find the total sequence
-      // length (or vice versa). We could get the total sequence length from
-      // seqlens_k, but only if this input is a constant that we can read.
-      if (isNoneValue(pastKey))
+    auto pastSeqLen = getStaticPastSequenceLength(pastKey, rewriter, customOp);
+    if (failed(pastSeqLen))
+      return failure();
+
+    int64_t kvSeqLen = -1;
+    bool preallocatedCacheMode = false;
+    if (!isNoneValue(key)) {
+      auto originalKeyType = dyn_cast<ShapedType>(key.getType());
+      if (!originalKeyType || !originalKeyType.hasStaticShape() ||
+          originalKeyType.getRank() != 3)
         return rewriter.notifyMatchFailure(
-            customOp, "expected 'past_ks' input to be provided");
-      auto pastKeyType = cast<ShapedType>(pastKey.getType());
-      if (!pastKeyType.hasStaticShape())
-        return rewriter.notifyMatchFailure(
-            customOp, "expected 'past_ks' input to have static type");
+            customOp, "expected 'key' input to have static rank-3 type");
+      kvSeqLen = originalKeyType.getShape()[1];
+      FailureOr<bool> preallocated =
+          hasPreallocatedCacheMode(customOp, rewriter, pastKey, kvSeqLen);
+      if (failed(preallocated))
+        return failure();
+      preallocatedCacheMode = *preallocated;
     }
 
     auto none = rewriter.create<ONNXNoneOp>(loc);
     auto si64Type = rewriter.getIntegerType(64, true);
 
+    // Values created by this rewrite are verified before replacing customOp.
     SmallVector<Value, 6> toCheck = {none};
 
     // query, key and value inputs may be packed in the same input (query). We
@@ -3484,99 +3796,34 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       headSize = queryType.getShape()[2] / qNumHeads.getSInt();
     }
 
+    if (kvSeqLen < 0) {
+      auto keyType = dyn_cast<ShapedType>(key.getType());
+      if (!keyType || !keyType.hasStaticShape() || keyType.getRank() != 3)
+        return rewriter.notifyMatchFailure(
+            customOp, "expected 'key' input to have static rank-3 type");
+      kvSeqLen = keyType.getShape()[1];
+      FailureOr<bool> preallocated =
+          hasPreallocatedCacheMode(customOp, rewriter, pastKey, kvSeqLen);
+      if (failed(preallocated))
+        return failure();
+      preallocatedCacheMode = *preallocated;
+    }
+
     // If do_rotary = 1, query and key need to be passed through a rotary
     // embedding op
     ONNXRotaryEmbeddingOp ropeQuery;
     ONNXRotaryEmbeddingOp ropeKey;
     if (doRotary && doRotary.getSInt() > 0) {
       assert(numIn >= 9 && !isNoneValue(cosCache) && !isNoneValue(sinCache));
-      // If do_rotary = 1 and no position ids are provided, we need to slice
-      // and transform the cos and sin caches to have shape:
-      // [batch_size, sequence_length, head_size / 2]. When
-      // enableCacheSlicing is false, skip the slice/reshape/expand and pass
-      // the original cos/sin caches through unchanged.
       if (numIn < 10 || isNoneValue(positionIds)) {
-        positionIds = none;
-
-        if (enableCacheSlicing) {
-          auto pastKeyType = cast<ShapedType>(pastKey.getType());
-
-          // Assuming the sequence length is the same kv_sequence_length
-          const int64_t seqLen = queryType.getShape()[1];
-          const int64_t pastSeqLen = pastKeyType.getShape()[2];
-          const int64_t totalSeqLen = pastSeqLen + seqLen;
-
-          // The slice mimics indexing the cos/sin caches using the default
-          // pos_ids: [past_seq_len..total_seq_len].
-          onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
-              rewriter, loc);
-          Value startsConst = create.onnx.constantInt64({pastSeqLen});
-          Value endsConst = create.onnx.constantInt64({totalSeqLen});
-          Value axesConst = create.onnx.constantInt64({0});
-          Value stepsConst = create.onnx.constantInt64({1});
-          toCheck.append({startsConst, endsConst, axesConst, stepsConst});
-
-          auto elementType = getElementTypeOrSelf(cosCache.getType());
-          auto cacheSlicedType =
-              RankedTensorType::get({seqLen, headSize / 2}, elementType);
-          auto cosCacheSliced =
-              rewriter.create<ONNXSliceOp>(loc, cacheSlicedType, cosCache,
-                  startsConst, endsConst, axesConst, stepsConst);
-          auto sinCacheSliced =
-              rewriter.create<ONNXSliceOp>(loc, cacheSlicedType, sinCache,
-                  startsConst, endsConst, axesConst, stepsConst);
-          toCheck.append({cosCacheSliced, sinCacheSliced});
-
-          // reshape to [1, sequence_length, head_size / 2]
-          auto cache3dType =
-              RankedTensorType::get({1, seqLen, headSize / 2}, elementType);
-          auto reshapeShapeConst =
-              create.onnx.constantInt64({1, seqLen, headSize / 2});
-          cosCache = create.onnx.reshape(
-              cache3dType, cosCacheSliced, reshapeShapeConst);
-          sinCache = create.onnx.reshape(
-              cache3dType, sinCacheSliced, reshapeShapeConst);
-          toCheck.append({reshapeShapeConst, cosCache, sinCache});
-
-          // Assume total/past sequence length is the same for every batch
-          // and broadcast the default pos_ids to get cos/sin caches with
-          // shape: [batch_size, sequence_length, head_size / 2]
-          int64_t batchSize = queryType.getShape()[0];
-          if (batchSize != 1) {
-            auto cacheBroadcastType = RankedTensorType::get(
-                {batchSize, seqLen, headSize / 2}, elementType);
-            auto broadcastShapeConst =
-                create.onnx.constantInt64({batchSize, seqLen, headSize / 2});
-            cosCache = create.onnx.expand(
-                cacheBroadcastType, cosCache, broadcastShapeConst);
-            sinCache = create.onnx.expand(
-                cacheBroadcastType, sinCache, broadcastShapeConst);
-            toCheck.append({broadcastShapeConst, cosCache, sinCache});
-          }
-        } else {
-          // Synthesize position_ids = [pastSeqLen, .., totalSeqLen-1]
-          // broadcast to [batch_size, seq_len]. Same semantics as the
-          // original slicing, but the cos/sin caches are passed through
-          // unchanged so the cache stays complete.
-          auto pastKeyType = cast<ShapedType>(pastKey.getType());
-          const int64_t seqLen = queryType.getShape()[1];
-          const int64_t pastSeqLen = pastKeyType.getShape()[2];
-          const int64_t totalSeqLen = pastSeqLen + seqLen;
-          const int64_t batchSize = queryType.getShape()[0];
-
-          SmallVector<Attribute> elements;
-          elements.reserve(batchSize * seqLen);
-          for (int64_t b = 0; b < batchSize; ++b)
-            for (int64_t i = pastSeqLen; i < totalSeqLen; ++i)
-              elements.push_back(rewriter.getI64IntegerAttr(i));
-
-          auto positionIdsType = RankedTensorType::get(
-              {batchSize, seqLen}, rewriter.getIntegerType(64));
-          positionIds = rewriter.create<ONNXConstantOp>(loc, Attribute(),
-              DenseElementsAttr::get(
-                  positionIdsType, ArrayRef<Attribute>(elements)));
-          toCheck.push_back(positionIds);
-        }
+        const int64_t seqLen = queryType.getShape()[1];
+        const int64_t batchSize = queryType.getShape()[0];
+        FailureOr<Value> runtimePositionIds = createRuntimePositionIds(
+            rewriter, loc, customOp, seqlensK, batchSize, seqLen, toCheck);
+        if (failed(runtimePositionIds))
+          return failure();
+        positionIds = *runtimePositionIds;
+        toCheck.push_back(positionIds);
       }
 
       int64_t rotaryInterleaved = 0;
@@ -3597,20 +3844,92 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       key = ropeKey;
     }
 
-    // Create the onnx.Attention op
+    Value presentKeyReplacement;
+    Value presentValueReplacement;
+    if (numOut >= 3 && !isa<NoneType>(customOp.getResult(1).getType())) {
+      if (isNoneValue(pastKey)) {
+        auto presentKeyOr = createPresentKVFromCurrentKV(rewriter, loc,
+            customOp, key, customOp.getResult(1).getType(),
+            queryType.getShape()[0], kvSeqLen, kvNumHeads.getSInt(), toCheck);
+        if (failed(presentKeyOr))
+          return failure();
+        auto presentValueOr = createPresentKVFromCurrentKV(rewriter, loc,
+            customOp, value, customOp.getResult(2).getType(),
+            queryType.getShape()[0], kvSeqLen, kvNumHeads.getSInt(), toCheck);
+        if (failed(presentValueOr))
+          return failure();
+        presentKeyReplacement = *presentKeyOr;
+        presentValueReplacement = *presentValueOr;
+      } else if (preallocatedCacheMode) {
+        auto presentKeyOr = createPresentKVSlotWrite(rewriter, loc, customOp,
+            pastKey, key, seqlensK, customOp.getResult(1).getType(),
+            queryType.getShape()[0], kvSeqLen, kvNumHeads.getSInt(), toCheck);
+        if (failed(presentKeyOr))
+          return failure();
+        auto presentValueOr = createPresentKVSlotWrite(rewriter, loc, customOp,
+            pastValue, value, seqlensK, customOp.getResult(2).getType(),
+            queryType.getShape()[0], kvSeqLen, kvNumHeads.getSInt(), toCheck);
+        if (failed(presentValueOr))
+          return failure();
+        presentKeyReplacement = *presentKeyOr;
+        presentValueReplacement = *presentValueOr;
+      }
+    }
+
+    // Build one explicit Attention mask for seqlens_k and causal visibility.
     if (numIn < 11 || isNoneValue(attentionBias))
       attentionBias = none;
 
+    auto queryElementType = getElementTypeOrSelf(query.getType());
+    if (!isa<FloatType>(queryElementType))
+      return rewriter.notifyMatchFailure(
+          customOp, "expected floating-point query type");
+    const int64_t batchSize = queryType.getShape()[0];
+    const int64_t qSeqLen = queryType.getShape()[1];
+    const int64_t attentionSeqLen =
+        preallocatedCacheMode ? *pastSeqLen : *pastSeqLen + kvSeqLen;
+    int64_t maskSeqLen = attentionSeqLen;
+    if (!isNoneValue(attentionBias)) {
+      if (auto attentionBiasType =
+              dyn_cast<ShapedType>(attentionBias.getType());
+          attentionBiasType && attentionBiasType.hasStaticShape() &&
+          attentionBiasType.getRank() > 0)
+        maskSeqLen = attentionBiasType.getShape().back();
+    }
+    FailureOr<Value> additiveMaskOr = createAdditiveAttentionMask(rewriter, loc,
+        customOp, seqlensK, batchSize, qSeqLen, maskSeqLen, *pastSeqLen,
+        queryElementType, toCheck);
+    if (failed(additiveMaskOr))
+      return failure();
+    Value additiveMask = *additiveMaskOr;
+    if (!isNoneValue(attentionBias)) {
+      // Attention's mask input also carries additive score bias.
+      additiveMask = rewriter.create<ONNXAddOp>(
+          loc, additiveMask.getType(), attentionBias, additiveMask);
+      toCheck.push_back(additiveMask);
+    }
+
     SmallVector<Type, 4> attentionResultTypes(customOp.getResultTypes());
+    if (presentKeyReplacement) {
+      attentionResultTypes[1] = rewriter.getNoneType();
+      attentionResultTypes[2] = rewriter.getNoneType();
+    }
     if (numOut < 4)
       attentionResultTypes.push_back(rewriter.getNoneType());
 
+    Value attentionKey = preallocatedCacheMode ? presentKeyReplacement : key;
+    Value attentionValue =
+        preallocatedCacheMode ? presentValueReplacement : value;
+    Value attentionPastKey = preallocatedCacheMode ? none : pastKey;
+    Value attentionPastValue = preallocatedCacheMode ? none : pastValue;
     auto attention = rewriter.create<ONNXAttentionOp>(loc, attentionResultTypes,
-        ValueRange{query, key, value, attentionBias, pastKey, pastValue});
+        ValueRange{query, attentionKey, attentionValue, additiveMask,
+            attentionPastKey, attentionPastValue});
 
     attention.setQNumHeadsAttr(qNumHeads);
     attention.setKvNumHeadsAttr(kvNumHeads);
-    attention.setIsCausal(1);
+    // Causal visibility is already encoded in additiveMask.
+    attention.setIsCausal(0);
 
     if (customOp->hasAttrOfType<IntegerAttr>("qk_output")) {
       auto qkOutput = customOp->getAttrOfType<IntegerAttr>("qk_output");
@@ -3631,8 +3950,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     SmallVector<Value, 4> replace;
     replace.push_back(attention.getResult(0));
     if (numOut >= 3) {
-      replace.push_back(attention.getResult(1)); // present_k
-      replace.push_back(attention.getResult(2)); // present_v
+      replace.push_back(presentKeyReplacement ? presentKeyReplacement
+                                              : attention.getResult(1));
+      replace.push_back(presentValueReplacement ? presentValueReplacement
+                                                : attention.getResult(2));
     }
     if (numOut == 4)
       replace.push_back(attention.getResult(3)); // qk_output
