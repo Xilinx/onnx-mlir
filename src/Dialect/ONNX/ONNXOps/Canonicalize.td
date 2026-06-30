@@ -105,8 +105,19 @@ def buildBroadcastBiasViaReshapeExpand : NativeCodeCall<
 def createArrayAttrOfTwoToRankOf : NativeCodeCall<
   "onnx_mlir::createArrayAttrOfNToM($_builder, 2, mlir::cast<ShapedType>($0.getType()).getRank() - 1)">;
 
+def AttributeIsNull :
+  Constraint<CPred<"!($_self)">, "Attribute is null">;
+
 def AttributeIsNotNull :
   Constraint<CPred<"($_self)">, "Attribute is not null">;
+
+// Create a DenseElementsAttr from an ArrayAttr.
+def createDenseArrayAttr
+    : NativeCodeCall<"::onnx_mlir::createDenseArrayAttr($_builder, $0)">;
+
+def noop_with_empty_axes
+    : NativeCodeCall<"IntegerAttr::get($_builder.getIntegerType(64, "
+                     "/*isSigned=*/true), APInt(64, 0, /*isSigned=*/true))">;
 
 // Intended to check whether there is at least one not-Null the attributes
 // However, the current table gen can only support max 4 parameters
@@ -1257,5 +1268,22 @@ def AlwaysFalseWherePattern : Pat<
  (replaceWithValue $false_val),
  [(IsNegativeSplatConstant:$negative_constant), (AreAllDimSizes:$dims)]
 >;
+
+//===----------------------------------------------------------------------===//
+// Canonicalization for ONNXReduceSumV11Op
+//===----------------------------------------------------------------------===//
+
+def ReduceSumV11ToLatestPattern1
+    : Pat<(ONNXReduceSumV11Op $oprd, $axes, $keepdims),
+          (ONNXReduceSumOp $oprd,
+              (CreateNoneValue), $keepdims, (noop_with_empty_axes)),
+          [(AttributeIsNull:$axes)]>;
+
+def ReduceSumV11ToLatestPattern2
+    : Pat<(ONNXReduceSumV11Op $oprd, $axes, $keepdims),
+          (ONNXReduceSumOp $oprd,
+              (ONNXConstantOpFromDenseAttr(createDenseArrayAttr $axes)),
+              $keepdims, (noop_with_empty_axes)),
+          [(AttributeIsNotNull:$axes)]>;
 
 #endif // ONNX_REWRITE
