@@ -522,14 +522,7 @@ bool hasShapeAndRank(Operation *op) {
 }
 
 bool isInQuantizedDomain(Operation *op, Value result) {
-  auto hasQuantElt = [](Type t) -> bool {
-    auto shaped = mlir::dyn_cast_if_present<ShapedType>(t);
-    if (!shaped)
-      return false;
-    Type elt = shaped.getElementType();
-    return elt && mlir::isa<mlir::quant::QuantizedType>(elt);
-  };
-  if (result && hasQuantElt(result.getType()))
+  if (result && hasQuantizedElementType(result))
     return true;
   // `op` may be null when `updateType` is invoked outside an op-typing
   // context (e.g. ONNXToTOSALegalizeUtils::CreateOpAndInfer passes
@@ -538,7 +531,7 @@ bool isInQuantizedDomain(Operation *op, Value result) {
   if (!op)
     return false;
   for (Value operand : op->getOperands())
-    if (operand && hasQuantElt(operand.getType()))
+    if (operand && hasQuantizedElementType(operand))
       return true;
   return false;
 }
@@ -1188,6 +1181,8 @@ bool hasQuantizedElementType(mlir::Type type) {
 }
 
 bool hasQuantizedElementType(mlir::Value value) {
+  if (isNoneValue(value))
+    return false;
   return hasQuantizedElementType(value.getType());
 }
 

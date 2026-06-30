@@ -4135,6 +4135,16 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
       return rewriter.notifyMatchFailure(
           conv2, "weight element types do not match");
 
+    const Value b1 = conv1.getB();
+    const Value b2 = conv2.getB();
+
+    if (hasQuantizedElementType(conv1.getX()) || hasQuantizedElementType(W1) ||
+        hasQuantizedElementType(b1) || hasQuantizedElementType(conv1.getY()) ||
+        hasQuantizedElementType(W2) || hasQuantizedElementType(b2) ||
+        hasQuantizedElementType(conv2.getY()))
+      return rewriter.notifyMatchFailure(
+          conv2, "quantized Conv fusion is not supported");
+
     // ---- Require constant weights for fold-ability ------------------
     if (!isDenseONNXConstant(W1))
       return rewriter.notifyMatchFailure(
@@ -4144,9 +4154,6 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
           conv2, "conv2 weight is not a dense ONNX constant");
 
     // ---- Bias constraints -------------------------------------------
-    const Value b1 = conv1.getB();
-    const Value b2 = conv2.getB();
-
     // The b1 contribution is spatially uniform only when conv2 pads are all
     // zero, unless b1 contributes nothing (None or zero).
     const bool conv2PadsAllZero = isAllZeros(conv2.getPads());
