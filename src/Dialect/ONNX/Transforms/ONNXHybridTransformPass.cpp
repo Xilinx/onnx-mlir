@@ -141,8 +141,8 @@ struct ONNXHybridTransformPass
     }
 
     if (recomposition) {
-      getRecomposeONNXToONNXPatterns(
-          cumulativePatterns, enableRotaryEmbeddingRecompose);
+      getRecomposeONNXToONNXPatterns(cumulativePatterns,
+          enableRotaryEmbeddingRecompose, enableReduceL2Recompositions);
     }
 
     patterns = FrozenRewritePatternSet(std::move(cumulativePatterns));

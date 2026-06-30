@@ -70,3 +70,75 @@ func.func @test_combine_conv_split(%arg0: tensor<1x1x512x512xf32>) -> tensor<1x9
 // XFAIL-CHECK-DAG:       [[LOC_CONV3:#.+]] = loc("conv3")
 // XFAIL-CHECK-DAG:       [[LOC_FUSED]] = loc(fused[[[LOC_CONV1]], [[LOC_CONV3]], [[LOC_CONV2]]])
 }
+
+// -----
+
+// Canonical HardSigmoid clip(mul(x, a) + b, 0, 1): the recomposed op fuses the
+// locations of the Clip, Add and Mul it replaces.
+// CHECK-LABEL:  func.func @hardsigmoid_canonical_loc
+func.func @hardsigmoid_canonical_loc(%arg0: tensor<8xf32>) -> tensor<8xf32> {
+  %a = onnx.Constant dense<0.166666672> : tensor<f32>
+  %b = onnx.Constant dense<5.000000e-01> : tensor<f32>
+  %zero = onnx.Constant dense<0.000000e+00> : tensor<f32>
+  %one = onnx.Constant dense<1.000000e+00> : tensor<f32>
+  %0 = "onnx.Mul"(%arg0, %a) : (tensor<8xf32>, tensor<f32>) -> tensor<8xf32> loc("mul")
+  %1 = "onnx.Add"(%0, %b) : (tensor<8xf32>, tensor<f32>) -> tensor<8xf32> loc("add")
+  %2 = "onnx.Clip"(%1, %zero, %one) : (tensor<8xf32>, tensor<f32>, tensor<f32>) -> tensor<8xf32> loc("clip")
+  return %2 : tensor<8xf32> loc("ret")
+// CHECK:           [[VAR_0_:%.+]] = "onnx.HardSigmoid"(%arg0) {alpha = 0.166666672 : f32, beta = 5.000000e-01 : f32} : (tensor<8xf32>) -> tensor<8xf32> loc([[LOC_FUSED:#.+]])
+// CHECK:           return
+// CHECK-DAG:       [[LOC_CLIP:#.+]] = loc("clip")
+// CHECK-DAG:       [[LOC_ADD:#.+]] = loc("add")
+// CHECK-DAG:       [[LOC_MUL:#.+]] = loc("mul")
+// CHECK:           [[LOC_FUSED]] = loc(fused[[[LOC_CLIP]], [[LOC_ADD]], [[LOC_MUL]]])
+}
+
+// -----
+
+// Div-form HardSigmoid clip(div(x + b, c), 0, 1): the recomposed op fuses the
+// locations of the Clip, Div and Add it replaces. (This is the form the
+// scaled-range div(clip(x + b, 0, c), c) collapses to after DivClipConstDistributive.)
+// CHECK-LABEL:  func.func @hardsigmoid_div_loc
+func.func @hardsigmoid_div_loc(%arg0: tensor<8xf32>) -> tensor<8xf32> {
+  %three = onnx.Constant dense<3.000000e+00> : tensor<f32>
+  %zero = onnx.Constant dense<0.000000e+00> : tensor<f32>
+  %one = onnx.Constant dense<1.000000e+00> : tensor<f32>
+  %six = onnx.Constant dense<6.000000e+00> : tensor<f32>
+  %0 = "onnx.Add"(%arg0, %three) : (tensor<8xf32>, tensor<f32>) -> tensor<8xf32> loc("add")
+  %1 = "onnx.Div"(%0, %six) : (tensor<8xf32>, tensor<f32>) -> tensor<8xf32> loc("div")
+  %2 = "onnx.Clip"(%1, %zero, %one) : (tensor<8xf32>, tensor<f32>, tensor<f32>) -> tensor<8xf32> loc("clip")
+  return %2 : tensor<8xf32> loc("ret")
+// CHECK:           [[VAR_0_:%.+]] = "onnx.HardSigmoid"(%arg0) {alpha = 0.166666672 : f32, beta = 5.000000e-01 : f32} : (tensor<8xf32>) -> tensor<8xf32> loc([[LOC_FUSED:#.+]])
+// CHECK:           return
+// CHECK-DAG:       [[LOC_CLIP:#.+]] = loc("clip")
+// CHECK-DAG:       [[LOC_DIV:#.+]] = loc("div")
+// CHECK-DAG:       [[LOC_ADD:#.+]] = loc("add")
+// CHECK:           [[LOC_FUSED]] = loc(fused[[[LOC_CLIP]], [[LOC_DIV]], [[LOC_ADD]]])
+}
+
+// -----
+
+// Canonical HardSwish x * clip(mul(x, a) + b, 0, 1): recomposed via HardSigmoid
+// then Mul(x, HardSigmoid(x)) -> HardSwish. MLIR flattens the nested fused
+// locations, so the HardSwish carries the locations of all four replaced ops.
+// (The scaled-range div form is normalized into this canonical form by the
+// constant-propagation pass, which is exercised in onnx_recompose_constprop.mlir.)
+// CHECK-LABEL:  func.func @hardswish_canonical_loc
+func.func @hardswish_canonical_loc(%arg0: tensor<8xf32>) -> tensor<8xf32> {
+  %a = onnx.Constant dense<0.166666672> : tensor<f32>
+  %b = onnx.Constant dense<5.000000e-01> : tensor<f32>
+  %zero = onnx.Constant dense<0.000000e+00> : tensor<f32>
+  %one = onnx.Constant dense<1.000000e+00> : tensor<f32>
+  %0 = "onnx.Mul"(%arg0, %a) : (tensor<8xf32>, tensor<f32>) -> tensor<8xf32> loc("mulA")
+  %1 = "onnx.Add"(%0, %b) : (tensor<8xf32>, tensor<f32>) -> tensor<8xf32> loc("add")
+  %2 = "onnx.Clip"(%1, %zero, %one) : (tensor<8xf32>, tensor<f32>, tensor<f32>) -> tensor<8xf32> loc("clip")
+  %3 = "onnx.Mul"(%arg0, %2) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32> loc("mulX")
+  return %3 : tensor<8xf32> loc("ret")
+// CHECK:           [[VAR_0_:%.+]] = "onnx.HardSwish"(%arg0) : (tensor<8xf32>) -> tensor<8xf32> loc([[LOC_FUSED:#.+]])
+// CHECK:           return
+// CHECK-DAG:       [[LOC_MUL_X:#.+]] = loc("mulX")
+// CHECK-DAG:       [[LOC_CLIP:#.+]] = loc("clip")
+// CHECK-DAG:       [[LOC_ADD:#.+]] = loc("add")
+// CHECK-DAG:       [[LOC_MUL_A:#.+]] = loc("mulA")
+// CHECK:           [[LOC_FUSED]] = loc(fused[[[LOC_MUL_X]], [[LOC_CLIP]], [[LOC_ADD]], [[LOC_MUL_A]]])
+}

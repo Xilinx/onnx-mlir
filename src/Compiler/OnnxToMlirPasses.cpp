@@ -60,9 +60,13 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // Decompose first. Eliminates some unsupported ops without shape inference.
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createONNXHybridTransformPass(
       getDecomposeOnlyOptions(opts.hybrid)));
-  if (opts.hybrid.recomposition)
-    pm.addNestedPass<func::FuncOp>(onnx_mlir::createRecomposeONNXToONNXPass(
-        /*target=*/"", opts.hybrid.enableRotaryEmbeddingRecompose));
+  if (opts.hybrid.recomposition) {
+    onnx_mlir::RecomposeONNXToONNXPassOptions recomposeOpts{
+        .enableRotaryEmbeddingRecompose =
+            opts.hybrid.enableRotaryEmbeddingRecompose};
+    pm.addNestedPass<func::FuncOp>(
+        onnx_mlir::createRecomposeONNXToONNXPass(recomposeOpts));
+  }
 
   if (opts.enableONNXHybridPass) {
     pm.addNestedPass<func::FuncOp>(
