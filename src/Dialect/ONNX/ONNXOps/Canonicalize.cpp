@@ -27,6 +27,7 @@
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -2034,6 +2035,57 @@ struct RecomposeConcatPattern : public OpRewritePattern<ONNXConcatOp> {
     }
 
     return failure();
+  }
+};
+
+// A concat operand whose concat-axis dimension is statically zero contributes
+// nothing along that axis and can be dropped. The result shape is unchanged,
+// so the original result type is reused. Only a single such operand is
+// removed per rewrite; when several are present the greedy driver re-matches.
+// Restricted to arity > 1 so the rewrite never produces an operand-less concat;
+// a resulting single operand is folded by `ConcatSingleOperandPattern`.
+struct RemoveEmptyConcatOperandsPattern
+    : public OpRewritePattern<ONNXConcatOp> {
+  using OpRewritePattern<ONNXConcatOp>::OpRewritePattern;
+
+  static bool isEmptyAlongConcatAxis(Value v, int64_t axis) {
+    auto type = mlir::dyn_cast<ShapedType>(v.getType());
+    if (!type || !type.hasRank())
+      return false;
+    int64_t rank = type.getRank();
+    if (axis < 0)
+      axis += rank;
+    return type.getDimSize(axis) == 0;
+  }
+
+  LogicalResult matchAndRewrite(
+      ONNXConcatOp concatOp, PatternRewriter &rewriter) const final {
+    if (concatOp.getNumOperands() <= 1)
+      return failure();
+
+    int64_t axis = concatOp.getAxis();
+    for (auto [idx, operand] : llvm::enumerate(concatOp.getOperands())) {
+      if (isEmptyAlongConcatAxis(operand, axis)) {
+        rewriter.modifyOpInPlace(
+            concatOp, [&] { concatOp->eraseOperand(idx); });
+        return success();
+      }
+    }
+
+    return failure();
+  }
+};
+
+// A concat with a single operand is an identity.
+struct ConcatSingleOperandPattern : public OpRewritePattern<ONNXConcatOp> {
+  using OpRewritePattern<ONNXConcatOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXConcatOp concatOp, PatternRewriter &rewriter) const final {
+    if (concatOp.getNumOperands() != 1)
+      return failure();
+    rewriter.replaceOp(concatOp, concatOp.getOperand(0));
+    return success();
   }
 };
 
@@ -4360,6 +4412,8 @@ void ONNXCastOp::getCanonicalizationPatterns(
 void ONNXConcatOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<RecomposeConcatPattern>(context);
+  results.insert<RemoveEmptyConcatOperandsPattern>(context);
+  results.insert<ConcatSingleOperandPattern>(context);
   results.insert<EliminateCarveOutAroundRotaryEmbeddingPattern>(context);
 }
 
