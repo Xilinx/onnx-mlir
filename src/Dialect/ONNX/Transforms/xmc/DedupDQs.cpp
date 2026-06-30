@@ -52,10 +52,22 @@ public:
     DenseSet<ONNXDequantizeLinearOp, DQOpInfo> uniqDQs;
     DenseSet<ONNXDequantizeLinearOp> opsToErase;
 
+    auto isOutput = [](ONNXDequantizeLinearOp dqOp) {
+      return any_of(dqOp->getUsers(),
+          [](Operation *user) { return isa<func::ReturnOp>(user); });
+    };
+
     for (auto dqOp : func.getOps<ONNXDequantizeLinearOp>()) {
       if (auto foundIter = uniqDQs.find(dqOp); foundIter != uniqDQs.end()) {
-        dqOp->replaceAllUsesWith((*foundIter)->getResults());
-        opsToErase.insert(dqOp);
+        if (isOutput(dqOp) && !isOutput(*foundIter)) {
+          (*foundIter)->replaceAllUsesWith(dqOp->getResults());
+          opsToErase.insert(*foundIter);
+          uniqDQs.erase(foundIter);
+          uniqDQs.insert(dqOp);
+        } else {
+          dqOp->replaceAllUsesWith((*foundIter)->getResults());
+          opsToErase.insert(dqOp);
+        }
       } else {
         uniqDQs.insert(dqOp);
       }
