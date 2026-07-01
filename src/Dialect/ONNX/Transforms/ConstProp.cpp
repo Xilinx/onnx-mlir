@@ -1703,9 +1703,6 @@ public:
     if (qOp.getBlockSize() != 0)
       return rewriter.notifyMatchFailure(qOp, "blocked quantization");
 
-    if (!qOp.getSaturate())
-      return rewriter.notifyMatchFailure(qOp, "only saturate=1 is supported");
-
     // The input and quantization parameters must all be constants.
     ElementsAttr xElems = getDenseOrDisposableConstLikeElements(qOp.getX());
     if (!xElems)
@@ -1731,9 +1728,6 @@ public:
     auto intType = dyn_cast<IntegerType>(getElementTypeOrSelf(qOp.getY()));
     if (!intType)
       return rewriter.notifyMatchFailure(qOp, "non-integer output type");
-    // castToIntElementType computes the saturation range with 64-bit shifts.
-    if (intType.getWidth() > 64)
-      return rewriter.notifyMatchFailure(qOp, "integer width > 64");
 
     auto xType = cast<ShapedType>(qOp.getX().getType());
     if (!xType.hasStaticShape())
@@ -1868,13 +1862,12 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(
   patterns.insert<IfOfConst>(patterns.getContext());
   patterns.insert<LoopUnroll>(patterns.getContext());
   patterns.insert<ConstPropConcatFromSequence>(patterns.getContext());
-  if (enableQDQ) {
+  if (enableQDQ)
     patterns.add<RemoveQDQForConst<ONNXSliceOp>,
         RemoveQDQForConst<ONNXTransposeOp>, RemoveQDQForConst<ONNXReshapeOp>,
         RemoveQDQForConst<ONNXSqueezeOp>, RemoveQDQForConst<ONNXUnsqueezeOp>,
         RemoveQDQForConst<ONNXGatherOp>>(patterns.getContext());
-    patterns.add<ConstFoldQuantizeLinearOnConst>(patterns.getContext());
-  }
+  patterns.add<ConstFoldQuantizeLinearOnConst>(patterns.getContext());
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,

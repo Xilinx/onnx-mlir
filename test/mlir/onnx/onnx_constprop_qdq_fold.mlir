@@ -1,4 +1,4 @@
-// RUN: onnx-mlir-opt --split-input-file %s -constprop-onnx=enable-qdq | FileCheck %s
+// RUN: onnx-mlir-opt --split-input-file %s -constprop-onnx | FileCheck %s
 
 //===----------------------------------------------------------------------===//
 // Positive cases.
