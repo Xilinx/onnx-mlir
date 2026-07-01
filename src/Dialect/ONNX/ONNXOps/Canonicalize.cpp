@@ -3718,6 +3718,28 @@ public:
   }
 };
 
+// LeakyRelu with alpha == 1.0 is the identity function f(x) = x.
+class LeakyReluAlphaOneToIdentityPattern
+    : public OpRewritePattern<ONNXLeakyReluOp> {
+public:
+  using OpRewritePattern<ONNXLeakyReluOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXLeakyReluOp op, PatternRewriter &rewriter) const override {
+    FloatAttr alphaAttr = op.getAlphaAttr();
+    assert(alphaAttr);
+    if (alphaAttr.getValueAsDouble() != 1.0)
+      return failure();
+
+    // Only eliminate the op when the input and result types match.
+    if (op.getX().getType() != op.getResult().getType())
+      return failure();
+
+    rewriter.replaceOp(op, op.getX());
+    return success();
+  }
+};
+
 // onnx.Abs(onnx.Abs(x)) -> onnx.Abs(x) by reusing the inner Abs result.
 class AbsAbsPattern : public OpRewritePattern<ONNXAbsOp> {
 public:
@@ -4503,6 +4525,7 @@ void ONNXLayoutTransformOp::getCanonicalizationPatterns(
 void ONNXLeakyReluOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<LeakyReluAlphaZeroToReluPattern>(context);
+  results.insert<LeakyReluAlphaOneToIdentityPattern>(context);
 }
 
 /// on the ONNXLessOp.
