@@ -9,6 +9,7 @@
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/Value.h>
+#include <mlir/Interfaces/SideEffectInterfaces.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Support/LLVM.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
@@ -59,8 +60,17 @@ void inferTensorNames(ValueRange replOperands) {
 }
 
 bool hasNameAndManyUses(Value value) {
-  auto numUses = std::distance(value.use_begin(), value.use_end());
-  return TensorName(value) && numUses > 1;
+  if (!TensorName(value))
+    return false;
+  // Count only live uses. A use whose owner is already trivially dead (but not
+  // yet DCE'd by the greedy driver) is not a real consumer, so ignore it. This
+  // mirrors the driver's own O(1) deadness check and avoids a transient dead
+  // use blocking ResultNames propagation onto a producer.
+  int liveUses = 0;
+  for (OpOperand &use : value.getUses())
+    if (!isOpTriviallyDead(use.getOwner()))
+      ++liveUses;
+  return liveUses > 1;
 }
 
 } // namespace
