@@ -197,3 +197,7 @@ def XFEONNXOpsetVerifierPass
            "Comma-separated bare ONNX op names that must not appear. Skips ops with non-static shapes.">
   ];
 }
+
+def DedupDQsPass : Pass<"dedup-dqs", "::mlir::func::FuncOp"> {
+  let summary = "Alternative to CSE, targets only DQ ops";
+}
