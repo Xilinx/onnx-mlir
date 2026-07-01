@@ -52,6 +52,9 @@ static bool disableBatchNormDecompose = false;
 // Populated by configureUnsafeMathCanonicalization().
 static bool enableUnsafeMath = true;
 
+// Populated by configureConv1x1IntoConvCanonicalization().
+static bool enableConv1x1IntoConvCanonicalization = false;
+
 using namespace mlir;
 using namespace onnx_mlir;
 
@@ -4421,7 +4424,8 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
 void ONNXConvOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<NormalizeConvAutoPadPattern>(context);
-  results.insert<FuseConv1x1IntoConvPattern>(context);
+  if (enableConv1x1IntoConvCanonicalization)
+    results.insert<FuseConv1x1IntoConvPattern>(context);
 }
 
 void onnx_mlir::configureBatchNormCanonicalization(
@@ -4432,4 +4436,10 @@ void onnx_mlir::configureBatchNormCanonicalization(
 void onnx_mlir::configureUnsafeMathCanonicalization(
     bool enableUnsafeMathOptimizations) {
   enableUnsafeMath = enableUnsafeMathOptimizations;
+}
+
+void onnx_mlir::configureConv1x1IntoConvCanonicalization(
+    bool enableConv1x1IntoConvCanonicalizationOption) {
+  enableConv1x1IntoConvCanonicalization =
+      enableConv1x1IntoConvCanonicalizationOption;
 }

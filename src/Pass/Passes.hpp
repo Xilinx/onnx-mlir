@@ -66,6 +66,10 @@ void configureBatchNormCanonicalization(bool disableBatchNormDecompose);
 // Configure patterns that are not numerically safe.
 void configureUnsafeMathCanonicalization(bool enableUnsafeMathOptimizations);
 
+// Configure Conv canonicalization that fuses a 1x1 Conv into a following Conv.
+void configureConv1x1IntoConvCanonicalization(
+    bool enableConv1x1IntoConvCanonicalization);
+
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(
     bool enableQDQ = false);
 
