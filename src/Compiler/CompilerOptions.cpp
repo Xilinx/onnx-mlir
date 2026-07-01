@@ -47,6 +47,7 @@ std::string opsForCall;                                // common for both
 bool disableKrnlOpFusion;                              // common for both
 bool disableQuantZeroPoint;                            // common for both
 bool enableUnsafeMathOptimizations;                    // common for both
+bool enableConv1x1IntoConvCanonicalization;            // common for both
 bool enableKrnlBufferReuse;                            // common for both
 std::string onnxTransformOptions;                      // onnx-mlir only
 bool enableQuarkQuantizerLegalization;                 // common for both
@@ -265,6 +266,14 @@ static llvm::cl::opt<bool, true> enableUnsafeMathOptimizationsOpt(
         "(default=true)."),
     llvm::cl::location(enableUnsafeMathOptimizations), llvm::cl::init(true),
     llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableConv1x1IntoConvCanonicalizationOpt(
+    "enable-conv1x1-into-conv-canonicalization",
+    llvm::cl::desc(
+        "Enable ONNX Conv canonicalization that fuses a 1x1 Conv into a "
+        "following Conv."),
+    llvm::cl::location(enableConv1x1IntoConvCanonicalization),
+    llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true> enableKrnlBufferReuseOpt(
     "enable-krnl-buffer-reuse",

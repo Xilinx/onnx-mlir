@@ -1,4 +1,4 @@
-// RUN: onnx-mlir-opt --onnx-hybrid-transform %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --enable-conv1x1-into-conv-canonicalization --onnx-hybrid-transform %s -split-input-file | FileCheck %s
 
 // -----
 
