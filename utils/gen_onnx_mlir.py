@@ -568,6 +568,7 @@ OpsWithCanonicalizer = [
     "UnsqueezeV11",
     "Where",
     "Xor",
+    "XFEAveragePool",
 ]
 
 # Operations with custom verifiers (alphabetical order).
