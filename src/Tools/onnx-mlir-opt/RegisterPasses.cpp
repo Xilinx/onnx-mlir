@@ -414,6 +414,7 @@ void registerOMPasses(int optLevel) {
 
   mlir::registerPass(createQuantTypesPass);
   mlir::registerPass(createONNXCSEPass);
+  mlir::registerPass(createDedupDQsPass);
   mlir::registerPass(createFixNegScalePass);
   mlir::registerPass(createInferTensorNames);
   mlir::registerPass(createCanonicalizeWithResultNamesPass);
