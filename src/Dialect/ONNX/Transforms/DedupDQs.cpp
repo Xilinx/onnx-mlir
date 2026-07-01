@@ -7,10 +7,14 @@
 #include <mlir/Support/LLVM.h>
 
 #include "src/Dialect/ONNX/ONNXOps.hpp"
+#include "src/Pass/Passes.hpp"
 
 using namespace mlir;
 
 namespace onnx_mlir {
+
+#define GEN_PASS_DEF_DEDUPDQSPASS
+#include "src/Dialect/ONNX/Transforms/Passes.h.inc"
 
 class DQOpInfo : public DenseMapInfo<ONNXDequantizeLinearOp> {
 public:
@@ -38,14 +42,9 @@ public:
   }
 };
 
-class DedupDQsPass
-    : public PassWrapper<DedupDQsPass, OperationPass<func::FuncOp>> {
+class DedupDQsPass : public impl::DedupDQsPassBase<DedupDQsPass> {
 public:
-  [[nodiscard]] StringRef getName() const override { return "dedup-dqs"; }
-  [[nodiscard]] StringRef getArgument() const override { return "dedup-dqs"; }
-  [[nodiscard]] StringRef getDescription() const override {
-    return "Alternative to CSE, targets only DQ ops";
-  }
+  using Base::Base;
 
   void runOnOperation() override {
     auto func = getOperation();
@@ -87,9 +86,5 @@ private:
         [](Operation *user) { return isa_and_present<func::ReturnOp>(user); });
   }
 };
-
-std::unique_ptr<Pass> createDedupDQsPass() {
-  return std::make_unique<DedupDQsPass>();
-}
 
 } // namespace onnx_mlir
