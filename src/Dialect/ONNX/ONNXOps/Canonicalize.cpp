@@ -33,6 +33,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
@@ -58,6 +59,9 @@ static bool enableUnsafeMath = true;
 
 // Populated by configureReshapeCanonicalization().
 static bool enableReshapeCanonicalization = true;
+
+// Populated by configurePositiveAxisCanonicalization().
+static bool enablePositiveAxisCanonicalization = true;
 
 // Populated by configureQDQDataMovementCanonicalization().
 static bool enableQDQDataMovementCanonicalization = false;
@@ -3132,28 +3136,6 @@ struct PullReluLikeOpsThroughSplitPattern
   }
 };
 
-struct SoftmaxNegativeAxisPattern : public OpRewritePattern<ONNXSoftmaxOp> {
-  using OpRewritePattern<ONNXSoftmaxOp>::OpRewritePattern;
-  LogicalResult matchAndRewrite(
-      ONNXSoftmaxOp softmaxOp, PatternRewriter &rewriter) const final {
-
-    auto inputType = dyn_cast<RankedTensorType>(softmaxOp.getInput().getType());
-    if (!inputType)
-      return rewriter.notifyMatchFailure(
-          softmaxOp, "Input is not a ranked tensor");
-
-    const int64_t axis = softmaxOp.getAxis();
-    const int64_t rank = inputType.getRank();
-
-    if (axis >= 0)
-      return failure(); // nothing to do.
-    assert(-rank <= axis && "axis is out of range");
-    rewriter.modifyOpInPlace(
-        softmaxOp, [&]() { softmaxOp.setAxis(rank + axis); });
-    return success();
-  }
-};
-
 // Softmax along an axis whose dimension has size 1 is the constant tensor 1.0
 // because exp(x)/exp(x) == 1.0 for all finite x.
 // E.g. Softmax(x: tensor<8x1xf32>) {axis=1} ==> Constant 1.0 : tensor<8x1xf32>
@@ -3735,6 +3717,163 @@ public:
     return success();
   }
 };
+
+namespace {
+
+// Normalizes a scalar `axis` attribute in place.
+bool normalizeAxisAttr(
+    Operation *op, const ONNXAxisValueSpec &spec, PatternRewriter &rewriter) {
+  SmallVector<int64_t, 1> axes;
+  if (!getONNXAxisValues(op, spec, axes) || axes.size() != 1)
+    return false;
+  const int64_t axis = axes[0];
+  if (axis >= 0)
+    return false;
+
+  const std::optional<int64_t> rank =
+      getONNXAxisNormalizationRank(op, spec, axes.size());
+  if (!rank)
+    return false;
+
+  const auto axisAttr = op->getAttrOfType<IntegerAttr>(spec.attrName);
+  if (!axisAttr)
+    return false;
+  const std::optional<int64_t> normalized =
+      normalizeONNXAxisValue(axis, *rank, spec.includeRank);
+  if (!normalized || *normalized == axis)
+    return false;
+
+  rewriter.modifyOpInPlace(op, [&]() {
+    op->setAttr(
+        spec.attrName, IntegerAttr::get(axisAttr.getType(), *normalized));
+  });
+  return true;
+}
+
+// Normalizes an `axes` array attribute in place.
+bool normalizeAxesAttr(
+    Operation *op, const ONNXAxisValueSpec &spec, PatternRewriter &rewriter) {
+  const auto axesAttr = op->getAttrOfType<ArrayAttr>(spec.attrName);
+  if (!axesAttr || axesAttr.empty())
+    return false;
+  SmallVector<IntegerAttr> axisAttrs;
+  axisAttrs.reserve(axesAttr.size());
+  for (const Attribute attr : axesAttr) {
+    const auto axisAttr = mlir::dyn_cast<IntegerAttr>(attr);
+    if (!axisAttr)
+      return false;
+    axisAttrs.push_back(axisAttr);
+  }
+
+  SmallVector<int64_t> axes;
+  if (!getONNXAxisValues(op, spec, axes))
+    return false;
+  const std::optional<int64_t> rank =
+      getONNXAxisNormalizationRank(op, spec, axes.size());
+  if (!rank)
+    return false;
+
+  SmallVector<int64_t> normalizedAxes;
+  const FailureOr<bool> changed =
+      normalizeONNXAxisValues(axes, *rank, spec.includeRank, normalizedAxes);
+  if (failed(changed) || !*changed)
+    return false;
+
+  SmallVector<Attribute> normalizedAttrs;
+  normalizedAttrs.reserve(axesAttr.size());
+  for (auto [axisAttr, axis] : llvm::zip_equal(axisAttrs, normalizedAxes)) {
+    normalizedAttrs.push_back(IntegerAttr::get(axisAttr.getType(),
+        APInt(axisAttr.getValue().getBitWidth(), axis, /*isSigned=*/true)));
+  }
+  rewriter.modifyOpInPlace(op, [&]() {
+    op->setAttr(
+        spec.attrName, ArrayAttr::get(op->getContext(), normalizedAttrs));
+  });
+  return true;
+}
+
+// Creates an ONNX integer constant with the same ranked tensor type as
+// `oldValue`.
+Value createIntegerConstantLike(PatternRewriter &rewriter, Location loc,
+    Value oldValue, ArrayRef<int64_t> values) {
+  const ElementsAttr elemsAttr = getElementAttributeFromONNXValue(oldValue);
+  if (!elemsAttr)
+    return {};
+  const auto tensorType = mlir::dyn_cast<RankedTensorType>(elemsAttr.getType());
+  if (!tensorType)
+    return {};
+  const auto intType = mlir::dyn_cast<IntegerType>(tensorType.getElementType());
+  if (!intType)
+    return {};
+  SmallVector<APInt> apValues;
+  apValues.reserve(values.size());
+  for (const int64_t value : values)
+    apValues.emplace_back(intType.getWidth(), value, /*isSigned=*/true);
+  const auto newAttr = DenseElementsAttr::get(tensorType, apValues);
+  return rewriter.create<ONNXConstantOp>(loc, /*sparse_value=*/Attribute(),
+      /*value=*/newAttr);
+}
+
+// Normalizes a constant `axis` or `axes` operand in place.
+bool normalizeAxisOperand(
+    Operation *op, const ONNXAxisValueSpec &spec, PatternRewriter &rewriter) {
+  assert(spec.index < op->getNumOperands() &&
+         "axis operand spec index must be valid for op");
+
+  const Value axisOperand = op->getOperand(spec.index);
+  if (mlir::isa<NoneType>(axisOperand.getType()))
+    return false;
+
+  SmallVector<int64_t> axes;
+  if (!getONNXAxisValues(op, spec, axes))
+    return false;
+
+  const std::optional<int64_t> rank =
+      getONNXAxisNormalizationRank(op, spec, axes.size());
+  if (!rank)
+    return false;
+
+  SmallVector<int64_t> normalizedAxes;
+  const FailureOr<bool> changed =
+      normalizeONNXAxisValues(axes, *rank, spec.includeRank, normalizedAxes);
+  if (failed(changed) || !*changed)
+    return false;
+
+  const Value newAxisOperand = createIntegerConstantLike(
+      rewriter, axisOperand.getLoc(), axisOperand, normalizedAxes);
+  if (!newAxisOperand)
+    return false;
+
+  rewriter.modifyOpInPlace(
+      op, [&]() { op->setOperand(spec.index, newAxisOperand); });
+  return true;
+}
+
+struct ONNXPositiveAxisCanonicalizationPattern : public RewritePattern {
+  ONNXPositiveAxisCanonicalizationPattern(
+      MLIRContext *context, PatternBenefit benefit)
+      : RewritePattern(MatchAnyOpTypeTag(), benefit, context) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, PatternRewriter &rewriter) const override {
+    if (op->getName().getDialectNamespace() !=
+        ONNXDialect::getDialectNamespace())
+      return failure();
+
+    const std::optional<ONNXAxisValueSpec> spec = getONNXAxisValueSpec(op);
+    if (!spec || !spec->canCanonicalize)
+      return failure();
+
+    if (spec->source == ONNXAxisValueSource::Operand)
+      return success(normalizeAxisOperand(op, *spec, rewriter));
+    if (spec->kind == ONNXAxisOperandKind::Scalar)
+      return success(normalizeAxisAttr(op, *spec, rewriter));
+    return success(normalizeAxesAttr(op, *spec, rewriter));
+  }
+};
+
+} // namespace
+
 namespace {
 bool hasScalarConstantQDQParams(ONNXDequantizeLinearOp op) {
   return isScalarConstantTensor(op.getXScale()) &&
@@ -4417,6 +4556,13 @@ void ONNXConcatOp::getCanonicalizationPatterns(
   results.insert<EliminateCarveOutAroundRotaryEmbeddingPattern>(context);
 }
 
+/// on the ONNXConvOp.
+void ONNXConvOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<NormalizeConvAutoPadPattern>(context);
+  results.insert<FuseConv1x1IntoConvPattern>(context);
+}
+
 /// on the ONNXClipOp.
 void ONNXClipOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
@@ -4614,7 +4760,6 @@ void ONNXSizeOp::getCanonicalizationPatterns(
 /// on the ONNXSoftmaxOp.
 void ONNXSoftmaxOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
-  results.insert<SoftmaxNegativeAxisPattern>(context);
   results.insert<SoftmaxSizeOneAxisPattern>(context);
 }
 
@@ -4769,11 +4914,10 @@ void onnx_mlir::populateQDQDataMovementCanonicalizationPatterns(
       patterns.getContext(), benefit);
 }
 
-/// on the ONNXConvOp.
-void ONNXConvOp::getCanonicalizationPatterns(
-    RewritePatternSet &results, MLIRContext *context) {
-  results.insert<NormalizeConvAutoPadPattern>(context);
-  results.insert<FuseConv1x1IntoConvPattern>(context);
+void onnx_mlir::populateONNXPositiveAxisCanonicalizationPatterns(
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<ONNXPositiveAxisCanonicalizationPattern>(
+      patterns.getContext(), benefit);
 }
 
 void onnx_mlir::configureBatchNormCanonicalization(
@@ -4788,6 +4932,14 @@ void onnx_mlir::configureUnsafeMathCanonicalization(
 
 void onnx_mlir::configureReshapeCanonicalization(bool enable) {
   enableReshapeCanonicalization = enable;
+}
+
+void onnx_mlir::configurePositiveAxisCanonicalization(bool enable) {
+  enablePositiveAxisCanonicalization = enable;
+}
+
+bool onnx_mlir::isPositiveAxisCanonicalizationEnabled() {
+  return enablePositiveAxisCanonicalization;
 }
 
 void onnx_mlir::configureQDQDataMovementCanonicalization(

@@ -194,6 +194,9 @@ def XFEONNXOpsetVerifierPass
   let options = [
     Option<"disallowedOps", "disallowed-ops", "std::string",
            /*default=*/"\"Flatten,Squeeze,Unsqueeze\"",
-           "Comma-separated bare ONNX op names that must not appear. Skips ops with non-static shapes.">
+           "Comma-separated bare ONNX op names that must not appear. Skips ops with non-static shapes.">,
+    Option<"verifyNonNegativeAxis", "verify-non-negative-axis", "bool",
+           /*default=*/"true",
+           "Verify ranked ONNX ops do not carry negative constant axis/axes values.">
   ];
 }

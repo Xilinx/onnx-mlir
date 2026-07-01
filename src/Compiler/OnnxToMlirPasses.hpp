@@ -34,6 +34,8 @@ struct OnnxToMlirOptions {
   bool disableBatchNormDecompose = false;
   // Reshape-family canonicalization (Flatten/Squeeze/Unsqueeze -> Reshape).
   bool enableReshapeCanonicalization = true;
+  // Negative axis/axes canonicalization when rank is known.
+  bool enablePositiveAxisCanonicalization = true;
   bool enableXFEONNXOpsetVerifier = true;
   bool enableUnsafeMathOptimizations = true;
   bool enableQDQDataMovementCanonicalization = false;

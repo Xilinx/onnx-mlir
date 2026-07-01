@@ -34,8 +34,10 @@
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -202,6 +204,56 @@ mlir::ONNXConstantOp getONNXConstantOp(mlir::Value value);
 // Return true if successfully obtaining the array. Otherwise, false.
 bool getI64ValuesFromONNXConstantOp(
     mlir::Value val, mlir::SmallVectorImpl<int64_t> &iRes);
+
+// Classifies operands that carry scalar axis or axes values. UnsqueezeAxes is
+// distinct because negative insertion axes are normalized against output rank.
+enum class ONNXAxisOperandKind { None, Scalar, Axes, UnsqueezeAxes };
+enum class ONNXAxisValueSource { Attribute, Operand };
+enum class ONNXAxisRankKind {
+  None,
+  FirstOperand,
+  FirstOperandMinusOne,
+  FirstOperandPlusOne,
+  ConcatFromSequence,
+  UnsqueezeOutput
+};
+
+struct ONNXAxisValueSpec {
+  ONNXAxisOperandKind kind;
+  ONNXAxisValueSource source;
+  llvm::StringRef attrName;
+  unsigned index;
+  bool canCanonicalize;
+  ONNXAxisRankKind rankKind;
+  bool includeRank;
+};
+
+// Returns the known axis/axes attribute or operand for an ONNX op.
+std::optional<ONNXAxisValueSpec> getONNXAxisValueSpec(mlir::Operation *op);
+
+// Reads axis values for a spec returned by getONNXAxisValueSpec().
+[[nodiscard]] bool getONNXAxisValues(mlir::Operation *op,
+    const ONNXAxisValueSpec &spec, mlir::SmallVectorImpl<int64_t> &values);
+
+// Returns the rank used to validate and normalize the axis values for `spec`.
+// `axesCount` is only used for Unsqueeze, where axes are normalized against the
+// output rank.
+[[nodiscard]] std::optional<int64_t> getONNXAxisNormalizationRank(
+    mlir::Operation *op, const ONNXAxisValueSpec &spec, int64_t axesCount);
+
+// Normalizes an axis to its non-negative equivalent. Returns std::nullopt when
+// the axis is out of range.
+[[nodiscard]] std::optional<int64_t> normalizeONNXAxisValue(
+    int64_t axis, int64_t rank, bool includeRank = false);
+
+// Normalizes a list of axes. The returned bool indicates whether any value
+// changed; failure means one of the axes was out of range.
+[[nodiscard]] mlir::FailureOr<bool> normalizeONNXAxisValues(
+    llvm::ArrayRef<int64_t> axes, int64_t rank, bool includeRank,
+    mlir::SmallVectorImpl<int64_t> &normalized);
+
+// Returns true if the op carries any known negative axis value.
+[[nodiscard]] bool hasNegativeONNXAxisValue(mlir::Operation *op);
 
 // Read a single-element i64 ONNX constant `v` into `out`. Returns false if
 // the value is not a 1-element i64 constant.

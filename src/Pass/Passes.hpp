@@ -68,6 +68,13 @@ void configureUnsafeMathCanonicalization(bool enableUnsafeMathOptimizations);
 // enabled.
 void configureReshapeCanonicalization(bool enableReshapeCanonicalization);
 
+// Configure whether negative axis/axes values are canonicalized to positive
+// equivalents when rank is known.
+void configurePositiveAxisCanonicalization(
+    bool enablePositiveAxisCanonicalization);
+
+bool isPositiveAxisCanonicalizationEnabled();
+
 // Configure QDQ canonicalizations for data-movement/view ONNX ops.
 void configureQDQDataMovementCanonicalization(
     bool enableQDQDataMovementCanonicalization);
@@ -75,6 +82,9 @@ void configureQDQDataMovementCanonicalization(
 bool isQDQDataMovementCanonicalizationEnabled();
 
 void populateQDQDataMovementCanonicalizationPatterns(
+    mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
+
+void populateONNXPositiveAxisCanonicalizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
 
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(

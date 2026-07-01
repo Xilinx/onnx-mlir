@@ -50,6 +50,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   configureBatchNormCanonicalization(opts.disableBatchNormDecompose);
   configureUnsafeMathCanonicalization(opts.enableUnsafeMathOptimizations);
   configureReshapeCanonicalization(opts.enableReshapeCanonicalization);
+  configurePositiveAxisCanonicalization(
+      opts.enablePositiveAxisCanonicalization);
   configureQDQDataMovementCanonicalization(
       opts.enableQDQDataMovementCanonicalization);
 
