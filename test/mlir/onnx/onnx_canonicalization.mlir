@@ -1040,7 +1040,7 @@ func.func @test_fuse_add_conv(%arg0 : tensor<1x1x28x28xf32>, %arg1 : tensor<8x1x
 // CHECK-LABEL:  func.func @test_fuse_add_conv
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x1x28x28xf32>, [[PARAM_1_:%.+]]: tensor<8x1x5x5xf32>) -> tensor<1x8x28x28xf32> {
 // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[-0.161539719, -0.433835655, 0.091641359, -0.0168522168, -0.0650264397, -0.131737873, 0.0204175506, -0.121110231]> : tensor<8xf32>
-// CHECK:           [[VAR_1_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[PARAM_1_]], [[VAR_0_]]) {auto_pad = "SAME_UPPER", dilations = [1, 1], group = 1 : si64, kernel_shape = [5, 5], strides = [1, 1]} : (tensor<1x1x28x28xf32>, tensor<8x1x5x5xf32>, tensor<8xf32>) -> tensor<1x8x28x28xf32>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[PARAM_1_]], [[VAR_0_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [5, 5], pads = [2, 2, 2, 2], strides = [1, 1]} : (tensor<1x1x28x28xf32>, tensor<8x1x5x5xf32>, tensor<8xf32>) -> tensor<1x8x28x28xf32>
 // CHECK:           onnx.Return [[VAR_1_]] : tensor<1x8x28x28xf32>
 }
 
@@ -1055,7 +1055,7 @@ func.func @test_fuse_add_conv_bias(%arg0 : tensor<1x1x28x28xf32>, %arg1 : tensor
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x1x28x28xf32>, [[PARAM_1_:%.+]]: tensor<8x1x5x5xf32>, [[PARAM_2_:%.+]]: tensor<8xf32>) -> tensor<1x8x28x28xf32> {
 // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[-0.161539719, -0.433835655, 0.091641359, -0.0168522168, -0.0650264397, -0.131737873, 0.0204175506, -0.121110231]> : tensor<8xf32>
 // CHECK:           [[VAR_1_:%.+]] = "onnx.Add"([[PARAM_2_]], [[VAR_0_]]) : (tensor<8xf32>, tensor<8xf32>) -> tensor<8xf32>
-// CHECK:           [[VAR_2_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[PARAM_1_]], [[VAR_1_]]) {auto_pad = "SAME_UPPER", dilations = [1, 1], group = 1 : si64, kernel_shape = [5, 5], strides = [1, 1]} : (tensor<1x1x28x28xf32>, tensor<8x1x5x5xf32>, tensor<8xf32>) -> tensor<1x8x28x28xf32>
+// CHECK:           [[VAR_2_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[PARAM_1_]], [[VAR_1_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [5, 5], pads = [2, 2, 2, 2], strides = [1, 1]} : (tensor<1x1x28x28xf32>, tensor<8x1x5x5xf32>, tensor<8xf32>) -> tensor<1x8x28x28xf32>
 // CHECK:           onnx.Return [[VAR_2_]] : tensor<1x8x28x28xf32>
 }
 
@@ -1109,7 +1109,7 @@ func.func @test_fuse_add_conv_with_scalar_const(%arg0 : tensor<1x1x28x28xf32>, %
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x1x28x28xf32>, [[PARAM_1_:%.+]]: tensor<8x1x5x5xf32>) -> tensor<1x8x28x28xf32> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<f32>
 // CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.NoValue"() {value} : () -> none
-// CHECK:           [[VAR_2_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[PARAM_1_]], [[VAR_1_]]) {auto_pad = "SAME_UPPER", dilations = [1, 1], group = 1 : si64, kernel_shape = [5, 5], onnx_node_name = "Convolution28", strides = [1, 1]} : (tensor<1x1x28x28xf32>, tensor<8x1x5x5xf32>, none) -> tensor<1x8x28x28xf32>
+// CHECK:           [[VAR_2_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[PARAM_1_]], [[VAR_1_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [5, 5], onnx_node_name = "Convolution28", pads = [2, 2, 2, 2], strides = [1, 1]} : (tensor<1x1x28x28xf32>, tensor<8x1x5x5xf32>, none) -> tensor<1x8x28x28xf32>
 // CHECK:           [[VAR_3_:%.+]] = "onnx.Add"([[VAR_2_]], [[VAR_0_]]) : (tensor<1x8x28x28xf32>, tensor<f32>) -> tensor<1x8x28x28xf32>
 // CHECK:           onnx.Return [[VAR_3_]] : tensor<1x8x28x28xf32>
 // CHECK:         }
@@ -1488,7 +1488,7 @@ func.func @test_fuse_mul_conv_rank_3D(%arg0: tensor<1x1x28x28xf32>) -> tensor<*x
   // CHECK-DAG:       [[VAR_3_:%.+]] = "onnx.NoValue"() {value} : () -> none
   // CHECK:           [[VAR_4_:%.+]] = "onnx.Reshape"([[VAR_1_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<8x1x1xf32>, tensor<4xi64>) -> tensor<8x1x1x1xf32>
   // CHECK:           [[VAR_5_:%.+]] = "onnx.Mul"([[VAR_4_]], [[VAR_2_]]) : (tensor<8x1x1x1xf32>, tensor<8x1x2x2xf32>) -> tensor<8x1x2x2xf32>
-  // CHECK:           [[VAR_6_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_5_]], [[VAR_3_]]) {auto_pad = "NOTSET", group = 1 : si64, kernel_shape = [2, 2], strides = [1, 1]} : (tensor<1x1x28x28xf32>, tensor<8x1x2x2xf32>, none) -> tensor<1x8x27x27xf32>
+  // CHECK:           [[VAR_6_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_5_]], [[VAR_3_]]) {auto_pad = "NOTSET", group = 1 : si64, kernel_shape = [2, 2], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x1x28x28xf32>, tensor<8x1x2x2xf32>, none) -> tensor<1x8x27x27xf32>
   // CHECK:           onnx.Return [[VAR_6_]] : tensor<1x8x27x27xf32>
 }
 
@@ -3784,4 +3784,88 @@ func.func @reduce_mean_keepdims_zero_unchanged(%arg0: tensor<1x3x1x5xf32>) -> te
   %0 = "onnx.ReduceMean"(%arg0, %axes) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x3x1x5xf32>, tensor<2xi64>) -> tensor<3x5xf32>
   onnx.Return %0 : tensor<3x5xf32>
   // CHECK: "onnx.ReduceMean"(%arg0, %{{.*}}) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_concat_single_operand
+// CHECK-SAME:  ([[PARAM_0_:%.+]]: tensor<3x4xf32>)
+func.func @test_concat_single_operand(%arg0: tensor<3x4xf32>) -> tensor<3x4xf32> {
+  %0 = "onnx.Concat"(%arg0) {axis = 0 : si64} : (tensor<3x4xf32>) -> tensor<3x4xf32>
+  onnx.Return %0 : tensor<3x4xf32>
+  // CHECK-NOT: onnx.Concat
+  // CHECK: onnx.Return [[PARAM_0_]] : tensor<3x4xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_concat_drop_empty_operand
+// CHECK-SAME:  ([[PARAM_0_:%.+]]: tensor<60xf32>, [[PARAM_1_:%.+]]: tensor<0xf32>)
+func.func @test_concat_drop_empty_operand(%arg0: tensor<60xf32>, %arg1: tensor<0xf32>) -> tensor<60xf32> {
+  %0 = "onnx.Concat"(%arg0, %arg1) {axis = 0 : si64} : (tensor<60xf32>, tensor<0xf32>) -> tensor<60xf32>
+  onnx.Return %0 : tensor<60xf32>
+  // CHECK-NOT: onnx.Concat
+  // CHECK: onnx.Return [[PARAM_0_]] : tensor<60xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_concat_drop_empty_keep_rest
+// CHECK-SAME:  ([[PARAM_0_:%.+]]: tensor<2x3xf32>, [[PARAM_1_:%.+]]: tensor<2x0xf32>, [[PARAM_2_:%.+]]: tensor<2x4xf32>)
+func.func @test_concat_drop_empty_keep_rest(%arg0: tensor<2x3xf32>, %arg1: tensor<2x0xf32>, %arg2: tensor<2x4xf32>) -> tensor<2x7xf32> {
+  %0 = "onnx.Concat"(%arg0, %arg1, %arg2) {axis = 1 : si64} : (tensor<2x3xf32>, tensor<2x0xf32>, tensor<2x4xf32>) -> tensor<2x7xf32>
+  onnx.Return %0 : tensor<2x7xf32>
+  // CHECK: [[VAR_0_:%.+]] = "onnx.Concat"([[PARAM_0_]], [[PARAM_2_]]) {axis = 1 : si64} : (tensor<2x3xf32>, tensor<2x4xf32>) -> tensor<2x7xf32>
+  // CHECK: onnx.Return [[VAR_0_]] : tensor<2x7xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_concat_no_empty_unchanged
+// CHECK-SAME:  ([[PARAM_0_:%.+]]: tensor<2x3xf32>, [[PARAM_1_:%.+]]: tensor<2x4xf32>)
+func.func @test_concat_no_empty_unchanged(%arg0: tensor<2x3xf32>, %arg1: tensor<2x4xf32>) -> tensor<2x7xf32> {
+  %0 = "onnx.Concat"(%arg0, %arg1) {axis = 1 : si64} : (tensor<2x3xf32>, tensor<2x4xf32>) -> tensor<2x7xf32>
+  onnx.Return %0 : tensor<2x7xf32>
+  // CHECK: [[VAR_0_:%.+]] = "onnx.Concat"([[PARAM_0_]], [[PARAM_1_]]) {axis = 1 : si64} : (tensor<2x3xf32>, tensor<2x4xf32>) -> tensor<2x7xf32>
+  // CHECK: onnx.Return [[VAR_0_]] : tensor<2x7xf32>
+}
+
+// -----
+
+// Multiple empty operands are removed one-per-rewrite; the greedy driver
+// re-matches until only the non-empty operands remain.
+// CHECK-LABEL: func.func @test_concat_drop_multiple_empty
+// CHECK-SAME:  ([[PARAM_0_:%.+]]: tensor<2x3xf32>, [[PARAM_1_:%.+]]: tensor<2x0xf32>, [[PARAM_2_:%.+]]: tensor<2x0xf32>, [[PARAM_3_:%.+]]: tensor<2x4xf32>)
+func.func @test_concat_drop_multiple_empty(%arg0: tensor<2x3xf32>, %arg1: tensor<2x0xf32>, %arg2: tensor<2x0xf32>, %arg3: tensor<2x4xf32>) -> tensor<2x7xf32> {
+  %0 = "onnx.Concat"(%arg0, %arg1, %arg2, %arg3) {axis = 1 : si64} : (tensor<2x3xf32>, tensor<2x0xf32>, tensor<2x0xf32>, tensor<2x4xf32>) -> tensor<2x7xf32>
+  onnx.Return %0 : tensor<2x7xf32>
+  // CHECK: [[VAR_0_:%.+]] = "onnx.Concat"([[PARAM_0_]], [[PARAM_3_]]) {axis = 1 : si64} : (tensor<2x3xf32>, tensor<2x4xf32>) -> tensor<2x7xf32>
+  // CHECK: onnx.Return [[VAR_0_]] : tensor<2x7xf32>
+}
+
+// -----
+
+// A zero on a non-concat axis does not make an operand removable: it may still
+// contribute along the concat axis.
+// CHECK-LABEL: func.func @test_concat_keep_zero_on_non_concat_axis
+// CHECK-SAME:  ([[PARAM_0_:%.+]]: tensor<2x3x0xf32>, [[PARAM_1_:%.+]]: tensor<2x5x0xf32>)
+func.func @test_concat_keep_zero_on_non_concat_axis(%arg0: tensor<2x3x0xf32>, %arg1: tensor<2x5x0xf32>) -> tensor<2x8x0xf32> {
+  %0 = "onnx.Concat"(%arg0, %arg1) {axis = 1 : si64} : (tensor<2x3x0xf32>, tensor<2x5x0xf32>) -> tensor<2x8x0xf32>
+  onnx.Return %0 : tensor<2x8x0xf32>
+  // CHECK: [[VAR_0_:%.+]] = "onnx.Concat"([[PARAM_0_]], [[PARAM_1_]]) {axis = 1 : si64} : (tensor<2x3x0xf32>, tensor<2x5x0xf32>) -> tensor<2x8x0xf32>
+  // CHECK: onnx.Return [[VAR_0_]] : tensor<2x8x0xf32>
+}
+
+// -----
+
+// When every operand is empty along the concat axis, operands are removed
+// one-per-rewrite down to a single survivor that then folds to identity.
+// Arity stays > 1 on each rewrite, so the concat never becomes operand-less.
+// CHECK-LABEL: func.func @test_concat_all_empty_collapses
+// CHECK-SAME:  ([[PARAM_0_:%.+]]: tensor<0x4xf32>, [[PARAM_1_:%.+]]: tensor<0x4xf32>)
+func.func @test_concat_all_empty_collapses(%arg0: tensor<0x4xf32>, %arg1: tensor<0x4xf32>) -> tensor<0x4xf32> {
+  %0 = "onnx.Concat"(%arg0, %arg1) {axis = 0 : si64} : (tensor<0x4xf32>, tensor<0x4xf32>) -> tensor<0x4xf32>
+  onnx.Return %0 : tensor<0x4xf32>
+  // CHECK-NOT: onnx.Concat
+  // CHECK: onnx.Return [[PARAM_1_]] : tensor<0x4xf32>
 }
