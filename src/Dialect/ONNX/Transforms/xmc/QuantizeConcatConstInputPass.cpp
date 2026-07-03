@@ -129,7 +129,8 @@ public:
         continue;
       }
 
-      ElementsAttr elements = onnx_mlir::getElementAttributeFromONNXValue(input);
+      ElementsAttr elements =
+          onnx_mlir::getElementAttributeFromONNXValue(input);
       if (!elements) {
         newInputs.push_back(input);
         continue;
