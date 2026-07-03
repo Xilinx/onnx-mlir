@@ -20,7 +20,10 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
+#include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
+#include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 
@@ -436,16 +439,16 @@ struct PushTransposeThroughConcat : public OpRewritePattern<ONNXConcatOp> {
     if (inputs.empty())
       return failure();
 
-    // Check that ALL inputs come from transpose operations
-    SmallVector<ONNXTransposeOp> transposeOps;
     SmallVector<int64_t> firstPerm;
-
+    bool havePerm = false;
     for (auto input : inputs) {
       auto transposeOp = input.getDefiningOp<ONNXTransposeOp>();
       if (!transposeOp)
+        continue;
+
+      if (!transposeOp.getResult().hasOneUse())
         return failure();
 
-      // Get transpose permutation
       auto permAttr = transposeOp.getPermAttr();
       if (!permAttr)
         return failure();
@@ -454,17 +457,15 @@ struct PushTransposeThroughConcat : public OpRewritePattern<ONNXConcatOp> {
       for (auto attr : permAttr.getValue())
         perm.push_back(mlir::cast<IntegerAttr>(attr).getInt());
 
-      // First transpose sets the expected permutation
-      if (transposeOps.empty()) {
+      if (!havePerm) {
         firstPerm = perm;
-      } else {
-        // All subsequent transposes must have the same permutation
-        if (perm != firstPerm)
-          return failure();
+        havePerm = true;
+      } else if (perm != firstPerm) {
+        return failure();
       }
-
-      transposeOps.push_back(transposeOp);
     }
+    if (!havePerm)
+      return failure();
 
     LLVM_DEBUG(llvm::dbgs() << "Pushing transposes through Concat\n");
 
@@ -483,45 +484,65 @@ struct PushTransposeThroughConcat : public OpRewritePattern<ONNXConcatOp> {
     if (axis < 0 || axis >= rank)
       return failure();
 
-    // Transform axis: axis in transposed space corresponds to firstPerm[axis]
-    // in original space
     int64_t newAxis = firstPerm[axis];
 
-    // Create new concat with original (non-transposed) inputs
-    SmallVector<Value> newInputs;
-    for (auto transposeOp : transposeOps) {
-      newInputs.push_back(transposeOp.getData());
+    SmallVector<int64_t> invPerm(rank);
+    for (int64_t k = 0; k < rank; ++k) {
+      int64_t p = firstPerm[k];
+      if (p < 0 || p >= rank)
+        return failure();
+      invPerm[p] = k;
     }
 
-    // Get the original concat output type before transpose (must be ranked)
     auto originalConcatOutputType =
         mlir::dyn_cast<RankedTensorType>(concatOp.getType());
     if (!originalConcatOutputType)
-      return failure(); // Unranked tensor - cannot optimize
+      return failure();
 
-    // Compute the new concat output shape (in original space)
+    rewriter.setInsertionPoint(concatOp);
+
+    SmallVector<uint64_t> invPermU;
+    for (int64_t k = 0; k < rank; ++k)
+      invPermU.push_back(static_cast<uint64_t>(invPerm[k]));
+
+    SmallVector<Value> newInputs;
+    for (auto input : inputs) {
+      auto transposeOp = input.getDefiningOp<ONNXTransposeOp>();
+      if (transposeOp) {
+        newInputs.push_back(transposeOp.getData());
+        continue;
+      }
+      ElementsAttr elements =
+          onnx_mlir::getElementAttributeFromONNXValue(input);
+      if (!elements)
+        return failure();
+      onnx_mlir::OnnxElementsAttrBuilder elementsBuilder(concatOp.getContext());
+      ElementsAttr transposedElements =
+          elementsBuilder.transpose(elements, invPermU);
+      Value newConst = onnx_mlir::OnnxBuilder(rewriter, concatOp.getLoc())
+                           .constant(transposedElements);
+      newInputs.push_back(newConst);
+    }
+
     SmallVector<int64_t> newConcatShape;
     auto firstInputType =
-        mlir::dyn_cast<RankedTensorType>(transposeOps[0].getData().getType());
+        mlir::dyn_cast<RankedTensorType>(newInputs[0].getType());
     if (!firstInputType)
-      return failure(); // Unranked tensor - cannot optimize
+      return failure();
     newConcatShape.assign(
         firstInputType.getShape().begin(), firstInputType.getShape().end());
 
-    // Compute concatenated dimension size
     int64_t concatDimSize = 0;
-    for (auto transposeOp : transposeOps) {
-      auto inputType =
-          mlir::dyn_cast<RankedTensorType>(transposeOp.getData().getType());
-      if (!inputType)
-        return failure(); // Unranked tensor - cannot optimize
-      auto inputShape = inputType.getShape();
-      if (newAxis >= 0 && static_cast<size_t>(newAxis) < inputShape.size()) {
-        if (concatDimSize == 0)
-          concatDimSize = inputShape[newAxis];
-        else
-          concatDimSize += inputShape[newAxis];
-      }
+    for (auto v : newInputs) {
+      auto vType = mlir::dyn_cast<RankedTensorType>(v.getType());
+      if (!vType)
+        return failure();
+      auto vShape = vType.getShape();
+      if (newAxis < 0 || static_cast<size_t>(newAxis) >= vShape.size())
+        return failure();
+      if (vShape[newAxis] == mlir::ShapedType::kDynamic)
+        return failure();
+      concatDimSize += vShape[newAxis];
     }
     newConcatShape[newAxis] = concatDimSize;
 
