@@ -3706,6 +3706,17 @@ func.func @leaky_relu_alpha_zero_to_relu(%arg0: tensor<2x3xf32>) -> tensor<2x3xf
 
 // -----
 
+// LeakyRelu with alpha = 1 is the identity and is removed.
+// CHECK-LABEL:   func.func @leaky_relu_alpha_one_to_identity(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+func.func @leaky_relu_alpha_one_to_identity(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  // CHECK-NEXT:    onnx.Return %arg0 : tensor<2x3xf32>
+  // CHECK-NOT:     "onnx.LeakyRelu"
+  %0 = "onnx.LeakyRelu"(%arg0) {alpha = 1.000000e+00 : f32} : (tensor<2x3xf32>) -> tensor<2x3xf32>
+  onnx.Return %0 : tensor<2x3xf32>
+}
+
+// -----
+
 // CHECK-LABEL:   func.func @leaky_relu_alpha_default(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
 func.func @leaky_relu_alpha_default(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
   // CHECK-NEXT:    %{{[0-9]+}} = "onnx.LeakyRelu"(%arg0) {alpha = 0.00999999977 : f32} : (tensor<2x3xf32>) -> tensor<2x3xf32>
