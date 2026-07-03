@@ -54,10 +54,8 @@ static bool isFixMatch(ONNXConcatOp concatOp) {
   return true;
 }
 
-// Replace the contiguous, in-order run of innerInputs inside outerInputs with
-// innerConcatOutput, preserving the original operand sequence. Returns nullopt
-// when innerInputs do not appear as a contiguous in-order subsequence, since
-// only that case can be collapsed without changing the concatenation order.
+// Replace innerInputs in place with innerConcatOutput when they form a
+// contiguous in-order run of outerInputs; nullopt otherwise (order-preserving).
 static std::optional<SmallVector<Value>> createNewConcatInputs(
     ValueRange outerInputs, ValueRange innerInputs, Value innerConcatOutput) {
   size_t n = outerInputs.size();

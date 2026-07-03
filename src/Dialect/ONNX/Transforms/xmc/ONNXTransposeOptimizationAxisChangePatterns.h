@@ -557,24 +557,14 @@ struct PushTransposeThroughConcat : public OpRewritePattern<ONNXConcatOp> {
 // PushTransposeThroughConcatWithConst - Concat with mixed transpose/const
 //===----------------------------------------------------------------------===//
 
-/// A Concat input is "foldable" for the mixed transpose/const pattern if it is
-/// either produced by a transpose (its data is pushed) or is a constant whose
-/// elements can be transposed and re-baked.
+// Foldable if produced by a transpose or is a constant.
 static bool isConcatFoldableInput(Value v) {
   if (v.getDefiningOp<ONNXTransposeOp>())
     return true;
   return static_cast<bool>(onnx_mlir::getElementAttributeFromONNXValue(v));
 }
 
-/// Returns true if `transposeOp` can be eliminated (not merely relocated) by
-/// pushing it through Concat(s). This holds when the transpose feeds a single
-/// use, or when it is multi-use but EVERY user is a Concat whose non-transpose
-/// operands are all foldable constants. In the latter case the greedy driver
-/// pushes the transpose through each such Concat in turn; after the last one is
-/// rewritten the transpose becomes dead and is removed, so no duplicate
-/// transpose is left behind (which is what the single-use guard protects
-/// against). This unblocks U-Net style skip connections where one encoder
-/// transpose feeds several coord concats.
+// Eliminable if single-use, or multi-use with every user a foldable concat.
 static bool transposeEliminableThroughConcats(ONNXTransposeOp transposeOp) {
   Value result = transposeOp.getResult();
   if (result.hasOneUse())
@@ -592,15 +582,8 @@ static bool transposeEliminableThroughConcats(ONNXTransposeOp transposeOp) {
   return true;
 }
 
-/// Pushes a transpose through a Concat whose inputs are a mix of transposes
-/// (all sharing one permutation) and foldable constants. Each constant is
-/// folded through the inverse permutation and re-baked, so no inverse transpose
-/// op is inserted (which would otherwise ping-pong under the greedy driver).
-/// Requires at least one transpose input and at least one constant input; the
-/// all-transpose case is handled by PushTransposeThroughConcat. Only fires when
-/// every transpose input is eliminable (single-use, or multi-use with all users
-/// being foldable concats), so the rewrite eliminates a transpose rather than
-/// relocating or duplicating it.
+// Push a transpose through a Concat with mixed transpose and constant inputs,
+// folding each constant through the inverse permutation.
 struct PushTransposeThroughConcatWithConst
     : public OpRewritePattern<ONNXConcatOp> {
   using OpRewritePattern<ONNXConcatOp>::OpRewritePattern;
@@ -694,12 +677,7 @@ struct PushTransposeThroughConcatWithConst
       ElementsAttr transposedElements =
           elementsBuilder.transpose(elements, invPermU);
 
-      // Preserve a quantized element type across the fold. The folded elements
-      // carry the plain integer storage type, so re-baking through
-      // OnnxBuilder::constant would drop the !quant.uniform<...> element type
-      // and leave the new Concat with a type-mismatched (dequantized) input.
-      // Rebuild the constant with the original quantized result type instead,
-      // mirroring the constant form produced by QuantizeConcatConstInputPass.
+      // Rebuild with the original quantized type so the fold preserves it.
       auto inTensorType = mlir::cast<RankedTensorType>(input.getType());
       if (auto qType = mlir::dyn_cast<quant::UniformQuantizedType>(
               inTensorType.getElementType())) {
