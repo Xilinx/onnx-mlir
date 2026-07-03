@@ -16,7 +16,6 @@ include "src/IR/AttrBase.td"
 
 def XFEAveragePoolOp:ONNX_Op<"XFEAveragePool",
   [Pure, OpVersionTrait<1>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
-  let hasCanonicalizer = 1;
   let summary = "AveragePool operation";
   let description = [{
   AveragePool with channel-last layout (channels innermost). Applies average pooling with input/output tensors in channel-last format. Supports N-D input tensors.
