@@ -329,34 +329,6 @@ bool isNotConvProducer(mlir::Value val) {
   return true; // If no defining op, assume it's safe
 }
 
-// Get the index of the axis value in the given permutation array.
-IntegerAttr getIndexOfAxisInPerm(
-    PatternRewriter &rewriter, ArrayAttr permAttr, IntegerAttr axis) {
-  IntegerAttr result;
-  for (uint64_t i = 0; i < permAttr.getValue().size(); ++i) {
-    IntegerAttr attr = mlir::cast<IntegerAttr>(permAttr.getValue()[i]);
-    assert(attr && "Element in ArrayAttr is not IntegerAttr");
-    if (attr.getValue().getSExtValue() == axis.getValue().getSExtValue())
-      return rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), i);
-  }
-  return result;
-}
-
-// Transpose a variadic input using a permutation array.
-SmallVector<Value, 4> transposeVariadicInput(PatternRewriter &rewriter,
-    Location loc, ValueRange inputs, ArrayAttr permAttr) {
-  SmallVector<Value, 4> transposedInputs;
-  for (Value inp : inputs) {
-    ShapedType inpType = mlir::cast<ShapedType>(inp.getType());
-    assert(inpType && "Type is not ShapedType");
-    ONNXTransposeOp transposeOp = rewriter.create<ONNXTransposeOp>(
-        loc, UnrankedTensorType::get(inpType.getElementType()), inp, permAttr);
-    static_cast<void>(transposeOp.inferShapes([](Region &region) {}));
-    transposedInputs.emplace_back(transposeOp.getResult());
-  }
-  return transposedInputs;
-}
-
 // Cast a variadic input using the given `saturate` and `to`.
 SmallVector<Value, 4> castVariadicInput(PatternRewriter &rewriter, Location loc,
     ValueRange inputs, IntegerAttr saturate, TypeAttr to) {
@@ -368,15 +340,6 @@ SmallVector<Value, 4> castVariadicInput(PatternRewriter &rewriter, Location loc,
     castInputs.emplace_back(castOp.getResult());
   }
   return castInputs;
-}
-
-// Check if all values are produced by ONNXTransposeOp.
-bool areProducedByTransposeOp(ValueRange values) {
-  return llvm::all_of(values, [](Value v) {
-    if (mlir::isa<BlockArgument>(v))
-      return false;
-    return isa<ONNXTransposeOp>(v.getDefiningOp());
-  });
 }
 
 Value maxOrDefault(PatternRewriter &rewriter, Location loc, Value a, Value b) {
@@ -4703,7 +4666,6 @@ void ONNXTransposeOp::getCanonicalizationPatterns(
   result.insert<FuseTransposeAndTanPattern>(context);
   result.insert<FuseTransposeAndTanhPattern>(context);
   result.insert<RemoveIdentityTransposePattern>(context);
-  result.insert<SwapTransposeConcatPattern>(context);
 }
 
 /// on the ONNXUnsqueezeOp.

@@ -307,9 +307,6 @@ class RankXMinusRankYIs<int diff>: Constraint<
           " - mlir::cast<ShapedType>($1.getType()).getRank() == " # diff # ")">,
     "X' rank is greater than Y's rank diff units">;
 
-def TransposeVariadicInput: NativeCodeCall<
-  "onnx_mlir::transposeVariadicInput($_builder, $_loc, $0, $1)">;
-
 def CastVariadicInput: NativeCodeCall<
   "onnx_mlir::castVariadicInput($_builder, $_loc, $0, $1, $2)">;
 
@@ -750,25 +747,6 @@ def RemoveIdentityTransposePattern:  Pat<
   (replaceWithValue $val),
   // Check that we have indeed a identity transpose pattern.
   [(IsIdentityPermuteAttribute:$p)]>;
-
-def GetIndexOfAxisInPerm: NativeCodeCall<
-  "onnx_mlir::getIndexOfAxisInPerm($_builder, $0, $1)"
->;
-
-def ProducedByTransposeOp: Constraint<
-  CPred<"onnx_mlir::areProducedByTransposeOp($_self)">,
-  "all values are produced by ONNXTransposeOp"
->;
-
-// Do transpose on concat's inputs instead of output in order to propagate
-// transpose operations together, which allows more chance for transpose fusion.
-// Do this only when all inputs are produced by transpose operations.
-def SwapTransposeConcatPattern: Pat<
-  (ONNXTransposeOp:$res (ONNXConcatOp $inputs, $axis), $perm),
-  (ONNXConcatOp (TransposeVariadicInput $inputs, $perm),
-                (GetIndexOfAxisInPerm $perm, $axis)),
-  [(ProducedByTransposeOp:$inputs)]
->;
 
 //===----------------------------------------------------------------------===//
 // Canonicalization for ONNXReshapeOp
