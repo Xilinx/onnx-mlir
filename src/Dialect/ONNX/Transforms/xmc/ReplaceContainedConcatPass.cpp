@@ -54,17 +54,38 @@ static bool isFixMatch(ONNXConcatOp concatOp) {
   return true;
 }
 
-// Create new input list: [innerConcatOutput] + (outerInputs - innerInputs)
-static SmallVector<Value> createNewConcatInputs(
+// Replace the contiguous, in-order run of innerInputs inside outerInputs with
+// innerConcatOutput, preserving the original operand sequence. Returns nullopt
+// when innerInputs do not appear as a contiguous in-order subsequence, since
+// only that case can be collapsed without changing the concatenation order.
+static std::optional<SmallVector<Value>> createNewConcatInputs(
     ValueRange outerInputs, ValueRange innerInputs, Value innerConcatOutput) {
-  SmallVector<Value> newInputs;
-  newInputs.push_back(innerConcatOutput);
+  size_t n = outerInputs.size();
+  size_t m = innerInputs.size();
+  if (m == 0 || m > n)
+    return std::nullopt;
 
-  llvm::DenseSet<Value> innerSet(innerInputs.begin(), innerInputs.end());
-  for (Value input : outerInputs)
-    if (!innerSet.contains(input))
-      newInputs.push_back(input);
-  return newInputs;
+  for (size_t start = 0; start + m <= n; ++start) {
+    bool match = true;
+    for (size_t j = 0; j < m; ++j) {
+      if (outerInputs[start + j] != innerInputs[j]) {
+        match = false;
+        break;
+      }
+    }
+    if (!match)
+      continue;
+
+    SmallVector<Value> newInputs;
+    for (size_t i = 0; i < start; ++i)
+      newInputs.push_back(outerInputs[i]);
+    newInputs.push_back(innerConcatOutput);
+    for (size_t i = start + m; i < n; ++i)
+      newInputs.push_back(outerInputs[i]);
+    return newInputs;
+  }
+
+  return std::nullopt;
 }
 
 // Implements the contained-concat optimization.
@@ -126,8 +147,11 @@ struct ReplaceContainedConcatPattern : public OpRewritePattern<ONNXConcatOp> {
       if (!isSubset(outerInputs, innerInputs))
         continue;
 
-      SmallVector<Value> newInputs = createNewConcatInputs(
+      auto newInputsOpt = createNewConcatInputs(
           outerInputs, innerInputs, innerConcatOp.getResult());
+      if (!newInputsOpt)
+        continue;
+      SmallVector<Value> newInputs = *newInputsOpt;
       if (newInputs.size() >= outerInputs.size())
         continue;
 
