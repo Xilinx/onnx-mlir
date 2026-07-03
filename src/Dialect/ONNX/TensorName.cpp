@@ -7,6 +7,7 @@
 #include <llvm/Support/ErrorHandling.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/TypeUtilities.h>
+#include <mlir/Interfaces/SideEffectInterfaces.h>
 
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/TensorName.hpp"
@@ -362,10 +363,28 @@ TensorName TensorName::infer(Value value) {
 
 TensorName TensorName::inferWithUse(Value value) {
   TensorName tname(value);
-  if (tname || !value.hasOneUse() || value.use_begin()->getOperandNumber() != 0)
+  if (tname)
     return tname;
 
-  Operation *op = *value.user_begin();
+  Operation *op = nullptr;
+  if (value.hasOneUse()) {
+    op = *value.user_begin();
+  } else if (std::distance(value.use_begin(), value.use_end()) == 2) {
+    // When a chain of ops like: (Transpose -> Transpose)
+    // replaced with new op:     (Transpose) op
+    // In the middle of rewrite, there will be 2 uses for input
+    // We still want to infer TensorName based on the new op
+    for (Operation *user : value.getUsers()) {
+      if (isOpTriviallyDead(user)) {
+        op = user;
+        break;
+      }
+    }
+  }
+
+  if (!op || op->getOperand(0) != value)
+    return tname;
+
   if (auto transform = fromOp(op)) {
     tname = inferWithUse(op->getResult(0));
     if (tname) {
