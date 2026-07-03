@@ -188,22 +188,6 @@ func.func @test_transpose_removal(%arg0: tensor<10x11x12x13xf32>) -> tensor<10x1
 
 // -----
 
-// Check the fusion of transposes when transposes at the output side are moved
-// to the input side. This is only done when there are transposes at the input side.
-// CHECK-LABEL: func @test_transpose_concat_reversed
-func.func @test_transpose_concat_reversed(%arg0: tensor<?x5x5x1xf32>, %arg1: tensor<?x5x5x2xf32>) -> tensor<?x5x5x3xf32> {
-    %0 = "onnx.Transpose"(%arg0) {perm = [0, 3, 1, 2]} : (tensor<?x5x5x1xf32>) -> tensor<?x1x5x5xf32>
-    %1 = "onnx.Transpose"(%arg1) {perm = [0, 3, 1, 2]} : (tensor<?x5x5x2xf32>) -> tensor<?x2x5x5xf32>
-    %2 = "onnx.Concat"(%0, %1) {axis = 1 : si64} : (tensor<?x1x5x5xf32>, tensor<?x2x5x5xf32>) -> tensor<?x3x5x5xf32>
-    %3 = "onnx.Transpose"(%2) {perm = [0, 2, 3, 1]} : (tensor<?x3x5x5xf32>) -> tensor<?x5x5x3xf32>
-    onnx.Return %3 : tensor<?x5x5x3xf32>
-
-    // CHECK-NEXT: "onnx.Concat"(%arg0, %arg1) {axis = 3 : si64} : (tensor<?x5x5x1xf32>, tensor<?x5x5x2xf32>) -> tensor<?x5x5x3xf32>
-    // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
 // CHECK-LABEL: func @identity_tile
 func.func @identity_tile(%arg0: tensor<32x64xf32>) -> tensor<32x64xf32> {
     %0 = onnx.Constant dense<1> : tensor<2xi64>
@@ -3717,6 +3701,17 @@ func.func @back_to_back_i8_maxpools(%arg0: tensor<1x192x23x40xf32>) -> tensor<1x
 func.func @leaky_relu_alpha_zero_to_relu(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
   // CHECK-NEXT:    %{{[0-9]+}} = "onnx.Relu"(%arg0) : (tensor<2x3xf32>) -> tensor<2x3xf32>
   %0 = "onnx.LeakyRelu"(%arg0) {alpha = 0.000000e+00 : f32} : (tensor<2x3xf32>) -> tensor<2x3xf32>
+  onnx.Return %0 : tensor<2x3xf32>
+}
+
+// -----
+
+// LeakyRelu with alpha = 1 is the identity and is removed.
+// CHECK-LABEL:   func.func @leaky_relu_alpha_one_to_identity(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+func.func @leaky_relu_alpha_one_to_identity(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  // CHECK-NEXT:    onnx.Return %arg0 : tensor<2x3xf32>
+  // CHECK-NOT:     "onnx.LeakyRelu"
+  %0 = "onnx.LeakyRelu"(%arg0) {alpha = 1.000000e+00 : f32} : (tensor<2x3xf32>) -> tensor<2x3xf32>
   onnx.Return %0 : tensor<2x3xf32>
 }
 

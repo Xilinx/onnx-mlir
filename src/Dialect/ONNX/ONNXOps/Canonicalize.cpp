@@ -329,34 +329,6 @@ bool isNotConvProducer(mlir::Value val) {
   return true; // If no defining op, assume it's safe
 }
 
-// Get the index of the axis value in the given permutation array.
-IntegerAttr getIndexOfAxisInPerm(
-    PatternRewriter &rewriter, ArrayAttr permAttr, IntegerAttr axis) {
-  IntegerAttr result;
-  for (uint64_t i = 0; i < permAttr.getValue().size(); ++i) {
-    IntegerAttr attr = mlir::cast<IntegerAttr>(permAttr.getValue()[i]);
-    assert(attr && "Element in ArrayAttr is not IntegerAttr");
-    if (attr.getValue().getSExtValue() == axis.getValue().getSExtValue())
-      return rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), i);
-  }
-  return result;
-}
-
-// Transpose a variadic input using a permutation array.
-SmallVector<Value, 4> transposeVariadicInput(PatternRewriter &rewriter,
-    Location loc, ValueRange inputs, ArrayAttr permAttr) {
-  SmallVector<Value, 4> transposedInputs;
-  for (Value inp : inputs) {
-    ShapedType inpType = mlir::cast<ShapedType>(inp.getType());
-    assert(inpType && "Type is not ShapedType");
-    ONNXTransposeOp transposeOp = rewriter.create<ONNXTransposeOp>(
-        loc, UnrankedTensorType::get(inpType.getElementType()), inp, permAttr);
-    static_cast<void>(transposeOp.inferShapes([](Region &region) {}));
-    transposedInputs.emplace_back(transposeOp.getResult());
-  }
-  return transposedInputs;
-}
-
 // Cast a variadic input using the given `saturate` and `to`.
 SmallVector<Value, 4> castVariadicInput(PatternRewriter &rewriter, Location loc,
     ValueRange inputs, IntegerAttr saturate, TypeAttr to) {
@@ -368,15 +340,6 @@ SmallVector<Value, 4> castVariadicInput(PatternRewriter &rewriter, Location loc,
     castInputs.emplace_back(castOp.getResult());
   }
   return castInputs;
-}
-
-// Check if all values are produced by ONNXTransposeOp.
-bool areProducedByTransposeOp(ValueRange values) {
-  return llvm::all_of(values, [](Value v) {
-    if (mlir::isa<BlockArgument>(v))
-      return false;
-    return isa<ONNXTransposeOp>(v.getDefiningOp());
-  });
 }
 
 Value maxOrDefault(PatternRewriter &rewriter, Location loc, Value a, Value b) {
@@ -3718,6 +3681,28 @@ public:
   }
 };
 
+// LeakyRelu with alpha == 1.0 is the identity function f(x) = x.
+class LeakyReluAlphaOneToIdentityPattern
+    : public OpRewritePattern<ONNXLeakyReluOp> {
+public:
+  using OpRewritePattern<ONNXLeakyReluOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXLeakyReluOp op, PatternRewriter &rewriter) const override {
+    FloatAttr alphaAttr = op.getAlphaAttr();
+    assert(alphaAttr);
+    if (alphaAttr.getValueAsDouble() != 1.0)
+      return failure();
+
+    // Only eliminate the op when the input and result types match.
+    if (op.getX().getType() != op.getResult().getType())
+      return failure();
+
+    rewriter.replaceOp(op, op.getX());
+    return success();
+  }
+};
+
 // onnx.Abs(onnx.Abs(x)) -> onnx.Abs(x) by reusing the inner Abs result.
 class AbsAbsPattern : public OpRewritePattern<ONNXAbsOp> {
 public:
@@ -4503,6 +4488,7 @@ void ONNXLayoutTransformOp::getCanonicalizationPatterns(
 void ONNXLeakyReluOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<LeakyReluAlphaZeroToReluPattern>(context);
+  results.insert<LeakyReluAlphaOneToIdentityPattern>(context);
 }
 
 /// on the ONNXLessOp.
@@ -4556,6 +4542,13 @@ void ONNXOrOp::getCanonicalizationPatterns(
 void ONNXReduceMeanOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<DropUnitAxesFromReduceMeanPattern>(context);
+}
+
+/// on the ONNXReduceSumV11Op.
+void ONNXReduceSumV11Op::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  result.insert<ReduceSumV11ToLatestPattern1>(context);
+  result.insert<ReduceSumV11ToLatestPattern2>(context);
 }
 
 /// on the ONNXReshapeOp.
@@ -4703,7 +4696,6 @@ void ONNXTransposeOp::getCanonicalizationPatterns(
   result.insert<FuseTransposeAndTanPattern>(context);
   result.insert<FuseTransposeAndTanhPattern>(context);
   result.insert<RemoveIdentityTransposePattern>(context);
-  result.insert<SwapTransposeConcatPattern>(context);
 }
 
 /// on the ONNXUnsqueezeOp.
