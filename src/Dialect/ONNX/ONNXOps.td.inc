@@ -10402,6 +10402,7 @@ def ONNXTransposeOp:ONNX_Op<"Transpose",
       return sh;
     }
   }];
+  let hasFolder = 1;
 }
 
 def ONNXTriluOp:ONNX_Op<"Trilu",

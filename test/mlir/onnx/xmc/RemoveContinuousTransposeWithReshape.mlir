@@ -124,23 +124,23 @@ func.func @fail_multiple_uses(%arg0: tensor<1x3x4x5xf32>) -> (tensor<1x3x20xf32>
 // Transpose1 perm is NOT the inverse of Transpose0 perm (after merging)
 // ============================================================================
 // CHECK-LABEL: @fail_non_inverse_perm
-func.func @fail_non_inverse_perm(%arg0: tensor<1x3x4x5xf32>) -> (tensor<1x20x3xf32>) {
+func.func @fail_non_inverse_perm(%arg0: tensor<1x3x4x5xf32>) -> (tensor<20x1x3xf32>) {
     %0 = onnx.Constant dense<0.0392156877> : tensor<f32>
     %1 = onnx.Constant dense<128> : tensor<ui8>
     %2 = onnx.Constant dense<[1, 20, 3]> : tensor<3xi64>
     %3 = "onnx.QuantizeLinear"(%arg0, %0, %1) : (tensor<1x3x4x5xf32>, tensor<f32>, tensor<ui8>) -> tensor<1x3x4x5x!quant.uniform<u8:f32, 0.023529412224888802:64>>
     %4 = "onnx.Transpose"(%3) {perm = [0, 2, 3, 1]} : (tensor<1x3x4x5x!quant.uniform<u8:f32, 0.023529412224888802:64>>) -> tensor<1x4x5x3x!quant.uniform<u8:f32, 0.023529412224888802:64>>
     %5 = "onnx.Reshape"(%4, %2) : (tensor<1x4x5x3x!quant.uniform<u8:f32, 0.023529412224888802:64>>, tensor<3xi64>) -> tensor<1x20x3x!quant.uniform<u8:f32, 0.023529412224888802:64>>
-    // perm=[0,1,2] is identity, NOT inverse of [0,2,1]
-    %6 = "onnx.Transpose"(%5) {perm = [0, 1, 2]} : (tensor<1x20x3x!quant.uniform<u8:f32, 0.023529412224888802:64>>) -> tensor<1x20x3x!quant.uniform<u8:f32, 0.023529412224888802:64>>
-    %7 = "onnx.DequantizeLinear"(%6, %0, %1) : (tensor<1x20x3x!quant.uniform<u8:f32, 0.023529412224888802:64>>, tensor<f32>, tensor<ui8>) -> tensor<1x20x3xf32>
-    return %7 : tensor<1x20x3xf32>
+    // perm=[1,0,2] is NOT the inverse of [0,2,1] (and not identity, so it is not folded away)
+    %6 = "onnx.Transpose"(%5) {perm = [1, 0, 2]} : (tensor<1x20x3x!quant.uniform<u8:f32, 0.023529412224888802:64>>) -> tensor<20x1x3x!quant.uniform<u8:f32, 0.023529412224888802:64>>
+    %7 = "onnx.DequantizeLinear"(%6, %0, %1) : (tensor<20x1x3x!quant.uniform<u8:f32, 0.023529412224888802:64>>, tensor<f32>, tensor<ui8>) -> tensor<20x1x3xf32>
+    return %7 : tensor<20x1x3xf32>
   }
 // Pattern should NOT fire - transposes and reshape should remain
 // CHECK: "onnx.Transpose"
 // CHECK: "onnx.Reshape"
 // CHECK: "onnx.Transpose"
-// CHECK: return {{.*}} : tensor<1x20x3xf32>
+// CHECK: return {{.*}} : tensor<20x1x3xf32>
 
 // ============================================================================
 // FAILURE CASE 4: Merged shapes not equal - pattern should NOT match

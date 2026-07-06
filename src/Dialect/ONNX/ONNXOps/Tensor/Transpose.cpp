@@ -10,6 +10,9 @@
 //
 // This file provides definition of ONNX dialect Transpose operation.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
@@ -81,6 +84,26 @@ LogicalResult ONNXTransposeOp::inferShapes(
       mlir::cast<ShapedType>(getData().getType()).getElementType();
   ONNXTransposeOpShapeHelper shapeHelper(getOperation(), {});
   return shapeHelper.computeShapeAndUpdateType(elementType);
+}
+
+//===----------------------------------------------------------------------===//
+// Folder
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ONNXTransposeOp::fold(FoldAdaptor /*adaptor*/) {
+  auto dataType = mlir::dyn_cast<RankedTensorType>(getData().getType());
+  if (!dataType)
+    return nullptr;
+
+  // A rank-0 or rank-1 transpose cannot reorder any axis: it is always a no-op.
+  if (dataType.getRank() <= 1)
+    return getData();
+
+  // Otherwise, an identity permutation is also a no-op.
+  if (IsIdentityPermuteVector(getPermAttr()))
+    return getData();
+
+  return nullptr;
 }
 
 //===----------------------------------------------------------------------===//
