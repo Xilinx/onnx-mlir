@@ -1823,7 +1823,13 @@ struct ConstPropONNXToONNXPass
 
   Option<bool> enableQDQ{*this, "enable-qdq", llvm::cl::init(true)};
 
-  ConstPropONNXToONNXPass(bool enableQDQ) { this->enableQDQ = enableQDQ; }
+  Option<bool> enableQuantConstFold{*this, "enable-quant-const-fold",
+      llvm::cl::init(true)};
+
+  ConstPropONNXToONNXPass(bool enableQDQ, bool enableQuantConstFold) {
+    this->enableQDQ = enableQDQ;
+    this->enableQuantConstFold = enableQuantConstFold;
+  }
 
   ConstPropONNXToONNXPass(const ConstPropONNXToONNXPass &other) {
     copyOptionValuesFrom(&other);
@@ -1843,7 +1849,7 @@ void ConstPropONNXToONNXPass::runOnOperation() {
   MLIRContext *context = &getContext();
 
   RewritePatternSet patterns(context);
-  getConstPropONNXToONNXPatterns(patterns, enableQDQ);
+  getConstPropONNXToONNXPatterns(patterns, enableQDQ, enableQuantConstFold);
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
           GreedyRewriteConfig{.listener = &rnUpdater})))
@@ -1852,8 +1858,8 @@ void ConstPropONNXToONNXPass::runOnOperation() {
 
 } // end anonymous namespace.
 
-void onnx_mlir::getConstPropONNXToONNXPatterns(
-    RewritePatternSet &patterns, bool enableQDQ) {
+void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
+    bool enableQDQ, bool enableQuantConstFold) {
   if (isConstantPropagationDisabled())
     return;
   populateWithGenerated(patterns);
@@ -1867,7 +1873,8 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(
         RemoveQDQForConst<ONNXTransposeOp>, RemoveQDQForConst<ONNXReshapeOp>,
         RemoveQDQForConst<ONNXSqueezeOp>, RemoveQDQForConst<ONNXUnsqueezeOp>,
         RemoveQDQForConst<ONNXGatherOp>>(patterns.getContext());
-  patterns.add<ConstFoldQuantizeLinearOnConst>(patterns.getContext());
+  if (enableQuantConstFold)
+    patterns.add<ConstFoldQuantizeLinearOnConst>(patterns.getContext());
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,
@@ -1885,6 +1892,7 @@ void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,
  * Create a ConstPropONNX pass.
  */
 std::unique_ptr<mlir::Pass> onnx_mlir::createConstPropONNXToONNXPass(
-    bool enableQDQ) {
-  return std::make_unique<ConstPropONNXToONNXPass>(enableQDQ);
+    bool enableQDQ, bool enableQuantConstFold) {
+  return std::make_unique<ConstPropONNXToONNXPass>(
+      enableQDQ, enableQuantConstFold);
 }

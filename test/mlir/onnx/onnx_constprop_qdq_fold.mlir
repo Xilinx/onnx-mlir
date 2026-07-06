@@ -1,4 +1,4 @@
-// RUN: onnx-mlir-opt --split-input-file %s -constprop-onnx | FileCheck %s
+// RUN: onnx-mlir-opt --split-input-file %s -constprop-onnx=enable-quant-const-fold | FileCheck %s
 
 //===----------------------------------------------------------------------===//
 // Positive cases.
