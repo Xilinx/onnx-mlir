@@ -67,6 +67,7 @@ struct OnnxBuilder : DialectBuilder {
       bool scalarType = false) const;
 
   // ONNXConcatOp
+  mlir::Value concat(mlir::ValueRange inputs, int64_t axis) const;
   mlir::Value concat(
       mlir::Type outputType, mlir::ValueRange inputs, int64_t axis) const;
 
