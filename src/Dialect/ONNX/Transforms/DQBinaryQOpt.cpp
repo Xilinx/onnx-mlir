@@ -873,8 +873,9 @@ public:
 
     // STEP 7: Remove binary op.
     // Downstream fold: the binary output no longer exists, so drop its name
-    // (else the listener would push it onto the upstream producer). 
-    // Upstream fold: the DQ now holds the value, so let the listener move the name to it.
+    // (else the listener would push it onto the upstream producer).
+    // Upstream fold: the DQ now holds the value, so let the listener move the
+    // name to it.
     const bool foldDownstream =
         state.dstNode != state.dequantActivationOfBinOp.getOperation();
     if (foldDownstream)
