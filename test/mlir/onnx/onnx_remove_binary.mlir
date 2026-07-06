@@ -925,3 +925,58 @@ func.func @div_by_zero_fold_into_dq(%arg0: tensor<1x4xf32>) -> tensor<1x4xf32> {
 // CHECK: "onnx.Div"
 // CHECK: "onnx.QuantizeLinear"
 
+
+// ============================================================================
+// Naming: folding the binary op must NOT migrate its ResultNames onto the
+// upstream (Reshape) producer. The Reshape keeps its own name; the folded
+// Mul's name is dropped, not pushed backward.
+// ============================================================================
+
+func.func @fold_mul_keeps_upstream_reshape_name(%arg0: tensor<1x1x64xui16>) -> tensor<1x1x1x64xui16> {
+  %shape = onnx.Constant {ResultNames = ["/Unsqueeze_1_shape"]} dense<[1, 1, 1, 64]> : tensor<4xi64>
+  %usc = onnx.Constant dense<1.52590219E-5> : tensor<f32>
+  %uzp = onnx.Constant dense<0> : tensor<ui16>
+  %msc = onnx.Constant dense<0.152590215> : tensor<f32>
+  %mzp = onnx.Constant dense<65535> : tensor<ui16>
+  %kq  = onnx.Constant dense<65535> : tensor<ui16>
+  %dq_act = "onnx.DequantizeLinear"(%arg0, %usc, %uzp) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x1x64xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x1x64xf32>
+  %rs = "onnx.Reshape"(%dq_act, %shape) {ResultNames = ["/Unsqueeze_1_output_0"], allowzero = 0 : si64, onnx_node_name = "/Unsqueeze_1"} : (tensor<1x1x64xf32>, tensor<4xi64>) -> tensor<1x1x1x64xf32>
+  %q1 = "onnx.QuantizeLinear"(%rs, %usc, %uzp) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x1x1x64xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x1x1x64xui16>
+  %dq1 = "onnx.DequantizeLinear"(%q1, %usc, %uzp) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x1x1x64xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x1x1x64xf32>
+  %kdq = "onnx.DequantizeLinear"(%kq, %msc, %uzp) {axis = 1 : si64, block_size = 0 : si64} : (tensor<ui16>, tensor<f32>, tensor<ui16>) -> tensor<f32>
+  %mul = "onnx.Mul"(%dq1, %kdq) {ResultNames = ["/Mul_output_0"], onnx_node_name = "/Mul"} : (tensor<1x1x1x64xf32>, tensor<f32>) -> tensor<1x1x1x64xf32>
+  %q2 = "onnx.QuantizeLinear"(%mul, %msc, %mzp) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x1x1x64xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x1x1x64xui16>
+  return %q2 : tensor<1x1x1x64xui16>
+}
+
+// CHECK-LABEL: func.func @fold_mul_keeps_upstream_reshape_name
+// CHECK:      "onnx.Reshape"
+// CHECK-SAME:   ResultNames = ["/Unsqueeze_1_output_0"]
+// CHECK-NOT:  "onnx.Mul"
+// CHECK-NOT:  ResultNames = ["/Mul_output_0"]
+
+// ============================================================================
+// Naming (fold into upstream DQ): when the binary op folds into the DQ above
+// it (branch on the dequant activation forces this), the binary op's name
+// must move onto that DQ, following the semantics upward.
+// ============================================================================
+
+func.func @fold_add_into_dq_moves_name(%arg0: tensor<1x4xi8>) -> (tensor<1x4xf32>, tensor<1x4xf32>) {
+  %s = onnx.Constant dense<5.000000e-01> : tensor<f32>
+  %z = onnx.Constant dense<0> : tensor<i8>
+  %c = onnx.Constant dense<1.000000e+01> : tensor<f32>
+  %qs = onnx.Constant dense<1.000000e-01> : tensor<f32>
+  %qz = onnx.Constant dense<0> : tensor<i8>
+  %dq = "onnx.DequantizeLinear"(%arg0, %s, %z) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x4xi8>, tensor<f32>, tensor<i8>) -> tensor<1x4xf32>
+  %add = "onnx.Add"(%dq, %c) {ResultNames = ["/Add_output_0"], onnx_node_name = "/Add"} : (tensor<1x4xf32>, tensor<f32>) -> tensor<1x4xf32>
+  %q = "onnx.QuantizeLinear"(%add, %qs, %qz) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x4xf32>, tensor<f32>, tensor<i8>) -> tensor<1x4xi8>
+  %dq2 = "onnx.DequantizeLinear"(%q, %qs, %qz) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x4xi8>, tensor<f32>, tensor<i8>) -> tensor<1x4xf32>
+  // Second consumer of %dq forces the fold to target the upstream DQ (Case 1).
+  %extra = "onnx.Neg"(%dq) : (tensor<1x4xf32>) -> tensor<1x4xf32>
+  return %dq2, %extra : tensor<1x4xf32>, tensor<1x4xf32>
+}
+
+// CHECK-LABEL: func.func @fold_add_into_dq_moves_name
+// CHECK:      "onnx.DequantizeLinear"
+// CHECK-SAME:   ResultNames = ["/Add_output_0"]
+// CHECK-NOT:  "onnx.Add"
