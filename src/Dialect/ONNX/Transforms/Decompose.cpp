@@ -55,6 +55,7 @@
 #include "src/Pass/Passes.hpp"
 #include "src/Support/TypeUtilities.hpp"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 
 #define DEBUG_TYPE "decompose"
@@ -3304,14 +3305,135 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   MicrosoftGroupQueryAttention(MLIRContext *ctx, PatternBenefit b = 1)
       : CustomOpToOnnxOps(ctx, MicrosoftDomainName, "GroupQueryAttention", b) {}
 
+  using AttributeValidator = LogicalResult (*)(
+      ONNXCustomOp, PatternRewriter &, Attribute);
+
+  // ORT uses -1 as the default/no-op local attention window. Any other value
+  // needs local-window semantics that onnx.Attention does not represent here.
+  static LogicalResult validateLocalWindowSize(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
+    auto localWindowSize = dyn_cast<IntegerAttr>(attr);
+    if (!localWindowSize || localWindowSize.getSInt() != -1)
+      return rewriter.notifyMatchFailure(
+          customOp, "attribute 'local_window_size' is only supported when -1");
+    return success();
+  }
+
+  // smooth_softmax changes the softmax denominator. Only disabled/default
+  // values can be passed through this decomposition.
+  static LogicalResult validateSmoothSoftmax(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
+    auto smoothSoftmax = dyn_cast<IntegerAttr>(attr);
+    if (!smoothSoftmax)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'smooth_softmax' attribute to be an integer");
+    if (smoothSoftmax.getSInt() == 1)
+      return rewriter.notifyMatchFailure(customOp,
+          "attribute 'smooth_softmax' not supported by onnx.Attention");
+    return success();
+  }
+
+  // Quantized cache attrs are recognized for diagnostics, but this lowering
+  // only handles the non-quantized mode.
+  static LogicalResult validateQuantType(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
+    auto quantType = dyn_cast<StringAttr>(attr);
+    if (!quantType)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected quantization type attribute to be a string");
+    if (!quantType.getValue().equals_insensitive("NONE"))
+      return rewriter.notifyMatchFailure(customOp,
+          "quantized KV-cache GroupQueryAttention variants are not supported");
+    return success();
+  }
+
+  // kv_cache_bit_width is only meaningful for quantized cache modes. Its
+  // presence is enough to reject this decomposition.
+  static LogicalResult validateKVCacheBitWidth(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute) {
+    return rewriter.notifyMatchFailure(customOp,
+        "quantized KV-cache GroupQueryAttention variants are not supported");
+  }
+
+  // qk_norm_epsilon is harmless by itself; q_norm/k_norm inputs below decide
+  // whether Q/K norm is requested. Validate only the attribute type here.
+  static LogicalResult validateQKNormEpsilon(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
+    if (!isa<FloatAttr>(attr))
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'qk_norm_epsilon' attribute to be a float");
+    return success();
+  }
+
+  // MicrosoftGroupQueryAttention defines these semantic attributes. A
+  // null validator means the attribute is recognized and has no attr-only
+  // restriction here; non-null validators enforce accepted no-op values or
+  // reject variants this decomposition cannot preserve.
+  inline static const llvm::StringMap<AttributeValidator>
+      groupQueryAttentionAttributeValidators{{"do_rotary", nullptr},
+          {"k_quant_type", validateQuantType},
+          {"kv_cache_bit_width", validateKVCacheBitWidth},
+          {"kv_num_heads", nullptr},
+          {"local_window_size", validateLocalWindowSize},
+          {"num_heads", nullptr}, {"qk_norm_epsilon", validateQKNormEpsilon},
+          {"qk_output", nullptr}, {"rotary_interleaved", nullptr},
+          {"scale", nullptr}, {"smooth_softmax", validateSmoothSoftmax},
+          {"softcap", nullptr}, {"v_quant_type", validateQuantType}};
+
+  // Reject unsupported semantic attrs so the rewrite does not silently drop
+  // behavior, then run value validators for recognized attrs that need local
+  // checks. onnx.Custom carrier attrs are filtered by getFilteredAttrs; the
+  // additional list covers importer/debug metadata.
+  static LogicalResult validateRecognizedAttributes(
+      ONNXCustomOp customOp, PatternRewriter &rewriter) {
+    const SmallVector<NamedAttribute> semanticAttrs = getFilteredAttrs(
+        customOp->getAttrs(), {"onnx_node_name", "ResultNames", "layout"});
+    for (NamedAttribute attr : semanticAttrs) {
+      StringRef attrName = attr.getName().getValue();
+
+      auto validatorIt = groupQueryAttentionAttributeValidators.find(attrName);
+      if (validatorIt == groupQueryAttentionAttributeValidators.end())
+        return rewriter.notifyMatchFailure(
+            customOp, "unsupported GroupQueryAttention attribute '" +
+                          attrName.str() + "'");
+
+      AttributeValidator validator = validatorIt->second;
+      if (!validator)
+        continue;
+      if (failed(validator(customOp, rewriter, attr.getValue())))
+        return failure();
+    }
+    return success();
+  }
+
+  static FailureOr<Type> getAttentionBiasMaskType(ONNXCustomOp customOp,
+      PatternRewriter &rewriter, Value attentionBias, Value additiveMask,
+      Type elementType) {
+    auto attentionBiasType = dyn_cast<ShapedType>(attentionBias.getType());
+    if (!attentionBiasType || !attentionBiasType.hasRank() ||
+        attentionBiasType.getRank() != 4)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'attention_bias' input to have rank-4 type");
+
+    auto additiveMaskType = dyn_cast<ShapedType>(additiveMask.getType());
+    if (!additiveMaskType || !additiveMaskType.hasRank())
+      return UnrankedTensorType::get(elementType);
+
+    if (!attentionBiasType.hasStaticShape() ||
+        !additiveMaskType.hasStaticShape())
+      return UnrankedTensorType::get(elementType);
+
+    SmallVector<int64_t, 4> broadcastShape;
+    if (!OpTrait::util::getBroadcastedShape(attentionBiasType.getShape(),
+            additiveMaskType.getShape(), broadcastShape))
+      return rewriter.notifyMatchFailure(customOp,
+          "expected 'attention_bias' to broadcast with explicit mask");
+    return RankedTensorType::get(broadcastShape, elementType);
+  }
+
   static bool hasPresentOptionalInput(ONNXCustomOp customOp, int64_t index) {
     return customOp.getNumOperands() > index &&
            !onnx_mlir::isNoneValue(customOp.getOperand(index));
-  }
-
-  static bool hasNonNoneQuantType(ONNXCustomOp customOp, StringRef attrName) {
-    auto attr = customOp->getAttrOfType<StringAttr>(attrName);
-    return attr && !attr.getValue().equals_insensitive("NONE");
   }
 
   // Fallback: cache tensor types can reveal quantized KV cache even when attrs
@@ -3328,15 +3450,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     return isa<Float8E4M3FNType>(elementType);
   }
 
-  static bool hasUnsupportedQuantizedCacheSchema(ONNXCustomOp customOp) {
+  static bool hasUnsupportedQuantizedCacheInputsOrTypes(ONNXCustomOp customOp) {
     // Inputs 12/13 are k_scale/v_scale for quantized KV cache.
     if (hasPresentOptionalInput(customOp, 12) ||
         hasPresentOptionalInput(customOp, 13))
-      return true;
-
-    if (hasNonNoneQuantType(customOp, "k_quant_type") ||
-        hasNonNoneQuantType(customOp, "v_quant_type") ||
-        customOp->hasAttr("kv_cache_bit_width"))
       return true;
 
     // Check both past (inputs 3/4) and present (results 1/2) KV cache types.
@@ -3348,7 +3465,7 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
                hasQuantizedCacheElementType(customOp.getResult(2).getType()));
   }
 
-  static bool hasUnsupportedQKNormSchema(ONNXCustomOp customOp) {
+  static bool hasUnsupportedQKNormInputs(ONNXCustomOp customOp) {
     // Inputs 14/15 are q_norm_weight/k_norm_weight.
     return hasPresentOptionalInput(customOp, 14) ||
            hasPresentOptionalInput(customOp, 15);
@@ -3369,7 +3486,8 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // Returns true for buffer-sharing/preallocated cache, where present keeps
   // cache capacity and GQA writes current K/V into the runtime seqlens_k slot.
   static FailureOr<bool> hasPreallocatedCacheMode(ONNXCustomOp customOp,
-      PatternRewriter &rewriter, Value pastKey, int64_t kvSeqLen) {
+      PatternRewriter &rewriter, Value pastKey, int64_t pastSeqLen,
+      int64_t kvSeqLen) {
     if (onnx_mlir::isNoneValue(pastKey))
       return false;
     if (customOp.getNumResults() < 3)
@@ -3384,16 +3502,12 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return rewriter.notifyMatchFailure(
           customOp, "expected 'present_key' output to have static rank-4 type");
 
-    auto pastSeqLen = getStaticPastSequenceLength(pastKey, rewriter, customOp);
-    if (failed(pastSeqLen))
-      return failure();
-
-    const int64_t expectedAppendSeqLen = *pastSeqLen + kvSeqLen;
+    const int64_t expectedAppendSeqLen = pastSeqLen + kvSeqLen;
     const int64_t presentSeqLen = presentKeyShapedType.getShape()[2];
     if (presentSeqLen == expectedAppendSeqLen)
       return false;
 
-    if (presentSeqLen == *pastSeqLen) {
+    if (presentSeqLen == pastSeqLen) {
       if (kvSeqLen != 1)
         return rewriter.notifyMatchFailure(customOp,
             "preallocated KV cache is only supported for decode "
@@ -3406,16 +3520,38 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
         "GroupQueryAttention decomposition");
   }
 
+  static FailureOr<int64_t> getStaticKVSequenceLength(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, Value key) {
+    auto keyType = dyn_cast<ShapedType>(key.getType());
+    if (!keyType || !keyType.hasStaticShape() || keyType.getRank() != 3)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'key' input to have static rank-3 type");
+    return keyType.getShape()[1];
+  }
+
+  static LogicalResult validateCurrentKVForCacheLayout(ONNXCustomOp customOp,
+      PatternRewriter &rewriter, Value kv, int64_t kvNumHeads) {
+    auto kvType = dyn_cast<ShapedType>(kv.getType());
+    if (!kvType || !kvType.hasStaticShape() || kvType.getRank() != 3)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected current K/V to have static rank-3 type");
+    if (kvType.getShape()[2] % kvNumHeads != 0)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected current K/V hidden size divisible by heads");
+    return success();
+  }
+
   // Convert current K/V from GQA's 3D layout [B,S,H*D] to cache layout
   // [B,H,S,D]. Both onnx.Attention present outputs and preallocated-cache
   // slot writes use this rank-4 cache layout.
   static FailureOr<Value> createCurrentKV4D(PatternRewriter &rewriter,
       Location loc, ONNXCustomOp customOp, Value kv, int64_t batchSize,
-      int64_t kvSeqLen, int64_t kvNumHeads, SmallVector<Value> &toCheck) {
-    auto kvType = dyn_cast<ShapedType>(kv.getType());
-    if (!kvType || !kvType.hasStaticShape() || kvType.getRank() != 3)
-      return rewriter.notifyMatchFailure(
-          customOp, "expected current K/V to have static rank-3 type");
+      int64_t kvSeqLen, int64_t kvNumHeads, Type kv4dType,
+      SmallVector<Value> &toCheck) {
+    if (failed(validateCurrentKVForCacheLayout(
+            customOp, rewriter, kv, kvNumHeads)))
+      return failure();
+    auto kvType = cast<ShapedType>(kv.getType());
 
     const int64_t headSize = kvType.getShape()[2] / kvNumHeads;
     auto reshapeShape = onnx_mlir::getONNXConstOpFromVector(
@@ -3424,8 +3560,6 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
         {batchSize, kvSeqLen, kvNumHeads, headSize}, kvType.getElementType());
     Value reshaped = rewriter.create<ONNXReshapeOp>(
         loc, reshapeType, kv, reshapeShape, nullptr);
-    auto kv4dType = RankedTensorType::get(
-        {batchSize, kvNumHeads, kvSeqLen, headSize}, kvType.getElementType());
     Value kv4d = rewriter.create<ONNXTransposeOp>(
         loc, kv4dType, reshaped, rewriter.getI64ArrayAttr({0, 2, 1, 3}));
     toCheck.append({reshapeShape, reshaped, kv4d});
@@ -3581,26 +3715,48 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     return additiveMask;
   }
 
+  static LogicalResult validatePresentKVFromCurrentKV(ONNXCustomOp customOp,
+      PatternRewriter &rewriter, Value key, Value value, int64_t kvNumHeads) {
+    if (failed(validateCurrentKVForCacheLayout(
+            customOp, rewriter, key, kvNumHeads)))
+      return failure();
+    return validateCurrentKVForCacheLayout(
+        customOp, rewriter, value, kvNumHeads);
+  }
+
   static FailureOr<Value> createPresentKVFromCurrentKV(
       PatternRewriter &rewriter, Location loc, ONNXCustomOp customOp, Value kv,
       Type presentType, int64_t batchSize, int64_t kvSeqLen, int64_t kvNumHeads,
       SmallVector<Value> &toCheck) {
-    auto kvType = dyn_cast<ShapedType>(kv.getType());
-    if (!kvType || !kvType.hasStaticShape() || kvType.getRank() != 3)
-      return rewriter.notifyMatchFailure(
-          customOp, "expected current K/V to have static rank-3 type");
+    return createCurrentKV4D(rewriter, loc, customOp, kv, batchSize, kvSeqLen,
+        kvNumHeads, presentType, toCheck);
+  }
 
-    const int64_t headSize = kvType.getShape()[2] / kvNumHeads;
-    auto reshapeShape = onnx_mlir::getONNXConstOpFromVector(
-        rewriter, loc, {batchSize, kvSeqLen, kvNumHeads, headSize});
-    auto reshapeType = RankedTensorType::get(
-        {batchSize, kvSeqLen, kvNumHeads, headSize}, kvType.getElementType());
-    Value reshaped = rewriter.create<ONNXReshapeOp>(
-        loc, reshapeType, kv, reshapeShape, nullptr);
-    Value present = rewriter.create<ONNXTransposeOp>(
-        loc, presentType, reshaped, rewriter.getI64ArrayAttr({0, 2, 1, 3}));
-    toCheck.append({reshapeShape, reshaped, present});
-    return present;
+  static LogicalResult validatePresentKVSlotWrite(ONNXCustomOp customOp,
+      PatternRewriter &rewriter, Value pastKV, Value currentKV,
+      Type presentType, int64_t kvSeqLen, int64_t kvNumHeads) {
+    auto pastType = dyn_cast<ShapedType>(pastKV.getType());
+    auto presentShapedType = dyn_cast<ShapedType>(presentType);
+    if (!pastType || !pastType.hasStaticShape() || pastType.getRank() != 4 ||
+        !presentShapedType || !presentShapedType.hasStaticShape() ||
+        presentShapedType.getRank() != 4)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected past/present K/V to have static rank-4 type");
+    if (kvSeqLen != 1)
+      return rewriter.notifyMatchFailure(customOp,
+          "preallocated KV cache is only supported for decode "
+          "GroupQueryAttention");
+    if (failed(validateCurrentKVForCacheLayout(
+            customOp, rewriter, currentKV, kvNumHeads)))
+      return failure();
+    auto currentType = cast<ShapedType>(currentKV.getType());
+    if (currentType.getElementType() != pastType.getElementType())
+      return rewriter.notifyMatchFailure(
+          customOp, "expected current and past K/V element types to match");
+    if (currentType.getShape()[2] / kvNumHeads != pastType.getShape()[3])
+      return rewriter.notifyMatchFailure(
+          customOp, "expected current and past K/V head sizes to match");
+    return success();
   }
 
   // Build preallocated-cache present K/V. GQA updates one runtime slot:
@@ -3613,21 +3769,12 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       Location loc, ONNXCustomOp customOp, Value pastKV, Value currentKV,
       Value seqlensK, Type presentType, int64_t batchSize, int64_t kvSeqLen,
       int64_t kvNumHeads, SmallVector<Value> &toCheck) {
-    auto pastType = dyn_cast<ShapedType>(pastKV.getType());
-    auto presentShapedType = dyn_cast<ShapedType>(presentType);
-    if (!pastType || !pastType.hasStaticShape() || pastType.getRank() != 4 ||
-        !presentShapedType || !presentShapedType.hasStaticShape() ||
-        presentShapedType.getRank() != 4)
-      return rewriter.notifyMatchFailure(
-          customOp, "expected past/present K/V to have static rank-4 type");
-    if (kvSeqLen != 1)
-      return rewriter.notifyMatchFailure(customOp,
-          "preallocated KV cache is only supported for decode "
-          "GroupQueryAttention");
-
+    auto pastType = cast<ShapedType>(pastKV.getType());
     const int64_t headSize = pastType.getShape()[3];
+    auto current4dType = RankedTensorType::get(
+        {batchSize, kvNumHeads, kvSeqLen, headSize}, pastType.getElementType());
     FailureOr<Value> current4dOr = createCurrentKV4D(rewriter, loc, customOp,
-        currentKV, batchSize, kvSeqLen, kvNumHeads, toCheck);
+        currentKV, batchSize, kvSeqLen, kvNumHeads, current4dType, toCheck);
     if (failed(current4dOr))
       return failure();
     Value current4d = *current4dOr;
@@ -3661,7 +3808,12 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return rewriter.notifyMatchFailure(
           customOp, "GroupQueryAttention expects 7, 9, or 10..16 inputs");
     const int64_t numOut = customOp.getNumResults();
-    assert((numOut >= 3 && numOut <= 4) && "expects 3..4 outputs");
+    if (numOut == 1)
+      return rewriter.notifyMatchFailure(
+          customOp, "single-output GroupQueryAttention is not decomposed");
+    if (numOut < 3 || numOut > 4)
+      return rewriter.notifyMatchFailure(
+          customOp, "GroupQueryAttention expects 1, 3, or 4 outputs");
 
     Value query = customOp.getOperand(0);
     Value key = customOp.getOperand(1);
@@ -3690,18 +3842,16 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return rewriter.notifyMatchFailure(
           customOp, "input 'head_sink' not supported by onnx.Attention");
 
-    auto smoothSoftmax = customOp->getAttrOfType<IntegerAttr>("smooth_softmax");
-    if (smoothSoftmax && smoothSoftmax.getSInt() == 1)
-      return rewriter.notifyMatchFailure(customOp,
-          "attribute 'smooth_softmax' not supported by onnx.Attention");
+    if (failed(validateRecognizedAttributes(customOp, rewriter)))
+      return failure();
 
-    if (hasUnsupportedQuantizedCacheSchema(customOp))
+    if (hasUnsupportedQuantizedCacheInputsOrTypes(customOp))
       return rewriter.notifyMatchFailure(customOp,
           "quantized KV-cache GroupQueryAttention variants are not supported");
 
     // TODO: Support q_norm_weight/k_norm_weight by applying per-head Q/K RMS
     // norm before RoPE/Attention.
-    if (hasUnsupportedQKNormSchema(customOp))
+    if (hasUnsupportedQKNormInputs(customOp))
       return rewriter.notifyMatchFailure(customOp,
           "Q/K-normalized GroupQueryAttention variants are not supported");
 
@@ -3713,10 +3863,15 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return rewriter.notifyMatchFailure(customOp,
           "expected 'total_sequence_length' input to have shaped type");
 
-    auto qNumHeads = customOp->getAttrOfType<IntegerAttr>("num_heads");
-    assert(qNumHeads && "Expected number of attention heads for q");
-    auto kvNumHeads = customOp->getAttrOfType<IntegerAttr>("kv_num_heads");
-    assert(kvNumHeads && "Expected number of attention heads for k and v");
+    const auto qNumHeads = customOp->getAttrOfType<IntegerAttr>("num_heads");
+    if (!qNumHeads)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'num_heads' attribute");
+    const auto kvNumHeads =
+        customOp->getAttrOfType<IntegerAttr>("kv_num_heads");
+    if (!kvNumHeads)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'kv_num_heads' attribute");
 
     if (!isa<ShapedType>(query.getType()))
       return rewriter.notifyMatchFailure(
@@ -3725,27 +3880,22 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     if (!queryType.hasStaticShape())
       return rewriter.notifyMatchFailure(
           customOp, "expected 'query' input to have static type");
-    assert(queryType.getRank() == 3 && "Query input must have rank 3");
-    auto doRotary = customOp->getAttrOfType<IntegerAttr>("do_rotary");
-    auto pastSeqLen = getStaticPastSequenceLength(pastKey, rewriter, customOp);
-    if (failed(pastSeqLen))
+    if (queryType.getRank() != 3)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'query' input to have rank 3");
+    if (isNoneValue(key) != isNoneValue(value))
+      return rewriter.notifyMatchFailure(customOp,
+          "expected 'key' and 'value' inputs to both be present or both be "
+          "none");
+    const auto doRotary = customOp->getAttrOfType<IntegerAttr>("do_rotary");
+    const auto pastSeqLenOr =
+        getStaticPastSequenceLength(pastKey, rewriter, customOp);
+    if (failed(pastSeqLenOr))
       return failure();
+    const int64_t pastSeqLen = *pastSeqLenOr;
 
     int64_t kvSeqLen = -1;
     bool preallocatedCacheMode = false;
-    if (!isNoneValue(key)) {
-      auto originalKeyType = dyn_cast<ShapedType>(key.getType());
-      if (!originalKeyType || !originalKeyType.hasStaticShape() ||
-          originalKeyType.getRank() != 3)
-        return rewriter.notifyMatchFailure(
-            customOp, "expected 'key' input to have static rank-3 type");
-      kvSeqLen = originalKeyType.getShape()[1];
-      FailureOr<bool> preallocated =
-          hasPreallocatedCacheMode(customOp, rewriter, pastKey, kvSeqLen);
-      if (failed(preallocated))
-        return failure();
-      preallocatedCacheMode = *preallocated;
-    }
 
     auto none = rewriter.create<ONNXNoneOp>(loc);
     auto si64Type = rewriter.getIntegerType(64, true);
@@ -3792,18 +3942,15 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       headSize = queryType.getShape()[2] / qNumHeads.getSInt();
     }
 
-    if (kvSeqLen < 0) {
-      auto keyType = dyn_cast<ShapedType>(key.getType());
-      if (!keyType || !keyType.hasStaticShape() || keyType.getRank() != 3)
-        return rewriter.notifyMatchFailure(
-            customOp, "expected 'key' input to have static rank-3 type");
-      kvSeqLen = keyType.getShape()[1];
-      FailureOr<bool> preallocated =
-          hasPreallocatedCacheMode(customOp, rewriter, pastKey, kvSeqLen);
-      if (failed(preallocated))
-        return failure();
-      preallocatedCacheMode = *preallocated;
-    }
+    auto kvSeqLenOr = getStaticKVSequenceLength(customOp, rewriter, key);
+    if (failed(kvSeqLenOr))
+      return failure();
+    kvSeqLen = *kvSeqLenOr;
+    FailureOr<bool> preallocated = hasPreallocatedCacheMode(
+        customOp, rewriter, pastKey, pastSeqLen, kvSeqLen);
+    if (failed(preallocated))
+      return failure();
+    preallocatedCacheMode = *preallocated;
 
     // If do_rotary = 1, query and key need to be passed through a rotary
     // embedding op
@@ -3823,10 +3970,11 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       }
 
       int64_t rotaryInterleaved = 0;
-      if (customOp->hasAttrOfType<IntegerAttr>("rotary_interleaved"))
-        rotaryInterleaved =
-            customOp->getAttrOfType<IntegerAttr>("rotary_interleaved")
-                .getSInt();
+      if (customOp->hasAttrOfType<IntegerAttr>("rotary_interleaved")) {
+        const auto rotaryInterleavedAttr =
+            customOp->getAttrOfType<IntegerAttr>("rotary_interleaved");
+        rotaryInterleaved = rotaryInterleavedAttr.getSInt();
+      }
 
       ropeQuery = rewriter.create<ONNXRotaryEmbeddingOp>(loc, query.getType(),
           query, cosCache, sinCache, positionIds, rotaryInterleaved, qNumHeads);
@@ -3840,10 +3988,17 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       key = ropeKey;
     }
 
+    // GQA present K/V semantics do not always match Attention's append-cache
+    // outputs. No-past prefill needs current K/V reshaped to cache layout;
+    // preallocated decode needs a slot write at seqlens_k, so materialize
+    // those replacements here.
     Value presentKeyReplacement;
     Value presentValueReplacement;
     if (numOut >= 3 && !isa<NoneType>(customOp.getResult(1).getType())) {
       if (isNoneValue(pastKey)) {
+        if (failed(validatePresentKVFromCurrentKV(
+                customOp, rewriter, key, value, kvNumHeads.getSInt())))
+          return failure();
         auto presentKeyOr = createPresentKVFromCurrentKV(rewriter, loc,
             customOp, key, customOp.getResult(1).getType(),
             queryType.getShape()[0], kvSeqLen, kvNumHeads.getSInt(), toCheck);
@@ -3857,6 +4012,13 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
         presentKeyReplacement = *presentKeyOr;
         presentValueReplacement = *presentValueOr;
       } else if (preallocatedCacheMode) {
+        if (failed(validatePresentKVSlotWrite(customOp, rewriter, pastKey, key,
+                customOp.getResult(1).getType(), kvSeqLen,
+                kvNumHeads.getSInt())) ||
+            failed(validatePresentKVSlotWrite(customOp, rewriter, pastValue,
+                value, customOp.getResult(2).getType(), kvSeqLen,
+                kvNumHeads.getSInt())))
+          return failure();
         auto presentKeyOr = createPresentKVSlotWrite(rewriter, loc, customOp,
             pastKey, key, seqlensK, customOp.getResult(1).getType(),
             queryType.getShape()[0], kvSeqLen, kvNumHeads.getSInt(), toCheck);
@@ -3883,25 +4045,33 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     const int64_t batchSize = queryType.getShape()[0];
     const int64_t qSeqLen = queryType.getShape()[1];
     const int64_t attentionSeqLen =
-        preallocatedCacheMode ? *pastSeqLen : *pastSeqLen + kvSeqLen;
+        preallocatedCacheMode ? pastSeqLen : pastSeqLen + kvSeqLen;
     int64_t maskSeqLen = attentionSeqLen;
     if (!isNoneValue(attentionBias)) {
       if (auto attentionBiasType =
               dyn_cast<ShapedType>(attentionBias.getType());
           attentionBiasType && attentionBiasType.hasStaticShape() &&
-          attentionBiasType.getRank() > 0)
+          attentionBiasType.getRank() > 0) {
+        // Attention permits mask/bias last-dim to be shorter than the full
+        // total_sequence_length; missing trailing scores are padded with -inf.
         maskSeqLen = attentionBiasType.getShape().back();
+      }
     }
     FailureOr<Value> additiveMaskOr = createAdditiveAttentionMask(rewriter, loc,
-        customOp, seqlensK, batchSize, qSeqLen, maskSeqLen, *pastSeqLen,
+        customOp, seqlensK, batchSize, qSeqLen, maskSeqLen, pastSeqLen,
         queryElementType, toCheck);
     if (failed(additiveMaskOr))
       return failure();
     Value additiveMask = *additiveMaskOr;
     if (!isNoneValue(attentionBias)) {
-      // Attention's mask input also carries additive score bias.
+      // Attention's mask input also carries additive score bias. The bias may
+      // already be per-head, so preserve the broadcasted Add result shape.
+      auto combinedMaskType = getAttentionBiasMaskType(
+          customOp, rewriter, attentionBias, additiveMask, queryElementType);
+      if (failed(combinedMaskType))
+        return failure();
       additiveMask = rewriter.create<ONNXAddOp>(
-          loc, additiveMask.getType(), attentionBias, additiveMask);
+          loc, *combinedMaskType, attentionBias, additiveMask);
       toCheck.push_back(additiveMask);
     }
 

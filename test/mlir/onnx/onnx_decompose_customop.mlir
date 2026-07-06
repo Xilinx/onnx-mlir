@@ -805,6 +805,39 @@ func.func @gqa_with_attention_bias_and_qk_output(
 
 // -----
 
+
+func.func @gqa_with_attention_bias_per_head(
+  %q: tensor<1x128x3072xf32>,
+  %k: tensor<1x128x1536xf32>,
+  %v: tensor<1x128x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>,
+  %att_bias: tensor<1x32x128x256xf32>
+) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>) {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %total_seqlen = "onnx.Constant"() {value = dense<256> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<255> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v, %qk_output = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen, %none, %none, %none, %att_bias) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    num_heads = 32 : si64,
+    qk_output = 1 : si64
+  } : (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>, none, none, none, tensor<1x32x128x256xf32>)
+    -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>)
+  return %out, %present_k, %present_v, %qk_output : tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>
+}
+
+// CHECK-LABEL: func.func @gqa_with_attention_bias_per_head
+// CHECK-SAME:  (%[[Q:.*]]: tensor<1x128x3072xf32>, %[[K:.*]]: tensor<1x128x1536xf32>, %[[V:.*]]: tensor<1x128x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>, %[[BIAS:.*]]: tensor<1x32x128x256xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>)
+// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x128x256xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x128x256xf32>
+// CHECK:       %[[BIAS_MASK:.*]] = "onnx.Add"(%[[BIAS]], %[[MASK]]) : (tensor<1x32x128x256xf32>, tensor<1x1x128x256xf32>) -> tensor<1x32x128x256xf32>
+// CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[K]], %[[V]], %[[BIAS_MASK]], %[[PAST_K]], %[[PAST_V]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
+// CHECK-SAME:      (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x32x128x256xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>)
+// CHECK:       return %[[Y]], %[[PK]], %[[PV]], %[[QK]] : tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>
+
+// -----
+
 func.func @gqa_with_scale_softcap_and_qk_output_2(
   %q: tensor<1x128x3072xf32>,
   %k: tensor<1x128x1536xf32>,
@@ -991,6 +1024,122 @@ func.func @gqa_preallocated_cache_slot_write(
 // CHECK:       %[[Y:.*]], %[[PK_NONE:.*]], %[[PV_NONE:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[PRESENT_K]], %[[PRESENT_V]], %[[MASK]], %[[NONE]], %[[NONE]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>, tensor<1x1x1x512xf32>, none, none) -> (tensor<1x1x3072xf32>, none, none, none)
 // CHECK:       return %[[Y]], %[[PRESENT_K]], %[[PRESENT_V]] : tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>
+
+// -----
+
+
+func.func @gqa_preallocated_cache_slot_write_with_attention_bias(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x512x96xf32>,
+  %past_v: tensor<1x16x512x96xf32>,
+  %att_bias: tensor<1x32x1x512xf32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>) {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %total_seqlen = "onnx.Constant"() {value = dense<512> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<255> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen, %none, %none, %none, %att_bias) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>, tensor<1x1xi32>, tensor<i32>, none, none, none, tensor<1x32x1x512xf32>) -> (tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>
+}
+
+// CHECK-LABEL: func.func @gqa_preallocated_cache_slot_write_with_attention_bias
+// CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x512x96xf32>, %[[PAST_V:.*]]: tensor<1x16x512x96xf32>, %[[BIAS:.*]]: tensor<1x32x1x512xf32>) -> (tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>)
+// CHECK:       %[[NONE:.*]] = "onnx.NoValue"() {value} : () -> none
+// CHECK:       %[[PRESENT_K:.*]] = "onnx.ScatterElements"(%[[PAST_K]], {{.*}}) {axis = 2 : si64, reduction = "none"} : (tensor<1x16x512x96xf32>, tensor<1x16x1x96xi64>, tensor<1x16x1x96xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[PRESENT_V:.*]] = "onnx.ScatterElements"(%[[PAST_V]], {{.*}}) {axis = 2 : si64, reduction = "none"} : (tensor<1x16x512x96xf32>, tensor<1x16x1x96xi64>, tensor<1x16x1x96xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x512xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x512xf32>
+// CHECK:       %[[BIAS_MASK:.*]] = "onnx.Add"(%[[BIAS]], %[[MASK]]) : (tensor<1x32x1x512xf32>, tensor<1x1x1x512xf32>) -> tensor<1x32x1x512xf32>
+// CHECK:       %[[Y:.*]], %[[PK_NONE:.*]], %[[PV_NONE:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[PRESENT_K]], %[[PRESENT_V]], %[[BIAS_MASK]], %[[NONE]], %[[NONE]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
+// CHECK-SAME:      (tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>, tensor<1x32x1x512xf32>, none, none) -> (tensor<1x1x3072xf32>, none, none, none)
+// CHECK:       return %[[Y]], %[[PRESENT_K]], %[[PRESENT_V]] : tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>
+
+// -----
+
+
+func.func @gqa_local_window_size_minus_one_decomposes(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>) {
+  %total_seqlen = "onnx.Constant"() {value = dense<257> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<256> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    local_window_size = -1 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+}
+
+// CHECK-LABEL: func.func @gqa_local_window_size_minus_one_decomposes
+// CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+// CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[K]], %[[V]], {{.*}}, %[[PAST_K]], %[[PAST_V]])
+// CHECK:       return %[[Y]], %[[PK]], %[[PV]] : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+
+// -----
+
+func.func @gqa_local_window_size_rejected(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>) {
+  %total_seqlen = "onnx.Constant"() {value = dense<257> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<256> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    local_window_size = 128 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+}
+
+// CHECK-LABEL: func.func @gqa_local_window_size_rejected
+// CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+// CHECK-NOT:   "onnx.Attention"
+// CHECK:       %[[GQA:.*]]:3 = "onnx.Custom"
+// CHECK-SAME:      local_window_size = 128 : si64
+// CHECK:       return %[[GQA]]#0, %[[GQA]]#1, %[[GQA]]#2 : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+
+// -----
+
+func.func @gqa_single_output_not_decomposed(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>
+) -> tensor<1x1x3072xf32> {
+  %total_seqlen = "onnx.Constant"() {value = dense<257> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<256> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> tensor<1x1x3072xf32>
+  return %out : tensor<1x1x3072xf32>
+}
+
+// CHECK-LABEL: func.func @gqa_single_output_not_decomposed
+// CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>) -> tensor<1x1x3072xf32>
+// CHECK-NOT:   "onnx.Attention"
+// CHECK:       %[[GQA:.*]] = "onnx.Custom"
+// CHECK-SAME:      function_name = "GroupQueryAttention"
+// CHECK:       return %[[GQA]] : tensor<1x1x3072xf32>
 
 // -----
 
