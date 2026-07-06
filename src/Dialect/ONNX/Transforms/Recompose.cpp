@@ -2005,10 +2005,12 @@ struct RecomposeONNXToONNXPass
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RecomposeONNXToONNXPass)
 
   RecomposeONNXToONNXPass(const std::string &target,
-      bool enableRotaryEmbeddingRecompose, bool enableReduceL2Recompositions) {
+      bool enableRotaryEmbeddingRecompose, bool enableReduceL2Recompositions,
+      bool enableDepthToSpaceDecompose) {
     this->target = target;
     this->enableRotaryEmbeddingRecompose = enableRotaryEmbeddingRecompose;
     this->enableReduceL2Recompositions = enableReduceL2Recompositions;
+    this->enableDepthToSpaceDecompose = enableDepthToSpaceDecompose;
   }
   RecomposeONNXToONNXPass(const RecomposeONNXToONNXPass &pass)
       : mlir::PassWrapper<RecomposeONNXToONNXPass,
@@ -2016,6 +2018,8 @@ struct RecomposeONNXToONNXPass
     this->target = pass.target.getValue();
     this->enableRotaryEmbeddingRecompose =
         pass.enableRotaryEmbeddingRecompose.getValue();
+    this->enableDepthToSpaceDecompose =
+        pass.enableDepthToSpaceDecompose.getValue();
   }
 
   StringRef getArgument() const override { return "recompose-onnx"; }
@@ -2041,6 +2045,12 @@ struct RecomposeONNXToONNXPass
                      "ReduceSumSquare from ReduceSum(Mul(x, x))"),
       ::llvm::cl::init(false)};
 
+  Option<bool> enableDepthToSpaceDecompose{*this,
+      "enable-depth-to-space-decompose",
+      llvm::cl::desc("Disable the DepthToSpace recompose patterns so they do "
+                     "not undo an active DepthToSpace decomposition"),
+      ::llvm::cl::init(false)};
+
   void runOnOperation() final;
 
   typedef PassWrapper<RecomposeONNXToONNXPass, OperationPass<func::FuncOp>>
@@ -2052,8 +2062,9 @@ void RecomposeONNXToONNXPass::runOnOperation() {
   MLIRContext *context = &getContext();
 
   RewritePatternSet patterns(context);
-  onnx_mlir::getRecomposeONNXToONNXPatterns(
-      patterns, enableRotaryEmbeddingRecompose, enableReduceL2Recompositions);
+  onnx_mlir::getRecomposeONNXToONNXPatterns(patterns,
+      enableRotaryEmbeddingRecompose, enableReduceL2Recompositions,
+      enableDepthToSpaceDecompose);
 
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
@@ -2065,7 +2076,7 @@ void RecomposeONNXToONNXPass::runOnOperation() {
 
 void onnx_mlir::getRecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns, bool enableRotaryEmbeddingRecompose,
-    bool enableReduceL2Recompositions) {
+    bool enableReduceL2Recompositions, bool enableDepthToSpaceDecompose) {
   MLIRContext *context = patterns.getContext();
   patterns.insert<RecomposeHardSwishFromMulPattern>(context);
   patterns.insert<RecomposeHardSigmoidFromMulClipPattern>(context);
@@ -2076,8 +2087,12 @@ void onnx_mlir::getRecomposeONNXToONNXPatterns(
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, true>>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXMulOp, true>>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXPowOp, true>>(context);
-  patterns.insert<RecomposeDepthToSpaceCRD>(context);
-  patterns.insert<RecomposeDepthToSpaceDCR>(context);
+  // Skip when DepthToSpace decomposition is active, otherwise the recompose
+  // patterns would immediately undo the decompose.
+  if (!enableDepthToSpaceDecompose) {
+    patterns.insert<RecomposeDepthToSpaceCRD>(context);
+    patterns.insert<RecomposeDepthToSpaceDCR>(context);
+  }
   if (enableRotaryEmbeddingRecompose)
     patterns.insert<RecomposeRotaryEmbeddingPattern>(context);
   if (enableReduceL2Recompositions) {
@@ -2095,7 +2110,8 @@ void onnx_mlir::getRecomposeONNXToONNXPatterns(
  */
 std::unique_ptr<mlir::Pass> onnx_mlir::createRecomposeONNXToONNXPass(
     const std::string &target, bool enableRotaryEmbeddingRecompose,
-    bool enableReduceL2Recompositions) {
-  return std::make_unique<RecomposeONNXToONNXPass>(
-      target, enableRotaryEmbeddingRecompose, enableReduceL2Recompositions);
+    bool enableReduceL2Recompositions, bool enableDepthToSpaceDecompose) {
+  return std::make_unique<RecomposeONNXToONNXPass>(target,
+      enableRotaryEmbeddingRecompose, enableReduceL2Recompositions,
+      enableDepthToSpaceDecompose);
 }
