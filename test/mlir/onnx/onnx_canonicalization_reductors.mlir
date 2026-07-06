@@ -1,5 +1,5 @@
 // Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
-// RUN: onnx-mlir-opt --shape-inference --canonicalize="test-convergence=true" --shape-inference --cse %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --enable-reduce-keepdims-canonicalization=true --shape-inference --canonicalize="test-convergence=true" --shape-inference --cse %s -split-input-file | FileCheck %s
 // RUN: onnx-mlir-opt --enable-reduce-keepdims-canonicalization=false --shape-inference --canonicalize="test-convergence=true" --shape-inference --cse %s -split-input-file | FileCheck %s --check-prefix=DISABLED-CHECK
 
 
@@ -8,10 +8,18 @@ func.func @test_reducesumv11_axes(%arg0: tensor<1x32x512x640xf32>) -> tensor<1x5
   onnx.Return %0 : tensor<1x512x640xf32>
 // CHECK-LABEL:  func.func @test_reducesumv11_axes
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x32x512x640xf32>) -> tensor<1x512x640xf32> {
+// CHECK-DAG:       [[SHAPE_:%.+]] = onnx.Constant dense<[1, 512, 640]> : tensor<3xi64>
 // CHECK-DAG:       [[AXES_:%.+]] = onnx.Constant dense<1> : tensor<1xi64>
-// CHECK:           [[REDUCED_:%.+]] = "onnx.ReduceSum"([[PARAM_0_]], [[AXES_]]) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x32x512x640xf32>, tensor<1xi64>) -> tensor<1x512x640xf32>
-// CHECK:           onnx.Return [[REDUCED_]] : tensor<1x512x640xf32>
+// CHECK:           [[REDUCED_:%.+]] = "onnx.ReduceSum"([[PARAM_0_]], [[AXES_]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x32x512x640xf32>, tensor<1xi64>) -> tensor<1x1x512x640xf32>
+// CHECK:           [[RES_:%.+]] = "onnx.Reshape"([[REDUCED_]], [[SHAPE_]]) {allowzero = 0 : si64} : (tensor<1x1x512x640xf32>, tensor<3xi64>) -> tensor<1x512x640xf32>
+// CHECK:           onnx.Return [[RES_]] : tensor<1x512x640xf32>
 // CHECK:         }
+// DISABLED-CHECK-LABEL:  func.func @test_reducesumv11_axes
+// DISABLED-CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x32x512x640xf32>) -> tensor<1x512x640xf32> {
+// DISABLED-CHECK:           [[AXES_:%.+]] = onnx.Constant dense<1> : tensor<1xi64>
+// DISABLED-CHECK:           [[REDUCED_:%.+]] = "onnx.ReduceSum"([[PARAM_0_]], [[AXES_]]) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x32x512x640xf32>, tensor<1xi64>) -> tensor<1x512x640xf32>
+// DISABLED-CHECK:           onnx.Return [[REDUCED_]] : tensor<1x512x640xf32>
+// DISABLED-CHECK-NOT:       "onnx.Reshape"
 }
 
 // -----
@@ -25,6 +33,7 @@ func.func @test_reducesumv11_noaxes(%arg0: tensor<2x3x4xf32>) -> tensor<1x1x1xf3
 // CHECK:           [[VAR_1_:%.+]] = "onnx.ReduceSum"([[PARAM_0_]], [[VAR_0_]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<2x3x4xf32>, none) -> tensor<1x1x1xf32>
 // CHECK:           onnx.Return [[VAR_1_]] : tensor<1x1x1xf32>
 // CHECK:         }
+}
 
 // -----
 
