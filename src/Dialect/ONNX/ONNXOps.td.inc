@@ -1482,6 +1482,13 @@ def ONNXConcatOp:ONNX_Op<"Concat",
       return sh;
     }
   }];
+  let builders = [
+  OpBuilder<(ins "ValueRange":$inputs, "IntegerAttr":$axis), [{
+   auto elementType = mlir::cast<ShapedType>(inputs[0].getType()).getElementType();
+   auto resultType = UnrankedTensorType::get(elementType);
+   build($_builder, $_state, resultType, inputs, axis);
+  }]>
+  ];
   let hasVerifier = 1;
 }
 

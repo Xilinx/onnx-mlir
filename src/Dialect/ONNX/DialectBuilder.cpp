@@ -101,6 +101,11 @@ Value OnnxBuilder::clip(
         toTensor(input), toTensor(min), toTensor(max));
 }
 
+Value OnnxBuilder::concat(ValueRange inputs, int64_t axis) const {
+  assert(inputs.size() >= 1 && "Expect at least one input");
+  return createOpAndInferShapes<ONNXConcatOp>(inputs, getSignedInt64Attr(axis));
+}
+
 Value OnnxBuilder::concat(
     Type outputType, ValueRange inputs, int64_t axis) const {
   IntegerAttr concatAxisAttr = getSignedInt64Attr(axis);

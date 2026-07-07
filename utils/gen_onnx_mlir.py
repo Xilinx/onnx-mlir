@@ -841,6 +841,16 @@ custom_definition_misc = dict(
   }] >
   ];""",
         ),
+        (
+            "Concat",
+            """  let builders = [
+  OpBuilder<(ins "ValueRange":$inputs, "IntegerAttr":$axis), [{
+   auto elementType = mlir::cast<ShapedType>(inputs[0].getType()).getElementType();
+   auto resultType = UnrankedTensorType::get(elementType);
+   build($_builder, $_state, resultType, inputs, axis);
+  }]>
+  ];""",
+        ),
     ]
 )
 
