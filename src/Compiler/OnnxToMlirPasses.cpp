@@ -61,7 +61,9 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
       getDecomposeOnlyOptions(opts.hybrid)));
   if (opts.hybrid.recomposition)
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createRecomposeONNXToONNXPass(
-        /*target=*/"", opts.hybrid.enableRotaryEmbeddingRecompose));
+        /*target=*/"", opts.hybrid.enableRotaryEmbeddingRecompose,
+        /*enableReduceL2Recompositions=*/false,
+        opts.hybrid.enableDepthToSpaceDecompose));
 
   if (opts.enableONNXHybridPass) {
     pm.addNestedPass<func::FuncOp>(

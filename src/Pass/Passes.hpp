@@ -49,7 +49,8 @@ std::unique_ptr<mlir::Pass> createONNXOpTransformPass(int threshold,
 
 std::unique_ptr<mlir::Pass> createRecomposeONNXToONNXPass(
     const std::string &target = "", bool enableRotaryEmbeddingRecompose = false,
-    bool enableReduceL2Recompositions = false);
+    bool enableReduceL2Recompositions = false,
+    bool enableDepthToSpaceDecompose = false);
 
 std::unique_ptr<mlir::Pass> createConvOptONNXToONNXPass(
     bool enableSimdDataLayoutOpt = false);
