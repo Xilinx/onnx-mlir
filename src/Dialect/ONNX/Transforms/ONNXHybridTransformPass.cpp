@@ -116,7 +116,8 @@ struct ONNXHybridTransformPass
     }
 
     if (constantPropagation) {
-      getConstPropONNXToONNXPatterns(cumulativePatterns, qdqConstProp);
+      getConstPropONNXToONNXPatterns(
+          cumulativePatterns, qdqConstProp, quantConstFold);
     }
 
     if (decomposition) {

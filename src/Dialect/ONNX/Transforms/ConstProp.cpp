@@ -1824,7 +1824,7 @@ struct ConstPropONNXToONNXPass
   Option<bool> enableQDQ{*this, "enable-qdq", llvm::cl::init(true)};
 
   Option<bool> enableQuantConstFold{*this, "enable-quant-const-fold",
-      llvm::cl::init(true)};
+      llvm::cl::init(false)};
 
   ConstPropONNXToONNXPass(bool enableQDQ, bool enableQuantConstFold) {
     this->enableQDQ = enableQDQ;
@@ -1858,8 +1858,8 @@ void ConstPropONNXToONNXPass::runOnOperation() {
 
 } // end anonymous namespace.
 
-void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
-    bool enableQDQ, bool enableQuantConstFold) {
+void onnx_mlir::getConstPropONNXToONNXPatterns(
+    RewritePatternSet &patterns, bool enableQDQ, bool enableQuantConstFold) {
   if (isConstantPropagationDisabled())
     return;
   populateWithGenerated(patterns);

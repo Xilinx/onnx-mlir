@@ -125,6 +125,10 @@ def ONNXHybridTransformOptions {
     Option<"qdqConstProp", "qdq-const-prop",
            "bool", /*default=*/"false",
            "Enable constant propagation for QDQ.">,
+    Option<"quantConstFold", "quant-const-fold",
+           "bool", /*default=*/"false",
+           "Enable folding of a constant QuantizeLinear into an integer "
+           "constant.">,
     Option<"decomposition", "decomposition",
            "bool", /*default=*/"true",
            "Enable decomposition in hybrid transform.">,

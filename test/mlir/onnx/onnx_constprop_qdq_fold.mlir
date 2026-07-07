@@ -1,10 +1,12 @@
 // RUN: onnx-mlir-opt --split-input-file %s -constprop-onnx=enable-quant-const-fold | FileCheck %s
+// RUN: onnx-mlir-opt --split-input-file %s -constprop-onnx | FileCheck %s --check-prefix=DISABLED
 
 //===----------------------------------------------------------------------===//
 // Positive cases.
 //===----------------------------------------------------------------------===//
 
 // Per-tensor, zero point = 0. 1.0/0.5=2, 2.0/0.5=4, 3.0/0.5=6.
+// The fold is gated behind enable-quant-const-fold, so it is off by default.
 func.func @fold_q_per_tensor() -> tensor<3xui8> {
   %x = onnx.Constant dense<[1.0, 2.0, 3.0]> : tensor<3xf32>
   %scale = onnx.Constant dense<5.000000e-01> : tensor<f32>
@@ -16,6 +18,9 @@ func.func @fold_q_per_tensor() -> tensor<3xui8> {
 // CHECK-LABEL: @fold_q_per_tensor
 // CHECK-NOT: onnx.QuantizeLinear
 // CHECK: onnx.Constant dense<[2, 4, 6]> : tensor<3xui8>
+
+// DISABLED-LABEL: @fold_q_per_tensor
+// DISABLED: onnx.QuantizeLinear
 
 // -----
 
