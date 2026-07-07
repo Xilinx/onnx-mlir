@@ -7,7 +7,7 @@ This document summarizes every pass added in `addXmcMlirPasses` (`src/Compiler/X
 | 1 | `FixNegScalePass` | Rewrites scalar `DequantizeLinear` with negative/zero scale into a positive-scale equivalent (negate scale + swap x/zp; for zero-scale emit x=0, zp=0, scale=1 so output stays 0). | Always |
 | 2 | `RecomposeHardSigmoidPass` | Folds `Clip(Add(Mul(x,~1/6),~0.5),0,1)` back into a single `onnx.HardSigmoid` (alpha=0.2, beta=0.5). | Always |
 | 3 | `DQBinaryQOptPass` | Folds a scalar-const `Mul` into the scale/zero-point of an adjacent `QuantizeLinear`/`DequantizeLinear`, removing the binary op. (Only Mul patterns are active; Add/Sub/Div are commented out.) | Always |
-| 4 | `ONNXCSEPass` | Common subexpression elimination over side-effect-free ONNX ops, ignoring `onnx_node_name`/`ResultNames` when comparing. | Always |
+| 4 | `DedupDQsPass` | Deduplicates identical `DequantizeLinear` ops (same input X, scale, zero-point, axis, block-size): rewires all uses to a single DQ and erases the rest, preferring the DQ that feeds `func.return`. | Always |
 | 5 | `ConvertQDQToRequantizePass` | Collapses `Quantize(Dequantize(x))` to `x` when params match, else inserts `XCOMPILERRequantize` carrying the (s1,zp1)→(s2,zp2) conversion. | Always |
 | 6 | `QuantTypesPass` | Replaces `DequantizeLinear`/`QuantizeLinear` with `quant.StorageCast` and retypes values to `!quant.uniform`, moving to a typed-quant representation. | Always |
 | 7 | `ReplaceErfToGeluPass` | Detects exact GELU `0.5*x*(1+erf(x/sqrt(2)))` subgraph and replaces it with `onnx.Gelu(approximate="none")`. | Always |
@@ -95,7 +95,7 @@ Most passes live in `src/Dialect/ONNX/Transforms/xmc/`. Exceptions:
 
 - `FixNegScalePass` → `src/Dialect/ONNX/Transforms/FixNegScale.cpp`
 - `QuantTypesPass` → `src/Dialect/ONNX/Transforms/QuantTypes.cpp`
-- `ONNXCSEPass` → `src/Dialect/ONNX/Transforms/ONNXCSE.cpp`
+- `DedupDQsPass` → `src/Dialect/ONNX/Transforms/DedupDQs.cpp`
 - `ConstPropONNXToONNXPass` → `src/Dialect/ONNX/Transforms/ConstProp.cpp`
 - `ShapeInferencePass` → `src/Dialect/ONNX/Transforms/ShapeInferencePass.cpp`
 - `CanonicalizeWithResultNamesPass` → `src/Dialect/ONNX/Transforms/ResultNamesUpdater.cpp`
