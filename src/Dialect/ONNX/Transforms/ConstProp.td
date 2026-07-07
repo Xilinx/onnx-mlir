@@ -780,6 +780,26 @@ def MulClipConstDistributive : NamedPat<"MulClipConstDistributive",
    (IsNotAConstant:$x), (HasOneUse:$clipOp), (IsIntOrFloatType:$x), 
   (IsIntOrFloatType:$a), (IsIntOrFloatType:$l), (IsIntOrFloatType:$u)]>;
 
+// Distribute division into clip: div(clip(x, l, u), a) -> clip(div(x, a),
+// div(l, a), div(u, a)). div(l, a) and div(u, a) are folded to single constants
+// by DivConstProp in a later iteration. The div analog of
+// MulClipConstDistributive.
+def DivClipConstDistributive : NamedPat<"DivClipConstDistributive",
+  // From div(clip(x, l, u), a) where a, l, u are constants.
+  (ONNXDivOp
+    (ONNXClipOp:$clipOp $x,
+      $l,
+      $u),
+    $a),
+  // To clip(div(x, a), div(l, a), div(u, a)).
+  (ONNXClipOp
+    (ONNXDivOp $x, $a),
+    (ONNXDivOp $l, $a),
+    (ONNXDivOp $u, $a)),
+  [(IsFromDenseConstLike:$a), (IsFromDenseConstLike:$l), (IsFromDenseConstLike:$u),
+   (IsNotAConstant:$x), (HasOneUse:$clipOp), (IsIntOrFloatType:$x),
+   (IsIntOrFloatType:$a), (IsIntOrFloatType:$l), (IsIntOrFloatType:$u)]>;
+
 // Constant Propagation for Mul
 def MulConstProp : NamedPat<"MulConstProp",
     // From mul(c1, c2).

@@ -705,6 +705,27 @@ func.func @test_div_by_zero() -> tensor<2xui32> {
 
 // -----
 
+// DivClipConstDistributive: div(clip(x, l, u), a) -> clip(div(x, a), div(l, a), div(u, a)).
+// The distributed bounds div(l, a) and div(u, a) are folded by DivConstProp, so
+// the clip ends up with constant bounds and the division is pushed onto x.
+// CHECK-LABEL: @test_div_clip_const_distributive(%arg0: tensor<3x2xf32>) -> tensor<3x2xf32>
+func.func @test_div_clip_const_distributive(%arg0 : tensor<3x2xf32>) -> tensor<3x2xf32> {
+  %l = onnx.Constant dense<0.000000e+00> : tensor<f32>
+  %u = onnx.Constant dense<6.000000e+00> : tensor<f32>
+  %a = onnx.Constant dense<6.000000e+00> : tensor<f32>
+  %0 = "onnx.Clip"(%arg0, %l, %u) : (tensor<3x2xf32>, tensor<f32>, tensor<f32>) -> tensor<3x2xf32>
+  %1 = "onnx.Div"(%0, %a) : (tensor<3x2xf32>, tensor<f32>) -> tensor<3x2xf32>
+  onnx.Return %1 : tensor<3x2xf32>
+  // CHECK-DAG:   [[LO:%.+]] = onnx.Constant dense<0.000000e+00> : tensor<f32>
+  // CHECK-DAG:   [[HI:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<f32>
+  // CHECK-DAG:   [[SIX:%.+]] = onnx.Constant dense<6.000000e+00> : tensor<f32>
+  // CHECK:       [[DIV:%.+]] = "onnx.Div"(%arg0, [[SIX]]) : (tensor<3x2xf32>, tensor<f32>) -> tensor<3x2xf32>
+  // CHECK:       [[CLIP:%.+]] = "onnx.Clip"([[DIV]], [[LO]], [[HI]]) : (tensor<3x2xf32>, tensor<f32>, tensor<f32>) -> tensor<3x2xf32>
+  // CHECK:       onnx.Return [[CLIP]] : tensor<3x2xf32>
+}
+
+// -----
+
 //===----------------------------------------------------------------------===//
 /// Clip's test
 
