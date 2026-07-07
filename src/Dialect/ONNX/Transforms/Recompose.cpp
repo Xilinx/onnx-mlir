@@ -2127,8 +2127,9 @@ void RecomposeONNXToONNXPass::runOnOperation() {
   MLIRContext *context = &getContext();
 
   RewritePatternSet patterns(context);
-  onnx_mlir::getRecomposeONNXToONNXPatterns(
-      patterns, enableRotaryEmbeddingRecompose, enableReduceL2Recompositions);
+  onnx_mlir::getRecomposeONNXToONNXPatterns(patterns,
+      enableRotaryEmbeddingRecompose, enableReduceL2Recompositions,
+      enableDepthToSpaceDecompose);
 
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
@@ -2140,7 +2141,7 @@ void RecomposeONNXToONNXPass::runOnOperation() {
 
 void onnx_mlir::getRecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns, bool enableRotaryEmbeddingRecompose,
-    bool enableReduceL2Recompositions) {
+    bool enableReduceL2Recompositions, bool enableDepthToSpaceDecompose) {
   MLIRContext *context = patterns.getContext();
   patterns.insert<RecomposeHardSwishFromMulPattern>(context);
   patterns.insert<RecomposeHardSigmoidFromMulClipPattern>(context);
@@ -2151,8 +2152,12 @@ void onnx_mlir::getRecomposeONNXToONNXPatterns(
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, true>>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXMulOp, true>>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXPowOp, true>>(context);
-  patterns.insert<RecomposeDepthToSpaceCRD>(context);
-  patterns.insert<RecomposeDepthToSpaceDCR>(context);
+  // Skip when DepthToSpace decomposition is active, otherwise the recompose
+  // patterns would immediately undo the decompose.
+  if (!enableDepthToSpaceDecompose) {
+    patterns.insert<RecomposeDepthToSpaceCRD>(context);
+    patterns.insert<RecomposeDepthToSpaceDCR>(context);
+  }
   if (enableRotaryEmbeddingRecompose)
     patterns.insert<RecomposeRotaryEmbeddingPattern>(context);
   if (enableReduceL2Recompositions) {
