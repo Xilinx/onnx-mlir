@@ -4,7 +4,7 @@
 
 //===------------------------ Expand.cpp - Expand Op ---------------------===//
 //
-// Copyright (c) 2024 Advanced Micro Devices, Inc.
+// Copyright (c) 2024-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -15,6 +15,7 @@
 #include "src/Conversion/ONNXToTOSA/DialectBuilder.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
+#include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 
 #include "src/Dialect/ONNX/ElementsAttr/ElementsAttrHelper.hpp"
@@ -74,6 +75,8 @@ public:
     // If inputRank is inferior to shapeRank we need to introduce a
     // reshape before the tile
     auto newInput = adaptor.getInput();
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
     if (inputRank != shapeArray.size()) {
       llvm::SmallVector<int64_t> newShape =
           getNewShape(inputType.getShape(), outputType.getShape());
@@ -83,8 +86,7 @@ public:
         return rewriter.notifyMatchFailure(
             op, "Could not find a shape that satisfies the expand constraints");
       }
-      TosaBuilder tosaBuilder(rewriter, op->getLoc());
-      newInput = tosaBuilder.reshape(adaptor.getInput(), newShape);
+      newInput = create.tosa.reshape(adaptor.getInput(), newShape);
     }
 
     const auto multiplies =
@@ -102,9 +104,10 @@ public:
         llvm::SmallVector<int64_t>(
             outputType.getShape().size(), ShapedType::kDynamic),
         newResultElementType);
-    onnx_mlir::tosa::CreateReplaceOpAndInfer<mlir::tosa::TileOp>(rewriter, op,
-        newTileOutputType, newInput,
-        mlir::tosa::getTosaConstShape(rewriter, op->getLoc(), multiplies));
+    Value repeats = create.onnx.constantInt64(multiplies);
+    Value tile = create.onnx.createTypedOpAndInferShapes<ONNXTileOp>(
+        newTileOutputType, newInput, repeats);
+    rewriter.replaceOp(op, tile);
     return success();
   }
 

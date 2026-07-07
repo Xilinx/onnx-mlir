@@ -1,4 +1,5 @@
 // RUN: onnx-mlir-opt --convert-onnx-to-tosa %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --convert-onnx-to-tosa="excluded-ops=Tile" %s -split-input-file | FileCheck %s --check-prefix=EXCLUDE-TILE
 
 func.func @test_expand(%arg0: tensor<1x64x1x1xf32>) -> tensor<1x64x64x64xf32> {
   %0 = "onnx.Constant"() {value = dense<[1, 64, 64, 64]> : tensor<4xi64>} : () -> tensor<4xi64>
@@ -12,6 +13,13 @@ func.func @test_expand(%arg0: tensor<1x64x1x1xf32>) -> tensor<1x64x64x64xf32> {
 // CHECK-DAG:       [[VAR_1_:%.+]] = tosa.const_shape  {value = dense<[1, 1, 64, 64]> : tensor<4xindex>} : () -> !tosa.shape<4>
 // CHECK:           [[VAR_2_:%.+]] = tosa.tile [[PARAM_0_]], [[VAR_1_]] : (tensor<1x64x1x1xf32>, !tosa.shape<4>) -> tensor<1x64x64x64xf32>
 // CHECK:           return [[VAR_2_]] : tensor<1x64x64x64xf32>
+
+// EXCLUDE-TILE-LABEL:  func.func @test_expand
+// EXCLUDE-TILE-SAME:   ([[PARAM_0_:%.+]]: tensor<1x64x1x1xf32>) -> tensor<1x64x64x64xf32> {
+// EXCLUDE-TILE-DAG:       [[VAR_0_:%.+]] = "tosa.const"() <{value = dense<[1, 64, 64, 64]> : tensor<4xi64>}> : () -> tensor<4xi64>
+// EXCLUDE-TILE-DAG:       [[VAR_1_:%.+]] = "tosa.const"() <{value = dense<[1, 1, 64, 64]> : tensor<4xi64>}> : () -> tensor<4xi64>
+// EXCLUDE-TILE:           [[VAR_2_:%.+]] = "onnx.Tile"([[PARAM_0_]], [[VAR_1_]]) : (tensor<1x64x1x1xf32>, tensor<4xi64>) -> tensor<1x64x64x64xf32>
+// EXCLUDE-TILE:           return [[VAR_2_]] : tensor<1x64x64x64xf32>
 
 // -----
 
