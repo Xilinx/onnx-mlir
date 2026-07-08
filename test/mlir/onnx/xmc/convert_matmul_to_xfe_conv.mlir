@@ -38,7 +38,7 @@ func.func @matmul_to_xfe_conv_quantized(%arg0: tensor<1x64xf32> {onnx.name = "in
 // CHECK: %[[CONV_WEIGHT:.*]] = "onnx.Reshape"(%{{.*}}, %[[WEIGHT_SHAPE]])
 // CHECK-SAME: tensor<32x1x1x64x!quant.uniform<u8:f32, 2.500000e-01>>
 
-// CHECK: %[[XFE_CONV:.*]] = "onnx.XFEConv"(%[[RESHAPE1_OUT]], %[[CONV_WEIGHT]], %{{.*}}) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, onnx_node_name = "MatMul_1", pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x1x1x64x!quant.uniform<u8:f32, 2.500000e-01>>, tensor<32x1x1x64x!quant.uniform<u8:f32, 2.500000e-01>>, none) -> tensor<1x1x1x32x!quant.uniform<u8:f32, 2.500000e-01>>
+// CHECK: %[[XFE_CONV:.*]] = "onnx.XFEConv"(%[[RESHAPE1_OUT]], %[[CONV_WEIGHT]], %{{.*}}) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], onnx_node_name = "MatMul_1", pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x1x1x64x!quant.uniform<u8:f32, 2.500000e-01>>, tensor<32x1x1x64x!quant.uniform<u8:f32, 2.500000e-01>>, none) -> tensor<1x1x1x32x!quant.uniform<u8:f32, 2.500000e-01>>
 
 // CHECK: %[[RESHAPE2_OUT:.*]] = "onnx.Reshape"(%[[XFE_CONV]], %[[RESHAPE2_SHAPE]])
 // CHECK-SAME: tensor<1x32x!quant.uniform<u8:f32, 2.500000e-01>>
@@ -77,7 +77,7 @@ func.func @gemm_transB1_with_bias(%arg0: tensor<1x64x!quant.uniform<u8:f32, 0.14
 // CHECK-NOT: "onnx.Transpose"
 // CHECK: %[[CONV_WEIGHT:.*]] = "onnx.Reshape"(%{{.*}}, %[[WEIGHT_SHAPE]])
 // CHECK-SAME: tensor<32x1x1x64x!quant.uniform<i8:f32, 2.000000e-03>>
-// CHECK: %[[XFE_CONV:.*]] = "onnx.XFEConv"(%[[RESHAPE1_OUT]], %[[CONV_WEIGHT]], %{{.*}}) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, onnx_node_name = "/fc/Gemm", pads = [0, 0, 0, 0], strides = [1, 1]}
+// CHECK: %[[XFE_CONV:.*]] = "onnx.XFEConv"(%[[RESHAPE1_OUT]], %[[CONV_WEIGHT]], %{{.*}}) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], onnx_node_name = "/fc/Gemm", pads = [0, 0, 0, 0], strides = [1, 1]}
 // CHECK-SAME: tensor<1x1x1x32x!quant.uniform<u8:f32, 1.134000e+00>>
 // CHECK: %[[RESHAPE2_OUT:.*]] = "onnx.Reshape"(%[[XFE_CONV]], %[[RESHAPE2_SHAPE]])
 // CHECK-SAME: tensor<1x32x!quant.uniform<u8:f32, 1.134000e+00>>
@@ -112,7 +112,7 @@ func.func @gemm_transB0(%arg0: tensor<1x64x!quant.uniform<u8:f32, 0.25>>) -> ten
 // CHECK-SAME: tensor<32x64x!quant.uniform<i8:f32, {{.*}}>>
 // CHECK: %[[CONV_WEIGHT:.*]] = "onnx.Reshape"(%[[TRANSPOSED_B]], %[[WEIGHT_SHAPE]])
 // CHECK-SAME: tensor<32x1x1x64x!quant.uniform<i8:f32, {{.*}}>>
-// CHECK: %[[XFE_CONV:.*]] = "onnx.XFEConv"(%[[RESHAPE1_OUT]], %[[CONV_WEIGHT]], %{{.*}}) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, onnx_node_name = "/fc/Gemm_0", pads = [0, 0, 0, 0], strides = [1, 1]}
+// CHECK: %[[XFE_CONV:.*]] = "onnx.XFEConv"(%[[RESHAPE1_OUT]], %[[CONV_WEIGHT]], %{{.*}}) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], onnx_node_name = "/fc/Gemm_0", pads = [0, 0, 0, 0], strides = [1, 1]}
 // CHECK-SAME: tensor<1x1x1x32x!quant.uniform<u8:f32, 2.500000e-01>>
 // CHECK: %[[RESHAPE2_OUT:.*]] = "onnx.Reshape"(%[[XFE_CONV]], %[[RESHAPE2_SHAPE]])
 // CHECK-SAME: tensor<1x32x!quant.uniform<u8:f32, 2.500000e-01>>
@@ -329,6 +329,7 @@ func.func @matmul_former_nhwc_recovery(
 // The conv is fed %arg0 directly (the [1,784] reshape is consumed), global
 // kernel = stride = [7,7], output [1,1,1,32].
 // CHECK: "onnx.XFEConv"(%arg0,
+// CHECK-SAME: kernel_shape = [7, 7]
 // CHECK-SAME: strides = [7, 7]
 // CHECK-SAME: -> tensor<1x1x1x32x!quant.uniform<u8:f32, 2.500000e-01>>
 // CHECK: "onnx.Reshape"
@@ -362,6 +363,7 @@ func.func @matmul_leading_flatten_pointwise(
 }
 // Conv fed %arg0 directly (flatten consumed), 1x1 kernel, output [1,8,8,32].
 // CHECK: "onnx.XFEConv"(%arg0,
+// CHECK-SAME: kernel_shape = [1, 1]
 // CHECK-SAME: strides = [1, 1]
 // CHECK-SAME: -> tensor<1x8x8x32x!quant.uniform<u8:f32, 2.500000e-01>>
 // CHECK: "onnx.Reshape"

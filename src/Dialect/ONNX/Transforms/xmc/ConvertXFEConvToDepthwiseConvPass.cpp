@@ -162,7 +162,15 @@ bool isDepthwiseConv(XFEConvOp convOp) {
 /// Weight format is OHWI: [C_out, kH, kW, C_in/group] for 2D
 ///                        [C_out, kD, kH, kW, C_in/group] for 3D
 SmallVector<int64_t> getKernelShape(XFEConvOp convOp) {
-  // infer from weight shape (OHWI format)
+  // First try to get from attribute
+  if (auto kernelShapeAttr = convOp.getKernelShapeAttr()) {
+    SmallVector<int64_t> kernelShape;
+    for (auto attr : kernelShapeAttr)
+      kernelShape.push_back(mlir::cast<IntegerAttr>(attr).getInt());
+    return kernelShape;
+  }
+
+  // Otherwise infer from weight shape (OHWI format)
   Value W = convOp.getW();
   auto wType = mlir::dyn_cast<RankedTensorType>(W.getType());
   if (!wType || !wType.hasRank())

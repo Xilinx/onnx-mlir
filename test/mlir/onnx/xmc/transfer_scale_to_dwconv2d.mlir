@@ -31,7 +31,7 @@ module {
   // CHECK-LABEL: func.func @test_scale_1d_float
   // CHECK: onnx.Reshape{{.*}} -> tensor<1x1x16x64xf32>
   // CHECK: onnx.Reshape{{.*}} -> tensor<64x1x1x1xf32>
-  // CHECK: onnx.XFEConv{{.*}}group = 64{{.*}}pads = [0, 0, 0, 0]{{.*}}strides = [1, 1]
+  // CHECK: onnx.XFEConv{{.*}}group = 64{{.*}}kernel_shape = [1, 1]{{.*}}pads = [0, 0, 0, 0]{{.*}}strides = [1, 1]
   // CHECK: onnx.Reshape{{.*}} -> tensor<1x16x64xf32>
 
   //===--------------------------------------------------------------------===//
@@ -46,7 +46,7 @@ module {
   }
   // CHECK-LABEL: func.func @test_scale_4d_float
   // CHECK: onnx.Reshape{{.*}} -> tensor<64x1x1x1xf32>
-  // CHECK: onnx.XFEConv{{.*}}group = 64{{.*}}pads = [0, 0, 0, 0]{{.*}}strides = [1, 1]
+  // CHECK: onnx.XFEConv{{.*}}group = 64{{.*}}kernel_shape = [1, 1]{{.*}}pads = [0, 0, 0, 0]{{.*}}strides = [1, 1]
   // CHECK: onnx.Reshape{{.*}} -> tensor<1x16x32x64xf32>
 
   //===--------------------------------------------------------------------===//

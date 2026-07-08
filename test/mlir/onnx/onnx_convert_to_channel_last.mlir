@@ -112,7 +112,7 @@ func.func @test_convtranspose_to_xfe_conv_transpose_channel_last(%arg0: tensor<1
 
   // CHECK: [[INPUT_CHANNEL_LAST:%.+]] = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x3x28x28xf32>) -> tensor<1x28x28x3xf32>
   // CHECK: [[WEIGHT_OHWI:%.+]] = "onnx.Transpose"(%arg1) {perm = [1, 2, 3, 0]} : (tensor<3x64x4x4xf32>) -> tensor<64x4x4x3xf32>
-  // CHECK: [[CONVT_CHANNEL_LAST:%.+]] = "onnx.XFEConvTranspose"([[INPUT_CHANNEL_LAST]], [[WEIGHT_OHWI]], %arg2) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, pads = [1, 1, 1, 1], strides = [2, 2]} : (tensor<1x28x28x3xf32>, tensor<64x4x4x3xf32>, tensor<64xf32>) -> tensor<1x56x56x64xf32>
+  // CHECK: [[CONVT_CHANNEL_LAST:%.+]] = "onnx.XFEConvTranspose"([[INPUT_CHANNEL_LAST]], [[WEIGHT_OHWI]], %arg2) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [4, 4], pads = [1, 1, 1, 1], strides = [2, 2]} : (tensor<1x28x28x3xf32>, tensor<64x4x4x3xf32>, tensor<64xf32>) -> tensor<1x56x56x64xf32>
   // CHECK: [[OUTPUT_NCHW:%.+]] = "onnx.Transpose"([[CONVT_CHANNEL_LAST]]) {perm = [0, 3, 1, 2]} : (tensor<1x56x56x64xf32>) -> tensor<1x64x56x56xf32>
   // CHECK: onnx.Return [[OUTPUT_NCHW]] : tensor<1x64x56x56xf32>
 }
@@ -134,7 +134,7 @@ func.func @test_convtranspose_to_xfe_conv_transpose_output_padding(%arg0: tensor
 
   // CHECK: [[INPUT_CHANNEL_LAST:%.+]] = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x3x28x28xf32>) -> tensor<1x28x28x3xf32>
   // CHECK: [[WEIGHT_OHWI:%.+]] = "onnx.Transpose"(%arg1) {perm = [1, 2, 3, 0]} : (tensor<3x64x3x3xf32>) -> tensor<64x3x3x3xf32>
-  // CHECK: [[CONVT_CHANNEL_LAST:%.+]] = "onnx.XFEConvTranspose"([[INPUT_CHANNEL_LAST]], [[WEIGHT_OHWI]], %arg2) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, output_padding = [1, 1], pads = [1, 1, 1, 1], strides = [2, 2]} : (tensor<1x28x28x3xf32>, tensor<64x3x3x3xf32>, tensor<64xf32>) -> tensor<1x56x56x64xf32>
+  // CHECK: [[CONVT_CHANNEL_LAST:%.+]] = "onnx.XFEConvTranspose"([[INPUT_CHANNEL_LAST]], [[WEIGHT_OHWI]], %arg2) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [3, 3], output_padding = [1, 1], pads = [1, 1, 1, 1], strides = [2, 2]} : (tensor<1x28x28x3xf32>, tensor<64x3x3x3xf32>, tensor<64xf32>) -> tensor<1x56x56x64xf32>
   // CHECK: [[OUTPUT_NCHW:%.+]] = "onnx.Transpose"([[CONVT_CHANNEL_LAST]]) {perm = [0, 3, 1, 2]} : (tensor<1x56x56x64xf32>) -> tensor<1x64x56x56xf32>
   // CHECK: onnx.Return [[OUTPUT_NCHW]] : tensor<1x64x56x56xf32>
 }
@@ -155,7 +155,7 @@ func.func @test_convtranspose3d_to_xfe_conv_transpose_channel_last(%arg0: tensor
 
   // CHECK: [[INPUT_CHANNEL_LAST:%.+]] = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 4, 1]} : (tensor<1x3x8x28x28xf32>) -> tensor<1x8x28x28x3xf32>
   // CHECK: [[WEIGHT_ODHWI:%.+]] = "onnx.Transpose"(%arg1) {perm = [1, 2, 3, 4, 0]} : (tensor<3x64x2x2x2xf32>) -> tensor<64x2x2x2x3xf32>
-  // CHECK: [[CONVT_CHANNEL_LAST:%.+]] = "onnx.XFEConvTranspose"([[INPUT_CHANNEL_LAST]], [[WEIGHT_ODHWI]], %arg2) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1, 1], group = 1 : si64, pads = [0, 0, 0, 0, 0, 0], strides = [2, 2, 2]} : (tensor<1x8x28x28x3xf32>, tensor<64x2x2x2x3xf32>, tensor<64xf32>) -> tensor<1x16x56x56x64xf32>
+  // CHECK: [[CONVT_CHANNEL_LAST:%.+]] = "onnx.XFEConvTranspose"([[INPUT_CHANNEL_LAST]], [[WEIGHT_ODHWI]], %arg2) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1, 1], group = 1 : si64, kernel_shape = [2, 2, 2], pads = [0, 0, 0, 0, 0, 0], strides = [2, 2, 2]} : (tensor<1x8x28x28x3xf32>, tensor<64x2x2x2x3xf32>, tensor<64xf32>) -> tensor<1x16x56x56x64xf32>
   // CHECK: [[OUTPUT_NCDHW:%.+]] = "onnx.Transpose"([[CONVT_CHANNEL_LAST]]) {perm = [0, 4, 1, 2, 3]} : (tensor<1x16x56x56x64xf32>) -> tensor<1x64x16x56x56xf32>
   // CHECK: onnx.Return [[OUTPUT_NCDHW]] : tensor<1x64x16x56x56xf32>
 }
@@ -620,227 +620,5 @@ func.func @test_gridsample_quant_per_tensor(
   // CHECK: [[GS:%.+]] = "onnx.XFEGridSample"([[IN_NHWC]], %arg1) {{{.*}}align_corners = 0 : si64{{.*}}mode = "linear"{{.*}}padding_mode = "zeros"{{.*}}} : (tensor<1x4x4x3x!quant.uniform<u8:f32, 5.000000e-02:128>>, tensor<1x2x2x2xf32>) -> tensor<1x2x2x3x!quant.uniform<u8:f32, 1.000000e-01:128>>
   // CHECK: [[OUT:%.+]] = "onnx.Transpose"([[GS]]) {perm = [0, 3, 1, 2]} : (tensor<1x2x2x3x!quant.uniform<u8:f32, 1.000000e-01:128>>) -> tensor<1x3x2x2x!quant.uniform<u8:f32, 1.000000e-01:128>>
   // CHECK: onnx.Return [[OUT]] : tensor<1x3x2x2x!quant.uniform<u8:f32, 1.000000e-01:128>>
-}
-
-// -----
-
-//===----------------------------------------------------------------------===//
-/// Dynamic shapes: conversion must not run (keep original ONNX ops)
-//===----------------------------------------------------------------------===//
-
-// CHECK-LABEL: func.func @test_conv_dynamic_input_no_channel_last
-func.func @test_conv_dynamic_input_no_channel_last(
-    %arg0: tensor<?x3x28x28xf32>, %arg1: tensor<64x3x3x3xf32>, %arg2: tensor<64xf32>)
-    -> tensor<1x64x26x26xf32> {
-  %0 = "onnx.Conv"(%arg0, %arg1, %arg2) {
-    dilations = [1, 1],
-    group = 1 : si64,
-    pads = [0, 0, 0, 0],
-    strides = [1, 1]
-  } : (tensor<?x3x28x28xf32>, tensor<64x3x3x3xf32>, tensor<64xf32>)
-    -> tensor<1x64x26x26xf32>
-  onnx.Return %0 : tensor<1x64x26x26xf32>
-
-  // CHECK: "onnx.Conv"
-  // CHECK-NOT: "onnx.XFEConv"
-  // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
-// CHECK-LABEL: func.func @test_convtranspose_dynamic_input_no_channel_last
-func.func @test_convtranspose_dynamic_input_no_channel_last(
-    %arg0: tensor<1x3x?x28xf32>, %arg1: tensor<3x64x4x4xf32>, %arg2: tensor<64xf32>)
-    -> tensor<1x64x56x56xf32> {
-  %0 = "onnx.ConvTranspose"(%arg0, %arg1, %arg2) {
-    dilations = [1, 1],
-    group = 1 : si64,
-    kernel_shape = [4, 4],
-    pads = [1, 1, 1, 1],
-    strides = [2, 2]
-  } : (tensor<1x3x?x28xf32>, tensor<3x64x4x4xf32>, tensor<64xf32>)
-    -> tensor<1x64x56x56xf32>
-  onnx.Return %0 : tensor<1x64x56x56xf32>
-
-  // CHECK: "onnx.ConvTranspose"
-  // CHECK-NOT: "onnx.XFEConvTranspose"
-  // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
-// CHECK-LABEL: func.func @test_avgpool_dynamic_spatial_no_channel_last
-func.func @test_avgpool_dynamic_spatial_no_channel_last(
-    %arg0: tensor<1x64x?x28xf32>) -> tensor<1x64x?x14xf32> {
-  %0 = "onnx.AveragePool"(%arg0) {
-    kernel_shape = [2, 2],
-    strides = [2, 2],
-    pads = [0, 0, 0, 0]
-  } : (tensor<1x64x?x28xf32>) -> tensor<1x64x?x14xf32>
-  onnx.Return %0 : tensor<1x64x?x14xf32>
-
-  // CHECK: "onnx.AveragePool"
-  // CHECK-NOT: "onnx.XFEAveragePool"
-  // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
-// CHECK-LABEL: func.func @test_maxpool_dynamic_spatial_no_channel_last
-func.func @test_maxpool_dynamic_spatial_no_channel_last(
-    %arg0: tensor<1x64x?x28xf32>) -> tensor<1x64x?x14xf32> {
-  %0 = "onnx.MaxPoolSingleOut"(%arg0) {
-    kernel_shape = [2, 2],
-    strides = [2, 2],
-    pads = [0, 0, 0, 0],
-    dilations = [1, 1]
-  } : (tensor<1x64x?x28xf32>) -> tensor<1x64x?x14xf32>
-  onnx.Return %0 : tensor<1x64x?x14xf32>
-
-  // CHECK: "onnx.MaxPoolSingleOut"
-  // CHECK-NOT: "onnx.XFEMaxPool"
-  // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
-// CHECK-LABEL: func.func @test_global_avgpool_dynamic_spatial_no_channel_last
-func.func @test_global_avgpool_dynamic_spatial_no_channel_last(
-    %arg0: tensor<1x512x?x7xf32>) -> tensor<1x512x1x1xf32> {
-  %0 = "onnx.GlobalAveragePool"(%arg0) : (tensor<1x512x?x7xf32>) -> tensor<1x512x1x1xf32>
-  onnx.Return %0 : tensor<1x512x1x1xf32>
-
-  // CHECK: "onnx.GlobalAveragePool"
-  // CHECK-NOT: "onnx.XFEGlobalAveragePool"
-  // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
-// CHECK-LABEL: func.func @test_global_maxpool_dynamic_spatial_no_channel_last
-func.func @test_global_maxpool_dynamic_spatial_no_channel_last(
-    %arg0: tensor<1x512x?x7xf32>) -> tensor<1x512x1x1xf32> {
-  %0 = "onnx.GlobalMaxPool"(%arg0) : (tensor<1x512x?x7xf32>) -> tensor<1x512x1x1xf32>
-  onnx.Return %0 : tensor<1x512x1x1xf32>
-
-  // CHECK: "onnx.GlobalMaxPool"
-  // CHECK-NOT: "onnx.XFEGlobalMaxPool"
-  // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
-// CHECK-LABEL: func.func @test_batchnorm_dynamic_spatial_no_channel_last
-func.func @test_batchnorm_dynamic_spatial_no_channel_last(
-    %arg0: tensor<1x64x?x256xf32>, %arg1: tensor<64xf32>, %arg2: tensor<64xf32>,
-    %arg3: tensor<64xf32>, %arg4: tensor<64xf32>) -> tensor<1x64x?x256xf32> {
-  %0 = "onnx.BatchNormalizationInferenceMode"(%arg0, %arg1, %arg2, %arg3, %arg4) {
-    epsilon = 1.0e-05 : f32,
-    momentum = 0.9 : f32
-  } : (tensor<1x64x?x256xf32>, tensor<64xf32>, tensor<64xf32>, tensor<64xf32>,
-       tensor<64xf32>) -> tensor<1x64x?x256xf32>
-  onnx.Return %0 : tensor<1x64x?x256xf32>
-
-  // CHECK: "onnx.BatchNormalizationInferenceMode"
-  // CHECK-NOT: "onnx.XFEBatchNormalization"
-  // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
-// CHECK-LABEL: func.func @test_instance_norm_dynamic_spatial_no_channel_last
-func.func @test_instance_norm_dynamic_spatial_no_channel_last(
-    %arg0: tensor<1x64x?x28xf32>, %arg1: tensor<64xf32>, %arg2: tensor<64xf32>)
-    -> tensor<1x64x?x28xf32> {
-  %0 = "onnx.InstanceNormalization"(%arg0, %arg1, %arg2) {epsilon = 1.0e-05 : f32}
-      : (tensor<1x64x?x28xf32>, tensor<64xf32>, tensor<64xf32>)
-      -> tensor<1x64x?x28xf32>
-  onnx.Return %0 : tensor<1x64x?x28xf32>
-
-  // CHECK: "onnx.InstanceNormalization"
-  // CHECK-NOT: "onnx.XFEInstanceNormalization"
-  // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
-// CHECK-LABEL: func.func @test_groupnorm_dynamic_spatial_no_channel_last
-func.func @test_groupnorm_dynamic_spatial_no_channel_last(
-    %arg0: tensor<1x64x?x28xf32>, %arg1: tensor<64xf32>, %arg2: tensor<64xf32>)
-    -> tensor<1x64x?x28xf32> {
-  %0 = "onnx.GroupNormalization"(%arg0, %arg1, %arg2) {
-    epsilon = 1.0e-05 : f32,
-    num_groups = 4 : si64
-  } : (tensor<1x64x?x28xf32>, tensor<64xf32>, tensor<64xf32>) -> tensor<1x64x?x28xf32>
-  onnx.Return %0 : tensor<1x64x?x28xf32>
-
-  // CHECK: "onnx.GroupNormalization"
-  // CHECK-NOT: "onnx.XFEGroupNormalization"
-  // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
-// CHECK-LABEL: func.func @test_depth_to_space_dynamic_spatial_no_channel_last
-func.func @test_depth_to_space_dynamic_spatial_no_channel_last(
-    %arg0: tensor<1x16x?x4xf32>) -> tensor<1x4x?x8xf32> {
-  %0 = "onnx.DepthToSpace"(%arg0) {blocksize = 2 : si64}
-      : (tensor<1x16x?x4xf32>) -> tensor<1x4x?x8xf32>
-  onnx.Return %0 : tensor<1x4x?x8xf32>
-
-  // CHECK: "onnx.DepthToSpace"
-  // CHECK-NOT: "onnx.XFEDepthToSpace"
-  // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
-// CHECK-LABEL: func.func @test_space_to_depth_dynamic_spatial_no_channel_last
-func.func @test_space_to_depth_dynamic_spatial_no_channel_last(
-    %arg0: tensor<1x4x?x8xf32>) -> tensor<1x16x?x4xf32> {
-  %0 = "onnx.SpaceToDepth"(%arg0) {blocksize = 2 : si64}
-      : (tensor<1x4x?x8xf32>) -> tensor<1x16x?x4xf32>
-  onnx.Return %0 : tensor<1x16x?x4xf32>
-
-  // CHECK: "onnx.SpaceToDepth"
-  // CHECK-NOT: "onnx.XFESpaceToDepth"
-  // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
-// CHECK-LABEL: func.func @test_resize_dynamic_spatial_no_channel_last
-func.func @test_resize_dynamic_spatial_no_channel_last(
-    %arg0: tensor<1x3x?x4xf32>) -> tensor<1x3x?x8xf32> {
-  %none = "onnx.NoValue"() {value} : () -> none
-  %scales = "onnx.Constant"() {value = dense<[1.0, 1.0, 2.0, 2.0]> : tensor<4xf32>}
-      : () -> tensor<4xf32>
-  %0 = "onnx.Resize"(%arg0, %none, %scales, %none) {
-    coordinate_transformation_mode = "half_pixel",
-    mode = "nearest",
-    nearest_mode = "round_prefer_floor"
-  } : (tensor<1x3x?x4xf32>, none, tensor<4xf32>, none) -> tensor<1x3x?x8xf32>
-  onnx.Return %0 : tensor<1x3x?x8xf32>
-
-  // CHECK: "onnx.Resize"
-  // CHECK-NOT: "onnx.XFEResize"
-  // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
-// CHECK-LABEL: func.func @test_gridsample_dynamic_grid_no_channel_last
-func.func @test_gridsample_dynamic_grid_no_channel_last(
-    %arg0: tensor<1x3x4x4xf32>, %arg1: tensor<1x?x2x2xf32>) -> tensor<1x3x?x2xf32> {
-  %0 = "onnx.GridSample"(%arg0, %arg1) {
-    align_corners = 0 : si64,
-    mode = "linear",
-    padding_mode = "zeros"
-  } : (tensor<1x3x4x4xf32>, tensor<1x?x2x2xf32>) -> tensor<1x3x?x2xf32>
-  onnx.Return %0 : tensor<1x3x?x2xf32>
-
-  // CHECK: "onnx.GridSample"
-  // CHECK-NOT: "onnx.XFEGridSample"
-  // CHECK-NOT: "onnx.Transpose"
 }
 

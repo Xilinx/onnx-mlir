@@ -80,6 +80,9 @@
     description: Number of groups for grouped convolution
     type: int
     default_value: 1
+  - name: kernel_shape
+    description: Shape of the convolution kernel
+    type: list(int)
   - name: pads
     description: Padding for the beginning and ending along each spatial axis
     type: list(int)
@@ -164,6 +167,9 @@
     description: Number of groups for grouped convolution
     type: int
     default_value: 1
+  - name: kernel_shape
+    description: Shape of the convolution kernel
+    type: list(int)
   - name: output_padding
     description: Additional size added to one side of the output shape for each spatial axis
     type: list(int)

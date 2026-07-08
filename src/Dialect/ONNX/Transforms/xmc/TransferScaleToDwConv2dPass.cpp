@@ -251,12 +251,13 @@ struct ScaleToDwConv2dPattern : public OpRewritePattern<ONNXMulOp> {
     auto groupAttr =
         rewriter.getIntegerAttr(rewriter.getIntegerType(64, /*isSigned=*/true),
             APInt(64, numChannels, /*isSigned=*/true));
+    auto kernelShapeAttr = rewriter.getI64ArrayAttr({1, 1});
     auto padsAttr = rewriter.getI64ArrayAttr({0, 0, 0, 0});
     auto stridesAttr = rewriter.getI64ArrayAttr({1, 1});
 
     auto dwConvOp = rewriter.create<XFEConvOp>(loc, convOutputType,
         reshapedInput, reshapedWeight, bias, rewriter.getStringAttr("NONE"),
-        autoPadAttr, dilationsAttr, groupAttr,
+        autoPadAttr, dilationsAttr, groupAttr, kernelShapeAttr,
         /*leakyrelu_alpha=*/FloatAttr(), padsAttr,
         /*prelu_in=*/IntegerAttr(), /*prelu_shift=*/IntegerAttr(), stridesAttr);
 

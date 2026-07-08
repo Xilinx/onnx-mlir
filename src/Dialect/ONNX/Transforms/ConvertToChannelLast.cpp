@@ -28,9 +28,6 @@
 // - GridSample -> XFEGridSample (explicit NCHW<->channel-last transposes; rank
 // >= 3 per ONNX GridSample)
 //
-// All patterns require fully static ranked operand shapes (optional operands
-// may be none)
-//
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -95,20 +92,6 @@ Type remapPerAxisQuantType(Type elementType, ArrayRef<int64_t> perm) {
       perAxisType.getStorageType(), perAxisType.getExpressedType(),
       perAxisType.getScales(), perAxisType.getZeroPoints(), newAxis,
       perAxisType.getStorageTypeMin(), perAxisType.getStorageTypeMax());
-}
-
-// XFE channel-last conversion requires fully static ranked tensor operands.
-static LogicalResult ensureAllOperandsStaticOrNone(
-    Operation *op, PatternRewriter &rewriter) {
-  for (Value operand : op->getOperands()) {
-    if (isa<NoneType>(operand.getType()))
-      continue;
-    auto rankedType = mlir::dyn_cast<RankedTensorType>(operand.getType());
-    if (!rankedType || !rankedType.hasStaticShape())
-      return rewriter.notifyMatchFailure(
-          op, "requires fully static operand shapes (or none)");
-  }
-  return success();
 }
 
 // Remap per-axis quant type from NCHW to NHWC layout.
@@ -216,9 +199,6 @@ struct ConvToChannelLastPattern : public OpRewritePattern<ONNXConvOp> {
 
   LogicalResult matchAndRewrite(
       ONNXConvOp convOp, PatternRewriter &rewriter) const override {
-    if (failed(ensureAllOperandsStaticOrNone(convOp.getOperation(), rewriter)))
-      return failure();
-
     Location loc = convOp.getLoc();
     Value input = convOp.getX();
     Value weight = convOp.getW();
@@ -252,7 +232,7 @@ struct ConvToChannelLastPattern : public OpRewritePattern<ONNXConvOp> {
         UnrankedTensorType::get(nhwcOutputElemType), inputChannelLast,
         weightChannelLast, bias, rewriter.getStringAttr("NONE"),
         convOp.getAutoPadAttr(), convOp.getDilationsAttr(),
-        convOp.getGroupAttr(),
+        convOp.getGroupAttr(), convOp.getKernelShapeAttr(),
         /*leakyrelu_alpha=*/FloatAttr(), convOp.getPadsAttr(),
         /*prelu_in=*/IntegerAttr(), /*prelu_shift=*/IntegerAttr(),
         convOp.getStridesAttr());
@@ -283,10 +263,6 @@ struct ConvTransposeToChannelLastPattern
 
   LogicalResult matchAndRewrite(ONNXConvTransposeOp convTransposeOp,
       PatternRewriter &rewriter) const override {
-    if (failed(ensureAllOperandsStaticOrNone(
-            convTransposeOp.getOperation(), rewriter)))
-      return failure();
-
     Location loc = convTransposeOp.getLoc();
     Value input = convTransposeOp.getX();
     Value weight = convTransposeOp.getW();
@@ -320,7 +296,7 @@ struct ConvTransposeToChannelLastPattern
         UnrankedTensorType::get(nhwcOutputElemType), inputChannelLast,
         weightChannelLast, bias, rewriter.getStringAttr("NONE"),
         convTransposeOp.getAutoPadAttr(), convTransposeOp.getDilationsAttr(),
-        convTransposeOp.getGroupAttr(),
+        convTransposeOp.getGroupAttr(), convTransposeOp.getKernelShapeAttr(),
         /*leakyrelu_alpha=*/FloatAttr(), convTransposeOp.getOutputPaddingAttr(),
         convTransposeOp.getOutputShapeAttr(), convTransposeOp.getPadsAttr(),
         /*prelu_in=*/IntegerAttr(), /*prelu_shift=*/IntegerAttr(),
@@ -352,9 +328,6 @@ struct AveragePoolToChannelLastPattern
 
   LogicalResult matchAndRewrite(
       ONNXAveragePoolOp poolOp, PatternRewriter &rewriter) const override {
-    if (failed(ensureAllOperandsStaticOrNone(poolOp.getOperation(), rewriter)))
-      return failure();
-
     Location loc = poolOp.getLoc();
     Value input = poolOp.getX();
 
@@ -401,9 +374,6 @@ struct MaxPoolToChannelLastPattern
 
   LogicalResult matchAndRewrite(
       ONNXMaxPoolSingleOutOp poolOp, PatternRewriter &rewriter) const override {
-    if (failed(ensureAllOperandsStaticOrNone(poolOp.getOperation(), rewriter)))
-      return failure();
-
     Location loc = poolOp.getLoc();
     Value input = poolOp.getX();
 
@@ -449,9 +419,6 @@ struct GlobalAveragePoolToChannelLastPattern
 
   LogicalResult matchAndRewrite(ONNXGlobalAveragePoolOp poolOp,
       PatternRewriter &rewriter) const override {
-    if (failed(ensureAllOperandsStaticOrNone(poolOp.getOperation(), rewriter)))
-      return failure();
-
     Location loc = poolOp.getLoc();
     Value input = poolOp.getX();
 
@@ -494,9 +461,6 @@ struct GlobalMaxPoolToChannelLastPattern
 
   LogicalResult matchAndRewrite(
       ONNXGlobalMaxPoolOp poolOp, PatternRewriter &rewriter) const override {
-    if (failed(ensureAllOperandsStaticOrNone(poolOp.getOperation(), rewriter)))
-      return failure();
-
     Location loc = poolOp.getLoc();
     Value input = poolOp.getX();
 
@@ -540,9 +504,6 @@ struct BatchNormToChannelLastPattern
 
   LogicalResult matchAndRewrite(ONNXBatchNormalizationInferenceModeOp bnOp,
       PatternRewriter &rewriter) const override {
-    if (failed(ensureAllOperandsStaticOrNone(bnOp.getOperation(), rewriter)))
-      return failure();
-
     Location loc = bnOp.getLoc();
     Value input = bnOp.getX();
     Value scale = bnOp.getScale();
@@ -590,9 +551,6 @@ struct InstanceNormToChannelLastPattern
 
   LogicalResult matchAndRewrite(ONNXInstanceNormalizationOp normOp,
       PatternRewriter &rewriter) const override {
-    if (failed(ensureAllOperandsStaticOrNone(normOp.getOperation(), rewriter)))
-      return failure();
-
     Location loc = normOp.getLoc();
     Value input = normOp.getInput();
     Value scale = normOp.getScale();
@@ -638,9 +596,6 @@ struct GroupNormToChannelLastPattern
 
   LogicalResult matchAndRewrite(
       ONNXGroupNormalizationOp gnOp, PatternRewriter &rewriter) const override {
-    if (failed(ensureAllOperandsStaticOrNone(gnOp.getOperation(), rewriter)))
-      return failure();
-
     Location loc = gnOp.getLoc();
     Value input = gnOp.getX();
     Value scale = gnOp.getScale();
@@ -689,9 +644,6 @@ struct DepthToSpaceToChannelLastPattern
 
   LogicalResult matchAndRewrite(
       ONNXDepthToSpaceOp d2sOp, PatternRewriter &rewriter) const override {
-    if (failed(ensureAllOperandsStaticOrNone(d2sOp.getOperation(), rewriter)))
-      return failure();
-
     Location loc = d2sOp.getLoc();
     Value input = d2sOp.getInput();
 
@@ -743,9 +695,6 @@ struct SpaceToDepthToChannelLastPattern
 
   LogicalResult matchAndRewrite(
       ONNXSpaceToDepthOp s2dOp, PatternRewriter &rewriter) const override {
-    if (failed(ensureAllOperandsStaticOrNone(s2dOp.getOperation(), rewriter)))
-      return failure();
-
     Location loc = s2dOp.getLoc();
     Value input = s2dOp.getInput();
 
@@ -894,10 +843,6 @@ struct ResizeToChannelLastPattern : public OpRewritePattern<ONNXResizeOp> {
 
   LogicalResult matchAndRewrite(
       ONNXResizeOp resizeOp, PatternRewriter &rewriter) const override {
-    if (failed(
-            ensureAllOperandsStaticOrNone(resizeOp.getOperation(), rewriter)))
-      return failure();
-
     Location loc = resizeOp.getLoc();
     Value input = resizeOp.getX();
 
@@ -1114,9 +1059,6 @@ struct GridSampleToChannelLastPattern
 
   LogicalResult matchAndRewrite(
       ONNXGridSampleOp op, PatternRewriter &rewriter) const override {
-    if (failed(ensureAllOperandsStaticOrNone(op.getOperation(), rewriter)))
-      return failure();
-
     auto xType = mlir::dyn_cast<RankedTensorType>(op.getX().getType());
     auto gridType = mlir::dyn_cast<RankedTensorType>(op.getGrid().getType());
     if (!xType || !gridType)
