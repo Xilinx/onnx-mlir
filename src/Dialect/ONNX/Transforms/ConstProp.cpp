@@ -1691,6 +1691,128 @@ public:
   }
 };
 
+// Fold Const(fp) -> QuantizeLinear into Const(int)
+class ConstFoldQuantizeLinearOnConst
+    : public OpRewritePattern<ONNXQuantizeLinearOp> {
+public:
+  using OpRewritePattern<ONNXQuantizeLinearOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXQuantizeLinearOp qOp, PatternRewriter &rewriter) const override {
+    // Blocked quantization is out of scope.
+    if (qOp.getBlockSize() != 0)
+      return rewriter.notifyMatchFailure(qOp, "blocked quantization");
+
+    // The input and quantization parameters must all be constants.
+    ElementsAttr xElems = getDenseOrDisposableConstLikeElements(qOp.getX());
+    if (!xElems)
+      return rewriter.notifyMatchFailure(qOp, "x is not a constant");
+    if (!isa<FloatType>(xElems.getElementType()))
+      return rewriter.notifyMatchFailure(qOp, "x is not floating point");
+
+    ElementsAttr scaleElems =
+        getDenseOrDisposableConstLikeElements(qOp.getYScale());
+    if (!scaleElems)
+      return rewriter.notifyMatchFailure(qOp, "y_scale is not a constant");
+
+    Value zpValue = qOp.getYZeroPoint();
+    bool hasZeroPoint = !isNoneValue(zpValue);
+    ElementsAttr zpElems;
+    if (hasZeroPoint) {
+      zpElems = getDenseOrDisposableConstLikeElements(zpValue);
+      if (!zpElems)
+        return rewriter.notifyMatchFailure(
+            qOp, "y_zero_point is not a constant");
+    }
+
+    auto intType = dyn_cast<IntegerType>(getElementTypeOrSelf(qOp.getY()));
+    if (!intType)
+      return rewriter.notifyMatchFailure(qOp, "non-integer output type");
+
+    auto xType = cast<ShapedType>(qOp.getX().getType());
+    if (!xType.hasStaticShape())
+      return rewriter.notifyMatchFailure(qOp, "x has dynamic shape");
+    int64_t xRank = xType.getRank();
+    ArrayRef<int64_t> xShape = xType.getShape();
+
+    int64_t scaleElemCount =
+        cast<ShapedType>(scaleElems.getType()).getNumElements();
+    int64_t zpElemCount =
+        hasZeroPoint ? cast<ShapedType>(zpElems.getType()).getNumElements() : 1;
+    bool isPerAxis = scaleElemCount > 1 || zpElemCount > 1;
+
+    int64_t axis = qOp.getAxis();
+    if (isPerAxis) {
+      if (axis < 0)
+        axis += xRank;
+      if (axis < 0 || axis >= xRank)
+        return rewriter.notifyMatchFailure(qOp, "axis out of range");
+
+      auto isFoldablePerAxisParam = [&](ElementsAttr elems,
+                                        int64_t count) -> bool {
+        if (count == 1)
+          return true; // Scalar broadcasts trivially.
+        auto type = cast<ShapedType>(elems.getType());
+        return type.getRank() == 1 && count == xShape[axis];
+      };
+      if (!isFoldablePerAxisParam(scaleElems, scaleElemCount) ||
+          (hasZeroPoint && !isFoldablePerAxisParam(zpElems, zpElemCount)))
+        return rewriter.notifyMatchFailure(
+            qOp, "unsupported per-axis scale/zp");
+    }
+
+    FloatType f64Type = rewriter.getF64Type();
+    OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
+
+    // Reshape a per-axis scale/zp (1-D of length xShape[axis]) so it
+    // broadcasts against x's shape; per-tensor (scalar) needs no reshape.
+    auto broadcastToX = [&](ElementsAttr elems) -> ElementsAttr {
+      auto type = cast<ShapedType>(elems.getType());
+      int64_t numElems = type.getNumElements();
+      if (numElems == 1)
+        return elems; // Per-tensor: scalar broadcasts trivially.
+      SmallVector<int64_t> bcastShape(xRank, 1);
+      bcastShape[axis] = numElems;
+      return elementsBuilder.reshape(elems, bcastShape);
+    };
+
+    ShapedType combinedType = cast<ShapedType>(
+        elementsBuilder.castToFPElementType(xElems, f64Type).getType());
+
+    // scaled = x / scale (both in f64).
+    ElementsAttr xF64 = elementsBuilder.castToFPElementType(xElems, f64Type);
+    ElementsAttr scaleF64 =
+        broadcastToX(elementsBuilder.castToFPElementType(scaleElems, f64Type));
+    ElementsAttr scaled = elementsBuilder.combine(xF64, scaleF64, combinedType,
+        elementwiseBinaryOpCombiner<ONNXDivOp>(f64Type));
+
+    // shifted = (x / scale) + zero_point
+    ElementsAttr shifted = scaled;
+    if (hasZeroPoint) {
+      ElementsAttr zpF64 =
+          broadcastToX(elementsBuilder.castToFPElementType(zpElems, f64Type));
+      shifted = elementsBuilder.combine(
+          scaled, zpF64, combinedType, addCombiner(f64Type));
+    }
+
+    ElementsAttr rounded =
+        elementsBuilder.transform(shifted, f64Type, [](WideNum n) {
+          int savedMode = fegetround();
+          fesetround(FE_TONEAREST);
+          double r = std::nearbyint(n.narrow<BType::DOUBLE>());
+          fesetround(savedMode);
+          return WideNum::widen<BType::DOUBLE>(r);
+        });
+
+    ElementsAttr quantized =
+        elementsBuilder.castToIntElementType(rounded, intType, /*round=*/false);
+
+    rewriter.replaceOp(
+        qOp, createReplacingConstantOp(rewriter, qOp.getY(), quantized));
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Code to manage the pass.
 //===----------------------------------------------------------------------===//
@@ -1701,7 +1823,13 @@ struct ConstPropONNXToONNXPass
 
   Option<bool> enableQDQ{*this, "enable-qdq", llvm::cl::init(true)};
 
-  ConstPropONNXToONNXPass(bool enableQDQ) { this->enableQDQ = enableQDQ; }
+  Option<bool> enableQuantConstFold{
+      *this, "enable-quant-const-fold", llvm::cl::init(false)};
+
+  ConstPropONNXToONNXPass(bool enableQDQ, bool enableQuantConstFold) {
+    this->enableQDQ = enableQDQ;
+    this->enableQuantConstFold = enableQuantConstFold;
+  }
 
   ConstPropONNXToONNXPass(const ConstPropONNXToONNXPass &other) {
     copyOptionValuesFrom(&other);
@@ -1721,7 +1849,7 @@ void ConstPropONNXToONNXPass::runOnOperation() {
   MLIRContext *context = &getContext();
 
   RewritePatternSet patterns(context);
-  getConstPropONNXToONNXPatterns(patterns, enableQDQ);
+  getConstPropONNXToONNXPatterns(patterns, enableQDQ, enableQuantConstFold);
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
           GreedyRewriteConfig{.listener = &rnUpdater})))
@@ -1731,7 +1859,7 @@ void ConstPropONNXToONNXPass::runOnOperation() {
 } // end anonymous namespace.
 
 void onnx_mlir::getConstPropONNXToONNXPatterns(
-    RewritePatternSet &patterns, bool enableQDQ) {
+    RewritePatternSet &patterns, bool enableQDQ, bool enableQuantConstFold) {
   if (isConstantPropagationDisabled())
     return;
   populateWithGenerated(patterns);
@@ -1745,6 +1873,8 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(
         RemoveQDQForConst<ONNXTransposeOp>, RemoveQDQForConst<ONNXReshapeOp>,
         RemoveQDQForConst<ONNXSqueezeOp>, RemoveQDQForConst<ONNXUnsqueezeOp>,
         RemoveQDQForConst<ONNXGatherOp>>(patterns.getContext());
+  if (enableQuantConstFold)
+    patterns.add<ConstFoldQuantizeLinearOnConst>(patterns.getContext());
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,
@@ -1762,6 +1892,7 @@ void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,
  * Create a ConstPropONNX pass.
  */
 std::unique_ptr<mlir::Pass> onnx_mlir::createConstPropONNXToONNXPass(
-    bool enableQDQ) {
-  return std::make_unique<ConstPropONNXToONNXPass>(enableQDQ);
+    bool enableQDQ, bool enableQuantConstFold) {
+  return std::make_unique<ConstPropONNXToONNXPass>(
+      enableQDQ, enableQuantConstFold);
 }
