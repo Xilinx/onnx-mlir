@@ -1691,6 +1691,81 @@ public:
   }
 };
 
+template <typename UserOp>
+class DequantOfConst : public OpRewritePattern<ONNXDequantizeLinearOp> {
+public:
+  using OpRewritePattern<ONNXDequantizeLinearOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXDequantizeLinearOp dqOp, PatternRewriter &rewriter) const override {
+
+    auto input = getDenseOrDisposableConstLikeElements(dqOp.getX());
+    if (!input)
+      return rewriter.notifyMatchFailure(dqOp, "Not a constant DQ");
+    auto scale = getConstValueElements(dqOp.getXScale());
+    if (!scale || !scale.isSplat())
+      return rewriter.notifyMatchFailure(dqOp, "Not a scalar constant scale");
+    auto zeroPoint = getConstValueElements(dqOp.getXZeroPoint());
+    if (!zeroPoint || !zeroPoint.isSplat())
+      return rewriter.notifyMatchFailure(
+          dqOp, "Not a scalar constant zeropoint");
+
+    if (Operation *userOp = *dqOp->user_begin()) {
+      if (!dqOp->hasOneUse() || !isa<UserOp>(userOp))
+        return rewriter.notifyMatchFailure(dqOp, "Unexpected user(s) of DQ");
+      if (auto qOp = dyn_cast<ONNXQuantizeLinearOp>(*userOp->user_begin());
+          qOp && userOp->hasOneUse() && dqOp.getXScale() == qOp.getYScale() &&
+          dqOp.getXZeroPoint() == qOp.getYZeroPoint() &&
+          getElementTypeOrSelf(dqOp.getX()) == getElementTypeOrSelf(qOp.getY()))
+        return rewriter.notifyMatchFailure(dqOp, "Equal Q-DQ params");
+    }
+
+    auto scaleVal = scale.getSplatValue<APFloat>().convertToFloat();
+    auto zpVal = APSInt(zeroPoint.getSplatValue<APInt>(),
+        zeroPoint.getElementType().isUnsignedInteger())
+                     .getExtValue();
+
+    auto dequantized = OnnxElementsAttrBuilder(rewriter.getContext())
+                           .dequantize(input, scaleVal, zpVal);
+    auto constVal =
+        createReplacingConstantOp(rewriter, dqOp.getY(), dequantized);
+    rewriter.replaceOp(dqOp, constVal);
+
+    return success();
+  }
+};
+
+class QuantOfConst : public OpRewritePattern<ONNXQuantizeLinearOp> {
+public:
+  using OpRewritePattern<ONNXQuantizeLinearOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXQuantizeLinearOp qOp, PatternRewriter &rewriter) const override {
+
+    auto input = getDenseOrDisposableConstLikeElements(qOp.getX());
+    if (!input)
+      return rewriter.notifyMatchFailure(qOp, "Not a constant Q");
+    auto scale = getConstValueElements(qOp.getYScale());
+    if (!scale || !scale.isSplat())
+      return rewriter.notifyMatchFailure(qOp, "Not a scalar constant scale");
+    auto zeroPoint = getConstValueElements(qOp.getYZeroPoint());
+    if (!zeroPoint || !zeroPoint.isSplat())
+      return rewriter.notifyMatchFailure(
+          qOp, "Not a scalar constant zeropoint");
+
+    auto scaleVal = scale.getSplatValue<APFloat>();
+    auto zpVal = APSInt(zeroPoint.getSplatValue<APInt>(),
+        zeroPoint.getElementType().isUnsignedInteger());
+
+    auto quantized = OnnxElementsAttrBuilder(rewriter.getContext())
+                         .quantize(input, scaleVal, zpVal);
+    auto constVal = createReplacingConstantOp(rewriter, qOp.getY(), quantized);
+    rewriter.replaceOp(qOp, constVal);
+
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Code to manage the pass.
 //===----------------------------------------------------------------------===//
@@ -1740,11 +1815,16 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(
   patterns.insert<IfOfConst>(patterns.getContext());
   patterns.insert<LoopUnroll>(patterns.getContext());
   patterns.insert<ConstPropConcatFromSequence>(patterns.getContext());
-  if (enableQDQ)
+  if (enableQDQ) {
     patterns.add<RemoveQDQForConst<ONNXSliceOp>,
         RemoveQDQForConst<ONNXTransposeOp>, RemoveQDQForConst<ONNXReshapeOp>,
         RemoveQDQForConst<ONNXSqueezeOp>, RemoveQDQForConst<ONNXUnsqueezeOp>,
         RemoveQDQForConst<ONNXGatherOp>>(patterns.getContext());
+    patterns.add<DequantOfConst<ONNXSliceOp>, DequantOfConst<ONNXTransposeOp>,
+        DequantOfConst<ONNXReshapeOp>, DequantOfConst<ONNXSqueezeOp>,
+        DequantOfConst<ONNXUnsqueezeOp>, DequantOfConst<ONNXGatherOp>,
+        QuantOfConst>(patterns.getContext());
+  }
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,

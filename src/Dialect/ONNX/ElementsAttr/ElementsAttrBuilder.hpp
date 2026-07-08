@@ -17,6 +17,8 @@
 #include "src/Dialect/ONNX/ElementsAttr/DisposablePool.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/Strides.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/WideNum.hpp"
+#include "llvm/ADT/APSInt.h"
+#include "llvm/ADT/FloatingPointMode.h"
 
 #include <functional>
 #include <memory>
@@ -226,6 +228,14 @@ public:
   // but for scalar input produces output shape [0, N] instead of [1, N],
   // which is different from Numpy's behavior.
   mlir::ElementsAttr nonZero(mlir::ElementsAttr elms);
+
+  // Returns float tensor from quantized tensor and quantization parameters
+  mlir::ElementsAttr dequantize(
+      mlir::ElementsAttr src, float scale, int64_t zeropoint);
+
+  // Returns quantized tensor from float tensor and quantization parameters
+  mlir::DenseIntElementsAttr quantize(
+      mlir::ElementsAttr src, mlir::APFloat scale, mlir::APSInt zeropoint);
 
 private:
   struct ElementsProperties;
