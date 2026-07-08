@@ -1823,8 +1823,8 @@ struct ConstPropONNXToONNXPass
 
   Option<bool> enableQDQ{*this, "enable-qdq", llvm::cl::init(true)};
 
-  Option<bool> enableQuantConstFold{*this, "enable-quant-const-fold",
-      llvm::cl::init(false)};
+  Option<bool> enableQuantConstFold{
+      *this, "enable-quant-const-fold", llvm::cl::init(false)};
 
   ConstPropONNXToONNXPass(bool enableQDQ, bool enableQuantConstFold) {
     this->enableQDQ = enableQDQ;
