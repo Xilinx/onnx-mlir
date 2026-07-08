@@ -4,7 +4,6 @@ add_onnx_mlir_executable(binary-decoder
   BinaryDecoder.cpp
 
   LINK_LIBS PRIVATE
-  LLVMOption
-  onnx
   LLVMSupport
+  onnx
   )
