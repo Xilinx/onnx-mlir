@@ -11,12 +11,19 @@
 
 include "mlir/Pass/PassBase.td"
 
-def ONNXDecomposePatternOptions {
+// Options common to both decompose-onnx and recompose-onnx: same C++ member,
+// same meaning. Declared once and pulled into both passes (and the hybrid pass)
+// so the generated options struct never gets a duplicate member.
+def SharedDecomposeRecomposePatternOptions {
   list<Option> options = [
     Option<"target", "target", "std::string", /*default=*/"\"\"",
-           "Target dialect to decompose into (e.g. stablehlo); "
-           "empty string means the default ONNX-to-ONNX decomposition.">,
+           "Target dialect to decompose/recompose into (e.g. stablehlo); "
+           "empty string means the default ONNX-to-ONNX behavior.">
+  ];
+}
 
+def ONNXDecomposePatternOptions {
+  list<Option> options = [
     Option<"enableConvTransposeDecompose", "enable-convtranspose",
            "bool", /*default=*/"false",
            "Enable decomposition of ConvTranspose.">,
@@ -111,6 +118,58 @@ def ONNXDecomposePatternOptions {
   ];
 }
 
+def DecomposeONNXToONNXPass : Pass<"decompose-onnx", "::mlir::func::FuncOp"> {
+  let summary = "Decompose ONNX operations into composition of other ONNX "
+                "operations.";
+  let description = [{
+    This pass rewrites ONNX operations into equivalent compositions of simpler
+    ONNX operations.  It is applied before shape inference so there is no
+    expectation of ranked tensor types at this point.
+
+    Individual decompositions can be enabled or disabled via the options below.
+    The pass-level defaults match the programmatic defaults used by
+    createDecomposeONNXToONNXPass().
+  }];
+
+  let options = SharedDecomposeRecomposePatternOptions.options
+              # ONNXDecomposePatternOptions.options;
+}
+
+// Recompose-specific options. The shared `target` option lives in
+// SharedDecomposeRecomposePatternOptions.
+def ONNXRecomposePatternOptions {
+  list<Option> options = [
+    Option<"enableRotaryEmbeddingRecompose", "enable-rotary-embedding-recompose",
+           "bool", /*default=*/"false",
+           "Recompose HuggingFace-style RoPE elementwise subgraphs "
+           "(rotate_half + 2 muls + 1 add) into onnx.RotaryEmbedding">,
+
+    Option<"enableReduceL2Recompositions",
+           "enable-reducel2-recompositions",
+           "bool", /*default=*/"false",
+           "Recompose ReduceL2 from Sqrt(ReduceSumSquare(x)) and "
+           "ReduceSumSquare from ReduceSum(Mul(x, x))">
+  ];
+}
+
+def RecomposeONNXToONNXPass : Pass<"recompose-onnx", "::mlir::func::FuncOp"> {
+  let summary = "Recompose ONNX operations into composition of other ONNX "
+                "operations.";
+  let description = [{
+    This pass rewrites ONNX operations into equivalent compositions of higher level
+    ONNX operations.  It is applied before shape inference so there is no
+    expectation of ranked tensor types at this point.
+
+    Individual decompositions can be enabled or disabled via the options above.
+    The pass-level defaults match the programmatic defaults used by
+    createRecomposeONNXToONNXPass().
+  }];
+
+  let options = SharedDecomposeRecomposePatternOptions.options
+              # ONNXRecomposePatternOptions.options;
+}
+
+
 def ONNXHybridTransformOptions {
   list<Option> options = [
     Option<"shapeInference", "shape-inference",
@@ -149,28 +208,7 @@ def ONNXHybridTransformOptions {
     Option<"enableGAPToReduceMean", "enable-globalaveragepool-to-reducemean",
            "bool", /*default=*/"true",
            "Enable canonicalize from GlobalAveragePool to ReduceMean.">,
-    Option<"enableRotaryEmbeddingRecompose",
-           "enable-rotary-embedding-recompose",
-           "bool", /*default=*/"false",
-           "Recompose LlamaRotaryEmbedding style RoPE into "
-           "onnx.RotaryEmbedding.">
   ];
-}
-
-def DecomposeONNXToONNXPass : Pass<"decompose-onnx", "::mlir::func::FuncOp"> {
-  let summary = "Decompose ONNX operations into composition of other ONNX "
-                "operations.";
-  let description = [{
-    This pass rewrites ONNX operations into equivalent compositions of simpler
-    ONNX operations.  It is applied before shape inference so there is no
-    expectation of ranked tensor types at this point.
-
-    Individual decompositions can be enabled or disabled via the options below.
-    The pass-level defaults match the programmatic defaults used by
-    createDecomposeONNXToONNXPass().
-  }];
-
-  let options = ONNXDecomposePatternOptions.options;
 }
 
 def ONNXHybridTransformPass
@@ -183,7 +221,7 @@ def ONNXHybridTransformPass
   }];
 
   let options =
-      ONNXHybridTransformOptions.options # ONNXDecomposePatternOptions.options;
+      ONNXHybridTransformOptions.options # SharedDecomposeRecomposePatternOptions.options # ONNXDecomposePatternOptions.options # ONNXRecomposePatternOptions.options;
 
   let genOptionsParser = 1;
 }

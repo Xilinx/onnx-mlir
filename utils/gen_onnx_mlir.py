@@ -550,7 +550,16 @@ OpsWithCanonicalizer = [
     "Mul",
     "Or",
     "Pow",
+    "ReduceL1",
+    "ReduceL2",
+    "ReduceMax",
     "ReduceMean",
+    "ReduceMin",
+    "ReduceProd",
+    "ReduceLogSum",
+    "ReduceLogSumExp",
+    "ReduceSum",
+    "ReduceSumSquare",
     "ReduceSumV11",
     "Reshape",
     "Resize",
@@ -839,6 +848,16 @@ custom_definition_misc = dict(
    auto resultType = mlir::UnrankedTensorType::get(to.getValue());
    build($_builder, $_state, resultType, input, saturate, to);
   }] >
+  ];""",
+        ),
+        (
+            "Concat",
+            """  let builders = [
+  OpBuilder<(ins "ValueRange":$inputs, "IntegerAttr":$axis), [{
+   auto elementType = mlir::cast<ShapedType>(inputs[0].getType()).getElementType();
+   auto resultType = UnrankedTensorType::get(elementType);
+   build($_builder, $_state, resultType, inputs, axis);
+  }]>
   ];""",
         ),
     ]
