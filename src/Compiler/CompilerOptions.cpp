@@ -53,6 +53,7 @@ std::string onnxTransformOptions;                      // onnx-mlir only
 bool enableQuarkQuantizerLegalization;                 // common for both
 bool disableBatchNormDecompose;                        // common for both
 bool enableReshapeCanonicalization;                    // common for both
+bool enableReduceKeepdimsCanonicalization;             // common for both
 bool enableXFEONNXOpsetVerifier;                       // common for both
 bool enableSafeCodeGen;                                // common for both
 bool disableMemRefPrefetch;                            // common for both
@@ -348,6 +349,14 @@ static llvm::cl::opt<bool, true> enableReshapeCanonicalizationOpt(
         "(default=true, i.e. the rewrite is enabled by default)."),
     llvm::cl::location(enableReshapeCanonicalization), llvm::cl::init(true),
     llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableReduceKeepdimsCanonicalizationOpt(
+    "enable-reduce-keepdims-canonicalization",
+    llvm::cl::desc(
+        "Enable canonicalization of reduce ops with keepdims=0 into "
+        "keepdims=1 + Reshape (default=false, i.e. the rewrite is disabled)."),
+    llvm::cl::location(enableReduceKeepdimsCanonicalization),
+    llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true> enableXFEONNXOpsetVerifierOpt(
     "enable-xfe-onnx-opset-verifier",

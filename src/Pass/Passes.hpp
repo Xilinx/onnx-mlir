@@ -64,6 +64,11 @@ void configureUnsafeMathCanonicalization(bool enableUnsafeMathOptimizations);
 // enabled.
 void configureReshapeCanonicalization(bool enableReshapeCanonicalization);
 
+// Configure whether reduce keepdims=0 -> keepdims=1 + Reshape canonicalization
+// is enabled.
+void configureReduceKeepdimsCanonicalization(
+    bool enableReduceKeepdimsCanonicalization);
+
 // Configure QDQ canonicalizations for data-movement/view ONNX ops.
 void configureQDQDataMovementCanonicalization(
     bool enableQDQDataMovementCanonicalization);
