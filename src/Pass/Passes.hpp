@@ -72,7 +72,7 @@ void configureConv1x1IntoConvCanonicalization(
     bool enableConv1x1IntoConvCanonicalization);
 
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(
-    bool enableQDQ = false);
+    bool enableQDQ = false, bool enableQuantConstFold = false);
 
 std::unique_ptr<mlir::Pass> createQDQCanonicalizePass(bool removeBinary = false,
     bool removeQDQAroundOps = false, int64_t maxRoundTripDiff = 0);
