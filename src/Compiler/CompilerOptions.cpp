@@ -56,6 +56,7 @@ bool enableReshapeCanonicalization;                    // common for both
 bool enablePositiveAxisCanonicalization;               // common for both
 bool enableExpandCanonicalization;                     // common for both
 bool enableReduceKeepdimsCanonicalization;             // common for both
+bool enableExpandCanonicalization;                     // common for both
 bool enableXFEONNXOpsetVerifier;                       // common for both
 bool enableSafeCodeGen;                                // common for both
 bool disableMemRefPrefetch;                            // common for both
@@ -376,6 +377,15 @@ static llvm::cl::opt<bool, true> enableReduceKeepdimsCanonicalizationOpt(
         "keepdims=1 + Reshape (default=false, i.e. the rewrite is disabled)."),
     llvm::cl::location(enableReduceKeepdimsCanonicalization),
     llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableExpandCanonicalizationOpt(
+    "enable-expand-canonicalization",
+    llvm::cl::desc(
+        "Enable canonicalization of static Expand to Tile (same rank) or "
+        "Reshape+Tile (rank increase) (default=false, i.e. the rewrite is "
+        "disabled by default)."),
+    llvm::cl::location(enableExpandCanonicalization), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true> enableXFEONNXOpsetVerifierOpt(
     "enable-xfe-onnx-opset-verifier",
