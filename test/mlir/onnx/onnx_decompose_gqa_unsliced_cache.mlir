@@ -1,3 +1,4 @@
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
 // RUN: onnx-mlir-opt --decompose-onnx="enable-groupqueryattention-decompose=true" %s -split-input-file | FileCheck %s
 
 // The cos/sin caches are passed through to onnx.RotaryEmbedding without
@@ -42,10 +43,12 @@ func.func @gqa_unsliced_cache_packed(
 // CHECK-SAME: -> tensor<1x1xi64>
 // CHECK: %[[POS_IDS:[[:alnum:]_]+]] = "onnx.Add"(%[[START]], %[[Q_RANGE_2D]])
 // CHECK-SAME: -> tensor<1x1xi64>
-// CHECK: %[[ROPE_Q:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[SPLIT]]#0, %[[COS]], %[[SIN]], %[[POS_IDS]])
-// CHECK-SAME: tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x1xi64>
-// CHECK: %[[ROPE_K:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[SPLIT]]#1, %[[COS]], %[[SIN]], %[[POS_IDS]])
-// CHECK-SAME: tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x1xi64>
+// CHECK: %[[COSG:[[:alnum:]_]+]] = "onnx.Gather"(%[[COS]], %[[POS_IDS]]) {axis = 0 : si64} : (tensor<4096x48xf32>, tensor<1x1xi64>) -> tensor<1x1x48xf32>
+// CHECK: %[[SING:[[:alnum:]_]+]] = "onnx.Gather"(%[[SIN]], %[[POS_IDS]]) {axis = 0 : si64} : (tensor<4096x48xf32>, tensor<1x1xi64>) -> tensor<1x1x48xf32>
+// CHECK: %[[ROPE_Q:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[SPLIT]]#0, %[[COSG]], %[[SING]], %{{[[:alnum:]_]+}})
+// CHECK-SAME: tensor<1x1x48xf32>, tensor<1x1x48xf32>, none
+// CHECK: %[[ROPE_K:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[SPLIT]]#1, %[[COSG]], %[[SING]], %{{[[:alnum:]_]+}})
+// CHECK-SAME: tensor<1x1x48xf32>, tensor<1x1x48xf32>, none
 // CHECK: %[[MASK:[[:alnum:]_]+]] = "onnx.Where"(
 // CHECK-SAME: -> tensor<1x1x1x257xf32>
 // CHECK: "onnx.Attention"(%[[ROPE_Q]], %[[ROPE_K]], %[[SPLIT]]#2, %[[MASK]], %[[PAST_K]], %[[PAST_V]])
@@ -97,10 +100,12 @@ func.func @gqa_unsliced_cache_prefill_batched(
 // CHECK-SAME: -> tensor<1x4xi64>
 // CHECK: %[[POS_IDS:[[:alnum:]_]+]] = "onnx.Add"(%[[START]], %[[Q_RANGE_2D]])
 // CHECK-SAME: -> tensor<2x4xi64>
-// CHECK: %[[ROPE_Q:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[Q]], %[[COS]], %[[SIN]], %[[POS_IDS]])
-// CHECK-SAME: tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<2x4xi64>
-// CHECK: %[[ROPE_K:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[K]], %[[COS]], %[[SIN]], %[[POS_IDS]])
-// CHECK-SAME: tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<2x4xi64>
+// CHECK: %[[COSG:[[:alnum:]_]+]] = "onnx.Gather"(%[[COS]], %[[POS_IDS]]) {axis = 0 : si64} : (tensor<4096x48xf32>, tensor<2x4xi64>) -> tensor<2x4x48xf32>
+// CHECK: %[[SING:[[:alnum:]_]+]] = "onnx.Gather"(%[[SIN]], %[[POS_IDS]]) {axis = 0 : si64} : (tensor<4096x48xf32>, tensor<2x4xi64>) -> tensor<2x4x48xf32>
+// CHECK: %[[ROPE_Q:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[Q]], %[[COSG]], %[[SING]], %{{[[:alnum:]_]+}})
+// CHECK-SAME: tensor<2x4x48xf32>, tensor<2x4x48xf32>, none
+// CHECK: %[[ROPE_K:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[K]], %[[COSG]], %[[SING]], %{{[[:alnum:]_]+}})
+// CHECK-SAME: tensor<2x4x48xf32>, tensor<2x4x48xf32>, none
 // CHECK: %[[MASK:[[:alnum:]_]+]] = "onnx.Where"(
 // CHECK-SAME: -> tensor<2x1x4x12xf32>
 // CHECK: "onnx.Attention"(%[[ROPE_Q]], %[[ROPE_K]], %[[V]], %[[MASK]], %[[PAST_K]], %[[PAST_V]])
@@ -143,10 +148,12 @@ func.func @gqa_unsliced_cache_with_user_position_ids(
 // CHECK-SAME: %[[POS_IDS:[[:alnum:]_]+]]: tensor<1x4xi64>
 // CHECK-NOT: "onnx.Slice"
 // CHECK-NOT: "onnx.Max"
-// CHECK: %[[ROPE_Q:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[Q]], %[[COS]], %[[SIN]], %[[POS_IDS]])
-// CHECK-SAME: tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x4xi64>
-// CHECK: %[[ROPE_K:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[K]], %[[COS]], %[[SIN]], %[[POS_IDS]])
-// CHECK-SAME: tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x4xi64>
+// CHECK: %[[COSG:[[:alnum:]_]+]] = "onnx.Gather"(%[[COS]], %[[POS_IDS]]) {axis = 0 : si64} : (tensor<4096x48xf32>, tensor<1x4xi64>) -> tensor<1x4x48xf32>
+// CHECK: %[[SING:[[:alnum:]_]+]] = "onnx.Gather"(%[[SIN]], %[[POS_IDS]]) {axis = 0 : si64} : (tensor<4096x48xf32>, tensor<1x4xi64>) -> tensor<1x4x48xf32>
+// CHECK: %[[ROPE_Q:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[Q]], %[[COSG]], %[[SING]], %{{[[:alnum:]_]+}})
+// CHECK-SAME: tensor<1x4x48xf32>, tensor<1x4x48xf32>, none
+// CHECK: %[[ROPE_K:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[K]], %[[COSG]], %[[SING]], %{{[[:alnum:]_]+}})
+// CHECK-SAME: tensor<1x4x48xf32>, tensor<1x4x48xf32>, none
 // CHECK: %[[MASK:[[:alnum:]_]+]] = "onnx.Where"(
 // CHECK-SAME: -> tensor<1x1x4x12xf32>
 // CHECK: "onnx.Attention"(%[[ROPE_Q]], %[[ROPE_K]], %[[V]], %[[MASK]], %[[PAST_K]], %[[PAST_V]])
