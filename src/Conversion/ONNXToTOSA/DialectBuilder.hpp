@@ -4,7 +4,7 @@
 
 //====------ DialectBuilder.hpp - TOSA dialect builder --------------------===//
 //
-// Copyright (c) 2022-2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -134,6 +134,16 @@ protected:
 
 private:
   mlir::PatternRewriter *patternRewriter;
+};
+
+// Recursive class specialized for TosaBuilder refereed to as tosa.
+template <class... Ts>
+struct MultiDialectBuilder<TosaBuilder, Ts...> : MultiDialectBuilder<Ts...> {
+  MultiDialectBuilder(mlir::PatternRewriter &b, mlir::Location loc)
+      : MultiDialectBuilder<Ts...>(b, loc), tosa(b, loc) {}
+  MultiDialectBuilder(const DialectBuilder &db)
+      : MultiDialectBuilder<Ts...>(db), tosa(db) {}
+  TosaBuilder tosa;
 };
 
 // =============================================================================

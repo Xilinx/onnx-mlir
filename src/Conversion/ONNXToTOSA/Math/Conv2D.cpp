@@ -4,7 +4,7 @@
 
 //===---------------- Conv2D.cpp - Conv2D Op ------------------------------===//
 //
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -16,6 +16,7 @@
 #include "src/Conversion/ONNXToTOSA/DialectBuilder.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
+#include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
 #include <src/Dialect/Mlir/IndexExpr.hpp>
 
@@ -130,7 +131,8 @@ public:
       }
     }
 
-    TosaBuilder tosaBuilder(rewriter, loc);
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder, IndexExprBuilderForTosa>
+        create(rewriter, loc);
 
     auto input = adaptor.getX();
     auto weights = adaptor.getW();
@@ -146,8 +148,7 @@ public:
     }
 
     // Get shapehelper for autopad attributes
-    IndexExprBuilderForTosa createTosaIE(rewriter, convOp->getLoc());
-    ONNXConvOpShapeHelper shapeHelper(op, operands, &createTosaIE);
+    ONNXConvOpShapeHelper shapeHelper(op, operands, &create.tosaIE);
     if (shapeHelper.computeShape().failed()) {
       return rewriter.notifyMatchFailure(convOp, "Could not infer shapes");
     }
@@ -162,13 +163,13 @@ public:
     }
 
     // Convert input [N,IC,IH,IW] -> [N,IH,IW,IC]
-    Value newInput = tosaBuilder.transpose(input, {0, 2, 3, 1});
+    Value newInput = create.onnx.transposeInt64(input, {0, 2, 3, 1});
 
     // Convert weights [OC,IC,KH,KW] -> [OC,KH,KW,IC]
-    Value newWeight = tosaBuilder.transpose(weights, {0, 2, 3, 1});
+    Value newWeight = create.onnx.transposeInt64(weights, {0, 2, 3, 1});
 
     if (mlir::isa<NoneType>(bias.getType())) {
-      bias = tosaBuilder.getSingleValueConst(
+      bias = create.tosa.getSingleValueConst(
           0.0F, inputType.getElementType(), {weightShape[0]});
     }
 
@@ -184,7 +185,7 @@ public:
     // reorder padding values
     llvm::SmallVector<int64_t, 4> reorderedPads = {
         pads[0], pads[2], pads[1], pads[3]};
-    FailureOr<Value> resizedInput = tosaBuilder.resizeWindowBasedOps(newInput,
+    FailureOr<Value> resizedInput = create.tosa.resizeWindowBasedOps(newInput,
         cast<RankedTensorType>(newInput.getType()).getShape(),
         {weightShape[2], weightShape[3]}, reorderedPads, shapeHelper.strides,
         shapeHelper.dilations);
@@ -219,10 +220,11 @@ public:
         // this grouped convolution is equal to a Depthwise convolution.
 
         // Convert weights [OC,IC,KH,KW] -> [KH, KW, OC, M(ChannelMultiplier)]
-        Value transposedWeight = tosaBuilder.transpose(weights, {2, 3, 0, 1});
+        Value transposedWeight =
+            create.onnx.transposeInt64(weights, {2, 3, 0, 1});
         // A reshape op is needed to adhere to the TOSA standard
         // https://www.mlplatform.org/tosa/tosa_spec.html#_depthwise_conv2d
-        Value newWeight = tosaBuilder.reshape(
+        Value newWeight = create.tosa.reshape(
             transposedWeight, {weightShape[2], weightShape[3], inputChannels,
                                   outputChannels / inputChannels});
 
@@ -238,10 +240,10 @@ public:
         // can be costly, so only allow it when the number of groups is less
         // than configurable threshold.
 
-        conv2D = createConvInGroups(rewriter, convOp, tosaBuilder, resultType,
+        conv2D = createConvInGroups(rewriter, convOp, create.tosa, resultType,
             weightShape, newInput, newWeight, bias, group, newPads, strides,
             dilations, accType, activation);
-        Value newOutput = tosaBuilder.transpose(conv2D, {0, 3, 1, 2});
+        Value newOutput = create.onnx.transposeInt64(conv2D, {0, 3, 1, 2});
         auto *opToReplace = activation ? activation : convOp;
         rewriter.replaceOp(opToReplace, {newOutput});
         return success();
@@ -252,7 +254,7 @@ public:
     }
 
     // Convert output [N,OH,OW,OC] -> [N,OC,OH,OW]
-    Value newOutput = tosaBuilder.transpose(conv2D, {0, 3, 1, 2});
+    Value newOutput = create.onnx.transposeInt64(conv2D, {0, 3, 1, 2});
     rewriter.replaceOp(convOp, {newOutput});
     return success();
   }
