@@ -68,6 +68,7 @@ void configurePasses() {
       onnxConstPropExpansionBound, onnxConstPropDisablePatterns,
       disableConstantProp);
   configureUnsafeMathCanonicalization(enableUnsafeMathOptimizations);
+  configureExpandCanonicalization(enableExpandCanonicalization);
   configureQDQDataMovementCanonicalization(
       enableQDQDataMovementCanonicalization);
 #ifdef ONNX_MLIR_ENABLE_KRNL
@@ -274,6 +275,7 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.instrumentStage = instrumentStage;
     opts.enableXMCPasses = enableXMCPasses;
     opts.enableReshapeCanonicalization = enableReshapeCanonicalization;
+    opts.enableExpandCanonicalization = enableExpandCanonicalization;
     opts.enableXFEONNXOpsetVerifier = enableXFEONNXOpsetVerifier;
     if (enableXMCPasses) {
       opts.hybrid.enableInstanceNormDecompose = false;

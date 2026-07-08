@@ -2490,6 +2490,7 @@ def ONNXExpOp:ONNX_Op<"Exp",
 
 def ONNXExpandOp:ONNX_Op<"Expand",
   [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Expand operation";
   let description = [{
   Broadcast the input tensor following the given shape and the broadcast rule.

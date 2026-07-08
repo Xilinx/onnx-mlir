@@ -62,6 +62,9 @@ static bool enableReshapeCanonicalization = true;
 // Populated by configureQDQDataMovementCanonicalization().
 static bool enableQDQDataMovementCanonicalization = false;
 
+// Populated by configureExpandCanonicalization().
+static bool enableExpandCanonicalization = false;
+
 using namespace mlir;
 using namespace onnx_mlir;
 
@@ -1696,6 +1699,87 @@ public:
     rewriter.replaceOp(op, {res});
     return success();
   };
+};
+
+static bool getStaticExpandShapes(ONNXExpandOp expandOp,
+    ArrayRef<int64_t> &inputShape, ArrayRef<int64_t> &resultShape) {
+  Type inputType = expandOp.getInput().getType();
+  Type resultType = expandOp.getOutput().getType();
+  if (!hasStaticShape(inputType) || !hasStaticShape(resultType))
+    return false;
+  inputShape = getShape(inputType);
+  resultShape = getShape(resultType);
+  return true;
+}
+
+// Rewrite a same-rank static `Expand` into `Tile`. For each dimension the
+// repeat is `1` when the sizes already match and `resultDim` when the input
+// dim broadcasts from `1`; any other combination cannot be a pure tile.
+class ExpandToTilePattern : public OpRewritePattern<ONNXExpandOp> {
+public:
+  using OpRewritePattern<ONNXExpandOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXExpandOp expandOp, PatternRewriter &rewriter) const override {
+    ArrayRef<int64_t> inputShape;
+    ArrayRef<int64_t> resultShape;
+    if (!getStaticExpandShapes(expandOp, inputShape, resultShape))
+      return failure();
+    // Rank increases are normalized to equal rank by the reshape pattern first.
+    if (inputShape.size() != resultShape.size() || inputShape.empty())
+      return failure();
+
+    SmallVector<int64_t> repeats;
+    for (auto [inputDim, resultDim] : llvm::zip(inputShape, resultShape)) {
+      if (inputDim == resultDim)
+        repeats.push_back(1);
+      else if (inputDim == 1)
+        repeats.push_back(resultDim);
+      else
+        return failure();
+    }
+
+    MultiDialectBuilder<OnnxBuilder> create(rewriter, expandOp.getLoc());
+    Value tile = rewriter.create<ONNXTileOp>(expandOp.getLoc(),
+        expandOp.getOutput().getType(), expandOp.getInput(),
+        create.onnx.constantInt64(repeats));
+    rewriter.replaceOp(expandOp, tile);
+    return success();
+  }
+};
+
+// Normalize a rank-increasing static `Expand` by left-padding the input with
+// unit dims via `Reshape`, leaving a same-rank `Expand` that the pattern above
+// can turn into `Tile`.
+class ExpandRankIncreaseToReshapeExpandPattern
+    : public OpRewritePattern<ONNXExpandOp> {
+public:
+  using OpRewritePattern<ONNXExpandOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXExpandOp expandOp, PatternRewriter &rewriter) const override {
+    ArrayRef<int64_t> inputShape;
+    ArrayRef<int64_t> resultShape;
+    if (!getStaticExpandShapes(expandOp, inputShape, resultShape))
+      return failure();
+    if (inputShape.size() >= resultShape.size())
+      return failure();
+
+    SmallVector<int64_t> reshapedShape(
+        resultShape.size() - inputShape.size(), 1);
+    reshapedShape.append(inputShape.begin(), inputShape.end());
+
+    MultiDialectBuilder<OnnxBuilder> create(rewriter, expandOp.getLoc());
+    Value input = expandOp.getInput();
+    Type reshapedType =
+        RankedTensorType::get(reshapedShape, getElementType(input.getType()));
+    Value reshaped = create.onnx.reshape(
+        reshapedType, input, create.onnx.constantInt64(reshapedShape));
+    Value newExpand = create.onnx.expand(
+        expandOp.getOutput().getType(), reshaped, expandOp.getShape());
+    rewriter.replaceOp(expandOp, newExpand);
+    return success();
+  }
 };
 
 /// The pattern is to replace two consecutive ReshapeOp with a single ReshapeOp.
@@ -4446,6 +4530,15 @@ void ONNXEqualOp::getCanonicalizationPatterns(
   result.insert<BinaryOpBroadcastAxisPattern<ONNXEqualOp>>(context);
 }
 
+/// on the ONNXExpandOp.
+void ONNXExpandOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableExpandCanonicalization) {
+    result.insert<ExpandToTilePattern>(context);
+    result.insert<ExpandRankIncreaseToReshapeExpandPattern>(context);
+  }
+}
+
 /// on the ONNXGlobalAveragePoolOp.
 void ONNXGlobalAveragePoolOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
@@ -4790,4 +4883,8 @@ void onnx_mlir::configureQDQDataMovementCanonicalization(
 
 bool onnx_mlir::isQDQDataMovementCanonicalizationEnabled() {
   return enableQDQDataMovementCanonicalization;
+}
+
+void onnx_mlir::configureExpandCanonicalization(bool enable) {
+  enableExpandCanonicalization = enable;
 }
