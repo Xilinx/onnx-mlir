@@ -3894,9 +3894,6 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return failure();
     const int64_t pastSeqLen = *pastSeqLenOr;
 
-    int64_t kvSeqLen = -1;
-    bool preallocatedCacheMode = false;
-
     auto none = rewriter.create<ONNXNoneOp>(loc);
     auto si64Type = rewriter.getIntegerType(64, true);
 
@@ -3942,15 +3939,15 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       headSize = queryType.getShape()[2] / qNumHeads.getSInt();
     }
 
-    auto kvSeqLenOr = getStaticKVSequenceLength(customOp, rewriter, key);
+    const auto kvSeqLenOr = getStaticKVSequenceLength(customOp, rewriter, key);
     if (failed(kvSeqLenOr))
       return failure();
-    kvSeqLen = *kvSeqLenOr;
-    FailureOr<bool> preallocated = hasPreallocatedCacheMode(
+    const int64_t kvSeqLen = *kvSeqLenOr;
+    const FailureOr<bool> preallocated = hasPreallocatedCacheMode(
         customOp, rewriter, pastKey, pastSeqLen, kvSeqLen);
     if (failed(preallocated))
       return failure();
-    preallocatedCacheMode = *preallocated;
+    const bool preallocatedCacheMode = *preallocated;
 
     // If do_rotary = 1, query and key need to be passed through a rotary
     // embedding op
@@ -4046,15 +4043,29 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     const int64_t qSeqLen = queryType.getShape()[1];
     const int64_t attentionSeqLen =
         preallocatedCacheMode ? pastSeqLen : pastSeqLen + kvSeqLen;
-    int64_t maskSeqLen = attentionSeqLen;
+    // onnx.Attention requires attn_mask to be broadcastable to
+    // [B, q_num_heads, q_sequence_length, total_sequence_length], and GQA
+    // defines attention_bias's last dim as total_sequence_length. So the mask
+    // spans the full attentionSeqLen; any static attention_bias must be
+    // broadcast-compatible with that target rather than resizing the mask.
+    const int64_t maskSeqLen = attentionSeqLen;
     if (!isNoneValue(attentionBias)) {
       if (auto attentionBiasType =
               dyn_cast<ShapedType>(attentionBias.getType());
-          attentionBiasType && attentionBiasType.hasStaticShape() &&
-          attentionBiasType.getRank() > 0) {
-        // Attention permits mask/bias last-dim to be shorter than the full
-        // total_sequence_length; missing trailing scores are padded with -inf.
-        maskSeqLen = attentionBiasType.getShape().back();
+          attentionBiasType && attentionBiasType.hasStaticShape()) {
+        const SmallVector<int64_t, 4> targetShape = {
+            batchSize, qNumHeads.getSInt(), qSeqLen, attentionSeqLen};
+        ArrayRef<int64_t> biasShape = attentionBiasType.getShape();
+        if (biasShape.size() != targetShape.size())
+          return rewriter.notifyMatchFailure(customOp,
+              "expected 'attention_bias' to be rank-4 and broadcast-compatible "
+              "with [B, q_num_heads, q_sequence_length, "
+              "total_sequence_length]");
+        for (auto [biasDim, targetDim] : llvm::zip(biasShape, targetShape))
+          if (biasDim != 1 && biasDim != targetDim)
+            return rewriter.notifyMatchFailure(customOp,
+                "expected 'attention_bias' to be broadcast-compatible with "
+                "[B, q_num_heads, q_sequence_length, total_sequence_length]");
       }
     }
     FailureOr<Value> additiveMaskOr = createAdditiveAttentionMask(rewriter, loc,
