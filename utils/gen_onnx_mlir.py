@@ -554,6 +554,7 @@ OpsWithCanonicalizer = [
     "Or",
     "Pow",
     "ReduceMean",
+    "ReduceMeanV13",
     "Reshape",
     "Resize",
     "RNN",
