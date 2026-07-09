@@ -1,4 +1,5 @@
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa=grouped-conv-threshold=4 -cse %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="grouped-conv-threshold=4 excluded-ops=Transpose" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDE-TRANSPOSE
 
 
 func.func @test_onnx_conv2d_stride_13(%arg0: tensor<5x3x256x256xf32>, %arg1 : tensor<2x3x64x64xf32>, %arg2: tensor<2xf32>) ->  tensor<5x2x15x15xf32> {
@@ -16,6 +17,17 @@ func.func @test_onnx_conv2d_stride_13(%arg0: tensor<5x3x256x256xf32>, %arg1 : te
 // CHECK-DAG:       %[[VAL_8:.*]] = "tosa.const"() <{value = dense<[0, 3, 1, 2]> : tensor<4xi32>}> : () -> tensor<4xi32>
 // CHECK:           %[[VAL_9:.*]] = tosa.transpose %[[VAL_7]], %[[VAL_8]] : (tensor<5x15x15x2xf32>, tensor<4xi32>) -> tensor<5x2x15x15xf32>
 // CHECK:           return %[[VAL_9]] : tensor<5x2x15x15xf32>
+
+// EXCLUDE-TRANSPOSE-LABEL:   func.func @test_onnx_conv2d_stride_13(
+// EXCLUDE-TRANSPOSE-SAME:                                          %[[VAL_0:.*]]: tensor<5x3x256x256xf32>,
+// EXCLUDE-TRANSPOSE-SAME:                                          %[[VAL_1:.*]]: tensor<2x3x64x64xf32>,
+// EXCLUDE-TRANSPOSE-SAME:                                          %[[VAL_2:.*]]: tensor<2xf32>) -> tensor<5x2x15x15xf32> {
+// EXCLUDE-TRANSPOSE-DAG:       %[[VAL_3:.*]] = "onnx.Transpose"(%[[VAL_0]]) {perm = [0, 2, 3, 1]} : (tensor<5x3x256x256xf32>) -> tensor<5x256x256x3xf32>
+// EXCLUDE-TRANSPOSE-DAG:       %[[VAL_4:.*]] = "onnx.Transpose"(%[[VAL_1]]) {perm = [0, 2, 3, 1]} : (tensor<2x3x64x64xf32>) -> tensor<2x64x64x3xf32>
+// EXCLUDE-TRANSPOSE:           %[[VAL_5:.*]] = tosa.slice %[[VAL_3]] {size = array<i64: 5, 245, 245, 3>, start = array<i64: 0, 0, 0, 0>} : (tensor<5x256x256x3xf32>) -> tensor<5x245x245x3xf32>
+// EXCLUDE-TRANSPOSE:           %[[VAL_6:.*]] = tosa.conv2d %[[VAL_5]], %[[VAL_4]], %[[VAL_2]] {acc_type = f32, dilation = array<i64: 1, 1>, pad = array<i64: 1, 0, 1, 0>, stride = array<i64: 13, 13>} : (tensor<5x245x245x3xf32>, tensor<2x64x64x3xf32>, tensor<2xf32>) -> tensor<5x15x15x2xf32>
+// EXCLUDE-TRANSPOSE:           %[[VAL_7:.*]] = "onnx.Transpose"(%[[VAL_6]]) {perm = [0, 3, 1, 2]} : (tensor<5x15x15x2xf32>) -> tensor<5x2x15x15xf32>
+// EXCLUDE-TRANSPOSE:           return %[[VAL_7]] : tensor<5x2x15x15xf32>
 }
 
 // -----

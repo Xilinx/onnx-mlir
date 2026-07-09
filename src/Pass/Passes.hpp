@@ -45,10 +45,6 @@ std::unique_ptr<mlir::Pass> createONNXOpTransformPass(int threshold,
     bool report, bool targetCPU, bool enableSimdDataLayoutOpt,
     bool enableConvOptPass, bool enableRecomposeOptPass);
 
-std::unique_ptr<mlir::Pass> createRecomposeONNXToONNXPass(
-    const std::string &target = "", bool enableRotaryEmbeddingRecompose = false,
-    bool enableReduceL2Recompositions = false);
-
 std::unique_ptr<mlir::Pass> createConvOptONNXToONNXPass(
     bool enableSimdDataLayoutOpt = false);
 
@@ -68,6 +64,11 @@ void configureUnsafeMathCanonicalization(bool enableUnsafeMathOptimizations);
 // enabled.
 void configureReshapeCanonicalization(bool enableReshapeCanonicalization);
 
+// Configure whether reduce keepdims=0 -> keepdims=1 + Reshape canonicalization
+// is enabled.
+void configureReduceKeepdimsCanonicalization(
+    bool enableReduceKeepdimsCanonicalization);
+
 // Configure QDQ canonicalizations for data-movement/view ONNX ops.
 void configureQDQDataMovementCanonicalization(
     bool enableQDQDataMovementCanonicalization);
@@ -82,7 +83,7 @@ void populateQDQDataMovementCanonicalizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
 
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(
-    bool enableQDQ = false);
+    bool enableQDQ = false, bool enableQuantConstFold = false);
 
 std::unique_ptr<mlir::Pass> createQDQCanonicalizePass(bool removeBinary = false,
     bool removeQDQAroundOps = false, int64_t maxRoundTripDiff = 0);

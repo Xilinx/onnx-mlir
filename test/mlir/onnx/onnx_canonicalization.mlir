@@ -3779,6 +3779,8 @@ func.func @reduce_mean_keepdims_zero_unchanged(%arg0: tensor<1x3x1x5xf32>) -> te
   %0 = "onnx.ReduceMean"(%arg0, %axes) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x3x1x5xf32>, tensor<2xi64>) -> tensor<3x5xf32>
   onnx.Return %0 : tensor<3x5xf32>
   // CHECK: "onnx.ReduceMean"(%arg0, %{{.*}}) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+  // CHECK: onnx.Return %{{.*}}
+  // CHECK-NOT: "onnx.Reshape"
 }
 
 // -----
