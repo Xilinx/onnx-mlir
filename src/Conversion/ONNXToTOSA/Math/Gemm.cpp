@@ -4,7 +4,7 @@
 
 //===---------------- Gemm.cpp - Gemm Op ----------------------------------===//
 //
-// Copyright (c) 2022-2024 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -30,15 +30,17 @@ public:
 
   LogicalResult matchAndRewrite(ONNXGemmOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
     // If legal, create a FullyConnected operator instead
-    if (rewriteToTosaFC(op, adaptor, rewriter, tosaBuilder))
+    if (rewriteToTosaFC(op, adaptor, rewriter, create.tosa))
       return success();
-    return rewriteToTosaMatMul(op, adaptor, rewriter, tosaBuilder);
+    return rewriteToTosaMatMul(op, adaptor, rewriter, create);
   }
 
   LogicalResult rewriteToTosaMatMul(ONNXGemmOp op, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter, TosaBuilder &tosaBuilder) const {
+      ConversionPatternRewriter &rewriter,
+      MultiDialectBuilder<TosaBuilder, OnnxBuilder> &create) const {
     Location loc = op->getLoc();
     Value A = op.getA();
     Value B = op.getB();
@@ -82,22 +84,10 @@ public:
 
     // If transA or transB are present, create Transpose operators.
     if (transA) {
-      Value targetTensor =
-          tosaBuilder.getConst(llvm::SmallVector<int32_t>{0, 2, 1}, {3});
-      Type outputType =
-          RankedTensorType::get(dynamicTensorShape, AType.getElementType());
-      A = tosa::CreateOpAndInfer<mlir::tosa::TransposeOp>(
-          rewriter, loc, outputType, A, targetTensor)
-              .getResult();
+      A = create.onnx.transposeInt64(A, {0, 2, 1});
     }
     if (transB) {
-      Value targetTensor =
-          tosaBuilder.getConst(llvm::SmallVector<int32_t>{0, 2, 1}, {3});
-      Type outputType =
-          RankedTensorType::get(dynamicTensorShape, BType.getElementType());
-      B = tosa::CreateOpAndInfer<mlir::tosa::TransposeOp>(
-          rewriter, loc, outputType, B, targetTensor)
-              .getResult();
+      B = create.onnx.transposeInt64(B, {0, 2, 1});
     }
 
     Value alphaMulResult = A;
@@ -105,19 +95,19 @@ public:
     // If Alpha is present and not 1, we create a multiply operation for alpha *
     // A
     if (alpha && alpha.getValueAsDouble() != 1.) {
-      Value splattedConstAlpha = tosaBuilder.getSplattedConst(
+      Value splattedConstAlpha = create.tosa.getSplattedConst(
           static_cast<float>(alpha.getValueAsDouble()), AType.getElementType(),
           newShapeA.size());
-      alphaMulResult = tosaBuilder.mul(splattedConstAlpha, A, 0);
+      alphaMulResult = create.tosa.mul(splattedConstAlpha, A, 0);
     }
 
     // If C and Beta are set, and beta is different from 1, we also need to add
     // a multiplication for beta * C
     if (beta && isCPresent && beta.getValueAsDouble() != 1.) {
-      Value splattedConstBeta = tosaBuilder.getSplattedConst(
+      Value splattedConstBeta = create.tosa.getSplattedConst(
           static_cast<float>(beta.getValueAsDouble()), AType.getElementType(),
           newShapeA.size());
-      betaMulResult = tosaBuilder.mul(splattedConstBeta, C, 0);
+      betaMulResult = create.tosa.mul(splattedConstBeta, C, 0);
     }
 
     // A * B
@@ -131,13 +121,13 @@ public:
     //(A*B) + Beta * C or (A*B) + C
     if (isCPresent) {
       addRes =
-          tosaBuilder.binaryOp<mlir::tosa::AddOp>(matmulRes, betaMulResult);
+          create.tosa.binaryOp<mlir::tosa::AddOp>(matmulRes, betaMulResult);
     } else {
       addRes = matmulRes;
     }
 
     // Add reshape to go back to the original shape
-    Value reshape = tosaBuilder.reshape(addRes, resultType.getShape());
+    Value reshape = create.tosa.reshape(addRes, resultType.getShape());
     rewriter.replaceOp(op, {reshape});
     return success();
   }
