@@ -62,8 +62,7 @@ def XFEBatchNormalizationOp:ONNX_Op<"XFEBatchNormalization",
     AnyTypeOf<[TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[BF16]>, TensorOf<[I8]>, TensorOf<[UI8]>, TensorOf<[quant_QuantizedType]>]>:$B,
     AnyTypeOf<[TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[BF16]>, TensorOf<[quant_QuantizedType]>]>:$input_mean,
     AnyTypeOf<[TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[BF16]>, TensorOf<[quant_QuantizedType]>]>:$input_var,
-    DefaultValuedAttr<F32Attr, "1e-05">:$epsilon,
-    DefaultValuedAttr<F32Attr, "0.9">:$momentum);
+    DefaultValuedAttr<F32Attr, "1e-05">:$epsilon);
   let results = (outs AnyTypeOf<[TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[BF16]>, TensorOf<[I8]>, TensorOf<[UI8]>, TensorOf<[quant_QuantizedType]>]>:$Y);
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
@@ -410,7 +409,6 @@ def XFEMaxPoolOp:ONNX_Op<"XFEMaxPool",
     OptionalAttr<I64ArrayAttr>:$dilations,
     OptionalAttr<I64ArrayAttr>:$kernel_shape,
     OptionalAttr<I64ArrayAttr>:$pads,
-    OptionalAttr<SI64Attr>:$storage_order,
     OptionalAttr<I64ArrayAttr>:$strides);
   let results = (outs AnyTypeOf<[TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[BF16]>, TensorOf<[I8]>, TensorOf<[UI8]>, TensorOf<[quant_QuantizedType]>]>:$Y);
   let extraClassDeclaration = [{

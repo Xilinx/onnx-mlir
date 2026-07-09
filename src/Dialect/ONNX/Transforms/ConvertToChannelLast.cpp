@@ -395,8 +395,7 @@ struct MaxPoolToChannelLastPattern
         UnrankedTensorType::get(nhwcOutputElemType), inputChannelLast,
         poolOp.getAutoPadAttr(), poolOp.getCeilModeAttr(),
         poolOp.getDilationsAttr(), poolOp.getKernelShapeAttr(),
-        poolOp.getPadsAttr(), poolOp.getStorageOrderAttr(),
-        poolOp.getStridesAttr());
+        poolOp.getPadsAttr(), poolOp.getStridesAttr());
 
     transferOnnxNodeName(poolOp, poolChannelLastOp);
 
@@ -528,7 +527,7 @@ struct BatchNormToChannelLastPattern
     Type nhwcOutputElemType = remapQuantTypeNchw2Nhwc(outputElementType, rank);
     auto bnChannelLastOp = rewriter.create<XFEBatchNormalizationOp>(loc,
         UnrankedTensorType::get(nhwcOutputElemType), inputChannelLast, scale, B,
-        mean, var, bnOp.getEpsilonAttr(), bnOp.getMomentumAttr());
+        mean, var, bnOp.getEpsilonAttr());
 
     transferOnnxNodeName(bnOp, bnChannelLastOp);
 
