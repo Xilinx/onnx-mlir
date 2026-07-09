@@ -5,7 +5,7 @@
 //===------------- ONNXMatMulOp.cpp - ONNXMatMulOp --------------===//
 //
 // Copyright 2020 The TensorFlow Authors. All Rights Reserved.
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -22,6 +22,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "src/Conversion/ONNXToTOSA/DialectBuilder.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
+#include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 
 using namespace mlir;
@@ -105,7 +106,9 @@ public:
   LogicalResult matchAndRewrite(ONNXMatMulOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
 
-    TosaBuilder builder(rewriter, op->getLoc());
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
+    TosaBuilder &builder = create.tosa;
 
     auto lhs = adaptor.getA();
     auto rhs = adaptor.getB();
@@ -198,6 +201,10 @@ public:
       }
       return false;
     };
+    auto transpose = [&](Value value, ArrayRef<int32_t> perm) {
+      SmallVector<int64_t> permI64(perm.begin(), perm.end());
+      return create.onnx.transposeInt64(value, permI64);
+    };
 
     SmallVector<TensorShape_t> commonElems;
     SmallVector<TensorShape_t> lhsSqueezedElems;
@@ -281,7 +288,7 @@ public:
           {maxInputRank - 2, lhsBroadcastedShape[maxInputRank - 2]});
       lhsSqueezedValue *= lhsBroadcastedShape[maxInputRank - 2];
 
-      // Step: Create the tosa.transpose array. If this array has a
+      // Step: Create the transpose array. If this array has a
       // non-monotonic series of dims, perform transpose.
       // First the common_elems
       for (uint32_t i = 0; i < commonElems.size(); i++) {
@@ -299,8 +306,7 @@ public:
 
       Value lhsReshapeInput = rankBroadcastedLhs;
       if (isTransposeRequired(transposedLhsDims)) {
-        lhsReshapeInput =
-            builder.transpose(rankBroadcastedLhs, transposedLhsDims);
+        lhsReshapeInput = transpose(rankBroadcastedLhs, transposedLhsDims);
       }
 
       // LHS = {common, lhs_squeezed, matmul_dim}
@@ -341,8 +347,7 @@ public:
 
       auto transposedRhsValue = rankBroadcastedRhs;
       if (isTransposeRequired(transposedRhsDims)) {
-        transposedRhsValue =
-            builder.transpose(rankBroadcastedRhs, transposedRhsDims);
+        transposedRhsValue = transpose(rankBroadcastedRhs, transposedRhsDims);
       }
 
       // reshape
@@ -467,7 +472,7 @@ public:
       llvm::copy(transposedOpDims, std::back_inserter(transposedOpDimsI32));
       // Perform final reshape
       output = isTransposeRequired(transposedOpDimsI32)
-                   ? builder.transpose(reshapeOp, transposedOpDimsI32)
+                   ? transpose(reshapeOp, transposedOpDimsI32)
                    : reshapeOp;
     }
 
