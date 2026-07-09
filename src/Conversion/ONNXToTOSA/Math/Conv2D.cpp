@@ -31,9 +31,10 @@ namespace {
 /// where the input, kernel and bias is a slice of the original inputs.
 /// Afterwards we have to concat the results of these into a single tensor.
 Value createConvInGroups(PatternRewriter &rewriter, Operation *op,
-    TosaBuilder &tosaBuilder, Type &resultType,
-    const llvm::ArrayRef<int64_t> weightShape, Value &newInput,
-    Value &newWeight, Value &bias, const int64_t groups,
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder, IndexExprBuilderForTosa>
+        &create,
+    Type &resultType, const llvm::ArrayRef<int64_t> weightShape,
+    Value &newInput, Value &newWeight, Value &bias, const int64_t groups,
     DenseI64ArrayAttr &pads, DenseI64ArrayAttr &strides,
     DenseI64ArrayAttr &dilations, TypeAttr &accType, Operation *activation) {
   // Set up constants outside of loop
@@ -50,15 +51,15 @@ Value createConvInGroups(PatternRewriter &rewriter, Operation *op,
   for (int64_t i = 0; i < groups; i++) {
     // Slice input
     Value newSliceInput =
-        tosaBuilder.slice(newInput, inputSize, {0, 0, 0, i * sizeOfSliceInput});
+        create.tosa.slice(newInput, inputSize, {0, 0, 0, i * sizeOfSliceInput});
 
     // Slice kernel
-    Value newSliceWeight = tosaBuilder.slice(
+    Value newSliceWeight = create.tosa.slice(
         newWeight, kernelSize, {i * sizeOfSliceKernel, 0, 0, 0});
 
     // Slice bias
     Value newSliceBias =
-        tosaBuilder.slice(bias, {sizeOfSliceKernel}, {i * sizeOfSliceKernel});
+        create.tosa.slice(bias, {sizeOfSliceKernel}, {i * sizeOfSliceKernel});
 
     // Create conv
     Type newConvOutputType = RankedTensorType::get(
@@ -91,12 +92,12 @@ Value createConvInGroups(PatternRewriter &rewriter, Operation *op,
 
   auto concatInputs = activation ? slicesWithAct : sliceValues;
 
-  // Create concat op
+  // Create concat op. Keep it in ONNX so the recursive conversion picks up the
+  // regular ONNX Concat lowering instead of leaving an excluded TOSA op behind.
   Type newConcatOutputType = RankedTensorType::get(
       llvm::SmallVector<int64_t, 4>(4, ShapedType::kDynamic),
       mlir::cast<ShapedType>(resultType).getElementType());
-  Value conv2D = tosa::CreateOpAndInfer<mlir::tosa::ConcatOp>(
-      rewriter, op->getLoc(), newConcatOutputType, concatInputs, 3);
+  Value conv2D = create.onnx.concat(newConcatOutputType, concatInputs, 3);
   return conv2D;
 }
 
@@ -240,7 +241,7 @@ public:
         // can be costly, so only allow it when the number of groups is less
         // than configurable threshold.
 
-        conv2D = createConvInGroups(rewriter, convOp, create.tosa, resultType,
+        conv2D = createConvInGroups(rewriter, convOp, create, resultType,
             weightShape, newInput, newWeight, bias, group, newPads, strides,
             dilations, accType, activation);
         Value newOutput = create.onnx.transposeInt64(conv2D, {0, 3, 1, 2});
