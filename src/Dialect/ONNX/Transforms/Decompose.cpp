@@ -3497,10 +3497,17 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return false;
 
     auto presentKeyShapedType = dyn_cast<ShapedType>(presentKeyType);
-    if (!presentKeyShapedType || !presentKeyShapedType.hasStaticShape() ||
-        presentKeyShapedType.getRank() != 4)
+    if (!presentKeyShapedType || presentKeyShapedType.getRank() != 4)
       return rewriter.notifyMatchFailure(
-          customOp, "expected 'present_key' output to have static rank-4 type");
+          customOp, "expected 'present_key' output to have rank-4 type");
+
+    // A dynamic present sequence dim means the cache grows at runtime, which
+    // is the append contract onnx.Attention models natively. Buffer-sharing
+    // caches are always statically shaped (fixed capacity), so they cannot be
+    // the dynamic case. Fall back to append here; all shapes the rewrite
+    // needs are derived from the (static) past_key/key inputs, not present.
+    if (!presentKeyShapedType.hasStaticShape())
+      return false;
 
     const int64_t expectedAppendSeqLen = pastSeqLen + kvSeqLen;
     const int64_t presentSeqLen = presentKeyShapedType.getShape()[2];
