@@ -554,6 +554,7 @@ OpsWithCanonicalizer = [
     "ReduceL2",
     "ReduceMax",
     "ReduceMean",
+    "ReduceMeanV13",
     "ReduceMin",
     "ReduceProd",
     "ReduceLogSum",
