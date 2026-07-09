@@ -3973,32 +3973,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
         rotaryInterleaved = rotaryInterleavedAttr.getSInt();
       }
 
-      // Bake the position_ids into the cos/sin caches by gathering the selected
-      // rows on axis 0, then hand RotaryEmbedding a none position_ids. This
-      // turns the [maxpos, dim/2] caches into the [batch, seqLen, dim/2] form
-      // that onnx.RotaryEmbedding accepts without position_ids, matching what
-      // downstream consumers expect. cache[position_ids] with cache rank 2 and
-      // position_ids rank 2 yields a rank-3 result (Gather output rank =
-      // q + (r - 1) = 2 + 1).
-      auto cosCacheType = cast<ShapedType>(cosCache.getType());
-      auto posIdsType = cast<ShapedType>(positionIds.getType());
-      SmallVector<int64_t> gatheredShape(posIdsType.getShape());
-      gatheredShape.push_back(cosCacheType.getShape().back());
-      auto gatheredCosType =
-          RankedTensorType::get(gatheredShape, cosCacheType.getElementType());
-      auto gatheredSinType = RankedTensorType::get(
-          gatheredShape, cast<ShapedType>(sinCache.getType()).getElementType());
-      Value cosGathered = rewriter.create<ONNXGatherOp>(
-          loc, gatheredCosType, cosCache, positionIds, /*axis=*/0);
-      Value sinGathered = rewriter.create<ONNXGatherOp>(
-          loc, gatheredSinType, sinCache, positionIds, /*axis=*/0);
-      toCheck.push_back(cosGathered);
-      toCheck.push_back(sinGathered);
-
       ropeQuery = rewriter.create<ONNXRotaryEmbeddingOp>(loc, query.getType(),
-          query, cosGathered, sinGathered, none, rotaryInterleaved, qNumHeads);
+          query, cosCache, sinCache, positionIds, rotaryInterleaved, qNumHeads);
       ropeKey = rewriter.create<ONNXRotaryEmbeddingOp>(loc, key.getType(), key,
-          cosGathered, sinGathered, none, rotaryInterleaved, kvNumHeads);
+          cosCache, sinCache, positionIds, rotaryInterleaved, kvNumHeads);
 
       toCheck.push_back(ropeQuery);
       toCheck.push_back(ropeKey);
