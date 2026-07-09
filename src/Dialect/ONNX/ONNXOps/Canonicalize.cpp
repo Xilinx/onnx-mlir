@@ -1020,37 +1020,39 @@ public:
   }
 };
 
-// Materialize the implicit "reduce all axes" of a ReduceMean whose reduction
-// axes are absent. An omitted `axes` means "reduce over every dimension"
-// (unless the modern op sets `noop_with_empty_axes = 1`, which is a no-op that
-// `ONNXReduceMeanOp::fold` already forwards).
-//
-// The two op versions store `axes` differently: the legacy ReduceMeanV13 uses
-// an optional `I64ArrayAttr`, while the modern ReduceMean uses a None-able
-// operand plus the `noop_with_empty_axes` attribute.
-class MaterializeAbsentAxesReduceMeanV13Pattern
+// Upgrade ReduceMeanV13 latest ReduceMean. A present `axes` attribute becomes a
+// constant axes operand; an absent one becomes a None operand with
+// `noop_with_empty_axes = 0`, preserving the legacy "reduce over every
+// dimension" semantics.
+class UpgradeReduceMeanV13Pattern
     : public OpRewritePattern<ONNXReduceMeanV13Op> {
 public:
   using OpRewritePattern<ONNXReduceMeanV13Op>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
       ONNXReduceMeanV13Op op, PatternRewriter &rewriter) const override {
-    if (op.getAxesAttr())
-      return rewriter.notifyMatchFailure(op, "axes already present");
-
-    auto dataType = mlir::dyn_cast<RankedTensorType>(op.getData().getType());
-    if (!dataType)
-      return rewriter.notifyMatchFailure(op, "data must be ranked");
-    const int64_t rank = dataType.getRank();
-
-    SmallVector<int64_t> axes(rank);
-    std::iota(axes.begin(), axes.end(), int64_t{0});
-    rewriter.modifyOpInPlace(
-        op, [&] { op.setAxesAttr(rewriter.getI64ArrayAttr(axes)); });
+    OnnxBuilder create(rewriter, op.getLoc());
+    Value newAxes;
+    if (ArrayAttr axesAttr = op.getAxesAttr()) {
+      SmallVector<int64_t> axes;
+      for (size_t i = 0; i < axesAttr.size(); ++i)
+        axes.push_back(ArrayAttrIntVal(axesAttr, i));
+      newAxes = create.constantInt64(axes);
+    } else {
+      newAxes = create.none();
+    }
+    IntegerAttr noopWithEmptyAxes = IntegerAttr::get(
+        rewriter.getIntegerType(64, /*isSigned=*/true), APInt(64, 0, true));
+    rewriter.replaceOpWithNewOp<ONNXReduceMeanOp>(op, op.getResult().getType(),
+        op.getData(), newAxes, op.getKeepdimsAttr(), noopWithEmptyAxes);
     return success();
   }
 };
 
+// Materialize the implicit "reduce all axes" of a ReduceMean whose reduction
+// axes operand is absent (None). An omitted `axes` means "reduce over every
+// dimension" unless `noop_with_empty_axes = 1`, which is a no-op that
+// `ONNXReduceMeanOp::fold` already forwards.
 class MaterializeAbsentAxesReduceMeanPattern
     : public OpRewritePattern<ONNXReduceMeanOp> {
 public:
@@ -4678,7 +4680,7 @@ void ONNXReduceMeanOp::getCanonicalizationPatterns(
 /// on the ONNXReduceMeanV13Op.
 void ONNXReduceMeanV13Op::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  result.insert<MaterializeAbsentAxesReduceMeanV13Pattern>(context);
+  result.insert<UpgradeReduceMeanV13Pattern>(context);
 }
 
 /// on the ONNXReduceMinOp.
