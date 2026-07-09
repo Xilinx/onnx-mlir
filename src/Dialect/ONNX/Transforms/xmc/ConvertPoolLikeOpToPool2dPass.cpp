@@ -514,6 +514,9 @@ struct LowerReduceMaxToMaxPoolSpatialPattern
 
     SmallVector<int64_t> axes = *axesResult;
 
+    if (axes.size() == 1 && axes.back() == rank - 1)
+      return failure();
+
     // This pattern handles SPATIAL reduction only
     if (!areAxesValidForSpatialPooling(axes, rank)) {
       return failure(); // Let channel pattern handle it
@@ -609,6 +612,9 @@ struct LowerReduceMaxToMaxPoolChannelPattern
     if (axes.empty()) {
       return failure(); // Handled by spatial pattern
     }
+
+    if (axes.size() == 1 && axes.back() == rank - 1)
+      return failure();
 
     // This pattern handles reduction that INCLUDES channel dimension
     // or reduction on batch dimension (anything not pure spatial)
