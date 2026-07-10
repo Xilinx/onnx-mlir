@@ -143,6 +143,10 @@ std::unique_ptr<mlir::Pass> createMergeContinuousStridedSlicePass();
 
 std::unique_ptr<mlir::Pass> createONNXTransposeOptimizationPass();
 
+/// Pass to bake plain-float constant inputs of a per-tensor quantized Concat
+/// into quantized constants sharing the concat's quantization parameters.
+std::unique_ptr<mlir::Pass> createQuantizeConcatConstInputPass();
+
 /// Pass to combine two transpose with same input and same perm.
 std::unique_ptr<mlir::Pass> createCombineTransposePairPass();
 
