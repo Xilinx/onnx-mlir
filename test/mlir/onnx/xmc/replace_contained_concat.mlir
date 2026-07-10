@@ -41,8 +41,9 @@ func.func @test_not_subset(%arg0: tensor<1x2x3x4xf32>, %arg1: tensor<1x2x3x4xf32
 
 // -----
 
-// Test 4: Subset exists but order differs; still optimize by reusing inner.
-// inner: [A, B], outer: [B, A, C] (subset true, order differs)
+// Test 4: Subset exists but order differs; do NOT optimize, because reusing the
+// inner concat would change the concatenation (channel) order of the outer.
+// inner: [A, B], outer: [B, A, C] (subset true, but not a contiguous in-order run)
 // CHECK-LABEL: func.func @test_subset_wrong_order
 func.func @test_subset_wrong_order(%arg0: tensor<1x2x3x4xf32>, %arg1: tensor<1x2x3x4xf32>, %arg2: tensor<1x2x3x4xf32>) -> (tensor<1x2x3x8xf32>, tensor<1x2x3x12xf32>) {
   %0 = "onnx.Concat"(%arg0, %arg1) {axis = 3 : si64} : (tensor<1x2x3x4xf32>, tensor<1x2x3x4xf32>) -> tensor<1x2x3x8xf32>
@@ -50,7 +51,7 @@ func.func @test_subset_wrong_order(%arg0: tensor<1x2x3x4xf32>, %arg1: tensor<1x2
   return %0, %1 : tensor<1x2x3x8xf32>, tensor<1x2x3x12xf32>
 }
 // CHECK: %[[I0:.*]] = "onnx.Concat"(%arg0, %arg1) {axis = 3 : si64}
-// CHECK: %[[O0:.*]] = "onnx.Concat"(%[[I0]], %arg2) {axis = 3 : si64}
+// CHECK: %[[O0:.*]] = "onnx.Concat"(%arg1, %arg0, %arg2) {axis = 3 : si64}
 // CHECK: return %[[I0]], %[[O0]]
 
 // -----
@@ -95,4 +96,19 @@ func.func @test_dominance_skip(%arg0: tensor<1x2x3x4xf32>, %arg1: tensor<1x2x3x4
 // CHECK: %[[C0:.*]] = "onnx.Concat"(%arg0, %arg1, %arg2, %arg3, %arg4) {axis = 3 : si64}
 // CHECK: %[[C1:.*]] = "onnx.Concat"(%arg0, %arg1, %arg2) {axis = 3 : si64}
 // CHECK: return %[[C0]], %[[C1]]
+
+// -----
+
+// Test 8: Inner run appears mid/tail of outer; it is replaced in place so the
+// outer concat order is preserved (inner result is not hoisted to the front).
+// inner: [B, C], outer: [A, B, C] -> outer becomes [A, inner]
+// CHECK-LABEL: func.func @test_contiguous_non_prefix
+func.func @test_contiguous_non_prefix(%arg0: tensor<1x2x3x4xf32>, %arg1: tensor<1x2x3x4xf32>, %arg2: tensor<1x2x3x4xf32>) -> (tensor<1x2x3x8xf32>, tensor<1x2x3x12xf32>) {
+  %0 = "onnx.Concat"(%arg1, %arg2) {axis = 3 : si64} : (tensor<1x2x3x4xf32>, tensor<1x2x3x4xf32>) -> tensor<1x2x3x8xf32>
+  %1 = "onnx.Concat"(%arg0, %arg1, %arg2) {axis = 3 : si64} : (tensor<1x2x3x4xf32>, tensor<1x2x3x4xf32>, tensor<1x2x3x4xf32>) -> tensor<1x2x3x12xf32>
+  return %0, %1 : tensor<1x2x3x8xf32>, tensor<1x2x3x12xf32>
+}
+// CHECK: %[[I0:.*]] = "onnx.Concat"(%arg1, %arg2) {axis = 3 : si64}
+// CHECK: %[[O0:.*]] = "onnx.Concat"(%arg0, %[[I0]]) {axis = 3 : si64}
+// CHECK: return %[[I0]], %[[O0]]
 
