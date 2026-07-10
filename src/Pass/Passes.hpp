@@ -75,6 +75,10 @@ void configureQDQDataMovementCanonicalization(
 
 bool isQDQDataMovementCanonicalizationEnabled();
 
+// Configure whether Expand-to-Tile / Expand-to-Reshape+Tile canonicalization is
+// enabled.
+void configureExpandCanonicalization(bool enableExpandCanonicalization);
+
 void populateQDQDataMovementCanonicalizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
 
