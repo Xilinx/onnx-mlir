@@ -148,6 +148,37 @@ func.func @reduce_max_channel_axis(%arg0: tensor<1x8x4x4x!quant.uniform<i8:f32, 
 // -----
 
 //===----------------------------------------------------------------------===//
+// ReduceMax over ONLY the innermost axis: kept as a reduction (NOT pooled)
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: @reduce_max_innermost_axis_not_pooled
+// A single-axis ReduceMax on the innermost (feature/class) dim must stay an
+// ONNXReduceMax so it lowers to xir.qlinear_reduction_max, matching the xmodel
+// flow. Lowering it to a spatial MaxPool would fold away the non-reduced 1600
+// dim. Mirrors the yolov8l-worldv2 attention ReduceMax (1x8x1600x80, axis 3).
+func.func @reduce_max_innermost_axis_not_pooled(%arg0: tensor<1x8x1600x80x!quant.uniform<i8:f32, 0.26:0>>) -> tensor<1x8x1600x1x!quant.uniform<i8:f32, 0.11:0>> {
+    %0 = onnx.Constant dense<[3]> : tensor<1xi64>
+    %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<1x8x1600x80x!quant.uniform<i8:f32, 0.26:0>>, tensor<1xi64>) -> tensor<1x8x1600x1x!quant.uniform<i8:f32, 0.11:0>>
+    return %1 : tensor<1x8x1600x1x!quant.uniform<i8:f32, 0.11:0>>
+}
+// CHECK: "onnx.ReduceMax"
+// CHECK-NOT: onnx.MaxPoolSingleOut
+
+// -----
+
+// CHECK-LABEL: @reduce_max_innermost_axis_negative_not_pooled
+// Same as above but with a negative axis (-1); normalized to the innermost dim.
+func.func @reduce_max_innermost_axis_negative_not_pooled(%arg0: tensor<1x3x4x8x!quant.uniform<i8:f32, 0.05:0>>) -> tensor<1x3x4x1x!quant.uniform<i8:f32, 0.05:0>> {
+    %0 = onnx.Constant dense<[-1]> : tensor<1xi64>
+    %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<1x3x4x8x!quant.uniform<i8:f32, 0.05:0>>, tensor<1xi64>) -> tensor<1x3x4x1x!quant.uniform<i8:f32, 0.05:0>>
+    return %1 : tensor<1x3x4x1x!quant.uniform<i8:f32, 0.05:0>>
+}
+// CHECK: "onnx.ReduceMax"
+// CHECK-NOT: onnx.MaxPoolSingleOut
+
+// -----
+
+//===----------------------------------------------------------------------===//
 // Edge Cases: Trivial reduction (dimension = 1) should be simplified
 //===----------------------------------------------------------------------===//
 
