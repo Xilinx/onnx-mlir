@@ -279,6 +279,7 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.enableExpandCanonicalization = enableExpandCanonicalization;
     opts.enableReduceKeepdimsCanonicalization =
         enableReduceKeepdimsCanonicalization;
+    opts.enableMaxPool3dTo2dDecomposition = enableMaxPool3dTo2dDecomposition;
     opts.enableXFEONNXOpsetVerifier = enableXFEONNXOpsetVerifier;
     if (enableXMCPasses) {
       opts.hybrid.enableInstanceNormDecompose = false;

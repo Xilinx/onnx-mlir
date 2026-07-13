@@ -69,6 +69,10 @@ void configureReshapeCanonicalization(bool enableReshapeCanonicalization);
 void configureReduceKeepdimsCanonicalization(
     bool enableReduceKeepdimsCanonicalization);
 
+// Configure whether the 3D MaxPool -> 2D MaxPool + depth pool decomposition is
+// enabled.
+void configureMaxPool3dTo2dDecomposition(bool enableMaxPool3dTo2dDecomposition);
+
 // Configure QDQ canonicalizations for data-movement/view ONNX ops.
 void configureQDQDataMovementCanonicalization(
     bool enableQDQDataMovementCanonicalization);

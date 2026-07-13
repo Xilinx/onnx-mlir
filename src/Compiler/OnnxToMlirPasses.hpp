@@ -36,6 +36,8 @@ struct OnnxToMlirOptions {
   bool enableReshapeCanonicalization = true;
   bool enableExpandCanonicalization = false;
   bool enableReduceKeepdimsCanonicalization = false;
+  // 3D MaxPool -> 2D MaxPool + depth pool decomposition.
+  bool enableMaxPool3dTo2dDecomposition = true;
   bool enableXFEONNXOpsetVerifier = true;
   bool enableUnsafeMathOptimizations = true;
   bool enableQDQDataMovementCanonicalization = false;

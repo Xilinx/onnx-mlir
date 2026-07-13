@@ -62,6 +62,9 @@ static bool enableReshapeCanonicalization = true;
 // Populated by configureReduceKeepdimsCanonicalization().
 static bool enableReduceKeepdimsCanonicalization = true;
 
+// Populated by configureMaxPool3dTo2dDecomposition().
+static bool enableMaxPool3dTo2dDecomposition = true;
+
 // Populated by configureQDQDataMovementCanonicalization().
 static bool enableQDQDataMovementCanonicalization = false;
 
@@ -4884,7 +4887,8 @@ void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<ReorderReluMaxPoolPattern>(context);
   results.insert<FuseBackToBackMaxpools>(context);
-  results.insert<Convert3dMaxpoolto2dMaxpool>(context);
+  if (enableMaxPool3dTo2dDecomposition)
+    results.insert<Convert3dMaxpoolto2dMaxpool>(context);
 }
 
 /// on the ONNXMulOp.
@@ -5225,6 +5229,10 @@ void onnx_mlir::configureReshapeCanonicalization(bool enable) {
 
 void onnx_mlir::configureReduceKeepdimsCanonicalization(bool enable) {
   enableReduceKeepdimsCanonicalization = enable;
+}
+
+void onnx_mlir::configureMaxPool3dTo2dDecomposition(bool enable) {
+  enableMaxPool3dTo2dDecomposition = enable;
 }
 
 void onnx_mlir::configureQDQDataMovementCanonicalization(
