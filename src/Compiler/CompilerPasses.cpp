@@ -68,6 +68,7 @@ void configurePasses() {
       onnxConstPropExpansionBound, onnxConstPropDisablePatterns,
       disableConstantProp);
   configureUnsafeMathCanonicalization(enableUnsafeMathOptimizations);
+  configureExpandCanonicalization(enableExpandCanonicalization);
   configureReduceKeepdimsCanonicalization(enableReduceKeepdimsCanonicalization);
   configureQDQDataMovementCanonicalization(
       enableQDQDataMovementCanonicalization);
@@ -275,6 +276,7 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.instrumentStage = instrumentStage;
     opts.enableXMCPasses = enableXMCPasses;
     opts.enableReshapeCanonicalization = enableReshapeCanonicalization;
+    opts.enableExpandCanonicalization = enableExpandCanonicalization;
     opts.enableReduceKeepdimsCanonicalization =
         enableReduceKeepdimsCanonicalization;
     opts.enableXFEONNXOpsetVerifier = enableXFEONNXOpsetVerifier;

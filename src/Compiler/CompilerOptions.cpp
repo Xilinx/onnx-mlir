@@ -53,6 +53,7 @@ std::string onnxTransformOptions;                      // onnx-mlir only
 bool enableQuarkQuantizerLegalization;                 // common for both
 bool disableBatchNormDecompose;                        // common for both
 bool enableReshapeCanonicalization;                    // common for both
+bool enableExpandCanonicalization;                     // common for both
 bool enableReduceKeepdimsCanonicalization;             // common for both
 bool enableXFEONNXOpsetVerifier;                       // common for both
 bool enableSafeCodeGen;                                // common for both
@@ -348,6 +349,15 @@ static llvm::cl::opt<bool, true> enableReshapeCanonicalizationOpt(
         "Enable canonicalization of Flatten/Squeeze/Unsqueeze to Reshape "
         "(default=true, i.e. the rewrite is enabled by default)."),
     llvm::cl::location(enableReshapeCanonicalization), llvm::cl::init(true),
+    llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableExpandCanonicalizationOpt(
+    "enable-expand-canonicalization",
+    llvm::cl::desc(
+        "Enable canonicalization of static Expand to Tile (same rank) or "
+        "Reshape+Tile (rank increase) (default=false, i.e. the rewrite is "
+        "disabled by default)."),
+    llvm::cl::location(enableExpandCanonicalization), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true> enableReduceKeepdimsCanonicalizationOpt(
