@@ -3478,6 +3478,186 @@ struct PushTransposeDownScalePattern : public OpRewritePattern<ONNXMulOp> {
 };
 
 // =============================================================================
+// Decomposes 3D maxpool -> 2D Maxpool + Max over the depth dimension
+// Goes From:
+//                         │  [N, C, D, H, W]
+//             ┌───────────▼──────────┐
+//             │     MaxPool (3D)     │
+//             │ kernel  = kd x kh x kw
+//             │ strides = sd x sh x sw
+//             └───────────┬──────────┘
+//                         ▼  [N, C, Dout, Hout, Wout]
+// To:
+//                         │  [N, C, D, H, W]
+//             ┌───────────▼──────────┐
+//             │        Reshape       │  -> [N, C, D*H, W]
+//             └───────────┬──────────┘
+//             ┌───────────▼──────────┐
+//             │       MaxPool2D      │  kernel kh x kw, stride sh x sw
+//             │                      │  -> [N, C, D*Hout, Wout]
+//             └───────────┬──────────┘
+//             ┌───────────▼──────────┐
+//             │       Reshape        │  -> [N, C, D, Hout, Wout]
+//             └───────────┬──────────┘
+//              ┌──────────┴──────────┐
+//     Slice even d (0:D:kd)   Slice odd d (1:D:kd)   (depth axis, kd=2)
+//              └──────────┬──────────┘
+//             ┌───────────▼──────────┐
+//             │          Max         │   depth pool
+//             └───────────┬──────────┘
+//                         ▼  [N, C, Dout, Hout, Wout]
+// =============================================================================
+struct Convert3dMaxpoolto2dMaxpool
+    : public OpRewritePattern<ONNXMaxPoolSingleOutOp> {
+  using OpRewritePattern<ONNXMaxPoolSingleOutOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ONNXMaxPoolSingleOutOp maxpool3d,
+    PatternRewriter &rewriter) const final {
+
+      auto ksizeArr = maxpool3d.getKernelShape();
+      if(ksizeArr.size() != 3){
+        return rewriter.notifyMatchFailure(maxpool3d->getLoc(), "Not a 3d maxpool");
+      }
+
+      ArrayRef<int64_t> maxpool3dInShape =
+          mlir::cast<ShapedType>(maxpool3d.getX().getType()).getShape();
+      Type elemTy =
+          mlir::cast<ShapedType>(maxpool3d.getX().getType()).getElementType();
+
+      SmallVector<int64_t> k =
+          extractFromIntegerArrayAttr<int64_t>(maxpool3d.getKernelShapeAttr());
+      SmallVector<int64_t> s{1, 1, 1};
+      if (maxpool3d.getStridesAttr())
+        s = extractFromIntegerArrayAttr<int64_t>(maxpool3d.getStridesAttr());
+      SmallVector<int64_t> p{0, 0, 0, 0, 0, 0};
+      if (maxpool3d.getPadsAttr())
+        p = extractFromIntegerArrayAttr<int64_t>(maxpool3d.getPadsAttr());
+
+      if (!mlir::cast<ShapedType>(maxpool3d.getX().getType()).hasStaticShape())
+        return rewriter.notifyMatchFailure(
+            maxpool3d->getLoc(), "only static input shape is supported");
+      if (maxpool3d.getDilationsAttr()) {
+        SmallVector<int64_t> dilations =
+            extractFromIntegerArrayAttr<int64_t>(maxpool3d.getDilationsAttr());
+        if (llvm::any_of(dilations, [](int64_t d) { return d != 1; }))
+          return rewriter.notifyMatchFailure(
+              maxpool3d->getLoc(), "Dilations other than 1x1x1 are not supported");
+      }
+      if (maxpool3d.getCeilMode() != 0 && maxpool3dInShape[3] % s[1] != 0)
+        return rewriter.notifyMatchFailure(
+            maxpool3d->getLoc(),
+            "ceil_mode=1 is only supported when the height is a multiple of the height stride");
+      if (maxpool3d.getAutoPad() != "NOTSET")
+        return rewriter.notifyMatchFailure(
+            maxpool3d->getLoc(), "only auto_pad NOTSET is supported");
+      if (llvm::any_of(p, [](int64_t v) { return v != 0; }))
+        return rewriter.notifyMatchFailure(
+            maxpool3d->getLoc(), "non-zero pads are not supported");
+      if (maxpool3d.getStorageOrder() != 0)
+        return rewriter.notifyMatchFailure(
+            maxpool3d->getLoc(), "only storage_order 0 is supported");
+      if (k[0] != 2 || s[0] != 2)
+        return rewriter.notifyMatchFailure(
+            maxpool3d->getLoc(), "only depthKSize == stride == 2 is supported");
+      if (maxpool3dInShape[2] % 2 != 0)
+        return rewriter.notifyMatchFailure(
+            maxpool3d->getLoc(), "only even depth is supported");
+      if (k[1] != s[1])
+        return rewriter.notifyMatchFailure(
+            maxpool3d->getLoc(), "only heightKsize == stride is supported");
+
+      MultiDialectBuilder<OnnxBuilder> b(rewriter, maxpool3d.getLoc());
+
+
+      int64_t strideH = s[1];
+      int64_t heightIn = (maxpool3dInShape[3] / strideH) * strideH;
+      Value poolInput = maxpool3d.getX();
+      if (heightIn != maxpool3dInShape[3]) {
+        // Slice: N C D H W -> N C D Hin W
+        SmallVector<int64_t> cropShapeVec = {
+            maxpool3dInShape[0],   // N
+            maxpool3dInShape[1],   // C
+            maxpool3dInShape[2],   // D
+            heightIn,              // Hin
+            maxpool3dInShape[4]};  // W
+        poolInput = b.onnx.slice(RankedTensorType::get(cropShapeVec, elemTy),
+            maxpool3d.getX(), /*starts=*/b.onnx.constantInt64({0}),
+            /*ends=*/b.onnx.constantInt64({heightIn}),
+            /*axes=*/b.onnx.constantInt64({3}), /*steps=*/b.onnx.constantInt64({1}));
+      }
+
+      // Reshape: N C D H W -> N C (D*H) W
+      SmallVector<int64_t> foldHeightShapeVec = {
+          maxpool3dInShape[0],             // N
+          maxpool3dInShape[1],             // C
+          maxpool3dInShape[2] * heightIn,  // D * H
+          maxpool3dInShape[4]};            // W
+      Value foldHeightReshape = b.onnx.reshape(
+          RankedTensorType::get(foldHeightShapeVec, elemTy), poolInput,
+          b.onnx.constantInt64(foldHeightShapeVec));
+
+      // 2D MaxPool: N C (D*H) W -> N C (D*Hout) Wout
+      ArrayAttr kernelHW = rewriter.getI64ArrayAttr({k[1], k[2]});
+      ArrayAttr stridesHW = rewriter.getI64ArrayAttr({s[1], s[2]});
+      ArrayAttr padsHW = rewriter.getI64ArrayAttr({p[1], p[2], p[4], p[5]});
+
+      auto maxpoolHW = rewriter.create<ONNXMaxPoolSingleOutOp>(
+          maxpool3d.getLoc(), UnrankedTensorType::get(elemTy), foldHeightReshape,
+          /*auto_pad=*/maxpool3d.getAutoPadAttr(),
+          /*ceil_mode=*/maxpool3d.getCeilModeAttr(),
+          /*dilations=*/rewriter.getI64ArrayAttr({1, 1}),
+          /*kernel_shape=*/kernelHW,
+          /*pads=*/padsHW,
+          /*storage_order=*/maxpool3d.getStorageOrderAttr(),
+          /*strides=*/stridesHW);
+
+        if (failed(maxpoolHW.inferShapes([](Region &) {})))
+          return rewriter.notifyMatchFailure(
+              maxpool3d->getLoc(), "could not infer 2D maxpool shape");
+
+        
+      // Reshape: N C (D*Hout) Wout -> N C D Hout Wout
+      ArrayRef<int64_t> maxpoolHWOutShape =
+          mlir::cast<ShapedType>(maxpoolHW.getResult().getType()).getShape();
+      auto ksizeDepth = k[0];
+      int64_t depthDim = maxpool3dInShape[2];               // D
+      int64_t heightOut = maxpoolHWOutShape[2] / depthDim;  // Hout = (D*Hout)/D
+      SmallVector<int64_t> depthUnfoldShapeVec = {
+          maxpool3dInShape[0],    // N
+          maxpool3dInShape[1],    // C
+          depthDim,               // D
+          heightOut,              // Hout
+          maxpoolHWOutShape[3]};  // Wout
+      Value depthUnfoldReshape = b.onnx.reshape(
+          RankedTensorType::get(depthUnfoldShapeVec, elemTy),
+          maxpoolHW.getResult(), b.onnx.constantInt64(depthUnfoldShapeVec));
+
+      // Slice: N C D Hout Wout -> N C D/ksize Hout Wout
+      //                        -> N C D/ksize Hout Wout
+      SmallVector<int64_t> depthPoolShapeVec = {
+          maxpool3dInShape[0],    // N
+          maxpool3dInShape[1],    // C
+          depthDim / ksizeDepth,  // Dout
+          heightOut,              // Hout
+          maxpoolHWOutShape[3]};  // Wout
+      Type depthPoolTy = RankedTensorType::get(depthPoolShapeVec, elemTy);
+      Value evenDepthSlice = b.onnx.slice(depthPoolTy, depthUnfoldReshape,
+          /*starts=*/b.onnx.constantInt64({0}), /*ends=*/b.onnx.constantInt64({depthDim}),
+          /*axes=*/b.onnx.constantInt64({2}), /*steps=*/b.onnx.constantInt64({ksizeDepth}));
+      Value oddDepthSlice = b.onnx.slice(depthPoolTy, depthUnfoldReshape,
+          /*starts=*/b.onnx.constantInt64({1}), /*ends=*/b.onnx.constantInt64({depthDim}),
+          /*axes=*/b.onnx.constantInt64({2}), /*steps=*/b.onnx.constantInt64({ksizeDepth}));
+
+      // Max(N C D/kize Hout Wout, N C D/kize Hout Wout)  -> N C Dout Hout Wout
+      SmallVector<Value> depthMaxInputs = {evenDepthSlice, oddDepthSlice};
+      Value depthMax = b.onnx.max(depthMaxInputs);
+
+      rewriter.replaceOp(maxpool3d, depthMax);
+      return success();
+    }
+  };
+
+// =============================================================================
 // Fuses back-to-back maxpools (ONNXMaxPoolSingleOutOps):
 // Goes From:
 //                    │
@@ -4704,6 +4884,7 @@ void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<ReorderReluMaxPoolPattern>(context);
   results.insert<FuseBackToBackMaxpools>(context);
+  results.insert<Convert3dMaxpoolto2dMaxpool>(context);
 }
 
 /// on the ONNXMulOp.
