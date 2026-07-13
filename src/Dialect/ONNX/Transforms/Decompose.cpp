@@ -65,6 +65,7 @@ namespace onnx_mlir {
 // OMONNXRewrite so the rewrite/transform libraries do not need to link
 // OMCompilerOptions (see Decompose.hpp for the rationale).
 bool separatePhasedConvsForConvTransposeActive = false;
+bool interleavedValidChannelsForConvTransposeActive = false;
 
 // Create an DenseElementsAttr of ArrayAttr.
 // This function is used to get Value Type of an EXISTING ArrayAttr for Scaler
@@ -1728,6 +1729,131 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
                        ValueRange{conv2, conv4, conv3, conv1}, 1)
                  : rewriter.create<ONNXConcatOp>(loc, concatOutputType,
                        ValueRange{conv1, conv3, conv4, conv2}, 1);
+    } else if (interleavedValidChannelsForConvTransposeActive &&
+               convOutputShape[1] == 1) {
+      // Interleaved-valid-channels merge (only for ConvTranspose with a single
+      // output channel, C_out == 1).
+      //
+      // Over-produce the conv output channels so each of the 4 phases occupies
+      // its own group of `groupSize` channels (its C_real valid channels first,
+      // the remaining lanes garbage). With groupSize == 4 and C_out == 1 this
+      // yields 2(H-phase) x 2(W-phase) x 4 = 16 output channels (a group of 4 is
+      // sufficient for C:8 vectorization; no need to pad each phase to a full 8).
+      // The 2x2 phase structure lives in the channel groups, so the pixel merge
+      // collapses to a reshape/transpose (free in the C:8 vectorized layout)
+      // followed by a single channel slice that drops the garbage lanes
+      // (groupSize -> C_real). No sub-word DDR transpose is needed.
+      //
+      // This mirrors the combined-weights else-branch below (which is only
+      // reached with uniform per-phase pads, i.e. reverseOrder == false), so the
+      // phase order [TL, TR, BL, BR] maps to weight slices {ws3, ws1, ws2, ws0}.
+      const int64_t groupSize = 4;
+      const int64_t cReal = convOutputShape[1];
+      assert(cReal <= groupSize &&
+             "interleaved-valid-channels path expects per-phase C_out <= 4");
+      const int64_t garbageChannels = groupSize - cReal;
+      auto wtsElemType = weightsType.getElementType();
+
+      SmallVector<Value, 4> phaseSlices = {weightSlices[3], weightSlices[1],
+          weightSlices[2], weightSlices[0]};
+
+      Value garbageWeights;
+      if (garbageChannels > 0) {
+        auto garbageWtsType = RankedTensorType::get(
+            {garbageChannels, weightsShape[1], convKernelSize, convKernelSize},
+            wtsElemType);
+        garbageWeights = create.onnx.constant(DenseElementsAttr::get(
+            garbageWtsType, rewriter.getZeroAttr(wtsElemType)));
+      }
+
+      SmallVector<Value> combinedWeightsOperands;
+      for (Value phaseSlice : phaseSlices) {
+        combinedWeightsOperands.push_back(phaseSlice);
+        if (garbageChannels > 0)
+          combinedWeightsOperands.push_back(garbageWeights);
+      }
+      auto combinedConvWeightsShapedType = weightsType.get(
+          {groupSize * 4, weightsShape[1], convKernelSize, convKernelSize},
+          wtsElemType);
+      Value combinedWeights = rewriter.create<ONNXConcatOp>(
+          loc, combinedConvWeightsShapedType, combinedWeightsOperands, 0);
+
+      if (!bias.getDefiningOp<ONNXNoneOp>()) {
+        RankedTensorType biasType =
+            mlir::cast<RankedTensorType>(bias.getType());
+        Value garbageBias;
+        if (garbageChannels > 0) {
+          auto garbageBiasType =
+              RankedTensorType::get({garbageChannels}, biasType.getElementType());
+          garbageBias = create.onnx.constant(DenseElementsAttr::get(
+              garbageBiasType, rewriter.getZeroAttr(biasType.getElementType())));
+        }
+        SmallVector<Value> biasOperands;
+        for (int i = 0; i < 4; i++) {
+          biasOperands.push_back(bias);
+          if (garbageChannels > 0)
+            biasOperands.push_back(garbageBias);
+        }
+        auto combinedBiasShapedType =
+            biasType.get({groupSize * 4}, biasType.getElementType());
+        bias = rewriter.create<ONNXConcatOp>(
+            loc, combinedBiasShapedType, biasOperands, 0);
+      }
+
+      auto combinedConvOutputType = RankedTensorType::get(
+          SmallVector<int64_t>({convOutputShape[0], groupSize * 4,
+              convOutputShape[2], convOutputShape[3]}),
+          elementType);
+      Value combinedConv = getActivationAppliedToConv(
+          addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
+              combinedConvOutputType, input,
+              addDequantizeNodeIfNeeded(combinedWeights), bias,
+              mlir::StringAttr(), dilations, group, convKernelShapeArrayAttr,
+              getPadsArrayAttr(kernelShape[0], 1, needWeightsPadding),
+              stridesArrayAttr)),
+          combinedConvOutputType);
+
+      // Emit the pixel-shuffle merge in the same 5-D, N-dropped style as the
+      // combined-weights path below (reshape [B,B,g,H,W] -> transpose
+      // {2,3,0,4,1} -> reshape [1,g,2H,2W]). This intentionally avoids the
+      // canonical 6-D DepthToSpace layout ([N,B,B,C/B^2,H,W] + perm
+      // {0,3,4,1,5,2}) so RecomposeDepthToSpace does not fold the sequence back
+      // into an onnx.DepthToSpace, keeping the explicit ops for legalization.
+      //
+      // [1, 4*G, H, W] -> [2, 2, G, H, W]  (Hphase, Wphase, g, H, W)
+      SmallVector<int64_t> reshapeSplitShape = {2, 2, groupSize,
+          convOutputShape[2], convOutputShape[3]};
+      auto reshapeSplitType =
+          RankedTensorType::get(reshapeSplitShape, elementType);
+      Value reshapeSplit = rewriter.create<ONNXReshapeOp>(loc, reshapeSplitType,
+          combinedConv,
+          getONNXConstOpFromVector(rewriter, loc, reshapeSplitShape));
+
+      // transpose -> [G, H, 2, W, 2]  (g, H, Hphase, W, Wphase)
+      SmallVector<int64_t> transposeShape = {groupSize, convOutputShape[2], 2,
+          convOutputShape[3], 2};
+      auto transposeType = RankedTensorType::get(transposeShape, elementType);
+      auto permAttr = rewriter.getI64ArrayAttr({2, 3, 0, 4, 1});
+      Value transposed = rewriter.create<ONNXTransposeOp>(
+          loc, transposeType, reshapeSplit, permAttr);
+
+      // reshape -> [1, G, 2H, 2W]  (H*Hphase, W*Wphase merged)
+      SmallVector<int64_t> mergeShape = {1, groupSize, convOutputShape[2] * 2,
+          convOutputShape[3] * 2};
+      auto mergeType = RankedTensorType::get(mergeShape, elementType);
+      Value merged = rewriter.create<ONNXReshapeOp>(loc, mergeType, transposed,
+          getONNXConstOpFromVector(rewriter, loc, mergeShape));
+
+      // slice channels [0:cReal] -> [1, cReal, 2H, 2W]  (drop garbage lanes)
+      SmallVector<int64_t> finalShape = {1, cReal, convOutputShape[2] * 2,
+          convOutputShape[3] * 2};
+      auto finalType = RankedTensorType::get(finalShape, elementType);
+      Value finalOutput = create.onnx.slice(finalType, merged,
+          getONNXConstOpFromVector(rewriter, loc, {0}),
+          getONNXConstOpFromVector(rewriter, loc, {cReal}),
+          getONNXConstOpFromVector(rewriter, loc, {1}),
+          getONNXConstOpFromVector(rewriter, loc, {1}));
+      return finalOutput;
     } else {
       // Combining the 4 phased weights into single weight.
       bool reverseOrder = (kernelShape[0] == 4);
@@ -4687,7 +4813,8 @@ struct DecomposeONNXToONNXPass
       bool enableSplitToSliceDecompose = false, bool enableConcatFuse = true,
       bool enableLstmSeqDecompose = false, bool enableReduceL2Decompose = true,
       bool enableGatherToSlice = true, bool enableHardSwishDecompose = true,
-      bool enableSeparatePhasedConvsForConvTranspose = false) {
+      bool enableSeparatePhasedConvsForConvTranspose = false,
+      bool enableInterleavedValidChannelsForConvTranspose = false) {
     this->target = target;
     this->enableConvTransposeDecompose = enableConvTransposeDecompose;
     this->enableConvTransposeDecomposeToPhasedConv =
@@ -4707,6 +4834,8 @@ struct DecomposeONNXToONNXPass
     this->enableHardSwishDecompose = enableHardSwishDecompose;
     this->enableSeparatePhasedConvsForConvTranspose =
         enableSeparatePhasedConvsForConvTranspose;
+    this->enableInterleavedValidChannelsForConvTranspose =
+        enableInterleavedValidChannelsForConvTranspose;
   }
 
   DecomposeONNXToONNXPass(const DecomposeONNXToONNXPass &pass)
@@ -4818,6 +4947,16 @@ struct DecomposeONNXToONNXPass
           "single Conv, when the conv output channels are DMA-aligned."),
       ::llvm::cl::init(false)};
 
+  Option<bool> enableInterleavedValidChannelsForConvTranspose{*this,
+      "enable-interleaved-valid-channels-for-convtranspose",
+      llvm::cl::desc(
+          "In 4-phase ConvTranspose decomposition (C_out == 1), over-produce "
+          "the combined conv output channels so each phase occupies its own "
+          "group of 4 channels (valid + garbage), reducing the pixel merge to a "
+          "reshape/transpose plus a single channel slice (4 -> C_real) with no "
+          "sub-word DDR transpose."),
+      ::llvm::cl::init(false)};
+
   void runOnOperation() final;
 
   typedef PassWrapper<DecomposeONNXToONNXPass, OperationPass<func::FuncOp>>
@@ -4829,6 +4968,8 @@ void DecomposeONNXToONNXPass::runOnOperation() {
   MLIRContext *context = &getContext();
   onnx_mlir::separatePhasedConvsForConvTransposeActive =
       this->enableSeparatePhasedConvsForConvTranspose.getValue();
+  onnx_mlir::interleavedValidChannelsForConvTransposeActive =
+      this->enableInterleavedValidChannelsForConvTranspose.getValue();
   RewritePatternSet patterns(context);
   onnx_mlir::getDecomposeONNXToONNXPatterns(patterns,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
@@ -4947,7 +5088,8 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createDecomposeONNXToONNXPass(
     bool enableSplitToSliceDecompose, bool enableConcatFuse,
     bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
     bool enableGatherToSlice, bool enableHardSwishDecompose,
-    bool enableSeparatePhasedConvsForConvTranspose) {
+    bool enableSeparatePhasedConvsForConvTranspose,
+    bool enableInterleavedValidChannelsForConvTranspose) {
   return std::make_unique<DecomposeONNXToONNXPass>(target,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
       enableConvTranspose1dDecomposeToPhasedConv, enableInstanceNormDecompose,
@@ -4955,5 +5097,6 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createDecomposeONNXToONNXPass(
       enableGroupQueryAttentionDecompose, enableSplitToSliceDecompose,
       enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
       enableGatherToSlice, enableHardSwishDecompose,
-      enableSeparatePhasedConvsForConvTranspose);
+      enableSeparatePhasedConvsForConvTranspose,
+      enableInterleavedValidChannelsForConvTranspose);
 }

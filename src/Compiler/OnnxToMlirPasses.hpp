@@ -29,6 +29,7 @@ struct OnnxToMlirOptions {
   bool enableConvTransposeDecomposeToPhasedConv = false;
   bool enableConvTranspose1dDecomposeToPhasedConv = false;
   bool enableSeparatePhasedConvsForConvTranspose = false;
+  bool enableInterleavedValidChannelsForConvTranspose = false;
   bool enableInstanceNormDecompose = true;
   bool enableGroupNormDecompose = true;
   bool enableReduceL2Decompose = true;

@@ -34,6 +34,7 @@ namespace onnx_mlir {
 // patterns. Defined in Decompose.cpp (OMONNXRewrite) on purpose so the rewrite
 // libraries do not need to link OMCompilerOptions
 extern bool separatePhasedConvsForConvTransposeActive;
+extern bool interleavedValidChannelsForConvTransposeActive;
 
 // Exports the DecomposeONNXToONNXPass patterns. They are all plain rewrite
 // patterns that can be used with any PatternRewriter, not conversion patterns.

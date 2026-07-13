@@ -190,6 +190,16 @@ struct ONNXHybridTransformPass
           "single Conv, when the conv output channels are DMA-aligned."),
       ::llvm::cl::init(false)};
 
+  Option<bool> enableInterleavedValidChannelsForConvTranspose{*this,
+      "enable-interleaved-valid-channels-for-convtranspose",
+      llvm::cl::desc(
+          "In 4-phase ConvTranspose decomposition (C_out == 1), over-produce "
+          "the combined conv output channels so each phase occupies its own "
+          "group of 4 channels (valid + garbage), reducing the pixel merge to a "
+          "reshape/transpose plus a single channel slice (4 -> C_real) with no "
+          "sub-word DDR transpose."),
+      ::llvm::cl::init(false)};
+
   FrozenRewritePatternSet patterns;
 
   ONNXHybridTransformPass(bool enableRecomposition,
@@ -204,7 +214,8 @@ struct ONNXHybridTransformPass
       bool enableGatherToSlice = true, bool enableReduceL2Decompose = true,
       bool enableRotaryEmbeddingRecompose = false,
       bool enableQDQConstProp = false, bool enableHardSwishDecompose = true,
-      bool enableSeparatePhasedConvsForConvTranspose = false) {
+      bool enableSeparatePhasedConvsForConvTranspose = false,
+      bool enableInterleavedValidChannelsForConvTranspose = false) {
     this->recomposition = enableRecomposition;
     this->quarkQuantizedOpsLegalization = enableQuarkQuantizedOpsLegalization;
     this->enableConvTransposeDecompose = enableConvTransposeDecompose;
@@ -228,6 +239,8 @@ struct ONNXHybridTransformPass
     this->enableHardSwishDecompose = enableHardSwishDecompose;
     this->enableSeparatePhasedConvsForConvTranspose =
         enableSeparatePhasedConvsForConvTranspose;
+    this->enableInterleavedValidChannelsForConvTranspose =
+        enableInterleavedValidChannelsForConvTranspose;
   }
 
   ONNXHybridTransformPass(const ONNXHybridTransformPass &pass)
@@ -304,6 +317,8 @@ struct ONNXHybridTransformPass
     Region &body = f.getBody();
     onnx_mlir::separatePhasedConvsForConvTransposeActive =
         this->enableSeparatePhasedConvsForConvTranspose.getValue();
+    onnx_mlir::interleavedValidChannelsForConvTransposeActive =
+        this->enableInterleavedValidChannelsForConvTranspose.getValue();
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
@@ -347,7 +362,8 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createONNXHybridTransformPass(
     bool enableGatherToSlice, bool enableReduceL2Decompose,
     bool enableRotaryEmbeddingRecompose, bool enableQDQConstProp,
     bool enableHardSwishDecompose,
-    bool enableSeparatePhasedConvsForConvTranspose) {
+    bool enableSeparatePhasedConvsForConvTranspose,
+    bool enableInterleavedValidChannelsForConvTranspose) {
   return std::make_unique<ONNXHybridTransformPass>(enableRecomposition,
       enableQuarkQuantizedOpsLegalization, enableConvTransposeDecompose,
       enableConvTransposeDecomposeToPhasedConv,
@@ -357,5 +373,6 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createONNXHybridTransformPass(
       enableConcatFuse, enableGAPToReduceMean, enableLstmSeqDecompose,
       enableGatherToSlice, enableReduceL2Decompose,
       enableRotaryEmbeddingRecompose, enableQDQConstProp,
-      enableHardSwishDecompose, enableSeparatePhasedConvsForConvTranspose);
+      enableHardSwishDecompose, enableSeparatePhasedConvsForConvTranspose,
+      enableInterleavedValidChannelsForConvTranspose);
 }
