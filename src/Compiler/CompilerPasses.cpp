@@ -242,6 +242,8 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
         enableConvTranspose1dDecomposeToPhasedConv;
     opts.enableSeparatePhasedConvsForConvTranspose =
         enableSeparatePhasedConvsForConvTranspose;
+    opts.enableInterleavedValidChannelsForConvTranspose =
+        enableInterleavedValidChannelsForConvTranspose;
     opts.disableBatchNormDecompose = disableBatchNormDecompose;
     opts.disableRecomposeOption = disableRecomposeOption;
     opts.enableUnsafeMathOptimizations = enableUnsafeMathOptimizations;

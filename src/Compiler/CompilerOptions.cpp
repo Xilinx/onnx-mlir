@@ -51,6 +51,7 @@ bool enableKrnlBufferReuse;                            // common for both
 bool enableConvTransposeDecomposeToPhasedConv;         // common for both
 bool enableConvTranspose1dDecomposeToPhasedConv;       // common for both
 bool enableSeparatePhasedConvsForConvTranspose;        // common for both
+bool enableInterleavedValidChannelsForConvTranspose;   // common for both
 bool enableQuarkQuantizerLegalization;                 // common for both
 bool disableBatchNormDecompose;                        // common for both
 bool enableSafeCodeGen;                                // common for both
@@ -338,6 +339,18 @@ static llvm::cl::opt<bool, true> enableSeparatePhasedConvsForConvTransposeOpt(
         "a single Conv, when the conv output channels are DMA-aligned."),
     llvm::cl::location(enableSeparatePhasedConvsForConvTranspose),
     llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true>
+    enableInterleavedValidChannelsForConvTransposeOpt(
+        "enable-interleaved-valid-channels-for-convtranspose",
+        llvm::cl::desc(
+            "In 4-phase ConvTranspose decomposition (C_out == 1), over-produce "
+            "the combined conv output channels so each phase occupies its own "
+            "group of 4 channels (valid + garbage), reducing the pixel merge "
+            "to a reshape/transpose plus a single channel slice with no "
+            "sub-word DDR transpose."),
+        llvm::cl::location(enableInterleavedValidChannelsForConvTranspose),
+        llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true> enableQuarkQuantizerLegalizationOptionOpt(
     "enable-quark-quantizer-legalization",
