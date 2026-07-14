@@ -40,6 +40,7 @@ struct OnnxToMlirOptions {
   bool enableCastDataMovementPatterns = true;
   bool enableKeepdimsCanonicalization = false;
   bool enableGatherElementsTileCanonicalization = true;
+  bool enableSliceCanonicalization = false;
   bool enableXFEONNXOpsetVerifier = true;
   bool enableUnsafeMathOptimizations = true;
   bool enableQDQDataMovementCanonicalization = false;

@@ -50,7 +50,7 @@ LogicalResult ONNXSliceOpShapeHelper::computeShape() {
       int64_t axis = val.getLiteral();
       if (axis < 0)
         axis += dataRank;
-      if (!(axis >= 0 && axis < static_cast<int64_t>(dataRank)))
+      if (axis < 0 || axis >= static_cast<int64_t>(dataRank))
         return op->emitError("Axes contains an out-of-bound index");
       axesIntLit.emplace_back(axis);
     }
