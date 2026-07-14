@@ -489,6 +489,9 @@ special_type_constraints = {
     "Slice": {
         "T": ["tensor(uint4)", "tensor(int4)"],
     },
+    "Gather": {
+        "Tind": ["tensor(int16)"],
+    },
 }
 
 # Manual specification of attribute type.
