@@ -205,7 +205,7 @@ public:
       // Update the input op to have the right quant type and ResultNames
       rewriter.modifyOpInPlace(
           binOp, [&]() { lhs.setType(lhsType.clone(newQType)); });
-      ResultNamesUpdater().notifyOperationReplaced(binOp, lhs.getDefiningOp());
+      ResultNamesUpdater().notifyOperationReplaced(binOp, lhs);
 
       auto qScast = rewriter.create<quant::StorageCastOp>(
           binLoc, lhsType.clone(newQType.getStorageType()), lhs);
