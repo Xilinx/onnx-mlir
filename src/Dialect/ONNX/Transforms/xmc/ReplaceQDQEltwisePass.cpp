@@ -972,6 +972,9 @@ struct ReplaceExpandWithEltwise : public OpRewritePattern<ONNXExpandOp> {
     if (!inputRankedType || !outputRankedType)
       return rewriter.notifyMatchFailure(expandOp, "not ranked tensors");
 
+    if (!inputRankedType.hasStaticShape() || !outputRankedType.hasStaticShape())
+      return rewriter.notifyMatchFailure(expandOp, "requires static shapes");
+
     auto inputShape = inputRankedType.getShape();
     if (inputShape.size() == 4 && inputShape[2] != 1)
       return rewriter.notifyMatchFailure(
@@ -981,21 +984,27 @@ struct ReplaceExpandWithEltwise : public OpRewritePattern<ONNXExpandOp> {
                             << expandOp->getName() << "\n");
 
     auto outputShape = outputRankedType.getShape();
-    Type elemType = outputRankedType.getElementType();
 
-    // Build a zero constant with the output shape and storage type.
-    Type storageType = elemType;
+    Type inElemType = inputRankedType.getElementType();
+    Type constElemType = inElemType;
+    Type storageType = inElemType;
+    DenseElementsAttr zeroAttr;
     if (auto qType =
-            mlir::dyn_cast<mlir::quant::UniformQuantizedType>(elemType))
+            mlir::dyn_cast<mlir::quant::UniformQuantizedType>(inElemType)) {
       storageType = qType.getStorageType();
+      zeroAttr = DenseElementsAttr::get(
+          RankedTensorType::get(outputShape, storageType),
+          rewriter.getIntegerAttr(storageType, qType.getZeroPoint()));
+    } else {
+      zeroAttr = DenseElementsAttr::get(
+          RankedTensorType::get(outputShape, storageType),
+          rewriter.getZeroAttr(storageType));
+    }
 
-    auto zeroAttr =
-        DenseElementsAttr::get(RankedTensorType::get(outputShape, storageType),
-            rewriter.getZeroAttr(storageType));
-
+    auto constResultType = RankedTensorType::get(outputShape, constElemType);
     auto valueNamedAttr = rewriter.getNamedAttr("value", zeroAttr);
     auto zeroConst = rewriter.create<ONNXConstantOp>(expandOp.getLoc(),
-        outputRankedType, mlir::ValueRange{},
+        constResultType, mlir::ValueRange{},
         mlir::ArrayRef<mlir::NamedAttribute>{valueNamedAttr});
 
     auto fusedOp = rewriter.create<XCOMPILERFusedEltwiseOp>(expandOp.getLoc(),
