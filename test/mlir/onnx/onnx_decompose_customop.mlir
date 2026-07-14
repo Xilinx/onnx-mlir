@@ -1,5 +1,6 @@
 // Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
 // RUN: onnx-mlir-opt --decompose-onnx %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --decompose-onnx=enable-gqa-uint16-cache-slot-rewrite=false %s -split-input-file | FileCheck %s --check-prefix=SCATTER
 
 // COM: Decompose CustomOp introduced by onnxruntime.
 
@@ -1018,13 +1019,34 @@ func.func @gqa_preallocated_cache_slot_write(
 
 // CHECK-LABEL: func.func @gqa_preallocated_cache_slot_write
 // CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x512x96xf32>, %[[PAST_V:.*]]: tensor<1x16x512x96xf32>) -> (tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>)
+// CHECK:       %[[POSITIONS:.*]] = onnx.Constant {{.*}} : tensor<1x1x512x1xui16>
 // CHECK:       %[[NONE:.*]] = "onnx.NoValue"() {value} : () -> none
-// CHECK:       %[[PRESENT_K:.*]] = "onnx.ScatterElements"(%[[PAST_K]], {{.*}}) {axis = 2 : si64, reduction = "none"} : (tensor<1x16x512x96xf32>, tensor<1x16x1x96xi64>, tensor<1x16x1x96xf32>) -> tensor<1x16x512x96xf32>
-// CHECK:       %[[PRESENT_V:.*]] = "onnx.ScatterElements"(%[[PAST_V]], {{.*}}) {axis = 2 : si64, reduction = "none"} : (tensor<1x16x512x96xf32>, tensor<1x16x1x96xi64>, tensor<1x16x1x96xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[SEQLENS_UI16:.*]] = "onnx.Cast"({{.*}}) {saturate = 1 : si64, to = ui16} : (tensor<1x1xi32>) -> tensor<1x1xui16>
+// CHECK:       %[[SEQLENS_4D:.*]] = "onnx.Reshape"(%[[SEQLENS_UI16]], {{.*}}) {allowzero = 0 : si64} : (tensor<1x1xui16>, tensor<4xi64>) -> tensor<1x1x1x1xui16>
+// CHECK-NOT:   "onnx.Expand"
+// CHECK:       %[[SELECTED_SLOT:.*]] = "onnx.Equal"(%[[POSITIONS]], %[[SEQLENS_4D]]) : (tensor<1x1x512x1xui16>, tensor<1x1x1x1xui16>) -> tensor<1x1x512x1xi1>
+// CHECK:       %[[SLOT_SELECTOR:.*]] = "onnx.Cast"(%[[SELECTED_SLOT]]) {saturate = 1 : si64, to = f32} : (tensor<1x1x512x1xi1>) -> tensor<1x1x512x1xf32>
+// CHECK:       %[[CURRENT_K:.*]] = "onnx.Transpose"({{.*}}) {perm = [0, 2, 1, 3]} : (tensor<1x1x16x96xf32>) -> tensor<1x16x1x96xf32>
+// CHECK:       %[[K_DELTA:.*]] = "onnx.Sub"(%[[CURRENT_K]], %[[PAST_K]]) : (tensor<1x16x1x96xf32>, tensor<1x16x512x96xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[SELECTED_K_DELTA:.*]] = "onnx.Mul"(%[[K_DELTA]], %[[SLOT_SELECTOR]]) : (tensor<1x16x512x96xf32>, tensor<1x1x512x1xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[PRESENT_K:.*]] = "onnx.Add"(%[[PAST_K]], %[[SELECTED_K_DELTA]]) : (tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[CURRENT_V:.*]] = "onnx.Transpose"({{.*}}) {perm = [0, 2, 1, 3]} : (tensor<1x1x16x96xf32>) -> tensor<1x16x1x96xf32>
+// CHECK:       %[[V_DELTA:.*]] = "onnx.Sub"(%[[CURRENT_V]], %[[PAST_V]]) : (tensor<1x16x1x96xf32>, tensor<1x16x512x96xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[SELECTED_V_DELTA:.*]] = "onnx.Mul"(%[[V_DELTA]], %[[SLOT_SELECTOR]]) : (tensor<1x16x512x96xf32>, tensor<1x1x512x1xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[PRESENT_V:.*]] = "onnx.Add"(%[[PAST_V]], %[[SELECTED_V_DELTA]]) : (tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>) -> tensor<1x16x512x96xf32>
+// CHECK-NOT:   "onnx.ScatterElements"
 // CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x512xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x512xf32>
 // CHECK:       %[[Y:.*]], %[[PK_NONE:.*]], %[[PV_NONE:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[PRESENT_K]], %[[PRESENT_V]], %[[MASK]], %[[NONE]], %[[NONE]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>, tensor<1x1x1x512xf32>, none, none) -> (tensor<1x1x3072xf32>, none, none, none)
 // CHECK:       return %[[Y]], %[[PRESENT_K]], %[[PRESENT_V]] : tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>
+
+// SCATTER-LABEL: func.func @gqa_preallocated_cache_slot_write
+// SCATTER-NOT:   ui16
+// SCATTER:       %[[K_INDICES:.*]] = "onnx.Expand"({{.*}}) : (tensor<1x1x1x1xi64>, tensor<4xi64>) -> tensor<1x16x1x96xi64>
+// SCATTER:       %[[PRESENT_K:.*]] = "onnx.ScatterElements"(%[[PAST_K:.*]], %[[K_INDICES]], {{.*}}) {axis = 2 : si64, reduction = "none"} : (tensor<1x16x512x96xf32>, tensor<1x16x1x96xi64>, tensor<1x16x1x96xf32>) -> tensor<1x16x512x96xf32>
+// SCATTER:       %[[V_INDICES:.*]] = "onnx.Expand"({{.*}}) : (tensor<1x1x1x1xi64>, tensor<4xi64>) -> tensor<1x16x1x96xi64>
+// SCATTER:       %[[PRESENT_V:.*]] = "onnx.ScatterElements"(%[[PAST_V:.*]], %[[V_INDICES]], {{.*}}) {axis = 2 : si64, reduction = "none"} : (tensor<1x16x512x96xf32>, tensor<1x16x1x96xi64>, tensor<1x16x1x96xf32>) -> tensor<1x16x512x96xf32>
+// SCATTER:       return {{.*}}, %[[PRESENT_K]], %[[PRESENT_V]]
 
 // -----
 
@@ -1051,9 +1073,22 @@ func.func @gqa_preallocated_cache_slot_write_with_attention_bias(
 
 // CHECK-LABEL: func.func @gqa_preallocated_cache_slot_write_with_attention_bias
 // CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x512x96xf32>, %[[PAST_V:.*]]: tensor<1x16x512x96xf32>, %[[BIAS:.*]]: tensor<1x32x1x512xf32>) -> (tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>)
+// CHECK:       %[[POSITIONS:.*]] = onnx.Constant {{.*}} : tensor<1x1x512x1xui16>
 // CHECK:       %[[NONE:.*]] = "onnx.NoValue"() {value} : () -> none
-// CHECK:       %[[PRESENT_K:.*]] = "onnx.ScatterElements"(%[[PAST_K]], {{.*}}) {axis = 2 : si64, reduction = "none"} : (tensor<1x16x512x96xf32>, tensor<1x16x1x96xi64>, tensor<1x16x1x96xf32>) -> tensor<1x16x512x96xf32>
-// CHECK:       %[[PRESENT_V:.*]] = "onnx.ScatterElements"(%[[PAST_V]], {{.*}}) {axis = 2 : si64, reduction = "none"} : (tensor<1x16x512x96xf32>, tensor<1x16x1x96xi64>, tensor<1x16x1x96xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[SEQLENS_UI16:.*]] = "onnx.Cast"({{.*}}) {saturate = 1 : si64, to = ui16} : (tensor<1x1xi32>) -> tensor<1x1xui16>
+// CHECK:       %[[SEQLENS_4D:.*]] = "onnx.Reshape"(%[[SEQLENS_UI16]], {{.*}}) {allowzero = 0 : si64} : (tensor<1x1xui16>, tensor<4xi64>) -> tensor<1x1x1x1xui16>
+// CHECK-NOT:   "onnx.Expand"
+// CHECK:       %[[SELECTED_SLOT:.*]] = "onnx.Equal"(%[[POSITIONS]], %[[SEQLENS_4D]]) : (tensor<1x1x512x1xui16>, tensor<1x1x1x1xui16>) -> tensor<1x1x512x1xi1>
+// CHECK:       %[[SLOT_SELECTOR:.*]] = "onnx.Cast"(%[[SELECTED_SLOT]]) {saturate = 1 : si64, to = f32} : (tensor<1x1x512x1xi1>) -> tensor<1x1x512x1xf32>
+// CHECK:       %[[CURRENT_K:.*]] = "onnx.Transpose"({{.*}}) {perm = [0, 2, 1, 3]} : (tensor<1x1x16x96xf32>) -> tensor<1x16x1x96xf32>
+// CHECK:       %[[K_DELTA:.*]] = "onnx.Sub"(%[[CURRENT_K]], %[[PAST_K]]) : (tensor<1x16x1x96xf32>, tensor<1x16x512x96xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[SELECTED_K_DELTA:.*]] = "onnx.Mul"(%[[K_DELTA]], %[[SLOT_SELECTOR]]) : (tensor<1x16x512x96xf32>, tensor<1x1x512x1xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[PRESENT_K:.*]] = "onnx.Add"(%[[PAST_K]], %[[SELECTED_K_DELTA]]) : (tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[CURRENT_V:.*]] = "onnx.Transpose"({{.*}}) {perm = [0, 2, 1, 3]} : (tensor<1x1x16x96xf32>) -> tensor<1x16x1x96xf32>
+// CHECK:       %[[V_DELTA:.*]] = "onnx.Sub"(%[[CURRENT_V]], %[[PAST_V]]) : (tensor<1x16x1x96xf32>, tensor<1x16x512x96xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[SELECTED_V_DELTA:.*]] = "onnx.Mul"(%[[V_DELTA]], %[[SLOT_SELECTOR]]) : (tensor<1x16x512x96xf32>, tensor<1x1x512x1xf32>) -> tensor<1x16x512x96xf32>
+// CHECK:       %[[PRESENT_V:.*]] = "onnx.Add"(%[[PAST_V]], %[[SELECTED_V_DELTA]]) : (tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>) -> tensor<1x16x512x96xf32>
+// CHECK-NOT:   "onnx.ScatterElements"
 // CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x512xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x512xf32>
 // CHECK:       %[[BIAS_MASK:.*]] = "onnx.Add"(%[[BIAS]], %[[MASK]]) : (tensor<1x32x1x512xf32>, tensor<1x1x1x512xf32>) -> tensor<1x32x1x512xf32>
 // CHECK:       %[[Y:.*]], %[[PK_NONE:.*]], %[[PV_NONE:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[PRESENT_K]], %[[PRESENT_V]], %[[BIAS_MASK]], %[[NONE]], %[[NONE]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}

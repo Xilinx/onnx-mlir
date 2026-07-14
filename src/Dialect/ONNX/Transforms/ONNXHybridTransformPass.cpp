@@ -130,7 +130,8 @@ struct ONNXHybridTransformPass
           enableSplitToSliceDecompose, enableConcatFuse, enableLstmSeqDecompose,
           enableReduceL2Decompose,
           /*disableGenericDecompositions=*/false, enableGatherToSlice,
-          enableHardSwishDecompose, enableDepthToSpaceDecompose);
+          enableHardSwishDecompose, enableDepthToSpaceDecompose,
+          enableGQAUint16CacheSlotRewrite);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
       if (target == "stablehlo") {

@@ -61,6 +61,12 @@ def ONNXDecomposePatternOptions {
            "Enable decomposition of Microsoft GroupQueryAttention to "
            "onnx.Attention and onnx.RotaryEmbedding ops.">,
 
+    Option<"enableGQAUint16CacheSlotRewrite",
+           "enable-gqa-uint16-cache-slot-rewrite",
+           "bool", /*default=*/"true",
+           "Rewrite preallocated GroupQueryAttention cache slot updates using "
+           "a uint16 selector and arithmetic instead of Expand/ScatterElements.">,
+
     Option<"enableSplitToSliceDecompose", "enable-split-to-slice",
            "bool", /*default=*/"false",
            "Enable decomposition of Split to Slice operations.">,

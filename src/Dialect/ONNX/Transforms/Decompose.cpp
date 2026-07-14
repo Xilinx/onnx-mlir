@@ -3302,8 +3302,12 @@ struct MicrosoftSkipSimplifiedLayerNorm : public CustomOpToOnnxOps {
 };
 
 struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
-  MicrosoftGroupQueryAttention(MLIRContext *ctx, PatternBenefit b = 1)
-      : CustomOpToOnnxOps(ctx, MicrosoftDomainName, "GroupQueryAttention", b) {}
+  MicrosoftGroupQueryAttention(
+      MLIRContext *ctx, bool enableUint16CacheSlotRewrite, PatternBenefit b = 1)
+      : CustomOpToOnnxOps(ctx, MicrosoftDomainName, "GroupQueryAttention", b),
+        enableUint16CacheSlotRewrite(enableUint16CacheSlotRewrite) {}
+
+  const bool enableUint16CacheSlotRewrite;
 
   using AttributeValidator = LogicalResult (*)(
       ONNXCustomOp, PatternRewriter &, Attribute);
@@ -3761,41 +3765,111 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
 
   // Build preallocated-cache present K/V. GQA updates one runtime slot:
   //   present[:, :, seqlens_k, :] = current K/V
-  // Convert current K/V from [B,1,H*D] to [B,H,1,D], expand seqlens_k to
-  // ScatterElements indices [B,H,1,D], then scatter into past K/V on axis 2.
-  // This preserves slot-write semantics that onnx.Attention's append-style
-  // present outputs cannot represent.
-  static FailureOr<Value> createPresentKVSlotWrite(PatternRewriter &rewriter,
-      Location loc, ONNXCustomOp customOp, Value pastKV, Value currentKV,
-      Value seqlensK, Type presentType, int64_t batchSize, int64_t kvSeqLen,
-      int64_t kvNumHeads, SmallVector<Value> &toCheck) {
-    auto pastType = cast<ShapedType>(pastKV.getType());
-    const int64_t headSize = pastType.getShape()[3];
-    auto current4dType = RankedTensorType::get(
-        {batchSize, kvNumHeads, kvSeqLen, headSize}, pastType.getElementType());
-    FailureOr<Value> current4dOr = createCurrentKV4D(rewriter, loc, customOp,
-        currentKV, batchSize, kvSeqLen, kvNumHeads, current4dType, toCheck);
-    if (failed(current4dOr))
+  // Both specializations convert current K/V from [B,1,H*D] to [B,H,1,D].
+  // The uint16 rewrite builds one shared selector for K and V, then uses:
+  //   present = past + (current - past) * selector
+  // The original path expands seqlens_k to i64 indices and uses
+  // ScatterElements.
+  template <bool UseUint16CacheSlotRewrite>
+  static FailureOr<SmallVector<Value, 2>> createPresentKVSlotWrite(
+      PatternRewriter &rewriter, Location loc, ONNXCustomOp customOp,
+      Value pastKey, Value key, Type presentKeyType, Value pastValue,
+      Value value, Type presentValueType, Value seqlensK, int64_t batchSize,
+      int64_t cacheSeqLen, int64_t kvSeqLen, int64_t kvNumHeads,
+      SmallVector<Value> &toCheck) {
+    Value slotSelector;
+    if constexpr (UseUint16CacheSlotRewrite) {
+      // Build a broadcastable selector for the runtime cache slot:
+      //   positions_ui16 = Constant [1, 1, T, 1] = 0..T-1
+      //   seqlens_ui16   = Cast(seqlens_k -> ui16)
+      //   selected_i1    = Equal(positions_ui16, reshape(seqlens_ui16))
+      //   selector       = Cast(selected_i1 -> K/V element type)
+      Type ui16Type = rewriter.getIntegerType(16, false);
+      auto seqlensType = cast<ShapedType>(seqlensK.getType());
+      auto seqlensUI16Type =
+          seqlensType.clone(seqlensType.getShape(), ui16Type);
+      Value seqlensUI16 = rewriter.create<ONNXCastOp>(
+          loc, seqlensUI16Type, seqlensK, nullptr, TypeAttr::get(ui16Type));
+
+      Value seqlens4dShape = onnx_mlir::getONNXConstOpFromVector(
+          rewriter, loc, {batchSize, 1, 1, 1});
+      auto seqlens4dType =
+          RankedTensorType::get({batchSize, 1, 1, 1}, ui16Type);
+      Value seqlens4d = rewriter.create<ONNXReshapeOp>(
+          loc, seqlens4dType, seqlensUI16, seqlens4dShape, nullptr);
+
+      SmallVector<Attribute> positionAttrs;
+      positionAttrs.reserve(cacheSeqLen);
+      for (int64_t i = 0; i < cacheSeqLen; ++i)
+        positionAttrs.push_back(rewriter.getIntegerAttr(ui16Type, i));
+      auto positionsType =
+          RankedTensorType::get({1, 1, cacheSeqLen, 1}, ui16Type);
+      Value positions = rewriter.create<ONNXConstantOp>(loc, Attribute(),
+          DenseElementsAttr::get(positionsType, ArrayRef(positionAttrs)));
+
+      Value selectedSlot =
+          rewriter.create<ONNXEqualOp>(loc, positions, seqlens4d);
+      Type cacheElementType =
+          cast<ShapedType>(pastKey.getType()).getElementType();
+      auto selectorType = RankedTensorType::get(
+          {batchSize, 1, cacheSeqLen, 1}, cacheElementType);
+      slotSelector = rewriter.create<ONNXCastOp>(loc, selectorType,
+          selectedSlot, nullptr, TypeAttr::get(cacheElementType));
+      toCheck.append({seqlensUI16, seqlens4dShape, seqlens4d, positions,
+          selectedSlot, slotSelector});
+    }
+
+    auto createOneSlotWrite = [&](Value pastKV, Value currentKV,
+                                  Type presentType) -> FailureOr<Value> {
+      auto pastType = cast<ShapedType>(pastKV.getType());
+      const int64_t headSize = pastType.getShape()[3];
+      auto current4dType =
+          RankedTensorType::get({batchSize, kvNumHeads, kvSeqLen, headSize},
+              pastType.getElementType());
+      FailureOr<Value> current4dOr = createCurrentKV4D(rewriter, loc, customOp,
+          currentKV, batchSize, kvSeqLen, kvNumHeads, current4dType, toCheck);
+      if (failed(current4dOr))
+        return failure();
+      Value current4d = *current4dOr;
+
+      if constexpr (UseUint16CacheSlotRewrite) {
+        Value delta =
+            rewriter.create<ONNXSubOp>(loc, presentType, current4d, pastKV);
+        Value selectedDelta =
+            rewriter.create<ONNXMulOp>(loc, presentType, delta, slotSelector);
+        Value present =
+            rewriter.create<ONNXAddOp>(loc, presentType, pastKV, selectedDelta);
+        toCheck.append({delta, selectedDelta, present});
+        return present;
+      } else {
+        Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
+        Value seqlens4d = reshapeI64(
+            rewriter, loc, seqlensI64, {batchSize, 1, 1, 1}, toCheck);
+        Value indexShape = onnx_mlir::getONNXConstOpFromVector(
+            rewriter, loc, {batchSize, kvNumHeads, 1, headSize});
+        auto indexType = RankedTensorType::get(
+            {batchSize, kvNumHeads, 1, headSize}, rewriter.getIntegerType(64));
+        Value indices = rewriter.create<ONNXExpandOp>(
+            loc, indexType, seqlens4d, indexShape);
+
+        Value present = rewriter.create<ONNXScatterElementsOp>(loc, presentType,
+            pastKV, indices, current4d,
+            rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), 2),
+            rewriter.getStringAttr("none"));
+        toCheck.append({indexShape, indices, present});
+        return present;
+      }
+    };
+
+    FailureOr<Value> presentKeyOr =
+        createOneSlotWrite(pastKey, key, presentKeyType);
+    if (failed(presentKeyOr))
       return failure();
-    Value current4d = *current4dOr;
-
-    Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
-    Value seqlens4d =
-        reshapeI64(rewriter, loc, seqlensI64, {batchSize, 1, 1, 1}, toCheck);
-    auto indexShape = onnx_mlir::getONNXConstOpFromVector(
-        rewriter, loc, {batchSize, kvNumHeads, 1, headSize});
-    auto indexType = RankedTensorType::get(
-        {batchSize, kvNumHeads, 1, headSize}, rewriter.getIntegerType(64));
-    Value indices =
-        rewriter.create<ONNXExpandOp>(loc, indexType, seqlens4d, indexShape);
-
-    // present[:, :, seqlens_k, :] = current K/V.
-    Value present = rewriter.create<ONNXScatterElementsOp>(loc, presentType,
-        pastKV, indices, current4d,
-        rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), 2),
-        rewriter.getStringAttr("none"));
-    toCheck.append({indexShape, indices, present});
-    return present;
+    FailureOr<Value> presentValueOr =
+        createOneSlotWrite(pastValue, value, presentValueType);
+    if (failed(presentValueOr))
+      return failure();
+    return SmallVector<Value, 2>{*presentKeyOr, *presentValueOr};
   }
 
   LogicalResult matchAndRewriteImpl(
@@ -4016,18 +4090,22 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
                 value, customOp.getResult(2).getType(), kvSeqLen,
                 kvNumHeads.getSInt())))
           return failure();
-        auto presentKeyOr = createPresentKVSlotWrite(rewriter, loc, customOp,
-            pastKey, key, seqlensK, customOp.getResult(1).getType(),
-            queryType.getShape()[0], kvSeqLen, kvNumHeads.getSInt(), toCheck);
-        if (failed(presentKeyOr))
+        FailureOr<SmallVector<Value, 2>> presentKVOr =
+            enableUint16CacheSlotRewrite
+                ? createPresentKVSlotWrite<true>(rewriter, loc, customOp,
+                      pastKey, key, customOp.getResult(1).getType(), pastValue,
+                      value, customOp.getResult(2).getType(), seqlensK,
+                      queryType.getShape()[0], pastSeqLen, kvSeqLen,
+                      kvNumHeads.getSInt(), toCheck)
+                : createPresentKVSlotWrite<false>(rewriter, loc, customOp,
+                      pastKey, key, customOp.getResult(1).getType(), pastValue,
+                      value, customOp.getResult(2).getType(), seqlensK,
+                      queryType.getShape()[0], pastSeqLen, kvSeqLen,
+                      kvNumHeads.getSInt(), toCheck);
+        if (failed(presentKVOr))
           return failure();
-        auto presentValueOr = createPresentKVSlotWrite(rewriter, loc, customOp,
-            pastValue, value, seqlensK, customOp.getResult(2).getType(),
-            queryType.getShape()[0], kvSeqLen, kvNumHeads.getSInt(), toCheck);
-        if (failed(presentValueOr))
-          return failure();
-        presentKeyReplacement = *presentKeyOr;
-        presentValueReplacement = *presentValueOr;
+        presentKeyReplacement = (*presentKVOr)[0];
+        presentValueReplacement = (*presentKVOr)[1];
       }
     }
 
@@ -5378,7 +5456,8 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       enableGroupQueryAttentionDecompose, enableSplitToSliceDecompose,
       enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
       /*disableGenericDecompositions=*/false, enableGatherToSlice,
-      enableHardSwishDecompose, enableDepthToSpaceDecompose);
+      enableHardSwishDecompose, enableDepthToSpaceDecompose,
+      enableGQAUint16CacheSlotRewrite);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
   if (this->target == "stablehlo") {
@@ -5403,7 +5482,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool enableSplitToSliceDecompose, bool enableConcatFuse,
     bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
     bool disableGenericDecompositions, bool enableGatherToSlice,
-    bool enableHardSwishDecompose, bool enableDepthToSpaceDecompose) {
+    bool enableHardSwishDecompose, bool enableDepthToSpaceDecompose,
+    bool enableGQAUint16CacheSlotRewrite) {
   MLIRContext *context = patterns.getContext();
   if (!disableGenericDecompositions)
     populateWithGenerated(patterns);
@@ -5446,7 +5526,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     patterns.insert<MicrosoftSkipSimplifiedLayerNorm>(context);
   }
   if (enableGroupQueryAttentionDecompose)
-    patterns.insert<MicrosoftGroupQueryAttention>(context);
+    patterns.insert<MicrosoftGroupQueryAttention>(
+        context, enableGQAUint16CacheSlotRewrite);
   if (!disableGenericDecompositions)
     patterns.insert<MicrosoftRotaryEmbedding>(context);
   if (enableMatmulNBitsDecompose)
