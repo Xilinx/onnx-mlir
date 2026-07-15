@@ -27,6 +27,8 @@
 
 namespace onnx_mlir {
 
+struct OnnxBuilder;
+
 // =============================================================================
 // TOSA Builder
 // =============================================================================
@@ -73,8 +75,8 @@ struct TosaBuilder : DialectBuilder {
   /// the input can only have values that are actually used. To achieve this we
   /// have to reduce padding and if this is not enough, we even have to insert a
   /// slice op.
-  mlir::FailureOr<mlir::Value> resizeWindowBasedOps(mlir::Value &value,
-      llvm::ArrayRef<int64_t> inputShape,
+  mlir::FailureOr<mlir::Value> resizeWindowBasedOps(OnnxBuilder &onnxBuilder,
+      mlir::Value &value, llvm::ArrayRef<int64_t> inputShape,
       llvm::ArrayRef<int64_t> weightSpatialShape,
       llvm::SmallVectorImpl<int64_t> &padding,
       llvm::ArrayRef<int64_t> strides = {1, 1},

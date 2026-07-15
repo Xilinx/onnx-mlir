@@ -4,7 +4,7 @@
 
 //===---------------- Slice.cpp - Slice Op --------------------===//
 //
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -17,6 +17,7 @@
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "llvm/ADT/SmallVector.h"
 
 using namespace mlir;
@@ -39,12 +40,10 @@ public:
       ConversionPatternRewriter &rewriter) const override {
 
     Location loc = op->getLoc();
-    if (!adaptor.getStarts().getDefiningOp<mlir::tosa::ConstOp>()) {
+    if (!isConstLikeValue(adaptor.getStarts()))
       return rewriter.notifyMatchFailure(op, "starts must be constant");
-    }
-    if (!adaptor.getEnds().getDefiningOp<mlir::tosa::ConstOp>()) {
+    if (!isConstLikeValue(adaptor.getEnds()))
       return rewriter.notifyMatchFailure(op, "ends must be constant");
-    }
 
     // Get shape.
     IndexExprBuilderForTosa createTosaIE(rewriter, loc);
