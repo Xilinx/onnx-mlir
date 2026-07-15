@@ -1,6 +1,7 @@
 // (c) Copyright 2022 - 2025 Advanced Micro Devices, Inc. All Rights reserved.
 
 // RUN: onnx-mlir-opt %s --constprop-onnx --decompose-onnx=enable-split-to-slice --canonicalize-with-rn --onnx-hybrid-transform --qdq-canonicalize=remove-qdq-around-ops | FileCheck %s
+// RUN: onnx-mlir-opt %s --canonicalize-with-rn | FileCheck --check-prefix ONLYCANON %s
 
 func.func @constprop() -> tensor<f32> {
   %0 = onnx.Constant {ResultNames = ["const0"]} dense<1.000000e+00> : tensor<f32>
@@ -90,3 +91,34 @@ func.func @remove_dq_q_multi_use(%arg0: tensor<1x128xf32>) -> (tensor<1x128xui8>
 // CHECK-SAME: ResultNames = ["q0"]
 // CHECK: onnx.DequantizeLinear
 // CHECK-SAME: ResultNames = ["dq1"]
+
+func.func @two_transposes(%arg0: tensor<1x12x20xf32>) -> tensor<1x4x5x3xf32> {
+  %shape = onnx.Constant dense<[1, 3, 4, 5]> : tensor<4xi64>
+  %0 = "onnx.Reshape"(%arg0, %shape) : (tensor<1x12x20xf32>, tensor<4xi64>) -> tensor<1x3x4x5xf32>
+  %1 = "onnx.Transpose"(%0) {perm = [0, 2, 1, 3]} : (tensor<1x3x4x5xf32>) -> tensor<1x4x3x5xf32>
+  %2 = "onnx.Transpose"(%1) {ResultNames = ["output"], perm = [0, 1, 3, 2]} : (tensor<1x4x3x5xf32>) -> tensor<1x4x5x3xf32>
+  return %2 : tensor<1x4x5x3xf32>
+}
+
+// ONLYCANON-LABEL: @two_transposes
+// ONLYCANON: onnx.Reshape
+// ONLYCANON-SAME: ResultNames = [
+// ONLYCANON-SAME: ["output", ["Transpose", [1, 4, 5, 3], [0, 3, 1, 2], [1, 3, 4, 5]]]]
+// ONLYCANON-NEXT: onnx.Transpose
+// ONLYCANON-NEXT: return
+
+func.func @two_reshapes(%arg0: tensor<1x20x12xf32>) -> tensor<4x5x3xf32> {
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 1]} : (tensor<1x20x12xf32>) -> tensor<1x12x20xf32>
+  %shape1 = onnx.Constant dense<[1, 3, 4, 5]> : tensor<4xi64>
+  %1 = "onnx.Reshape"(%0, %shape1) : (tensor<1x12x20xf32>, tensor<4xi64>) -> tensor<1x3x4x5xf32>
+  %shape2 = onnx.Constant dense<[4, 5, 3]> : tensor<3xi64>
+  %2 = "onnx.Reshape"(%1, %shape2) {ResultNames = ["output"]} : (tensor<1x3x4x5xf32>, tensor<3xi64>) -> tensor<4x5x3xf32>
+  return %2 : tensor<4x5x3xf32>
+}
+
+// ONLYCANON-LABEL: @two_reshapes
+// ONLYCANON: onnx.Transpose
+// ONLYCANON-SAME: ResultNames = [
+// ONLYCANON-SAME: ["output", ["Reshape", [4, 5, 3], [1, 12, 20]]]]
+// ONLYCANON-NEXT: onnx.Reshape
+// ONLYCANON-NEXT: return
