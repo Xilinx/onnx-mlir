@@ -242,7 +242,7 @@ mlir::FailureOr<mlir::Value> convertPoolOp(
 
   mlir::FailureOr<mlir::Value> resizedInput = create.tosa.resizeWindowBasedOps(
       input, mlir::cast<mlir::RankedTensorType>(input.getType()).getShape(),
-      {kernelShapeVec[0], kernelShapeVec[1]}, reorderedPads,
+      {kernelShapeVec[0], kernelShapeVec[1]}, reorderedPads, create.onnx,
       shapeHelper.strides, shapeHelper.dilations);
 
   if (failed(resizedInput)) {

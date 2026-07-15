@@ -51,15 +51,15 @@ Value createConvInGroups(PatternRewriter &rewriter, Operation *op,
   for (int64_t i = 0; i < groups; i++) {
     // Slice input
     Value newSliceInput =
-        create.tosa.slice(newInput, inputSize, {0, 0, 0, i * sizeOfSliceInput});
+        create.onnx.slice(newInput, {0, 0, 0, i * sizeOfSliceInput}, inputSize);
 
     // Slice kernel
-    Value newSliceWeight = create.tosa.slice(
-        newWeight, kernelSize, {i * sizeOfSliceKernel, 0, 0, 0});
+    Value newSliceWeight = create.onnx.slice(
+        newWeight, {i * sizeOfSliceKernel, 0, 0, 0}, kernelSize);
 
     // Slice bias
     Value newSliceBias =
-        create.tosa.slice(bias, {sizeOfSliceKernel}, {i * sizeOfSliceKernel});
+        create.onnx.slice(bias, {i * sizeOfSliceKernel}, {sizeOfSliceKernel});
 
     // Create conv
     Type newConvOutputType = RankedTensorType::get(
@@ -188,8 +188,8 @@ public:
         pads[0], pads[2], pads[1], pads[3]};
     FailureOr<Value> resizedInput = create.tosa.resizeWindowBasedOps(newInput,
         cast<RankedTensorType>(newInput.getType()).getShape(),
-        {weightShape[2], weightShape[3]}, reorderedPads, shapeHelper.strides,
-        shapeHelper.dilations);
+        {weightShape[2], weightShape[3]}, reorderedPads, create.onnx,
+        shapeHelper.strides, shapeHelper.dilations);
 
     if (failed(resizedInput))
       return rewriter.notifyMatchFailure(

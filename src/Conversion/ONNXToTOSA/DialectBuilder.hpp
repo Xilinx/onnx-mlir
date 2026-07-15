@@ -27,6 +27,8 @@
 
 namespace onnx_mlir {
 
+struct OnnxBuilder;
+
 // =============================================================================
 // TOSA Builder
 // =============================================================================
@@ -48,6 +50,7 @@ struct TosaBuilder : DialectBuilder {
   mlir::Value intdiv(mlir::Value &lhs, mlir::Value &rhs);
 
   mlir::Value transpose(mlir::Value &value, llvm::ArrayRef<int32_t> perm);
+  // Internal helper for ONNXSliceLoweringToTOSA only.
   mlir::Value slice(mlir::Value &inputConst, llvm::ArrayRef<int64_t> size,
       llvm::ArrayRef<int64_t> start);
   mlir::Value reshape(mlir::Value value, llvm::ArrayRef<int64_t> shape);
@@ -76,7 +79,7 @@ struct TosaBuilder : DialectBuilder {
   mlir::FailureOr<mlir::Value> resizeWindowBasedOps(mlir::Value &value,
       llvm::ArrayRef<int64_t> inputShape,
       llvm::ArrayRef<int64_t> weightSpatialShape,
-      llvm::SmallVectorImpl<int64_t> &padding,
+      llvm::SmallVectorImpl<int64_t> &padding, OnnxBuilder &onnxBuilder,
       llvm::ArrayRef<int64_t> strides = {1, 1},
       llvm::ArrayRef<int64_t> dilation = {0, 0});
 
