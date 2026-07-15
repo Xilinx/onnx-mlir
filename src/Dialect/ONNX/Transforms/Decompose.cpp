@@ -2443,6 +2443,31 @@ private:
   size_t iterArraySize;
 };
 
+int64_t indexToOffset(
+    llvm::ArrayRef<int64_t> shape, llvm::ArrayRef<int64_t> index) {
+  int64_t offset = 0;
+  for (size_t i = 0; i < shape.size(); i++) {
+    offset = offset * shape[i] + index[i];
+  }
+  return offset;
+}
+
+SmallVector<int64_t> offsetToIndex(
+    llvm::ArrayRef<int64_t> shape, int64_t offset) {
+  auto rank = shape.size();
+  // The rank of the index will be equal to the rank of the shape
+  SmallVector<int64_t> resultIndex;
+  resultIndex.reserve(rank);
+  // Compute all the index values from the last to the first one, reverse the
+  // vector afterwards as there is no convenient push_front.
+  for (int32_t i = rank - 1; i >= 0; i--) {
+    resultIndex.push_back(offset % shape[i]);
+    offset /= shape[i];
+  }
+  std::reverse(resultIndex.begin(), resultIndex.end());
+  return resultIndex;
+}
+
 class IndicesContiguousCounter {
 public:
   explicit IndicesContiguousCounter(
@@ -2463,6 +2488,25 @@ public:
         break;
       }
     }
+  }
+
+  // Re-expresses the current counter position under a different shape.
+  //
+  // The counter is a multi-dimensional index into `currentShape`. This first
+  // flattens it to a single linear (row-major) offset, then re-expands that
+  // same offset into a multi-dimensional index for `newShape`. In other words
+  // it recalculates and returns the equivalent index once the underlying tensor
+  // is viewed with `newShape` instead of `currentShape` (both must describe the
+  // same number of elements for the mapping to be meaningful).
+  //
+  // Example: currentShape = [2, 3, 4], counter = [1, 2, 3].
+  //   linear offset = ((1 * 3) + 2) * 4 + 3 = 23
+  //   reshapedCounter([2, 3, 4], [6, 4]) -> offsetToIndex([6, 4], 23) = [5, 3]
+  //   (since 5 * 4 + 3 == 23, the same element in the [6, 4] view).
+  SmallVector<int64_t> reshapedCounter(
+      ArrayRef<int64_t> currentShape, ArrayRef<int64_t> newShape) {
+    auto idxToOffsetValue = indexToOffset(currentShape, counter);
+    return offsetToIndex(newShape, idxToOffsetValue);
   }
 
 private:
@@ -2672,6 +2716,207 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
     Value concat = create.onnx.concat(
         dataType, {split[0], scatterNDOp.getUpdates(), split[2]}, splitAxis);
     rewriter.replaceOp(scatterNDOp, concat);
+    return success();
+  }
+};
+
+// Canonicalizes an ONNXScatterND that writes a contiguous block spanning *two
+// consecutive* axes into an equivalent ScatterND that writes along a *single*
+// axis, by merging those two axes into one.
+//
+// Motivation: the contiguous-block ScatterND decomposition (Split + Concat, see
+// DecomposeScatterNDPattern) only handles the case where data and updates
+// differ in a single dimension. When the update region spans two adjacent axes
+// (e.g. it replaces a full [H, W] plane per batch), the scatter has two
+// differing axes and that pattern cannot apply. This canonicalization folds the
+// two axes together so the simpler single-axis decomposition can take over.
+//
+// It matches only when (all preconditions must hold, otherwise it bails):
+//   - reduction == "none",
+//   - data, indices and updates all have static shapes,
+//   - rank(data) == rank(updates),
+//   - exactly two axes differ in size between data and updates, and they are
+//     consecutive (splitAxes = {a, a+1}),
+//   - indices is a constant, non-empty tensor,
+//   - the first index is 0 on every non-split axis (the block starts at the
+//     origin there) and non-negative on the split axes (no ONNX wrap-around),
+//   - the indices are contiguous and cover the whole merged block.
+//
+// The rewrite reshapes data, updates and indices so axes a and a+1 become one
+// axis of size data[a]*data[a+1], rebuilds the (constant) indices as linear
+// coordinates into the merged shape, emits a new ScatterND, and reshapes the
+// result back to the original data shape.
+//
+// Example: data:[6,4,4], updates:[6,1,1], indices:[6,1,1,3] holding [b,0,0].
+//   splitAxes = {1, 2} (4 != 1 on both) -> merge axes 1 and 2 (4*4 = 16):
+//     newDataShape    = [6, 16]
+//     newUpdateShape  = [6, 1]
+//     newIndicesShape = [6, 1, 2]   // last dim = rank(newData) = 2
+//   each index [b,0,0] (offset b*16 into [6,4,4]) becomes [b, 0] into [6,16].
+//   The resulting ScatterND now differs from data only on axis 1, so the
+//   Split+Concat decomposition can lower it. Reshapes wrap it back to [6,4,4].
+struct CanonicalizeScatterNDWithMultiAxes
+    : public OpRewritePattern<ONNXScatterNDOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXScatterNDOp scatterNDOp, PatternRewriter &rewriter) const final {
+    // Check preconditions
+    if (scatterNDOp.getReductionAttr().strref() != "none") {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "Scatters with reduction are not supported");
+    }
+    const auto data = scatterNDOp.getData();
+    const auto indices = scatterNDOp.getIndices();
+    const auto updates = scatterNDOp.getUpdates();
+    if (!onnx_mlir::hasStaticShape(data.getType()) ||
+        !onnx_mlir::hasStaticShape(indices.getType()) ||
+        !onnx_mlir::hasStaticShape(updates.getType())) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "All operands need to have a static shape");
+    }
+    const auto dataType = cast<RankedTensorType>(data.getType());
+    const auto dataShape = dataType.getShape();
+    const auto updatesType = cast<RankedTensorType>(updates.getType());
+    const auto updateShape = updatesType.getShape();
+    const auto indicesType = cast<RankedTensorType>(indices.getType());
+    const auto indicesShape = indicesType.getShape();
+    if (dataType.getRank() != updatesType.getRank()) {
+      return rewriter.notifyMatchFailure(scatterNDOp,
+          "Only the case where data and update have the same rank "
+          "is supported");
+    }
+
+    SmallVector<uint64_t> splitAxes;
+    // Split at the dim where the update and original data have a
+    // different size
+    for (auto [idx, dimData, dimUpdates] :
+        llvm::enumerate(dataShape, updateShape)) {
+      if (dimData != dimUpdates) {
+        splitAxes.push_back(idx);
+      }
+    }
+
+    if (splitAxes.size() != 2 || splitAxes[0] + 1 != splitAxes[1]) {
+      return rewriter.notifyMatchFailure(scatterNDOp,
+          "This pattern needs exactly two split axes that are consecutive");
+    }
+
+    SmallVector<int64_t> indicesAsFlatArray;
+    if (!onnx_mlir::getI64ValuesFromONNXConstantOp(
+            indices, indicesAsFlatArray)) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "The indices need to be constant");
+    }
+    if (indicesAsFlatArray.empty()) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "Empty indices are not supported"); // Skip the edge case
+                                                           // of empty indices
+    }
+    const auto indicesLastDimSize = indicesShape.back();
+    SubArrayAccessHelper<int64_t> indicesFlatAccessor(
+        indicesAsFlatArray, indicesLastDimSize);
+
+    const auto firstIndex =
+        indicesFlatAccessor[0]; // Safe, we have checked the length before
+    for (auto [idx, firstIndexDim] : llvm::enumerate(firstIndex)) {
+      if (!llvm::is_contained(splitAxes, idx) && firstIndexDim != 0) {
+        return rewriter.notifyMatchFailure(
+            scatterNDOp, " Shifting is only supported on the split axis");
+      }
+      if (llvm::is_contained(splitAxes, idx) && firstIndexDim < 0) {
+        return rewriter.notifyMatchFailure(scatterNDOp,
+            "Negative values with wrap around are not yet "
+            "supported"); // onnx allows negative values with
+                          // wrap-around, this decomposition does
+                          // not (for now)
+      }
+    }
+
+    // Collapse the two adjacent axes firstSplitAxis and firstSplitAxis+1 into a
+    // single axis of their product, keeping the surrounding dims unchanged.
+    const auto firstSplitAxis = splitAxes[0];
+    auto collapseAdjacentSplitAxes =
+        [firstSplitAxis](ArrayRef<int64_t> shape) -> SmallVector<int64_t> {
+      SmallVector<int64_t> newShape =
+          llvm::to_vector(shape.take_front(firstSplitAxis));
+      newShape.push_back(shape[firstSplitAxis] * shape[firstSplitAxis + 1]);
+      newShape.append(
+          llvm::to_vector(shape.take_back(shape.size() - firstSplitAxis - 2)));
+      return newShape;
+    };
+
+    SmallVector<int64_t> newDataShape = collapseAdjacentSplitAxes(dataShape);
+    SmallVector<int64_t> newUpdateShape =
+        collapseAdjacentSplitAxes(updateShape);
+    SmallVector<int64_t> newIndicesShape =
+        collapseAdjacentSplitAxes(indicesShape.drop_back(1));
+    auto newIndicesShapeDroppedLastDim = newIndicesShape;
+    newIndicesShape.push_back(newDataShape.size());
+
+    // Check that all indices are contiguous.
+    // - The check for contiguity and covering works the following way:
+    // -- Iterated over all idx in indices and compare the idx against the
+    //    expected index, fail if it differs
+    // -- The expected index is calculated the following way:
+    // --- The expected index is initialized with the first index in indices and
+    //     then always incremented by one.
+    // --- The increment works like a manual addition, the least significant
+    //     digit/subindex gets incremented by one. If a digit overflows, it
+    //     gets reset to the first index and the addition carries to the next,
+    //     more significant digit. The addition overflows, if the index for an
+    //     axis is equal to the size of this axis in updates/indices. (By
+    //     definition the shape for indices.shape().drop(-1) must match the
+    //     first dimensions in updates). If the addition overflows , the
+    //     overflowing digit is reset to its value in the first index. This is
+    //     zero for all axes, except for 'a', where it can be a positive number
+    //     if the split/concat is in the middle of the tensor
+
+    SmallVector<int64_t> newIndicesAsFlatArray;
+
+    assert(
+        updateShape.drop_back(updateShape.size() - (indicesShape.size() - 1)) ==
+            indicesShape.drop_back(1) &&
+        "Update and indicesShape should partially match for scatterNd");
+    {
+      IndicesContiguousCounter counter(firstIndex, indicesShape.drop_back(1));
+      for (size_t i = 0; i < indicesFlatAccessor.size(); ++i) {
+        newIndicesAsFlatArray.append(
+            counter.reshapedCounter(dataShape, newDataShape));
+        if (counter.getCounter() != indicesFlatAccessor[i]) {
+          return rewriter.notifyMatchFailure(
+              scatterNDOp, "Indices are not contiguous");
+        }
+        counter.increment();
+      }
+    }
+
+    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+        rewriter, scatterNDOp->getLoc());
+
+    auto newDataTy =
+        RankedTensorType::get(newDataShape, dataType.getElementType());
+
+    auto reshapedScatterNDData = create.onnx.reshape(newDataTy,
+        scatterNDOp.getData(), create.onnx.constantInt64(newDataShape));
+
+    // New Indices
+    Value newIndices = create.onnx.constant(DenseElementsAttr::get(
+        RankedTensorType::get(newIndicesShape, indicesType.getElementType()),
+        ArrayRef<int64_t>(newIndicesAsFlatArray)));
+
+    auto reshapedScatterNDUpdates = create.onnx.reshape(
+        RankedTensorType::get(newUpdateShape, updatesType.getElementType()),
+        scatterNDOp.getUpdates(), create.onnx.constantInt64(newUpdateShape));
+
+    auto newScatterNDOp =
+        rewriter.create<ONNXScatterNDOp>(scatterNDOp->getLoc(), newDataTy,
+            reshapedScatterNDData, newIndices, reshapedScatterNDUpdates);
+
+    auto reshapedNewScatterND = create.onnx.reshape(dataType,
+        newScatterNDOp.getResult(), create.onnx.constantInt64(dataShape));
+
+    rewriter.replaceOp(scatterNDOp, reshapedNewScatterND);
     return success();
   }
 };
@@ -4897,6 +5142,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   if (!disableGenericDecompositions) {
     patterns.insert<DecomposeSlicePadPattern>(context);
     patterns.insert<DecomposeScatterNDPattern>(context);
+    patterns.insert<CanonicalizeScatterNDWithMultiAxes>(context);
     patterns.insert<SoftmaxCrossEntropyPattern>(context);
     patterns.insert<SumToAddPattern>(context);
   }
