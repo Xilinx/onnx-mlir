@@ -1,11 +1,8 @@
-// RUN: onnx-mlir-opt --decompose-onnx="enable-groupqueryattention-decompose=true enable-groupqueryattention-cache-slicing=false" %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --decompose-onnx="enable-groupqueryattention-decompose=true" %s -split-input-file | FileCheck %s
 
-// When enable-groupqueryattention-cache-slicing is false, the cos/sin caches
-// must be passed through to onnx.RotaryEmbedding without any Slice/Reshape/
-// Expand, and the position_ids that the slicing would have implicitly
-// selected must be materialized as a constant tensor of shape
-// [batch_size, sequence_length] with values [past_seq_len .. total_seq_len-1]
-// per batch row.
+// The cos/sin caches are passed through to onnx.RotaryEmbedding without
+// Slice. Missing position_ids are synthesized from runtime seqlens_k instead
+// of static past_key capacity.
 
 func.func @gqa_unsliced_cache_packed(
   %qkv: tensor<1x1x6144xf32>,
@@ -26,26 +23,38 @@ func.func @gqa_unsliced_cache_packed(
   }: (tensor<1x1x6144xf32>, none, none, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>, tensor<4096x48xf32>, tensor<4096x48xf32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
   return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
 }
-// CHECK-LABEL:   func.func @gqa_unsliced_cache_packed(
-// CHECK-SAME:                                          %[[VAL_0:.*]]: tensor<1x1x6144xf32>,
-// CHECK-SAME:                                          %[[VAL_1:.*]]: tensor<1x16x256x96xf32>, %[[VAL_2:.*]]: tensor<1x16x256x96xf32>,
-// CHECK-SAME:                                          %[[COS_CACHE:.*]]: tensor<4096x48xf32>,
-// CHECK-SAME:                                          %[[SIN_CACHE:.*]]: tensor<4096x48xf32>)
+// CHECK-LABEL: func.func @gqa_unsliced_cache_packed(
+// CHECK-SAME: %[[QKV:[[:alnum:]_]+]]: tensor<1x1x6144xf32>
+// CHECK-SAME: %[[PAST_K:[[:alnum:]_]+]]: tensor<1x16x256x96xf32>
+// CHECK-SAME: %[[PAST_V:[[:alnum:]_]+]]: tensor<1x16x256x96xf32>
+// CHECK-SAME: %[[COS:[[:alnum:]_]+]]: tensor<4096x48xf32>
+// CHECK-SAME: %[[SIN:[[:alnum:]_]+]]: tensor<4096x48xf32>
 // CHECK-NOT: "onnx.Slice"
-// CHECK-NOT: "onnx.Reshape"
-// CHECK-NOT: "onnx.Expand"
-// CHECK-DAG:       %[[POS_IDS:.*]] = onnx.Constant dense<256> : tensor<1x1xi64>
-// CHECK:           %[[VAL_8:.*]] = "onnx.RotaryEmbedding"({{.*}}, %[[COS_CACHE]], %[[SIN_CACHE]], %[[POS_IDS]])
-// CHECK-SAME:          : (tensor<1x1x3072xf32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x1xi64>) -> tensor<1x1x3072xf32>
-// CHECK:           %[[VAL_9:.*]] = "onnx.RotaryEmbedding"({{.*}}, %[[COS_CACHE]], %[[SIN_CACHE]], %[[POS_IDS]])
-// CHECK-SAME:          : (tensor<1x1x1536xf32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x1xi64>) -> tensor<1x1x1536xf32>
-// CHECK:           "onnx.Attention"(%[[VAL_8]], %[[VAL_9]],
+// CHECK: %[[SEQLENS:[[:alnum:]_]+]] = onnx.Constant dense<255> : tensor<1x1xi32>
+// CHECK: %[[SPLIT:[[:alnum:]_]+]]:3 = "onnx.Split"(%[[QKV]]
+// CHECK: %[[SEQLENS_I64:[[:alnum:]_]+]] = "onnx.Cast"(%[[SEQLENS]])
+// CHECK-SAME: -> tensor<1x1xi64>
+// CHECK: %[[START:[[:alnum:]_]+]] = "onnx.Max"(
+// CHECK-SAME: -> tensor<1x1xi64>
+// CHECK: %[[Q_RANGE:[[:alnum:]_]+]] = "onnx.Range"(
+// CHECK-SAME: -> tensor<1xi64>
+// CHECK: %[[Q_RANGE_2D:[[:alnum:]_]+]] = "onnx.Reshape"(%[[Q_RANGE]]
+// CHECK-SAME: -> tensor<1x1xi64>
+// CHECK: %[[POS_IDS:[[:alnum:]_]+]] = "onnx.Add"(%[[START]], %[[Q_RANGE_2D]])
+// CHECK-SAME: -> tensor<1x1xi64>
+// CHECK: %[[ROPE_Q:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[SPLIT]]#0, %[[COS]], %[[SIN]], %[[POS_IDS]])
+// CHECK-SAME: tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x1xi64>
+// CHECK: %[[ROPE_K:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[SPLIT]]#1, %[[COS]], %[[SIN]], %[[POS_IDS]])
+// CHECK-SAME: tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x1xi64>
+// CHECK: %[[MASK:[[:alnum:]_]+]] = "onnx.Where"(
+// CHECK-SAME: -> tensor<1x1x1x257xf32>
+// CHECK: "onnx.Attention"(%[[ROPE_Q]], %[[ROPE_K]], %[[SPLIT]]#2, %[[MASK]], %[[PAST_K]], %[[PAST_V]])
+// CHECK-SAME: {is_causal = 0 : si64
 
 // -----
 
 // Multi-step prefill (seq_len > 1) with batch > 1 and a non-zero past length:
-// the synthesized position_ids must be a 2D constant tensor with one row per
-// batch containing [past_seq_len .. total_seq_len-1].
+// synthesized position_ids must be a 2D tensor derived from seqlens_k.
 
 func.func @gqa_unsliced_cache_prefill_batched(
   %q: tensor<2x4x3072xf32>,
@@ -68,22 +77,39 @@ func.func @gqa_unsliced_cache_prefill_batched(
   }: (tensor<2x4x3072xf32>, tensor<2x4x1536xf32>, tensor<2x4x1536xf32>, tensor<2x16x8x96xf32>, tensor<2x16x8x96xf32>, tensor<2x1xi32>, tensor<i32>, tensor<4096x48xf32>, tensor<4096x48xf32>) -> (tensor<2x4x3072xf32>, tensor<2x16x12x96xf32>, tensor<2x16x12x96xf32>)
   return %out, %present_k, %present_v : tensor<2x4x3072xf32>, tensor<2x16x12x96xf32>, tensor<2x16x12x96xf32>
 }
-// CHECK-LABEL:   func.func @gqa_unsliced_cache_prefill_batched
+// CHECK-LABEL: func.func @gqa_unsliced_cache_prefill_batched(
+// CHECK-SAME: %[[Q:[[:alnum:]_]+]]: tensor<2x4x3072xf32>
+// CHECK-SAME: %[[K:[[:alnum:]_]+]]: tensor<2x4x1536xf32>
+// CHECK-SAME: %[[V:[[:alnum:]_]+]]: tensor<2x4x1536xf32>
+// CHECK-SAME: %[[PAST_K:[[:alnum:]_]+]]: tensor<2x16x8x96xf32>
+// CHECK-SAME: %[[PAST_V:[[:alnum:]_]+]]: tensor<2x16x8x96xf32>
+// CHECK-SAME: %[[COS:[[:alnum:]_]+]]: tensor<4096x48xf32>
+// CHECK-SAME: %[[SIN:[[:alnum:]_]+]]: tensor<4096x48xf32>
 // CHECK-NOT: "onnx.Slice"
-// CHECK-NOT: "onnx.Reshape"
-// CHECK-NOT: "onnx.Expand"
-// CHECK-DAG:       %[[POS_IDS:.*]] = onnx.Constant dense<{{\[}}[8, 9, 10, 11], [8, 9, 10, 11]]> : tensor<2x4xi64>
-// CHECK:           "onnx.RotaryEmbedding"({{.*}}, %[[POS_IDS]])
-// CHECK-SAME:          : (tensor<2x4x3072xf32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<2x4xi64>) -> tensor<2x4x3072xf32>
-// CHECK:           "onnx.RotaryEmbedding"({{.*}}, %[[POS_IDS]])
-// CHECK-SAME:          : (tensor<2x4x1536xf32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<2x4xi64>) -> tensor<2x4x1536xf32>
-// CHECK:           "onnx.Attention"
+// CHECK: %[[SEQLENS:[[:alnum:]_]+]] = onnx.Constant dense<11> : tensor<2x1xi32>
+// CHECK: %[[SEQLENS_I64:[[:alnum:]_]+]] = "onnx.Cast"(%[[SEQLENS]])
+// CHECK-SAME: -> tensor<2x1xi64>
+// CHECK: %[[START:[[:alnum:]_]+]] = "onnx.Max"(
+// CHECK-SAME: -> tensor<2x1xi64>
+// CHECK: %[[Q_RANGE:[[:alnum:]_]+]] = "onnx.Range"(
+// CHECK-SAME: -> tensor<4xi64>
+// CHECK: %[[Q_RANGE_2D:[[:alnum:]_]+]] = "onnx.Reshape"(%[[Q_RANGE]]
+// CHECK-SAME: -> tensor<1x4xi64>
+// CHECK: %[[POS_IDS:[[:alnum:]_]+]] = "onnx.Add"(%[[START]], %[[Q_RANGE_2D]])
+// CHECK-SAME: -> tensor<2x4xi64>
+// CHECK: %[[ROPE_Q:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[Q]], %[[COS]], %[[SIN]], %[[POS_IDS]])
+// CHECK-SAME: tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<2x4xi64>
+// CHECK: %[[ROPE_K:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[K]], %[[COS]], %[[SIN]], %[[POS_IDS]])
+// CHECK-SAME: tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<2x4xi64>
+// CHECK: %[[MASK:[[:alnum:]_]+]] = "onnx.Where"(
+// CHECK-SAME: -> tensor<2x1x4x12xf32>
+// CHECK: "onnx.Attention"(%[[ROPE_Q]], %[[ROPE_K]], %[[V]], %[[MASK]], %[[PAST_K]], %[[PAST_V]])
+// CHECK-SAME: {is_causal = 0 : si64
 
 // -----
 
 // When position_ids is provided by the caller, the synthesis path is not
-// taken even with the flag set: the existing position_ids flows through
-// directly and no Slice/Reshape/Expand is added.
+// taken: the existing position_ids flow through and no cache Slice is added.
 
 func.func @gqa_unsliced_cache_with_user_position_ids(
   %q: tensor<1x4x3072xf32>,
@@ -106,15 +132,22 @@ func.func @gqa_unsliced_cache_with_user_position_ids(
   }: (tensor<1x4x3072xf32>, tensor<1x4x1536xf32>, tensor<1x4x1536xf32>, tensor<1x16x8x96xf32>, tensor<1x16x8x96xf32>, tensor<1x1xi32>, tensor<i32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x4xi64>) -> (tensor<1x4x3072xf32>, tensor<1x16x12x96xf32>, tensor<1x16x12x96xf32>)
   return %out, %present_k, %present_v : tensor<1x4x3072xf32>, tensor<1x16x12x96xf32>, tensor<1x16x12x96xf32>
 }
-// CHECK-LABEL:   func.func @gqa_unsliced_cache_with_user_position_ids(
-// CHECK-SAME:                                                          %[[Q:.*]]: tensor<1x4x3072xf32>,
-// CHECK-SAME:                                                          %[[K:.*]]: tensor<1x4x1536xf32>, %[[V:.*]]: tensor<1x4x1536xf32>,
-// CHECK-SAME:                                                          %[[PAST_K:.*]]: tensor<1x16x8x96xf32>, %[[PAST_V:.*]]: tensor<1x16x8x96xf32>,
-// CHECK-SAME:                                                          %[[COS_CACHE:.*]]: tensor<4096x48xf32>, %[[SIN_CACHE:.*]]: tensor<4096x48xf32>,
-// CHECK-SAME:                                                          %[[POS_IDS:.*]]: tensor<1x4xi64>)
+// CHECK-LABEL: func.func @gqa_unsliced_cache_with_user_position_ids(
+// CHECK-SAME: %[[Q:[[:alnum:]_]+]]: tensor<1x4x3072xf32>
+// CHECK-SAME: %[[K:[[:alnum:]_]+]]: tensor<1x4x1536xf32>
+// CHECK-SAME: %[[V:[[:alnum:]_]+]]: tensor<1x4x1536xf32>
+// CHECK-SAME: %[[PAST_K:[[:alnum:]_]+]]: tensor<1x16x8x96xf32>
+// CHECK-SAME: %[[PAST_V:[[:alnum:]_]+]]: tensor<1x16x8x96xf32>
+// CHECK-SAME: %[[COS:[[:alnum:]_]+]]: tensor<4096x48xf32>
+// CHECK-SAME: %[[SIN:[[:alnum:]_]+]]: tensor<4096x48xf32>
+// CHECK-SAME: %[[POS_IDS:[[:alnum:]_]+]]: tensor<1x4xi64>
 // CHECK-NOT: "onnx.Slice"
-// CHECK-NOT: "onnx.Reshape"
-// CHECK-NOT: "onnx.Expand"
-// CHECK:           %[[VAL_Q:.*]] = "onnx.RotaryEmbedding"(%[[Q]], %[[COS_CACHE]], %[[SIN_CACHE]], %[[POS_IDS]])
-// CHECK:           %[[VAL_K:.*]] = "onnx.RotaryEmbedding"(%[[K]], %[[COS_CACHE]], %[[SIN_CACHE]], %[[POS_IDS]])
-// CHECK:           "onnx.Attention"(%[[VAL_Q]], %[[VAL_K]],
+// CHECK-NOT: "onnx.Max"
+// CHECK: %[[ROPE_Q:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[Q]], %[[COS]], %[[SIN]], %[[POS_IDS]])
+// CHECK-SAME: tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x4xi64>
+// CHECK: %[[ROPE_K:[[:alnum:]_]+]] = "onnx.RotaryEmbedding"(%[[K]], %[[COS]], %[[SIN]], %[[POS_IDS]])
+// CHECK-SAME: tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x4xi64>
+// CHECK: %[[MASK:[[:alnum:]_]+]] = "onnx.Where"(
+// CHECK-SAME: -> tensor<1x1x4x12xf32>
+// CHECK: "onnx.Attention"(%[[ROPE_Q]], %[[ROPE_K]], %[[V]], %[[MASK]], %[[PAST_K]], %[[PAST_V]])
+// CHECK-SAME: {is_causal = 0 : si64
