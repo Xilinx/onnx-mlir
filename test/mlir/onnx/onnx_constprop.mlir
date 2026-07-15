@@ -2310,6 +2310,71 @@ func.func @test_expand_2_broadcast() -> tensor<*xf32> {
 
 // -----
 
+//===----------------------------------------------------------------------===//
+// Tile
+//===----------------------------------------------------------------------===//
+
+func.func @test_tile() -> tensor<*xf32> {
+  %0 = onnx.Constant dense<[1.0, 2.0, 3.0]> : tensor<3xf32>
+  %1 = onnx.Constant dense<[2]> : tensor<1xi64>
+  %2 = "onnx.Tile"(%0, %1) : (tensor<3xf32>, tensor<1xi64>) -> tensor<*xf32>
+  "onnx.Return"(%2) : (tensor<*xf32>) -> ()
+
+  // CHECK-LABEL:  func.func @test_tile
+  // CHECK-SAME:   () -> tensor<6xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[1.000000e+00, 2.000000e+00, 3.000000e+00, 1.000000e+00, 2.000000e+00, 3.000000e+00]> : tensor<6xf32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<6xf32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_tile_repeat_nonunit_axis() -> tensor<*xf32> {
+  %0 = onnx.Constant dense<[[1.0, 2.0], [3.0, 4.0]]> : tensor<2x2xf32>
+  %1 = onnx.Constant dense<[2, 1]> : tensor<2xi64>
+  %2 = "onnx.Tile"(%0, %1) : (tensor<2x2xf32>, tensor<2xi64>) -> tensor<*xf32>
+  "onnx.Return"(%2) : (tensor<*xf32>) -> ()
+
+  // CHECK-LABEL:  func.func @test_tile_repeat_nonunit_axis
+  // CHECK-SAME:   () -> tensor<4x2xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}[1.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00], [1.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00]]> : tensor<4x2xf32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<4x2xf32>
+  // CHECK:         }
+}
+
+// -----
+
+// Tile repeating multiple axes at once.
+func.func @test_tile_multi_axis() -> tensor<*xi32> {
+  %0 = onnx.Constant dense<[[1, 2], [3, 4]]> : tensor<2x2xi32>
+  %1 = onnx.Constant dense<[2, 2]> : tensor<2xi64>
+  %2 = "onnx.Tile"(%0, %1) : (tensor<2x2xi32>, tensor<2xi64>) -> tensor<*xi32>
+  "onnx.Return"(%2) : (tensor<*xi32>) -> ()
+
+  // CHECK-LABEL:  func.func @test_tile_multi_axis
+  // CHECK-SAME:   () -> tensor<4x4xi32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}[1, 2, 1, 2], [3, 4, 3, 4], [1, 2, 1, 2], [3, 4, 3, 4]]> : tensor<4x4xi32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<4x4xi32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_tile_splat() -> tensor<*xf32> {
+  %0 = onnx.Constant dense<5.0> : tensor<1x1xf32>
+  %1 = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  %2 = "onnx.Tile"(%0, %1) : (tensor<1x1xf32>, tensor<2xi64>) -> tensor<*xf32>
+  "onnx.Return"(%2) : (tensor<*xf32>) -> ()
+
+  // CHECK-LABEL:  func.func @test_tile_splat
+  // CHECK-SAME:   () -> tensor<2x3xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<5.000000e+00> : tensor<2x3xf32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<2x3xf32>
+  // CHECK:         }
+}
+
+// -----
+
 func.func @test_gather_axis_0() -> tensor<*xf32>{
   %0 = onnx.Constant dense<[[1.0, 1.2], [2.3, 3.4], [4.5, 5.7]]> : tensor<3x2xf32>
   %1 = onnx.Constant dense<[[0, 1], [1, 2]]> : tensor<2x2xi64>

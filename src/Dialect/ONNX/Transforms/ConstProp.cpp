@@ -1141,6 +1141,40 @@ Value ConstPropExpand(
 }
 
 //===----------------------------------------------------------------------===//
+// Constant propagation for TileOp.
+//===----------------------------------------------------------------------===//
+
+Value ConstPropTile(
+    PatternRewriter &rewriter, Value replacingValue, Value constValue) {
+  auto inputType = mlir::cast<ShapedType>(constValue.getType());
+  auto outputType = mlir::cast<ShapedType>(replacingValue.getType());
+  ArrayRef<int64_t> inputShape = inputType.getShape();
+  ArrayRef<int64_t> outputShape = outputType.getShape();
+
+  // A zero repeat (or zero-sized input) yields an empty tensor.
+  if (outputType.getNumElements() == 0)
+    return createReplacingConstantOp(rewriter, replacingValue,
+        DenseElementsAttr::get(outputType, ArrayRef<Attribute>{}));
+
+  ElementsAttr elements = getConstValueElements(constValue);
+
+  if (elements.isSplat())
+    return createReplacingConstantOp(rewriter, replacingValue,
+        DenseElementsAttr::get(
+            outputType, {elements.getSplatValue<Attribute>()}));
+
+  OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
+  for (int64_t axis = 0; axis < inputType.getRank(); ++axis) {
+    int64_t repeat = outputShape[axis] / inputShape[axis];
+    if (repeat == 1)
+      continue;
+    SmallVector<ElementsAttr> copies(repeat, elements);
+    elements = elementsBuilder.concat(copies, axis);
+  }
+  return createReplacingConstantOp(rewriter, replacingValue, elements);
+}
+
+//===----------------------------------------------------------------------===//
 // Code to perform constant propagation for ShapeOp.
 //===----------------------------------------------------------------------===//
 
