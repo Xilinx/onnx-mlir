@@ -186,10 +186,11 @@ public:
     // reorder padding values
     llvm::SmallVector<int64_t, 4> reorderedPads = {
         pads[0], pads[2], pads[1], pads[3]};
-    FailureOr<Value> resizedInput = create.tosa.resizeWindowBasedOps(newInput,
-        cast<RankedTensorType>(newInput.getType()).getShape(),
-        {weightShape[2], weightShape[3]}, reorderedPads, create.onnx,
-        shapeHelper.strides, shapeHelper.dilations);
+    FailureOr<Value> resizedInput =
+        create.tosa.resizeWindowBasedOps(create.onnx, newInput,
+            cast<RankedTensorType>(newInput.getType()).getShape(),
+            {weightShape[2], weightShape[3]}, reorderedPads,
+            shapeHelper.strides, shapeHelper.dilations);
 
     if (failed(resizedInput))
       return rewriter.notifyMatchFailure(

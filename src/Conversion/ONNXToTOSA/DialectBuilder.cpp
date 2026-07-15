@@ -368,10 +368,10 @@ static bool containsNonZero(llvm::SmallVectorImpl<int64_t> &values) {
   return llvm::any_of(values, [](int64_t value) { return value != 0; });
 }
 
-FailureOr<Value> TosaBuilder::resizeWindowBasedOps(mlir::Value &value,
-    const llvm::ArrayRef<int64_t> inputShape,
+FailureOr<Value> TosaBuilder::resizeWindowBasedOps(OnnxBuilder &onnxBuilder,
+    mlir::Value &value, const llvm::ArrayRef<int64_t> inputShape,
     const llvm::ArrayRef<int64_t> weightSpatialShape,
-    llvm::SmallVectorImpl<int64_t> &padding, OnnxBuilder &onnxBuilder,
+    llvm::SmallVectorImpl<int64_t> &padding,
     const llvm::ArrayRef<int64_t> strides,
     const llvm::ArrayRef<int64_t> dilation) {
 

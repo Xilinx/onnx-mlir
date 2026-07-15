@@ -240,10 +240,11 @@ mlir::FailureOr<mlir::Value> convertPoolOp(
   llvm::SmallVector<int64_t, 4> reorderedPads = {
       pads[0], pads[2] + ceilConstants[0], pads[1], pads[3] + ceilConstants[1]};
 
-  mlir::FailureOr<mlir::Value> resizedInput = create.tosa.resizeWindowBasedOps(
-      input, mlir::cast<mlir::RankedTensorType>(input.getType()).getShape(),
-      {kernelShapeVec[0], kernelShapeVec[1]}, reorderedPads, create.onnx,
-      shapeHelper.strides, shapeHelper.dilations);
+  mlir::FailureOr<mlir::Value> resizedInput =
+      create.tosa.resizeWindowBasedOps(create.onnx, input,
+          mlir::cast<mlir::RankedTensorType>(input.getType()).getShape(),
+          {kernelShapeVec[0], kernelShapeVec[1]}, reorderedPads,
+          shapeHelper.strides, shapeHelper.dilations);
 
   if (failed(resizedInput)) {
     return rewriter.notifyMatchFailure(

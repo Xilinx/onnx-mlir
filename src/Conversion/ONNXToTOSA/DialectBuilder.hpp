@@ -50,7 +50,6 @@ struct TosaBuilder : DialectBuilder {
   mlir::Value intdiv(mlir::Value &lhs, mlir::Value &rhs);
 
   mlir::Value transpose(mlir::Value &value, llvm::ArrayRef<int32_t> perm);
-  // Internal helper for ONNXSliceLoweringToTOSA only.
   mlir::Value slice(mlir::Value &inputConst, llvm::ArrayRef<int64_t> size,
       llvm::ArrayRef<int64_t> start);
   mlir::Value reshape(mlir::Value value, llvm::ArrayRef<int64_t> shape);
@@ -76,10 +75,10 @@ struct TosaBuilder : DialectBuilder {
   /// the input can only have values that are actually used. To achieve this we
   /// have to reduce padding and if this is not enough, we even have to insert a
   /// slice op.
-  mlir::FailureOr<mlir::Value> resizeWindowBasedOps(mlir::Value &value,
-      llvm::ArrayRef<int64_t> inputShape,
+  mlir::FailureOr<mlir::Value> resizeWindowBasedOps(OnnxBuilder &onnxBuilder,
+      mlir::Value &value, llvm::ArrayRef<int64_t> inputShape,
       llvm::ArrayRef<int64_t> weightSpatialShape,
-      llvm::SmallVectorImpl<int64_t> &padding, OnnxBuilder &onnxBuilder,
+      llvm::SmallVectorImpl<int64_t> &padding,
       llvm::ArrayRef<int64_t> strides = {1, 1},
       llvm::ArrayRef<int64_t> dilation = {0, 0});
 

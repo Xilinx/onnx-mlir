@@ -26,10 +26,6 @@ namespace onnx_mlir {
 
 namespace {
 
-bool isStaticSliceAttribute(Value val) {
-  return val.getDefiningOp<mlir::tosa::ConstOp>() || isConstLikeValue(val);
-}
-
 class ONNXSliceLoweringToTOSA : public OpConversionPattern<ONNXSliceOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -44,9 +40,9 @@ public:
       ConversionPatternRewriter &rewriter) const override {
 
     Location loc = op->getLoc();
-    if (!isStaticSliceAttribute(adaptor.getStarts()))
+    if (!isConstLikeValue(adaptor.getStarts()))
       return rewriter.notifyMatchFailure(op, "starts must be constant");
-    if (!isStaticSliceAttribute(adaptor.getEnds()))
+    if (!isConstLikeValue(adaptor.getEnds()))
       return rewriter.notifyMatchFailure(op, "ends must be constant");
 
     // Get shape.
