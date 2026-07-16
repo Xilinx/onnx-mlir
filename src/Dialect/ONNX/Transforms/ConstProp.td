@@ -135,6 +135,9 @@ def OpIsLikelyToBeFusedWithBias: Constraint<
 def SatisfiesExpansionBound: Constraint<
   CPred<"satisfiesExpansionBound($_self)">>;
 
+def SatisfiesMaxTileFoldSize: Constraint<
+  CPred<"satisfiesMaxTileFoldSize($_self)">>;
+
 class IsNotDisabled<string name>: Constraint<
   CPred<"isNotDisabled(\"" # name # "\")">>;
 
@@ -1333,14 +1336,14 @@ def TileofConst : NamedPat<"TileofConst",
     (ONNXTileOp:$resOp $input, $repeats),
     // To c where c is the tiled value.
     (CreateTileOfConst $resOp, $input),
-    [(IsFromDenseConstLike:$input),
+    [(IsFromDenseConstLike:$input), (IsIntOrFloatType:$input),
      (HasStaticShape:$resOp), (ValuesHaveSameDType $resOp, $input),
-     (SatisfiesExpansionBound:$resOp)]>;
+     (SatisfiesExpansionBound:$resOp), (SatisfiesMaxTileFoldSize:$resOp)]>;
 
 def SplatTileofConst : NamedPat<"SplatTileofConst",
     (ONNXTileOp:$resOp $input, $repeats),
     (CreateTileOfConst $resOp, $input),
-    [(IsFromSplatDenseConstLike:$input),
+    [(IsFromSplatDenseConstLike:$input), (IsIntOrFloatType:$input),
      (HasStaticShape:$resOp), (ValuesHaveSameDType $resOp, $input)],
     [], (addBenefit 1)>;
 

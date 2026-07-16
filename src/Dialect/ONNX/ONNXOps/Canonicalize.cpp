@@ -22,6 +22,7 @@
 #include <numeric>
 
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
+#include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/Dialect/Traits.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
@@ -1839,9 +1840,9 @@ public:
     }
 
     MultiDialectBuilder<OnnxBuilder> create(rewriter, expandOp.getLoc());
+    Value repeatsValue = create.onnx.constantInt64(repeats);
     Value tile = rewriter.create<ONNXTileOp>(expandOp.getLoc(),
-        expandOp.getOutput().getType(), expandOp.getInput(),
-        create.onnx.constantInt64(repeats));
+        expandOp.getOutput().getType(), expandOp.getInput(), repeatsValue);
     rewriter.replaceOp(expandOp, tile);
     return success();
   }

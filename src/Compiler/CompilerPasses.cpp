@@ -67,6 +67,7 @@ void configurePasses() {
   configureConstPropONNXToONNXPass(onnxConstPropRoundFPToInt,
       onnxConstPropExpansionBound, onnxConstPropDisablePatterns,
       disableConstantProp);
+  configureConstPropMaxTileFoldSize(onnxConstPropMaxTileFoldSize);
   configureUnsafeMathCanonicalization(enableUnsafeMathOptimizations);
   configurePositiveAxisCanonicalization(enablePositiveAxisCanonicalization);
   configureReduceKeepdimsCanonicalization(enableReduceKeepdimsCanonicalization);

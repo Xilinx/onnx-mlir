@@ -75,6 +75,7 @@ extern std::string march;                                     // common for both
 extern InstrumentStages instrumentStage;                      // common for both
 extern bool onnxConstPropRoundFPToInt;                        // common for both
 extern int onnxConstPropExpansionBound;                       // common for both
+extern int64_t onnxConstPropMaxTileFoldSize;                  // common for both
 extern std::vector<std::string> onnxConstPropDisablePatterns; // common for both
 extern bool enableONNXHybridPass;                             // common for both
 extern std::vector<std::string> functionsToDecompose;         // common for both

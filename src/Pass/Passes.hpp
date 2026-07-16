@@ -54,6 +54,8 @@ std::unique_ptr<mlir::Pass> createShapeInferencePass();
 void configureConstPropONNXToONNXPass(bool roundFPToInt, int expansionBound,
     llvm::ArrayRef<std::string> disabledPatterns, bool constantPropIsDisabled);
 
+void configureConstPropMaxTileFoldSize(int64_t maxTileFoldSize);
+
 // To configure whether BatchNorm decomposition is disabled in canonicalization.
 void configureBatchNormCanonicalization(bool disableBatchNormDecompose);
 

@@ -73,14 +73,26 @@ namespace {
 struct ConstPropONNXToONNXPassConfiguration {
   static bool roundFPToInt;
   static int expansionBound;
+  static int64_t maxTileFoldSize;
   static StringSet<> disabledPatterns;
   static bool constantPropIsDisabled;
 };
 
 bool ConstPropONNXToONNXPassConfiguration::roundFPToInt = false;
 int ConstPropONNXToONNXPassConfiguration::expansionBound = -1; // -1 == no bound
+int64_t ConstPropONNXToONNXPassConfiguration::maxTileFoldSize = 0;
 StringSet<> ConstPropONNXToONNXPassConfiguration::disabledPatterns = {};
 bool ConstPropONNXToONNXPassConfiguration::constantPropIsDisabled = false;
+
+bool satisfiesMaxTileFoldSize(Value result) {
+  int64_t maxSize = ConstPropONNXToONNXPassConfiguration::maxTileFoldSize;
+  if (maxSize <= 0)
+    return true;
+  auto resultType = dyn_cast<RankedTensorType>(result.getType());
+  if (!resultType || !resultType.hasStaticShape())
+    return false;
+  return getSizeInBytes(resultType) <= maxSize;
+}
 
 // Precondition: result has ranked tensor type with static shape and int or
 // float element type.
@@ -1163,14 +1175,22 @@ Value ConstPropTile(
         DenseElementsAttr::get(
             outputType, {elements.getSplatValue<Attribute>()}));
 
-  OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
-  for (int64_t axis = 0; axis < inputType.getRank(); ++axis) {
-    int64_t repeat = outputShape[axis] / inputShape[axis];
-    if (repeat == 1)
-      continue;
-    SmallVector<ElementsAttr> copies(repeat, elements);
-    elements = elementsBuilder.concat(copies, axis);
+  // Collect the elements of TileOp as a broadcast:
+  // - Insert a singleton dimension in front of each axis
+  // - Expand those dimensions up to the per-axis repeat counts
+  // - Flatten back to the tiled shape
+  // This way we only allocate an ElementsAttr once.
+  SmallVector<int64_t> singletonShape;
+  SmallVector<int64_t> broadcastShape;
+  for (auto [in, out] : llvm::zip(inputShape, outputShape)) {
+    singletonShape.append({1, in});
+    broadcastShape.append({out / in, in});
   }
+
+  OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
+  elements = elementsBuilder.reshape(elements, singletonShape);
+  elements = elementsBuilder.expand(elements, broadcastShape);
+  elements = elementsBuilder.reshape(elements, outputShape);
   return createReplacingConstantOp(rewriter, replacingValue, elements);
 }
 
@@ -1920,6 +1940,10 @@ void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,
       disabledPatterns.begin(), disabledPatterns.end());
   ConstPropONNXToONNXPassConfiguration::constantPropIsDisabled =
       constantPropIsDisabled;
+}
+
+void onnx_mlir::configureConstPropMaxTileFoldSize(int64_t maxTileFoldSize) {
+  ConstPropONNXToONNXPassConfiguration::maxTileFoldSize = maxTileFoldSize;
 }
 
 /*!
