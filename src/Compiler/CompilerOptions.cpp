@@ -56,6 +56,7 @@ bool enableReshapeCanonicalization;                    // common for both
 bool enablePositiveAxisCanonicalization;               // common for both
 bool enableExpandCanonicalization;                     // common for both
 bool enableReduceKeepdimsCanonicalization;             // common for both
+bool enableMaxPool3dTo2dDecomposition;                 // common for both
 bool enableXFEONNXOpsetVerifier;                       // common for both
 bool enableSafeCodeGen;                                // common for both
 bool disableMemRefPrefetch;                            // common for both
@@ -376,6 +377,13 @@ static llvm::cl::opt<bool, true> enableReduceKeepdimsCanonicalizationOpt(
         "keepdims=1 + Reshape (default=false, i.e. the rewrite is disabled)."),
     llvm::cl::location(enableReduceKeepdimsCanonicalization),
     llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableMaxPool3dTo2dDecompositionOpt(
+    "enable-maxpool3d-to-2d-decomposition",
+    llvm::cl::desc(
+        "Enable decomposition of a 3D MaxPool into a 2D Maxpool + Max"),
+    llvm::cl::location(enableMaxPool3dTo2dDecomposition), llvm::cl::init(true),
+    llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true> enableXFEONNXOpsetVerifierOpt(
     "enable-xfe-onnx-opset-verifier",

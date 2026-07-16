@@ -66,6 +66,9 @@ static bool enablePositiveAxisCanonicalization = true;
 // Populated by configureReduceKeepdimsCanonicalization().
 static bool enableReduceKeepdimsCanonicalization = true;
 
+// Populated by configureMaxPool3dTo2dDecomposition().
+static bool enableMaxPool3dTo2dDecomposition = true;
+
 // Populated by configureQDQDataMovementCanonicalization().
 static bool enableQDQDataMovementCanonicalization = false;
 
@@ -3482,6 +3485,142 @@ struct PushTransposeDownScalePattern : public OpRewritePattern<ONNXMulOp> {
 };
 
 // =============================================================================
+// Decomposes 3D maxpool -> 2D MaxPool + depth ReduceMax
+// Goes From:
+//                         │  [N, C, D, H, W]
+//             ┌───────────▼──────────┐
+//             │     MaxPool (3D)     │  kernel kd x kh x kw
+//             |                      |  stride sd x sh x sw
+//             └───────────┬──────────┘
+//                         ▼  [N, C, Dout, Hout, Wout]
+// To:
+//                         │  [N, C, D, H, W]
+//             ┌───────────▼──────────┐
+//             │        Reshape       │  -> [N, C*D, H, W]
+//             └───────────┬──────────┘
+//             ┌───────────▼──────────┐
+//             │       MaxPool2D      │  kernel kh x kw, stride sh x sw
+//             │                      │  -> [N, C*D, Hout, Wout]
+//             └───────────┬──────────┘
+//             ┌───────────▼──────────┐
+//             │        Reshape       │  -> [N, C, D/kd, kd, Hout, Wout]
+//             └───────────┬──────────┘
+//             ┌───────────▼──────────┐
+//             │       ReduceMax      │   over the kd axis (depth pool)
+//             └───────────┬──────────┘
+//                         ▼  [N, C, Dout, Hout, Wout]
+// =============================================================================
+struct Convert3dMaxpoolto2dMaxpool
+    : public OpRewritePattern<ONNXMaxPoolSingleOutOp> {
+  using OpRewritePattern<ONNXMaxPoolSingleOutOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXMaxPoolSingleOutOp maxpool3d, PatternRewriter &rewriter) const final {
+
+    auto ksizeArr = maxpool3d.getKernelShape();
+    if (ksizeArr.size() != 3)
+      return rewriter.notifyMatchFailure(
+          maxpool3d->getLoc(), "Not a 3d maxpool");
+
+    ArrayRef<int64_t> maxpool3dInShape =
+        mlir::cast<ShapedType>(maxpool3d.getX().getType()).getShape();
+    Type elemTy =
+        mlir::cast<ShapedType>(maxpool3d.getX().getType()).getElementType();
+
+    SmallVector<int64_t> k =
+        extractFromIntegerArrayAttr<int64_t>(maxpool3d.getKernelShapeAttr());
+    SmallVector<int64_t> s{1, 1, 1};
+    if (maxpool3d.getStridesAttr())
+      s = extractFromIntegerArrayAttr<int64_t>(maxpool3d.getStridesAttr());
+    SmallVector<int64_t> p{0, 0, 0, 0, 0, 0};
+    if (maxpool3d.getPadsAttr())
+      p = extractFromIntegerArrayAttr<int64_t>(maxpool3d.getPadsAttr());
+
+    if (!mlir::cast<ShapedType>(maxpool3d.getX().getType()).hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          maxpool3d->getLoc(), "only static input shape is supported");
+    if (maxpool3d.getDilationsAttr()) {
+      SmallVector<int64_t> dilations =
+          extractFromIntegerArrayAttr<int64_t>(maxpool3d.getDilationsAttr());
+      if (llvm::any_of(dilations, [](int64_t d) { return d != 1; }))
+        return rewriter.notifyMatchFailure(maxpool3d->getLoc(),
+            "Dilations other than 1x1x1 are not supported");
+    }
+    if (maxpool3d.getAutoPad() != "NOTSET")
+      return rewriter.notifyMatchFailure(
+          maxpool3d->getLoc(), "only auto_pad NOTSET is supported");
+    if (p[0] != 0 || p[3] != 0)
+      return rewriter.notifyMatchFailure(
+          maxpool3d->getLoc(), "non-zero padding along depth is not supported");
+    if (maxpool3d.getStorageOrder() != 0)
+      return rewriter.notifyMatchFailure(
+          maxpool3d->getLoc(), "only storage_order 0 is supported");
+    int64_t ksizeDepth = k[0];
+    if (s[0] != ksizeDepth)
+      return rewriter.notifyMatchFailure(maxpool3d->getLoc(),
+          "only non-overlapping depth windows (depth stride == depth kernel) "
+          "are supported");
+    if (ksizeDepth == 0 || maxpool3dInShape[2] % ksizeDepth != 0)
+      return rewriter.notifyMatchFailure(maxpool3d->getLoc(),
+          "only depth extents that are a multiple of the depth kernel are "
+          "supported");
+
+    MultiDialectBuilder<OnnxBuilder> b(rewriter, maxpool3d.getLoc());
+
+    // Reshape: N C D H W -> N (C*D) H W
+    SmallVector<int64_t> channelDepthShapeVec = {maxpool3dInShape[0], // N
+        maxpool3dInShape[1] * maxpool3dInShape[2],                    // C * D
+        maxpool3dInShape[3],                                          // H
+        maxpool3dInShape[4]};                                         // W
+    Value channelDepthReshape =
+        b.onnx.reshape(RankedTensorType::get(channelDepthShapeVec, elemTy),
+            maxpool3d.getX(), b.onnx.constantInt64(channelDepthShapeVec));
+
+    // 2D MaxPool: N (C*D) H W -> N (C*D) Hout Wout
+    ArrayAttr kernelHW = rewriter.getI64ArrayAttr({k[1], k[2]});
+    ArrayAttr stridesHW = rewriter.getI64ArrayAttr({s[1], s[2]});
+    ArrayAttr padsHW = rewriter.getI64ArrayAttr({p[1], p[2], p[4], p[5]});
+
+    auto maxpoolHW = rewriter.create<ONNXMaxPoolSingleOutOp>(maxpool3d.getLoc(),
+        UnrankedTensorType::get(elemTy), channelDepthReshape,
+        /*auto_pad=*/maxpool3d.getAutoPadAttr(),
+        /*ceil_mode=*/maxpool3d.getCeilModeAttr(),
+        /*dilations=*/rewriter.getI64ArrayAttr({1, 1}),
+        /*kernel_shape=*/kernelHW,
+        /*pads=*/padsHW,
+        /*storage_order=*/maxpool3d.getStorageOrderAttr(),
+        /*strides=*/stridesHW);
+
+    if (failed(maxpoolHW.inferShapes([](Region &) {})))
+      return rewriter.notifyMatchFailure(
+          maxpool3d->getLoc(), "could not infer 2D maxpool shape");
+
+    // Reshape: N (C*D) Hout Wout -> N C D/kd kd Hout Wout
+    ArrayRef<int64_t> maxpoolHWOutShape =
+        mlir::cast<ShapedType>(maxpoolHW.getResult().getType()).getShape();
+    int64_t depthDim = maxpool3dInShape[2];                           // D
+    SmallVector<int64_t> depthGroupedShapeVec = {maxpool3dInShape[0], // N
+        maxpool3dInShape[1],                                          // C
+        depthDim / ksizeDepth,                                        // Dout
+        ksizeDepth,                                                   // kd
+        maxpoolHWOutShape[2],                                         // Hout
+        maxpoolHWOutShape[3]};                                        // Wout
+    Value channelDepthGroupReshape =
+        b.onnx.reshape(RankedTensorType::get(depthGroupedShapeVec, elemTy),
+            maxpoolHW.getResult(), b.onnx.constantInt64(depthGroupedShapeVec));
+
+    // ReduceMax: N C D/kd kd Hout Wout -> N C Dout Hout Wout
+    Value channelDepthReduceMax =
+        b.onnx.reduceMax(maxpool3d.getResult().getType(),
+            channelDepthGroupReshape, b.onnx.constantInt64({3}),
+            /*keepDims=*/false);
+
+    rewriter.replaceOp(maxpool3d, channelDepthReduceMax);
+    return success();
+  }
+};
+
+// =============================================================================
 // Fuses back-to-back maxpools (ONNXMaxPoolSingleOutOps):
 // Goes From:
 //                    │
@@ -4872,6 +5011,8 @@ void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<ReorderReluMaxPoolPattern>(context);
   results.insert<FuseBackToBackMaxpools>(context);
+  if (enableMaxPool3dTo2dDecomposition)
+    results.insert<Convert3dMaxpoolto2dMaxpool>(context);
 }
 
 /// on the ONNXMulOp.
@@ -5219,6 +5360,10 @@ bool onnx_mlir::isPositiveAxisCanonicalizationEnabled() {
 
 void onnx_mlir::configureReduceKeepdimsCanonicalization(bool enable) {
   enableReduceKeepdimsCanonicalization = enable;
+}
+
+void onnx_mlir::configureMaxPool3dTo2dDecomposition(bool enable) {
+  enableMaxPool3dTo2dDecomposition = enable;
 }
 
 void onnx_mlir::configureQDQDataMovementCanonicalization(

@@ -93,6 +93,7 @@ extern bool enableReshapeCanonicalization;                    // common for both
 extern bool enablePositiveAxisCanonicalization;               // common for both
 extern bool enableExpandCanonicalization;                     // common for both
 extern bool enableReduceKeepdimsCanonicalization;             // common for both
+extern bool enableMaxPool3dTo2dDecomposition;                 // common for both
 extern bool enableXFEONNXOpsetVerifier;                       // common for both
 extern uint64_t compilationNumThreads;                        // common for both
 // AMD: Decompose unconditionally
