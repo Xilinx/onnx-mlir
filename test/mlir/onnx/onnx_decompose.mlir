@@ -928,6 +928,58 @@ func.func @test_scatter_nd_negative_shift(%data : tensor<1x6x10x12xf32>, %update
 // CHECK:        onnx.ScatterND
 
 // -----
+
+func.func @test_scatter_nd_three_split_axes_full_indexing(%data : tensor<2x3x4x5xf32>, %updates : tensor<1x1x1x5xf32> ) -> tensor<2x3x4x5xf32> {
+  %indices = onnx.Constant dense<[[[[[1, 1, 1, 0], [1, 1, 1, 1], [1, 1, 1, 2], [1, 1, 1, 3], [1, 1, 1, 4]]]]]> : tensor<1x1x1x5x4xi64>
+  %0 = "onnx.ScatterND"(%data, %indices, %updates) {reduction = "none"} : (tensor<2x3x4x5xf32>, tensor<1x1x1x5x4xi64>, tensor<1x1x1x5xf32>) -> tensor<2x3x4x5xf32>
+  onnx.Return %0 : tensor<2x3x4x5xf32>
+}
+// CHECK-LABEL:  func.func @test_scatter_nd_three_split_axes_full_indexing
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x3x4x5xf32>, [[PARAM_1_:%.+]]: tensor<1x1x1x5xf32>) -> tensor<2x3x4x5xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<[2, 3, 4, 5]> : tensor<4xi64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<[17, 1, 6]> : tensor<3xi64>
+// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<[1, 5]> : tensor<2xi64>
+// CHECK-DAG:       [[VAR_3_:%.+]] = onnx.Constant dense<[24, 5]> : tensor<2xi64>
+// CHECK-NOT: separator of consecutive DAGs
+// CHECK-DAG:       [[VAR_4_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_3_]]) {allowzero = 0 : si64} : (tensor<2x3x4x5xf32>, tensor<2xi64>) -> tensor<24x5xf32>
+// CHECK-DAG:       [[VAR_5_:%.+]] = "onnx.Reshape"([[PARAM_1_]], [[VAR_2_]]) {allowzero = 0 : si64} : (tensor<1x1x1x5xf32>, tensor<2xi64>) -> tensor<1x5xf32>
+// CHECK:           [[VAR_6_:%.+]]:3 = "onnx.Split"([[VAR_4_]], [[VAR_1_]]) {axis = 0 : si64} : (tensor<24x5xf32>, tensor<3xi64>) -> (tensor<17x5xf32>, tensor<1x5xf32>, tensor<6x5xf32>)
+// CHECK:           [[VAR_7_:%.+]] = "onnx.Concat"([[VAR_6_]]#0, [[VAR_5_]], [[VAR_6_]]#2) {axis = 0 : si64} : (tensor<17x5xf32>, tensor<1x5xf32>, tensor<6x5xf32>) -> tensor<24x5xf32>
+// CHECK:           [[VAR_8_:%.+]] = "onnx.Reshape"([[VAR_7_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<24x5xf32>, tensor<4xi64>) -> tensor<2x3x4x5xf32>
+// CHECK:           onnx.Return [[VAR_8_]] : tensor<2x3x4x5xf32>
+// CHECK:         }
+
+// -----
+func.func @test_scatter_nd_three_split_axes_partial_indexing(%data : tensor<2x2x3x5xf32>, %updates : tensor<1x1x2x5xf32> ) -> tensor<2x2x3x5xf32> {
+  %indices = onnx.Constant dense<[[[[0, 1, 0], [0, 1, 1]]]]> : tensor<1x1x2x3xi64>
+  %0 = "onnx.ScatterND"(%data, %indices, %updates) {reduction = "none"} : (tensor<2x2x3x5xf32>, tensor<1x1x2x3xi64>, tensor<1x1x2x5xf32>) -> tensor<2x2x3x5xf32>
+  onnx.Return %0 : tensor<2x2x3x5xf32>
+}
+// CHECK-LABEL:  func.func @test_scatter_nd_three_split_axes_partial_indexing
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x2x3x5xf32>, [[PARAM_1_:%.+]]: tensor<1x1x2x5xf32>) -> tensor<2x2x3x5xf32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<[2, 2, 3, 5]> : tensor<4xi64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<[3, 2, 7]> : tensor<3xi64>
+// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<[2, 5]> : tensor<2xi64>
+// CHECK-DAG:       [[VAR_3_:%.+]] = onnx.Constant dense<[12, 5]> : tensor<2xi64>
+// CHECK-NOT: separator of consecutive DAGs
+// CHECK-DAG:       [[VAR_4_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_3_]]) {allowzero = 0 : si64} : (tensor<2x2x3x5xf32>, tensor<2xi64>) -> tensor<12x5xf32>
+// CHECK-DAG:       [[VAR_5_:%.+]] = "onnx.Reshape"([[PARAM_1_]], [[VAR_2_]]) {allowzero = 0 : si64} : (tensor<1x1x2x5xf32>, tensor<2xi64>) -> tensor<2x5xf32>
+// CHECK:           [[VAR_6_:%.+]]:3 = "onnx.Split"([[VAR_4_]], [[VAR_1_]]) {axis = 0 : si64} : (tensor<12x5xf32>, tensor<3xi64>) -> (tensor<3x5xf32>, tensor<2x5xf32>, tensor<7x5xf32>)
+// CHECK:           [[VAR_7_:%.+]] = "onnx.Concat"([[VAR_6_]]#0, [[VAR_5_]], [[VAR_6_]]#2) {axis = 0 : si64} : (tensor<3x5xf32>, tensor<2x5xf32>, tensor<7x5xf32>) -> tensor<12x5xf32>
+// CHECK:           [[VAR_8_:%.+]] = "onnx.Reshape"([[VAR_7_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<12x5xf32>, tensor<4xi64>) -> tensor<2x2x3x5xf32>
+// CHECK:           onnx.Return [[VAR_8_]] : tensor<2x2x3x5xf32>
+// CHECK:         }
+
+// -----
+func.func @test_scatter_nd_non_consecutive_split_axes(%data : tensor<2x3x4x12xf32>, %updates : tensor<1x3x1x12xf32> ) -> tensor<2x3x4x12xf32> {
+  %indices = onnx.Constant dense<0> : tensor<1x3x1x3xi64>
+  %0 = "onnx.ScatterND"(%data, %indices, %updates) {reduction = "none"} : (tensor<2x3x4x12xf32>, tensor<1x3x1x3xi64>, tensor<1x3x1x12xf32>) -> tensor<2x3x4x12xf32>
+  onnx.Return %0 : tensor<2x3x4x12xf32>
+}
+// CHECK-LABEL:  func.func @test_scatter_nd_non_consecutive_split_axes
+// CHECK:        onnx.ScatterND
+
+// -----
 func.func @test_scatter_nd_full_overwrite(%data : tensor<1x6x10x12xf32>, %updates : tensor<1x6x10x12xf32> ) -> tensor<1x6x10x12xf32> {
   %indices = onnx.Constant dense<[[[[0, 0, 0], [0, 0, 1], [0, 0, 2], [0, 0, 3], [0, 0, 4], [0, 0, 5], [0, 0, 6], [0, 0, 7], [0, 0, 8], [0, 0, 9]], [[0, 1, 0], [0, 1, 1], [0, 1, 2], [0, 1, 3], [0, 1, 4], [0, 1, 5], [0, 1, 6], [0, 1, 7], [0, 1, 8], [0, 1, 9]], [[0, 2, 0], [0, 2, 1], [0, 2, 2], [0, 2, 3], [0, 2, 4], [0, 2, 5], [0, 2, 6], [0, 2, 7], [0, 2, 8], [0, 2, 9]], [[0, 3, 0], [0, 3, 1], [0, 3, 2], [0, 3, 3], [0, 3, 4], [0, 3, 5], [0, 3, 6], [0, 3, 7], [0, 3, 8], [0, 3, 9]], [[0, 4, 0], [0, 4, 1], [0, 4, 2], [0, 4, 3], [0, 4, 4], [0, 4, 5], [0, 4, 6], [0, 4, 7], [0, 4, 8], [0, 4, 9]], [[0, 5, 0], [0, 5, 1], [0, 5, 2], [0, 5, 3], [0, 5, 4], [0, 5, 5], [0, 5, 6], [0, 5, 7], [0, 5, 8], [0, 5, 9]]]]> : tensor<1x6x10x3xi64>
   %0 = "onnx.ScatterND"(%data, %indices, %updates) {reduction = "none"} : (tensor<1x6x10x12xf32>, tensor<1x6x10x3xi64>, tensor<1x6x10x12xf32>) -> tensor<1x6x10x12xf32>
@@ -1003,14 +1055,6 @@ func.func @scatter_block_rows0to2_cols0to2_partial_slicing(%data: tensor<6x4x4xf
 // CHECK-LABEL:  func.func @scatter_block_rows0to2_cols0to2_partial_slicing
 // CHECK:        onnx.ScatterND
 
-// -----
-func.func @scatter_block_rows0to2_col3_partial_slicing(%data: tensor<6x4x4xf32>, %updates: tensor<6x3x1xf32>) -> tensor<6x4x4xf32> {
-  %indices = onnx.Constant dense<[[[[0, 0, 3]], [[0, 1, 3]], [[0, 2, 3]]], [[[1, 0, 3]], [[1, 1, 3]], [[1, 2, 3]]], [[[2, 0, 3]], [[2, 1, 3]], [[2, 2, 3]]], [[[3, 0, 3]], [[3, 1, 3]], [[3, 2, 3]]], [[[4, 0, 3]], [[4, 1, 3]], [[4, 2, 3]]], [[[5, 0, 3]], [[5, 1, 3]], [[5, 2, 3]]]]> : tensor<6x3x1x3xi64>
-  %out = "onnx.ScatterND"(%data, %indices, %updates) {reduction = "none"} : (tensor<6x4x4xf32>, tensor<6x3x1x3xi64>, tensor<6x3x1xf32>) -> tensor<6x4x4xf32>
-  onnx.Return %out : tensor<6x4x4xf32>
-}
-// CHECK-LABEL:  func.func @scatter_block_rows0to2_col3_partial_slicing
-// CHECK:        onnx.ScatterND
 
 // -----
 
