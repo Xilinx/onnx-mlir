@@ -498,7 +498,7 @@ Value OnnxBuilder::slice(
   Value endsVal = constant(b().getI64TensorAttr(ends));
   Value axesVal = constant(b().getI64TensorAttr(axes));
   Value stepsVal = constant(b().getI64TensorAttr(steps));
-  auto inputType = cast<ShapedType>(input.getType());
+  auto inputType = mlir::cast<ShapedType>(input.getType());
   Type outputType = RankedTensorType::get(sizes, inputType.getElementType());
   return slice(outputType, input, startsVal, endsVal, axesVal, stepsVal);
 }
