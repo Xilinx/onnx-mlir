@@ -1,5 +1,5 @@
 // Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
-// RUN: onnx-mlir-opt --decompose-onnx %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --decompose-onnx=enable-gqa-uint16-cache-slot-rewrite=true %s -split-input-file | FileCheck %s
 // RUN: onnx-mlir-opt --decompose-onnx=enable-gqa-uint16-cache-slot-rewrite=false %s -split-input-file | FileCheck %s --check-prefix=SCATTER
 
 // COM: Decompose CustomOp introduced by onnxruntime.
@@ -1047,6 +1047,34 @@ func.func @gqa_preallocated_cache_slot_write(
 // SCATTER:       %[[V_INDICES:.*]] = "onnx.Expand"({{.*}}) : (tensor<1x1x1x1xi64>, tensor<4xi64>) -> tensor<1x16x1x96xi64>
 // SCATTER:       %[[PRESENT_V:.*]] = "onnx.ScatterElements"(%[[PAST_V:.*]], %[[V_INDICES]], {{.*}}) {axis = 2 : si64, reduction = "none"} : (tensor<1x16x512x96xf32>, tensor<1x16x1x96xi64>, tensor<1x16x1x96xf32>) -> tensor<1x16x512x96xf32>
 // SCATTER:       return {{.*}}, %[[PRESENT_K]], %[[PRESENT_V]]
+
+// -----
+
+func.func @gqa_uint16_cache_slot_rewrite_falls_back_for_oversized_cache(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x65537x96xf32>,
+  %past_v: tensor<1x16x65537x96xf32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x65537x96xf32>, tensor<1x16x65537x96xf32>) {
+  %total_seqlen = "onnx.Constant"() {value = dense<65537> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<65536> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x65537x96xf32>, tensor<1x16x65537x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x65537x96xf32>, tensor<1x16x65537x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x65537x96xf32>, tensor<1x16x65537x96xf32>
+}
+
+// CHECK-LABEL: func.func @gqa_uint16_cache_slot_rewrite_falls_back_for_oversized_cache
+// CHECK-NOT:   ui16
+// CHECK:       "onnx.Expand"
+// CHECK:       "onnx.ScatterElements"
+// CHECK:       "onnx.Expand"
+// CHECK:       "onnx.ScatterElements"
+// CHECK:       "onnx.Attention"
 
 // -----
 

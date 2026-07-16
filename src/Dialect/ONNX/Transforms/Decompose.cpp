@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <numeric>
 #include <type_traits>
@@ -55,6 +56,8 @@
 #include "src/Pass/Passes.hpp"
 #include "src/Support/TypeUtilities.hpp"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 
@@ -3765,20 +3768,24 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
 
   // Build preallocated-cache present K/V. GQA updates one runtime slot:
   //   present[:, :, seqlens_k, :] = current K/V
-  // Both specializations convert current K/V from [B,1,H*D] to [B,H,1,D].
+  // Both paths convert current K/V from [B,1,H*D] to [B,H,1,D].
   // The uint16 rewrite builds one shared selector for K and V, then uses:
   //   present = past + (current - past) * selector
-  // The original path expands seqlens_k to i64 indices and uses
+  // whereas the default path expands seqlens_k to i64 indices and uses
   // ScatterElements.
-  template <bool UseUint16CacheSlotRewrite>
   static FailureOr<SmallVector<Value, 2>> createPresentKVSlotWrite(
       PatternRewriter &rewriter, Location loc, ONNXCustomOp customOp,
       Value pastKey, Value key, Type presentKeyType, Value pastValue,
       Value value, Type presentValueType, Value seqlensK, int64_t batchSize,
       int64_t cacheSeqLen, int64_t kvSeqLen, int64_t kvNumHeads,
-      SmallVector<Value> &toCheck) {
+      bool enableUint16CacheSlotRewrite, SmallVector<Value> &toCheck) {
+    const int64_t maxUint16CacheCapacity =
+        static_cast<int64_t>(std::numeric_limits<uint16_t>::max()) + 1;
+    const bool useUint16CacheSlotRewrite =
+        enableUint16CacheSlotRewrite && cacheSeqLen <= maxUint16CacheCapacity;
+
     Value slotSelector;
-    if constexpr (UseUint16CacheSlotRewrite) {
+    if (useUint16CacheSlotRewrite) {
       // Build a broadcastable selector for the runtime cache slot:
       //   positions_ui16 = Constant [1, 1, T, 1] = 0..T-1
       //   seqlens_ui16   = Cast(seqlens_k -> ui16)
@@ -3798,10 +3805,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       Value seqlens4d = rewriter.create<ONNXReshapeOp>(
           loc, seqlens4dType, seqlensUI16, seqlens4dShape, nullptr);
 
-      SmallVector<Attribute> positionAttrs;
-      positionAttrs.reserve(cacheSeqLen);
-      for (int64_t i = 0; i < cacheSeqLen; ++i)
-        positionAttrs.push_back(rewriter.getIntegerAttr(ui16Type, i));
+      SmallVector<Attribute> positionAttrs = llvm::map_to_vector(
+          llvm::seq<int64_t>(cacheSeqLen), [&](int64_t i) -> Attribute {
+            return rewriter.getIntegerAttr(ui16Type, i);
+          });
       auto positionsType =
           RankedTensorType::get({1, 1, cacheSeqLen, 1}, ui16Type);
       Value positions = rewriter.create<ONNXConstantOp>(loc, Attribute(),
@@ -3832,7 +3839,7 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
         return failure();
       Value current4d = *current4dOr;
 
-      if constexpr (UseUint16CacheSlotRewrite) {
+      if (useUint16CacheSlotRewrite) {
         Value delta =
             rewriter.create<ONNXSubOp>(loc, presentType, current4d, pastKV);
         Value selectedDelta =
@@ -4091,17 +4098,11 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
                 kvNumHeads.getSInt())))
           return failure();
         FailureOr<SmallVector<Value, 2>> presentKVOr =
-            enableUint16CacheSlotRewrite
-                ? createPresentKVSlotWrite<true>(rewriter, loc, customOp,
-                      pastKey, key, customOp.getResult(1).getType(), pastValue,
-                      value, customOp.getResult(2).getType(), seqlensK,
-                      queryType.getShape()[0], pastSeqLen, kvSeqLen,
-                      kvNumHeads.getSInt(), toCheck)
-                : createPresentKVSlotWrite<false>(rewriter, loc, customOp,
-                      pastKey, key, customOp.getResult(1).getType(), pastValue,
-                      value, customOp.getResult(2).getType(), seqlensK,
-                      queryType.getShape()[0], pastSeqLen, kvSeqLen,
-                      kvNumHeads.getSInt(), toCheck);
+            createPresentKVSlotWrite(rewriter, loc, customOp, pastKey, key,
+                customOp.getResult(1).getType(), pastValue, value,
+                customOp.getResult(2).getType(), seqlensK,
+                queryType.getShape()[0], pastSeqLen, kvSeqLen,
+                kvNumHeads.getSInt(), enableUint16CacheSlotRewrite, toCheck);
         if (failed(presentKVOr))
           return failure();
         presentKeyReplacement = (*presentKVOr)[0];
