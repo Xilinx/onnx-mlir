@@ -88,6 +88,13 @@ def ONNXDecomposePatternOptions {
            "Enable decomposition of HardSwish into "
            "x * HardSigmoid(x) (alpha=1/6, beta=0.5).">,
 
+    Option<"enableGroupQueryAttentionCacheSlicing",
+           "enable-groupqueryattention-cache-slicing",
+           "bool", /*default=*/"true",
+           "Enable slicing of cos/sin caches during GroupQueryAttention "
+           "decomposition. Set to false to keep the cache and synthesize "
+           "position_ids instead.">,
+
     Option<"enableSeparatePhasedConvsForConvTranspose",
            "enable-separate-phased-convs-for-convtranspose",
            "bool", /*default=*/"false",
