@@ -2769,7 +2769,7 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
 //   (2*6 = 12): newDataShape=[12,10,12], newUpdateShape=[1,10,12],
 //   newIndicesShape=[1,10,2] (index depth 3 -> 2). Index [1,1,l] becomes
 //   [7, l] into [12,10,12] (still a slice scatter over the last axis).
-struct CanonicalizeScatterNDWithMultiAxes
+struct CanonicalizeScatterNDWithMultiAxis
     : public OpRewritePattern<ONNXScatterNDOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -5191,7 +5191,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   if (!disableGenericDecompositions) {
     patterns.insert<DecomposeSlicePadPattern>(context);
     patterns.insert<DecomposeScatterNDPattern>(context);
-    patterns.insert<CanonicalizeScatterNDWithMultiAxes>(context);
+    patterns.insert<CanonicalizeScatterNDWithMultiAxis>(context);
     patterns.insert<SoftmaxCrossEntropyPattern>(context);
     patterns.insert<SumToAddPattern>(context);
   }
