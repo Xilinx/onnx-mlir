@@ -55,6 +55,9 @@ static bool enableUnsafeMath = true;
 // Populated by configureConv1x1IntoConvCanonicalization().
 static bool enableConv1x1IntoConvCanonicalization = false;
 
+// Populated by configureReshapeCanonicalization().
+static bool enableReshapeCanonicalization = true;
+
 using namespace mlir;
 using namespace onnx_mlir;
 
@@ -2914,6 +2917,38 @@ public:
 };
 
 // =============================================================================
+// Reshape canonicalization patterns.
+// Rewrite Flatten/Squeeze/Unsqueeze to onnx.Reshape when the output is fully
+// static. Guarded by enableReshapeCanonicalization.
+//
+/// Rewrite Flatten/Squeeze/Unsqueeze as onnx.Reshape when the result is a
+/// fully static ranked tensor.  All three ops have the data tensor as their
+/// first operand and the reshaped tensor as their first (and only) result, so
+/// no per-op accessors are needed.
+template <typename OpT>
+struct ReshapeFamilyToReshapePattern : public OpRewritePattern<OpT> {
+  using OpRewritePattern<OpT>::OpRewritePattern;
+  LogicalResult matchAndRewrite(OpT op, PatternRewriter &rewriter) const final {
+    auto resultType =
+        mlir::dyn_cast<RankedTensorType>(op->getResult(0).getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          op, "output must be a static ranked tensor");
+    SmallVector<int64_t> shape(
+        resultType.getShape().begin(), resultType.getShape().end());
+    Value shapeConst = rewriter.create<ONNXConstantOp>(
+        op.getLoc(), nullptr, rewriter.getI64TensorAttr(shape));
+    rewriter.replaceOpWithNewOp<ONNXReshapeOp>(
+        op, resultType, op->getOperand(0), shapeConst);
+    return success();
+  }
+};
+
+using FlattenToReshapePattern = ReshapeFamilyToReshapePattern<ONNXFlattenOp>;
+using SqueezeToReshapePattern = ReshapeFamilyToReshapePattern<ONNXSqueezeOp>;
+using UnsqueezeToReshapePattern =
+    ReshapeFamilyToReshapePattern<ONNXUnsqueezeOp>;
+
 // Rewrite pattern for BatchNormalization
 // =============================================================================
 /// Decompose BatchNormV9 to BatchNorm
@@ -3646,6 +3681,42 @@ public:
   }
 };
 
+/// Simplify Reshape(Cast(Reshape(x, s1)), s2) to Cast(x) when the outer
+/// Reshape's result shape equals the inner Reshape's input shape (i.e., the
+/// two Reshapes together form an identity).
+struct FuseCastBetweenReshapesPattern : public OpRewritePattern<ONNXReshapeOp> {
+  using OpRewritePattern::OpRewritePattern;
+  LogicalResult matchAndRewrite(
+      ONNXReshapeOp outerReshape, PatternRewriter &rewriter) const final {
+    auto castOp = outerReshape.getData().getDefiningOp<ONNXCastOp>();
+    if (!castOp)
+      return rewriter.notifyMatchFailure(outerReshape, "input is not Cast");
+    auto innerReshape = castOp.getInput().getDefiningOp<ONNXReshapeOp>();
+    if (!innerReshape)
+      return rewriter.notifyMatchFailure(
+          outerReshape, "Cast input is not Reshape");
+    // Both result and inner input must be static ranked tensors with the
+    // same shape
+    auto outerTy =
+        mlir::dyn_cast<RankedTensorType>(outerReshape.getResult().getType());
+    auto innerInTy =
+        mlir::dyn_cast<RankedTensorType>(innerReshape.getData().getType());
+    if (!outerTy || !innerInTy)
+      return rewriter.notifyMatchFailure(outerReshape, "types not ranked");
+    if (!outerTy.hasStaticShape() || !innerInTy.hasStaticShape())
+      return rewriter.notifyMatchFailure(outerReshape, "types not static");
+    if (outerTy.getShape() != innerInTy.getShape())
+      return rewriter.notifyMatchFailure(
+          outerReshape, "outer result shape != inner input shape");
+    Location fusedLoc = rewriter.getFusedLoc(
+        {innerReshape.getLoc(), castOp.getLoc(), outerReshape.getLoc()});
+    Value newCast = rewriter.create<ONNXCastOp>(fusedLoc, outerTy,
+        innerReshape.getData(), castOp.getSaturateAttr(), castOp.getToAttr());
+    rewriter.replaceOp(outerReshape, newCast);
+    return success();
+  }
+};
+
 // =============================================================================
 /// Register optimization patterns as "canonicalization" patterns.
 /// Add op to OpsWithCanonicalizer in gen_onnx_mlir.py to activate.
@@ -3890,6 +3961,7 @@ void ONNXReshapeOp::getCanonicalizationPatterns(
   result.insert<RemoveIdentityReshapePattern2>(context);
   result.insert<SwapReshapeMatMulPattern>(context);
   result.insert<ReplaceReshapeAllowZeroByReshape>(context);
+  result.insert<FuseCastBetweenReshapesPattern>(context);
 }
 
 /// on the ONNXResizeOp.
@@ -3960,10 +4032,19 @@ void ONNXSplitOp::getCanonicalizationPatterns(
 }
 
 /// on the ONNXSqueezeOp.
+void ONNXFlattenOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableReshapeCanonicalization)
+    result.insert<FlattenToReshapePattern>(context);
+}
+
+/// on the ONNXSqueezeOp.
 void ONNXSqueezeOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<RemoveSqueezeUnsqueezePattern>(context);
   result.insert<RemoveSqueezeCastUnsqueezePattern>(context);
+  if (enableReshapeCanonicalization)
+    result.insert<SqueezeToReshapePattern>(context);
 }
 
 void ONNXSqueezeV11Op::getCanonicalizationPatterns(
@@ -4025,6 +4106,8 @@ void ONNXUnsqueezeOp::getCanonicalizationPatterns(
   result.insert<RemoveUnsqueezeSqueezePattern>(context);
   result.insert<RemoveUnsqueezeCastSqueezePattern>(context);
   result.insert<ReplaceUnsqueezeOfExpandRewritePattern>(context);
+  if (enableReshapeCanonicalization)
+    result.insert<UnsqueezeToReshapePattern>(context);
 }
 
 void ONNXUnsqueezeV11Op::getCanonicalizationPatterns(
@@ -4442,4 +4525,8 @@ void onnx_mlir::configureConv1x1IntoConvCanonicalization(
     bool enableConv1x1IntoConvCanonicalizationOption) {
   enableConv1x1IntoConvCanonicalization =
       enableConv1x1IntoConvCanonicalizationOption;
+}
+
+void onnx_mlir::configureReshapeCanonicalization(bool enable) {
+  enableReshapeCanonicalization = enable;
 }
