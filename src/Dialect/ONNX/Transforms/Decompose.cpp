@@ -2747,14 +2747,27 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
 // coordinates into the merged shape, emits a new ScatterND, and reshapes the
 // result back to the original data shape.
 //
+// Partial indexing (k = indices.shape[-1] < rank(data)) is supported: each
+// index then addresses a data.shape[k:] slice rather than a scalar. Merging two
+// indexed axes drops the index depth by one (k -> k-1) and the coordinate remap
+// runs over the indexed prefix (the first k axes) only; the trailing r-k slice
+// axes ride along unchanged. For full indexing (k == rank(data)) the new index
+// depth equals the new data rank, matching the original behavior.
+//
 // Example: data:[6,4,4], updates:[6,1,1], indices:[6,1,1,3] holding [b,0,0].
 //   splitAxes = {1, 2} (4 != 1 on both) -> merge axes 1 and 2 (4*4 = 16):
 //     newDataShape    = [6, 16]
 //     newUpdateShape  = [6, 1]
-//     newIndicesShape = [6, 1, 2]   // last dim = rank(newData) = 2
+//     newIndicesShape = [6, 1, 2]   // last dim = new index depth k-1 = 2
 //   each index [b,0,0] (offset b*16 into [6,4,4]) becomes [b, 0] into [6,16].
 //   The resulting ScatterND now differs from data only on axis 1, so the
 //   Split+Concat decomposition can lower it. Reshapes wrap it back to [6,4,4].
+//
+// Partial-indexing example: data:[2,6,10,12], updates:[1,1,10,12],
+//   indices:[1,1,10,3] (k=3 < r=4). splitAxes = {0, 1} -> merge axes 0,1
+//   (2*6 = 12): newDataShape=[12,10,12], newUpdateShape=[1,10,12],
+//   newIndicesShape=[1,10,2] (index depth 3 -> 2). Index [1,1,l] becomes
+//   [7, l] into [12,10,12] (still a slice scatter over the last axis).
 struct CanonicalizeScatterNDWithMultiAxes
     : public OpRewritePattern<ONNXScatterNDOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -2817,6 +2830,18 @@ struct CanonicalizeScatterNDWithMultiAxes
     SubArrayAccessHelper<int64_t> indicesFlatAccessor(
         indicesAsFlatArray, indicesLastDimSize);
 
+    // The index depth k = indices.shape[-1] may be smaller than rank(data)
+    // (partial / slice indexing, where each index addresses a data.shape[k:]
+    // sub-tensor rather than a scalar). ScatterND guarantees data and updates
+    // agree on the trailing r-k slice axes, so any differing axis is always an
+    // indexed one; both merged axes must therefore lie within the first k axes.
+    // Guard defensively so the coordinate remap below never reads past the end
+    // of a length-k index vector.
+    if (splitAxes[1] >= static_cast<uint64_t>(indicesLastDimSize)) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "Split axes must lie within the indexed prefix");
+    }
+
     const auto firstIndex =
         indicesFlatAccessor[0]; // Safe, we have checked the length before
     for (auto [idx, firstIndexDim] : llvm::enumerate(firstIndex)) {
@@ -2852,7 +2877,12 @@ struct CanonicalizeScatterNDWithMultiAxes
     SmallVector<int64_t> newIndicesShape =
         collapseAdjacentSplitAxes(indicesShape.drop_back(1));
     auto newIndicesShapeDroppedLastDim = newIndicesShape;
-    newIndicesShape.push_back(newDataShape.size());
+    // Merging two indexed axes into one reduces the index depth by one. For
+    // full indexing (k == rank(data)) this equals the new data rank
+    // (newDataShape.size()); for partial indexing (k < rank(data)) it is
+    // strictly smaller and the scatter stays a slice scatter.
+    const int64_t newIndexDepth = indicesLastDimSize - 1;
+    newIndicesShape.push_back(newIndexDepth);
 
     // Check that all indices are contiguous.
     // - The check for contiguity and covering works the following way:
@@ -2881,8 +2911,13 @@ struct CanonicalizeScatterNDWithMultiAxes
     {
       IndicesContiguousCounter counter(firstIndex, indicesShape.drop_back(1));
       for (size_t i = 0; i < indicesFlatAccessor.size(); ++i) {
-        newIndicesAsFlatArray.append(
-            counter.reshapedCounter(dataShape, newDataShape));
+        // Remap each length-k index coordinate through the axis merge, working
+        // only over the indexed prefix (the first k axes). Using the full data
+        // shape here would read past the end of the k-length coordinate when
+        // k < rank(data).
+        newIndicesAsFlatArray.append(counter.reshapedCounter(
+            dataShape.take_front(indicesLastDimSize),
+            ArrayRef<int64_t>(newDataShape).take_front(newIndexDepth)));
         if (counter.getCounter() != indicesFlatAccessor[i]) {
           return rewriter.notifyMatchFailure(
               scatterNDOp, "Indices are not contiguous");
