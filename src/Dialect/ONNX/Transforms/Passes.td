@@ -141,7 +141,8 @@ def ONNXRecomposePatternOptions {
            "enable-reducel2-recompositions",
            "bool", /*default=*/"false",
            "Recompose ReduceL2 from Sqrt(ReduceSumSquare(x)) and "
-           "ReduceSumSquare from ReduceSum(Mul(x, x))">
+           "Pow(ReduceSumSquare(x), 0.5), and ReduceSumSquare from "
+           "ReduceSum(Mul(x, x)) or ReduceSum(Pow(x, 2))">
   ];
 }
 

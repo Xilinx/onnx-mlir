@@ -15,6 +15,9 @@
 // implement shape inference for the recomposed operation. Hence, it is expected
 // that there is no knowledge about tensor shape at this point.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef ONNX_MLIR_RECOMPOSE_H
@@ -34,7 +37,8 @@ namespace onnx_mlir {
 // matches the RoPE in HuggingFaces LlamaRotaryEmbedding
 // `enableReduceL2Recompositions` enables a recomposition of a decomposed
 // ReduceL2 from Sqrt(ReduceSumSquare(x)) into an onnx.ReduceL2 op and
-// ReduceSumSquare from ReduceSum(Mul(x, x)).
+// Pow(ReduceSumSquare(x), 0.5) into an onnx.ReduceL2 op, and ReduceSumSquare
+// from ReduceSum(Mul(x, x)) or ReduceSum(Pow(x, 2)).
 void getRecomposeONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
     bool enableRotaryEmbeddingRecompose = false,
     bool enableReduceL2Recompositions = false);
