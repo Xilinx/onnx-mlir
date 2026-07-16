@@ -710,7 +710,8 @@ func.func @test_expand_to_eltwise_4d(
       -> tensor<1x1x32x32x!quant.uniform<u8:f32, 0.05:128>>
   return %expand : tensor<1x1x32x32x!quant.uniform<u8:f32, 0.05:128>>
 
-  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<0> : tensor<1x1x32x32xui8>}
+  // Identity-add constant is the quantized zero == zero_point (128), not raw 0.
+  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<128> : tensor<1x1x32x32xui8>}
   // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
   // CHECK-SAME: nonlinear = "NONE"
   // CHECK-SAME: type = "ADD"
@@ -749,7 +750,7 @@ func.func @test_expand_match_w_not_one(
       -> tensor<1x1x8x4x!quant.uniform<u8:f32, 0.05:128>>
   return %expand : tensor<1x1x8x4x!quant.uniform<u8:f32, 0.05:128>>
 
-  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<0> : tensor<1x1x8x4xui8>}
+  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<128> : tensor<1x1x8x4xui8>}
   // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
   // CHECK-SAME: nonlinear = "NONE"
   // CHECK-SAME: type = "ADD"
@@ -769,7 +770,7 @@ func.func @test_expand_match_c_not_one(
       -> tensor<1x16x32x32x!quant.uniform<u8:f32, 0.05:128>>
   return %expand : tensor<1x16x32x32x!quant.uniform<u8:f32, 0.05:128>>
 
-  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<0> : tensor<1x16x32x32xui8>}
+  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<128> : tensor<1x16x32x32xui8>}
   // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
   // CHECK-SAME: nonlinear = "NONE"
   // CHECK-SAME: type = "ADD"
@@ -824,6 +825,27 @@ func.func @test_expand_to_eltwise_3d(
   // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<0> : tensor<4x16x8xi8>}
   // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
   // CHECK-SAME: nonlinear = "NONE"
+  // CHECK-SAME: type = "ADD"
+  // CHECK: return %[[FUSED]]
+}
+
+// -----
+// Regression (AIESW-39013): a large zero_point must be encoded in the
+// identity-add constant. For u16 with zero_point=65535 the quantized "real 0"
+// is 65535 -- filling raw 0 would decode to (0 - 65535)*scale ~= -1000 and
+// corrupt the attention-mask path. Mirrors the yolov8/PSO3 attention Expand.
+// CHECK-LABEL: func.func @test_expand_to_eltwise_u16_large_zp
+func.func @test_expand_to_eltwise_u16_large_zp(
+    %arg0: tensor<1x8x1x1x!quant.uniform<u16:f32, 0.015259021893143654:65535>>)
+    -> tensor<1x8x1x151x!quant.uniform<u16:f32, 0.015259021893143654:65535>> {
+  %shape = "onnx.Constant"() {value = dense<[1, 8, 1, 151]> : tensor<4xi64>} : () -> tensor<4xi64>
+  %expand = "onnx.Expand"(%arg0, %shape) :
+      (tensor<1x8x1x1x!quant.uniform<u16:f32, 0.015259021893143654:65535>>, tensor<4xi64>)
+      -> tensor<1x8x1x151x!quant.uniform<u16:f32, 0.015259021893143654:65535>>
+  return %expand : tensor<1x8x1x151x!quant.uniform<u16:f32, 0.015259021893143654:65535>>
+
+  // CHECK: %[[ZEROS:.*]] = onnx.Constant {value = dense<65535> : tensor<1x8x1x151xui16>}
+  // CHECK: %[[FUSED:.*]] = "onnx.XCOMPILERFusedEltwise"(%arg0, %[[ZEROS]])
   // CHECK-SAME: type = "ADD"
   // CHECK: return %[[FUSED]]
 }
