@@ -2720,39 +2720,40 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
   }
 };
 
-// Canonicalizes an ONNXScatterND that writes a contiguous block spanning *two
-// consecutive* axes into an equivalent ScatterND that writes along a *single*
-// axis, by merging those two axes into one.
+// Canonicalizes an ONNXScatterND that writes a contiguous block spanning two or
+// more *consecutive* axes into an equivalent ScatterND that writes along a
+// *single* axis, by merging those axes into one.
 //
 // Motivation: the contiguous-block ScatterND decomposition (Split + Concat, see
 // DecomposeScatterNDPattern) only handles the case where data and updates
-// differ in a single dimension. When the update region spans two adjacent axes
-// (e.g. it replaces a full [H, W] plane per batch), the scatter has two
-// differing axes and that pattern cannot apply. This canonicalization folds the
-// two axes together so the simpler single-axis decomposition can take over.
+// differ in a single dimension. When the update region spans several adjacent
+// axes (e.g. it replaces a full [H, W] plane per batch), the scatter has
+// multiple differing axes and that pattern cannot apply. This canonicalization
+// folds the N differing axes together so the single-axis decomposition can take
+// over.
 //
 // It matches only when (all preconditions must hold, otherwise it bails):
 //   - reduction == "none",
 //   - data, indices and updates all have static shapes,
 //   - rank(data) == rank(updates),
-//   - exactly two axes differ in size between data and updates, and they are
-//     consecutive (splitAxes = {a, a+1}),
+//   - at least two axes differ in size between data and updates, and they are
+//     all consecutive (splitAxes = {a, a+1, ..., a+N-1}),
 //   - indices is a constant, non-empty tensor,
 //   - the first index is 0 on every non-split axis (the block starts at the
 //     origin there) and non-negative on the split axes (no ONNX wrap-around),
 //   - the indices are contiguous and cover the whole merged block.
 //
-// The rewrite reshapes data, updates and indices so axes a and a+1 become one
-// axis of size data[a]*data[a+1], rebuilds the (constant) indices as linear
+// The rewrite reshapes data, updates and indices so the N split axes become one
+// axis of size prod(data[a..a+N-1]), rebuilds the (constant) indices as linear
 // coordinates into the merged shape, emits a new ScatterND, and reshapes the
 // result back to the original data shape.
 //
 // Partial indexing (k = indices.shape[-1] < rank(data)) is supported: each
-// index then addresses a data.shape[k:] slice rather than a scalar. Merging two
-// indexed axes drops the index depth by one (k -> k-1) and the coordinate remap
-// runs over the indexed prefix (the first k axes) only; the trailing r-k slice
-// axes ride along unchanged. For full indexing (k == rank(data)) the new index
-// depth equals the new data rank, matching the original behavior.
+// index then addresses a data.shape[k:] slice rather than a scalar. Merging N
+// indexed axes drops the index depth by N-1 (k -> k-N+1) and the coordinate
+// remap runs over the indexed prefix (the first k axes) only; the trailing r-k
+// slice axes ride along unchanged. For full indexing (k == rank(data)) the new
+// index depth equals the new data rank, matching the original behavior.
 //
 // Example: data:[6,4,4], updates:[6,1,1], indices:[6,1,1,3] holding [b,0,0].
 //   splitAxes = {1, 2} (4 != 1 on both) -> merge axes 1 and 2 (4*4 = 16):
@@ -2810,9 +2811,16 @@ struct CanonicalizeScatterNDWithMultiAxes
       }
     }
 
-    if (splitAxes.size() != 2 || splitAxes[0] + 1 != splitAxes[1]) {
-      return rewriter.notifyMatchFailure(scatterNDOp,
-          "This pattern needs exactly two split axes that are consecutive");
+    if (splitAxes.size() < 2) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "This pattern needs at least two split axes");
+    }
+
+    for (size_t i = 0; i < splitAxes.size() - 1; ++i) {
+      if (splitAxes[i] + 1 != splitAxes[i + 1]) {
+        return rewriter.notifyMatchFailure(
+            scatterNDOp, "This pattern needs consecutive split axes");
+      }
     }
 
     SmallVector<int64_t> indicesAsFlatArray;
@@ -2837,7 +2845,7 @@ struct CanonicalizeScatterNDWithMultiAxes
     // indexed one; both merged axes must therefore lie within the first k axes.
     // Guard defensively so the coordinate remap below never reads past the end
     // of a length-k index vector.
-    if (splitAxes[1] >= static_cast<uint64_t>(indicesLastDimSize)) {
+    if (splitAxes.back() >= static_cast<uint64_t>(indicesLastDimSize)) {
       return rewriter.notifyMatchFailure(
           scatterNDOp, "Split axes must lie within the indexed prefix");
     }
@@ -2860,14 +2868,19 @@ struct CanonicalizeScatterNDWithMultiAxes
 
     // Collapse the two adjacent axes firstSplitAxis and firstSplitAxis+1 into a
     // single axis of their product, keeping the surrounding dims unchanged.
-    const auto firstSplitAxis = splitAxes[0];
+    const auto firstSplitAxis = splitAxes.front();
     auto collapseAdjacentSplitAxes =
-        [firstSplitAxis](ArrayRef<int64_t> shape) -> SmallVector<int64_t> {
+        [firstSplitAxis, splitAxes](
+            ArrayRef<int64_t> shape) -> SmallVector<int64_t> {
+      auto splitAxisSize = splitAxes.size();
       SmallVector<int64_t> newShape =
           llvm::to_vector(shape.take_front(firstSplitAxis));
-      newShape.push_back(shape[firstSplitAxis] * shape[firstSplitAxis + 1]);
-      newShape.append(
-          llvm::to_vector(shape.take_back(shape.size() - firstSplitAxis - 2)));
+      auto collapsedShape = shape.slice(firstSplitAxis, splitAxisSize);
+      auto collapsedSize = std::accumulate(collapsedShape.begin(),
+          collapsedShape.end(), 1LL, std::multiplies<int64_t>());
+      newShape.push_back(collapsedSize);
+      newShape.append(llvm::to_vector(
+          shape.take_back(shape.size() - firstSplitAxis - splitAxisSize)));
       return newShape;
     };
 
@@ -2877,11 +2890,12 @@ struct CanonicalizeScatterNDWithMultiAxes
     SmallVector<int64_t> newIndicesShape =
         collapseAdjacentSplitAxes(indicesShape.drop_back(1));
     auto newIndicesShapeDroppedLastDim = newIndicesShape;
-    // Merging two indexed axes into one reduces the index depth by one. For
-    // full indexing (k == rank(data)) this equals the new data rank
+    // Merging N consecutive indexed axes into one reduces the index depth by
+    // N-1. For full indexing (k == rank(data)) this equals the new data rank
     // (newDataShape.size()); for partial indexing (k < rank(data)) it is
     // strictly smaller and the scatter stays a slice scatter.
-    const int64_t newIndexDepth = indicesLastDimSize - 1;
+    const int64_t newIndexDepth =
+        indicesLastDimSize - (static_cast<int64_t>(splitAxes.size()) - 1);
     newIndicesShape.push_back(newIndexDepth);
 
     // Check that all indices are contiguous.
@@ -2915,9 +2929,9 @@ struct CanonicalizeScatterNDWithMultiAxes
         // only over the indexed prefix (the first k axes). Using the full data
         // shape here would read past the end of the k-length coordinate when
         // k < rank(data).
-        newIndicesAsFlatArray.append(counter.reshapedCounter(
-            dataShape.take_front(indicesLastDimSize),
-            ArrayRef<int64_t>(newDataShape).take_front(newIndexDepth)));
+        newIndicesAsFlatArray.append(
+            counter.reshapedCounter(dataShape.take_front(indicesLastDimSize),
+                ArrayRef<int64_t>(newDataShape).take_front(newIndexDepth)));
         if (counter.getCounter() != indicesFlatAccessor[i]) {
           return rewriter.notifyMatchFailure(
               scatterNDOp, "Indices are not contiguous");
