@@ -89,6 +89,37 @@ mlir::DenseElementsAttr expandDilatedWeightsNCHW(
       tensorType, llvm::ArrayRef<char>(expandedData));
 }
 
+// Preserve native dilated depthwise conv for shapes supported by the AIE
+// backend (e.g. DeepLabV3 ASPP: OH=OW=65, k3, stride=1, dilation=2/4).
+// Do not expand these to k5/k9 with dilation=1.
+bool shouldPreserveNativeDilatedDepthwiseConv(
+    ONNXConvOp convOp, int64_t orgKernel, int64_t dilation) {
+  if (orgKernel != 3 || (dilation != 2 && dilation != 4))
+    return false;
+
+  auto stridesAttr = convOp.getStridesAttr();
+  if (!stridesAttr)
+    return false;
+  for (auto attr : stridesAttr.getValue()) {
+    if (mlir::cast<IntegerAttr>(attr).getInt() != 1)
+      return false;
+  }
+
+  auto xType = mlir::dyn_cast<RankedTensorType>(convOp.getX().getType());
+  if (!xType || xType.getRank() != 4)
+    return false;
+
+  auto shape = xType.getShape();
+  if (shape[2] != 65 || shape[3] != 65)
+    return false;
+
+  int64_t group = convOp.getGroup();
+  if (group <= 1 || group != shape[1])
+    return false;
+
+  return true;
+}
+
 //===----------------------------------------------------------------------===//
 // Pattern: RemoveDilationConv
 //===----------------------------------------------------------------------===//
@@ -149,6 +180,9 @@ struct RemoveDilationConv : public OpRewritePattern<ONNXConvOp> {
       return failure();
 
     int64_t org_kernel = originalShape[2];
+
+    if (shouldPreserveNativeDilatedDepthwiseConv(convOp, org_kernel, dilation))
+      return failure();
 
     // Calculate new kernel size
     int64_t new_kernel = org_kernel + (org_kernel - 1) * (dilation - 1);
