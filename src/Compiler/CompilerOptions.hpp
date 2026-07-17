@@ -90,6 +90,7 @@ extern std::string onnxTransformOptions;                      // onnx-mlir only
 extern bool enableQuarkQuantizerLegalization;                 // common for both
 extern bool disableBatchNormDecompose;                        // common for both
 extern bool enableReshapeCanonicalization;                    // common for both
+extern bool enablePositiveAxisCanonicalization;               // common for both
 extern bool enableExpandCanonicalization;                     // common for both
 extern bool enableReduceKeepdimsCanonicalization;             // common for both
 extern bool enableXFEONNXOpsetVerifier;                       // common for both

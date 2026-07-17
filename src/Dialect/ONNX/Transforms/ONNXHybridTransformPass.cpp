@@ -113,6 +113,8 @@ struct ONNXHybridTransformPass
 
       if (isQDQDataMovementCanonicalizationEnabled())
         populateQDQDataMovementCanonicalizationPatterns(cumulativePatterns);
+      if (isPositiveAxisCanonicalizationEnabled())
+        populateONNXPositiveAxisCanonicalizationPatterns(cumulativePatterns);
     }
 
     if (constantPropagation) {

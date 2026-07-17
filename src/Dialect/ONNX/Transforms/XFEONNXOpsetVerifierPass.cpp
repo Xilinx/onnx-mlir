@@ -14,8 +14,8 @@
 #include "llvm/ADT/StringSet.h"
 
 #include "src/Dialect/ONNX/ONNXOps.hpp"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Pass/Passes.hpp"
-#include "src/Support/TypeUtilities.hpp"
 
 namespace onnx_mlir {
 #define GEN_PASS_DEF_XFEONNXOPSETVERIFIERPASS
@@ -23,8 +23,48 @@ namespace onnx_mlir {
 } // namespace onnx_mlir
 
 using namespace mlir;
+using namespace onnx_mlir;
 
 namespace {
+
+// Parses the comma-separated bare ONNX op deny-list into dialect-qualified
+// operation names.
+llvm::StringSet<> parseDisallowedOps(StringRef disallowedOps) {
+  llvm::StringSet<> denySet;
+  StringRef list(disallowedOps);
+  while (!list.empty()) {
+    auto [token, rest] = list.split(',');
+    token = token.trim();
+    if (!token.empty())
+      denySet.insert(("onnx." + token).str());
+    list = rest;
+  }
+  return denySet;
+}
+
+bool isStaticallyShapedTensorLike(Type ty) {
+  if (isa<NoneType>(ty))
+    return true;
+  if (auto tensorType = dyn_cast<RankedTensorType>(ty))
+    return tensorType.hasStaticShape();
+  if (auto seqType = dyn_cast<SeqType>(ty)) {
+    if (ShapedType::isDynamic(seqType.getLength()))
+      return false;
+    if (auto elementType = dyn_cast<RankedTensorType>(seqType.getElementType()))
+      return elementType.hasStaticShape();
+  }
+  return false;
+}
+
+bool hasAllStaticTensorValues(Operation *op) {
+  for (const Value operand : op->getOperands())
+    if (!isStaticallyShapedTensorLike(operand.getType()))
+      return false;
+  for (const Value result : op->getResults())
+    if (!isStaticallyShapedTensorLike(result.getType()))
+      return false;
+  return true;
+}
 
 struct XFEONNXOpsetVerifierPass
     : public onnx_mlir::impl::XFEONNXOpsetVerifierPassBase<
@@ -32,44 +72,24 @@ struct XFEONNXOpsetVerifierPass
   using Base::Base;
 
   void runOnOperation() override {
-    llvm::StringSet<> denySet;
-
-    llvm::StringRef list(disallowedOps);
-    while (!list.empty()) {
-      auto [token, rest] = list.split(',');
-      token = token.trim();
-      if (!token.empty())
-        denySet.insert(("onnx." + token).str());
-      list = rest;
-    }
-
-    if (denySet.empty())
-      return;
+    const llvm::StringSet<> denySet = parseDisallowedOps(disallowedOps);
 
     bool anyFailed = false;
     func::FuncOp func = getOperation();
 
     for (Operation &op : func.getBody().getOps()) {
+      const bool allStatic = hasAllStaticTensorValues(&op);
+
       // Check deny-list.
-      if (!denySet.count(op.getName().getStringRef()))
-        continue;
-
-      // Static gate: skip if any tensor-typed operand is not fully static.
-      bool allStatic = true;
-      for (Value operand : op.getOperands()) {
-        Type ty = operand.getType();
-        if (isa<NoneType>(ty))
-          continue;
-        if (!isa<RankedTensorType>(ty) || !onnx_mlir::hasStaticShape(ty)) {
-          allStatic = false;
-          break;
-        }
+      if (denySet.count(op.getName().getStringRef()) && allStatic) {
+        op.emitOpError("disallowed in XFE ONNX opset");
+        anyFailed = true;
       }
-      if (!allStatic)
-        continue;
 
-      op.emitOpError("disallowed in XFE ONNX opset");
-      anyFailed = true;
+      if (verifyNonNegativeAxis && allStatic && hasNegativeONNXAxisValue(&op)) {
+        op.emitOpError("negative axis value is disallowed in XFE ONNX opset");
+        anyFailed = true;
+      }
     }
 
     if (anyFailed)

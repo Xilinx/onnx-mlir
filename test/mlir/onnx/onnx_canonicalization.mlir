@@ -1936,7 +1936,7 @@ func.func @test_softmax_v11_axis_minus_one_ranked(%arg0 : tensor<10x20x30xf32>) 
 
 // CHECK-LABEL:  func.func @test_softmax_v11_axis_minus_one_ranked
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<10x20x30xf32>) -> tensor<10x20x30xf32> {
-// CHECK:           [[VAR_0_:%.+]] = "onnx.Softmax"([[PARAM_0_]]) {axis = 2 : si64} : (tensor<10x20x30xf32>) -> tensor<10x20x30xf32>
+// CHECK:           [[VAR_0_:%.+]] = "onnx.Softmax"([[PARAM_0_]]) {axis = -1 : si64} : (tensor<10x20x30xf32>) -> tensor<10x20x30xf32>
 // CHECK:           onnx.Return [[VAR_0_]] : tensor<10x20x30xf32>
 // CHECK:         }
 }
@@ -2025,7 +2025,7 @@ func.func @test_softmax_negative_axis(%arg0 : tensor<10x20x30xf32>) -> tensor<10
 
 // CHECK-LABEL:  func.func @test_softmax_negative_axis
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<10x20x30xf32>) -> tensor<10x20x30xf32> {
-// CHECK:           [[VAR_0_:%.+]] = "onnx.Softmax"([[PARAM_0_]]) {axis = 2 : si64} : (tensor<10x20x30xf32>) -> tensor<10x20x30xf32>
+// CHECK:           [[VAR_0_:%.+]] = "onnx.Softmax"([[PARAM_0_]]) {axis = -1 : si64} : (tensor<10x20x30xf32>) -> tensor<10x20x30xf32>
 // CHECK:           onnx.Return [[VAR_0_]] : tensor<10x20x30xf32>
 // CHECK:         }
 }

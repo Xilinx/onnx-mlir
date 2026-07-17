@@ -523,6 +523,14 @@ OpsWithCustomAssemblyFormat = [
 ]
 
 # Operations supporting canonicalization (alphabetical order).
+#
+# Note: ONNX positive-axis canonicalization is a generic pattern populated by
+# the ONNX canonicalization passes, not a per-op canonicalizer generated from
+# this list. The supported axis/axes field and its rank semantics are
+# maintained in the shared ONNX axis-value spec in OpHelper.cpp so the
+# canonicalizer and verifier use the same metadata.
+# When adding a new op with an axis/axes attr or operand, also add it to
+# getONNXAxisValueSpec.
 OpsWithCanonicalizer = [
     "Abs",
     "Add",
