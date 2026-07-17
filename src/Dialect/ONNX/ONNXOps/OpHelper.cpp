@@ -676,6 +676,28 @@ bool extractSlice1DConst(mlir::ONNXSliceOp sliceOp, int64_t &axis,
          extractI64Scalar(sliceOp.getSteps(), step);
 }
 
+int64_t indexToOffset(
+    llvm::ArrayRef<int64_t> shape, llvm::ArrayRef<int64_t> index) {
+  int64_t offset = 0;
+  for (size_t i = 0; i < shape.size(); i++) {
+    offset = offset * shape[i] + index[i];
+  }
+  return offset;
+}
+
+SmallVector<int64_t> offsetToIndex(
+    llvm::ArrayRef<int64_t> shape, int64_t offset) {
+  auto rank = shape.size();
+  // The rank of the index will be equal to the rank of the shape
+  SmallVector<int64_t> resultIndex;
+  for (int32_t i = rank - 1; i >= 0; i--) {
+    resultIndex.push_back(offset % shape[i]);
+    offset /= shape[i];
+  }
+  std::reverse(resultIndex.begin(), resultIndex.end());
+  return resultIndex;
+}
+
 //===----------------------------------------------------------------------===//
 // Support for BatchNorm
 
