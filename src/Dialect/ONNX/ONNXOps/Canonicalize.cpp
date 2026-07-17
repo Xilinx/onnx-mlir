@@ -3278,6 +3278,28 @@ struct PullReluLikeOpsThroughSplitPattern
   }
 };
 
+struct SoftmaxNegativeAxisPattern : public OpRewritePattern<ONNXSoftmaxOp> {
+  using OpRewritePattern<ONNXSoftmaxOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(
+      ONNXSoftmaxOp softmaxOp, PatternRewriter &rewriter) const final {
+
+    auto inputType = dyn_cast<RankedTensorType>(softmaxOp.getInput().getType());
+    if (!inputType)
+      return rewriter.notifyMatchFailure(
+          softmaxOp, "Input is not a ranked tensor");
+
+    const int64_t axis = softmaxOp.getAxis();
+    const int64_t rank = inputType.getRank();
+
+    if (axis >= 0)
+      return failure(); // nothing to do.
+    assert(-rank <= axis && "axis is out of range");
+    rewriter.modifyOpInPlace(
+        softmaxOp, [&]() { softmaxOp.setAxis(rank + axis); });
+    return success();
+  }
+};
+
 // Softmax along an axis whose dimension has size 1 is the constant tensor 1.0
 // because exp(x)/exp(x) == 1.0 for all finite x.
 // E.g. Softmax(x: tensor<8x1xf32>) {axis=1} ==> Constant 1.0 : tensor<8x1xf32>
@@ -5014,6 +5036,7 @@ void ONNXSizeOp::getCanonicalizationPatterns(
 void ONNXSoftmaxOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<SoftmaxSizeOneAxisPattern>(context);
+  results.insert<SoftmaxNegativeAxisPattern>(context);
 }
 
 /// on the ONNXSoftmaxV11Op.
