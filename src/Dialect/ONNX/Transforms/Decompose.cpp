@@ -2515,6 +2515,116 @@ private:
   ArrayRef<int64_t> shapeToCheck;
 };
 
+// Shared preconditions for the ScatterND contiguous-block rewrites
+// (DecomposeScatterNDPattern and CanonicalizeScatterNDWithMultiAxis):
+// reduction must be "none", all operands must have a static shape, and
+// rank(data) == rank(updates). On success the operand tensor types are written
+// to the out-parameters.
+LogicalResult checkScatterNDPreconditions(ONNXScatterNDOp scatterNDOp,
+    PatternRewriter &rewriter, RankedTensorType &dataType,
+    RankedTensorType &updatesType, RankedTensorType &indicesType) {
+  if (scatterNDOp.getReductionAttr().strref() != "none") {
+    return rewriter.notifyMatchFailure(
+        scatterNDOp, "Scatters with reduction are not supported");
+  }
+  const auto data = scatterNDOp.getData();
+  const auto indices = scatterNDOp.getIndices();
+  const auto updates = scatterNDOp.getUpdates();
+  if (!onnx_mlir::hasStaticShape(data.getType()) ||
+      !onnx_mlir::hasStaticShape(indices.getType()) ||
+      !onnx_mlir::hasStaticShape(updates.getType())) {
+    return rewriter.notifyMatchFailure(
+        scatterNDOp, "All operands need to have a static shape");
+  }
+  dataType = cast<RankedTensorType>(data.getType());
+  updatesType = cast<RankedTensorType>(updates.getType());
+  indicesType = cast<RankedTensorType>(indices.getType());
+  if (dataType.getRank() != updatesType.getRank()) {
+    return rewriter.notifyMatchFailure(scatterNDOp,
+        "Only the case where data and update have the same rank "
+        "is supported");
+  }
+  return success();
+}
+
+// Extracts the ScatterND indices operand as a flat constant array. Fails if the
+// indices are not a constant tensor or are empty.
+LogicalResult getScatterNDConstantIndices(ONNXScatterNDOp scatterNDOp,
+    PatternRewriter &rewriter, SmallVectorImpl<int64_t> &indicesAsFlatArray) {
+  if (!onnx_mlir::getI64ValuesFromONNXConstantOp(
+          scatterNDOp.getIndices(), indicesAsFlatArray)) {
+    return rewriter.notifyMatchFailure(
+        scatterNDOp, "The indices need to be constant");
+  }
+  if (indicesAsFlatArray.empty()) {
+    return rewriter.notifyMatchFailure(
+        scatterNDOp, "Empty indices are not supported"); // Skip the edge case
+                                                         // of empty indices
+  }
+  return success();
+}
+
+// Validates the first index vector: it must be 0 on every non-split axis (the
+// block starts at the origin there) and non-negative on the split axes (ONNX
+// negative wrap-around indexing is not supported by these rewrites).
+// `isSplitAxis` returns true when the given axis is a split axis.
+LogicalResult checkScatterNDFirstIndexShift(ONNXScatterNDOp scatterNDOp,
+    PatternRewriter &rewriter, ArrayRef<int64_t> firstIndex,
+    llvm::function_ref<bool(uint64_t)> isSplitAxis) {
+  for (auto [idx, firstIndexDim] : llvm::enumerate(firstIndex)) {
+    if (!isSplitAxis(idx) && firstIndexDim != 0) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, " Shifting is only supported on the split axis");
+    }
+    if (isSplitAxis(idx) && firstIndexDim < 0) {
+      return rewriter.notifyMatchFailure(scatterNDOp,
+          "Negative values with wrap around are not yet "
+          "supported"); // onnx allows negative values with
+                        // wrap-around, this decomposition does
+                        // not (for now)
+    }
+  }
+  return success();
+}
+
+// Checks that all indices are contiguous.
+// - The check for contiguity and covering works the following way:
+// -- Iterated over all idx in indices and compare the idx against the
+//    expected index, fail if it differs
+// -- The expected index is calculated the following way:
+// --- The expected index is initialized with the first index in indices and
+//     then always incremented by one.
+// --- The increment works like a manual addition, the least significant
+//     digit/subindex gets incremented by one. If a digit overflows, it
+//     gets reset to the first index and the addition carries to the next,
+//     more significant digit. The addition overflows, if the index for an
+//     axis is equal to the size of this axis in updates/indices. (By
+//     definition the shape for indices.shape().drop(-1) must match the
+//     first dimensions in updates). If the addition overflows , the
+//     overflowing digit is reset to its value in the first index. This is
+//     zero for all axes, except for 'a', where it can be a positive number
+//     if the split/concat is in the middle of the tensor
+// `onIndex`, when set, is invoked with the running counter for every index
+// (before its contiguity comparison), letting callers reuse the same walk to
+// perform extra per-index work such as coordinate remapping.
+LogicalResult checkScatterNDContiguousIndices(ONNXScatterNDOp scatterNDOp,
+    PatternRewriter &rewriter, ArrayRef<int64_t> firstIndex,
+    ArrayRef<int64_t> counterShape,
+    const SubArrayAccessHelper<int64_t> &indicesFlatAccessor,
+    llvm::function_ref<void(IndicesContiguousCounter &)> onIndex = {}) {
+  IndicesContiguousCounter counter(firstIndex, counterShape);
+  for (size_t i = 0; i < indicesFlatAccessor.size(); ++i) {
+    if (onIndex)
+      onIndex(counter);
+    if (counter.getCounter() != indicesFlatAccessor[i]) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "Indices are not contiguous");
+    }
+    counter.increment();
+  }
+  return success();
+}
+
 } // namespace
 
 // Decomposes ScatterNDs into a single Split and Concat.
@@ -2577,30 +2687,16 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
   LogicalResult matchAndRewrite(
       ONNXScatterNDOp scatterNDOp, PatternRewriter &rewriter) const final {
     // Check preconditions
-    if (scatterNDOp.getReductionAttr().strref() != "none") {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "Scatters with reduction are not supported");
+    RankedTensorType dataType;
+    RankedTensorType updatesType;
+    RankedTensorType indicesType;
+    if (failed(checkScatterNDPreconditions(
+            scatterNDOp, rewriter, dataType, updatesType, indicesType))) {
+      return failure();
     }
-    const auto data = scatterNDOp.getData();
-    const auto indices = scatterNDOp.getIndices();
-    const auto updates = scatterNDOp.getUpdates();
-    if (!onnx_mlir::hasStaticShape(data.getType()) ||
-        !onnx_mlir::hasStaticShape(indices.getType()) ||
-        !onnx_mlir::hasStaticShape(updates.getType())) {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "All operands need to have a static shape");
-    }
-    const auto dataType = cast<RankedTensorType>(data.getType());
     const auto dataShape = dataType.getShape();
-    const auto updatesType = cast<RankedTensorType>(updates.getType());
     const auto updateShape = updatesType.getShape();
-    const auto indicesType = cast<RankedTensorType>(indices.getType());
     const auto indicesShape = indicesType.getShape();
-    if (dataType.getRank() != updatesType.getRank()) {
-      return rewriter.notifyMatchFailure(scatterNDOp,
-          "Only the case where data and update have the same rank "
-          "is supported");
-    }
 
     const auto splitAxis = [&]() -> uint64_t {
       // Split at the dim where the update and original data have a
@@ -2624,65 +2720,27 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
     }
 
     SmallVector<int64_t> indicesAsFlatArray;
-    if (!onnx_mlir::getI64ValuesFromONNXConstantOp(
-            indices, indicesAsFlatArray)) {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "The indices need to be constant");
-    }
-    if (indicesAsFlatArray.empty()) {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "Empty indices are not supported"); // Skip the edge case
-                                                           // of empty indices
+    if (failed(getScatterNDConstantIndices(
+            scatterNDOp, rewriter, indicesAsFlatArray))) {
+      return failure();
     }
     const auto indicesLastDimSize = indicesShape.back();
     SubArrayAccessHelper<int64_t> indicesFlatAccessor(
         indicesAsFlatArray, indicesLastDimSize);
     const auto firstIndex =
         indicesFlatAccessor[0]; // Safe, we have checked the length before
-    for (auto [idx, firstIndexDim] : llvm::enumerate(firstIndex)) {
-      if (idx != splitAxis && firstIndexDim != 0) {
-        return rewriter.notifyMatchFailure(
-            scatterNDOp, " Shifting is only supported on the split axis");
-      }
-      if (idx == splitAxis && firstIndexDim < 0) {
-        return rewriter.notifyMatchFailure(scatterNDOp,
-            "Negative values with wrap around are not yet "
-            "supported"); // onnx allows negative values with
-                          // wrap-around, this decomposition does
-                          // not (for now)
-      }
+    if (failed(checkScatterNDFirstIndexShift(scatterNDOp, rewriter, firstIndex,
+            [&](uint64_t idx) { return idx == splitAxis; }))) {
+      return failure();
     }
 
-    // Check that all indices are contiguous.
-    // - The check for contiguity and covering works the following way:
-    // -- Iterated over all idx in indices and compare the idx against the
-    //    expected index, fail if it differs
-    // -- The expected index is calculated the following way:
-    // --- The expected index is initialized with the first index in indices and
-    //     then always incremented by one.
-    // --- The increment works like a manual addition, the least significant
-    //     digit/subindex gets incremented by one. If a digit overflows, it
-    //     gets reset to the first index and the addition carries to the next,
-    //     more significant digit. The addition overflows, if the index for an
-    //     axis is equal to the size of this axis in updates/indices. (By
-    //     definition the shape for indices.shape().drop(-1) must match the
-    //     first dimensions in updates). If the addition overflows , the
-    //     overflowing digit is reset to its value in the first index. This is
-    //     zero for all axes, except for 'a', where it can be a positive number
-    //     if the split/concat is in the middle of the tensor
     assert(
         updateShape.drop_back(updateShape.size() - (indicesShape.size() - 1)) ==
             indicesShape.drop_back(1) &&
         "Update and indicesShape should partially match for scatterNd");
-    {
-      IndicesContiguousCounter counter(firstIndex, indicesShape.drop_back(1));
-      for (size_t i = 0; i < indicesFlatAccessor.size(); ++i) {
-        if (counter.getCounter() != indicesFlatAccessor[i]) {
-          return rewriter.notifyMatchFailure(
-              scatterNDOp, "Indices are not contiguous");
-        }
-        counter.increment();
-      }
+    if (failed(checkScatterNDContiguousIndices(scatterNDOp, rewriter,
+            firstIndex, indicesShape.drop_back(1), indicesFlatAccessor))) {
+      return failure();
     }
 
     onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
@@ -2776,30 +2834,16 @@ struct CanonicalizeScatterNDWithMultiAxis
   LogicalResult matchAndRewrite(
       ONNXScatterNDOp scatterNDOp, PatternRewriter &rewriter) const final {
     // Check preconditions
-    if (scatterNDOp.getReductionAttr().strref() != "none") {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "Scatters with reduction are not supported");
+    RankedTensorType dataType;
+    RankedTensorType updatesType;
+    RankedTensorType indicesType;
+    if (failed(checkScatterNDPreconditions(
+            scatterNDOp, rewriter, dataType, updatesType, indicesType))) {
+      return failure();
     }
-    const auto data = scatterNDOp.getData();
-    const auto indices = scatterNDOp.getIndices();
-    const auto updates = scatterNDOp.getUpdates();
-    if (!onnx_mlir::hasStaticShape(data.getType()) ||
-        !onnx_mlir::hasStaticShape(indices.getType()) ||
-        !onnx_mlir::hasStaticShape(updates.getType())) {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "All operands need to have a static shape");
-    }
-    const auto dataType = cast<RankedTensorType>(data.getType());
     const auto dataShape = dataType.getShape();
-    const auto updatesType = cast<RankedTensorType>(updates.getType());
     const auto updateShape = updatesType.getShape();
-    const auto indicesType = cast<RankedTensorType>(indices.getType());
     const auto indicesShape = indicesType.getShape();
-    if (dataType.getRank() != updatesType.getRank()) {
-      return rewriter.notifyMatchFailure(scatterNDOp,
-          "Only the case where data and update have the same rank "
-          "is supported");
-    }
 
     SmallVector<uint64_t> splitAxes;
     // Split at the dim where the update and original data have a
@@ -2824,15 +2868,9 @@ struct CanonicalizeScatterNDWithMultiAxis
     }
 
     SmallVector<int64_t> indicesAsFlatArray;
-    if (!onnx_mlir::getI64ValuesFromONNXConstantOp(
-            indices, indicesAsFlatArray)) {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "The indices need to be constant");
-    }
-    if (indicesAsFlatArray.empty()) {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "Empty indices are not supported"); // Skip the edge case
-                                                           // of empty indices
+    if (failed(getScatterNDConstantIndices(
+            scatterNDOp, rewriter, indicesAsFlatArray))) {
+      return failure();
     }
     const auto indicesLastDimSize = indicesShape.back();
     SubArrayAccessHelper<int64_t> indicesFlatAccessor(
@@ -2852,18 +2890,11 @@ struct CanonicalizeScatterNDWithMultiAxis
 
     const auto firstIndex =
         indicesFlatAccessor[0]; // Safe, we have checked the length before
-    for (auto [idx, firstIndexDim] : llvm::enumerate(firstIndex)) {
-      if (!llvm::is_contained(splitAxes, idx) && firstIndexDim != 0) {
-        return rewriter.notifyMatchFailure(
-            scatterNDOp, " Shifting is only supported on the split axis");
-      }
-      if (llvm::is_contained(splitAxes, idx) && firstIndexDim < 0) {
-        return rewriter.notifyMatchFailure(scatterNDOp,
-            "Negative values with wrap around are not yet "
-            "supported"); // onnx allows negative values with
-                          // wrap-around, this decomposition does
-                          // not (for now)
-      }
+    if (failed(checkScatterNDFirstIndexShift(scatterNDOp, rewriter, firstIndex,
+            [&](uint64_t idx) {
+              return llvm::is_contained(splitAxes, idx);
+            }))) {
+      return failure();
     }
 
     // Collapse the two adjacent axes firstSplitAxis and firstSplitAxis+1 into a
@@ -2898,46 +2929,24 @@ struct CanonicalizeScatterNDWithMultiAxis
         indicesLastDimSize - (static_cast<int64_t>(splitAxes.size()) - 1);
     newIndicesShape.push_back(newIndexDepth);
 
-    // Check that all indices are contiguous.
-    // - The check for contiguity and covering works the following way:
-    // -- Iterated over all idx in indices and compare the idx against the
-    //    expected index, fail if it differs
-    // -- The expected index is calculated the following way:
-    // --- The expected index is initialized with the first index in indices and
-    //     then always incremented by one.
-    // --- The increment works like a manual addition, the least significant
-    //     digit/subindex gets incremented by one. If a digit overflows, it
-    //     gets reset to the first index and the addition carries to the next,
-    //     more significant digit. The addition overflows, if the index for an
-    //     axis is equal to the size of this axis in updates/indices. (By
-    //     definition the shape for indices.shape().drop(-1) must match the
-    //     first dimensions in updates). If the addition overflows , the
-    //     overflowing digit is reset to its value in the first index. This is
-    //     zero for all axes, except for 'a', where it can be a positive number
-    //     if the split/concat is in the middle of the tensor
-
     SmallVector<int64_t> newIndicesAsFlatArray;
 
     assert(
         updateShape.drop_back(updateShape.size() - (indicesShape.size() - 1)) ==
             indicesShape.drop_back(1) &&
         "Update and indicesShape should partially match for scatterNd");
-    {
-      IndicesContiguousCounter counter(firstIndex, indicesShape.drop_back(1));
-      for (size_t i = 0; i < indicesFlatAccessor.size(); ++i) {
-        // Remap each length-k index coordinate through the axis merge, working
-        // only over the indexed prefix (the first k axes). Using the full data
-        // shape here would read past the end of the k-length coordinate when
-        // k < rank(data).
-        newIndicesAsFlatArray.append(
-            counter.reshapedCounter(dataShape.take_front(indicesLastDimSize),
-                ArrayRef<int64_t>(newDataShape).take_front(newIndexDepth)));
-        if (counter.getCounter() != indicesFlatAccessor[i]) {
-          return rewriter.notifyMatchFailure(
-              scatterNDOp, "Indices are not contiguous");
-        }
-        counter.increment();
-      }
+    if (failed(checkScatterNDContiguousIndices(scatterNDOp, rewriter,
+            firstIndex, indicesShape.drop_back(1), indicesFlatAccessor,
+            [&](IndicesContiguousCounter &counter) {
+              // Remap each length-k index coordinate through the axis merge,
+              // working only over the indexed prefix (the first k axes). Using
+              // the full data shape here would read past the end of the
+              // k-length coordinate when k < rank(data).
+              newIndicesAsFlatArray.append(counter.reshapedCounter(
+                  dataShape.take_front(indicesLastDimSize),
+                  ArrayRef<int64_t>(newDataShape).take_front(newIndexDepth)));
+            }))) {
+      return failure();
     }
 
     onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
