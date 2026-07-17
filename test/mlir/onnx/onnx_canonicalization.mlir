@@ -188,22 +188,6 @@ func.func @test_transpose_removal(%arg0: tensor<10x11x12x13xf32>) -> tensor<10x1
 
 // -----
 
-// Check the fusion of transposes when transposes at the output side are moved
-// to the input side. This is only done when there are transposes at the input side.
-// CHECK-LABEL: func @test_transpose_concat_reversed
-func.func @test_transpose_concat_reversed(%arg0: tensor<?x5x5x1xf32>, %arg1: tensor<?x5x5x2xf32>) -> tensor<?x5x5x3xf32> {
-    %0 = "onnx.Transpose"(%arg0) {perm = [0, 3, 1, 2]} : (tensor<?x5x5x1xf32>) -> tensor<?x1x5x5xf32>
-    %1 = "onnx.Transpose"(%arg1) {perm = [0, 3, 1, 2]} : (tensor<?x5x5x2xf32>) -> tensor<?x2x5x5xf32>
-    %2 = "onnx.Concat"(%0, %1) {axis = 1 : si64} : (tensor<?x1x5x5xf32>, tensor<?x2x5x5xf32>) -> tensor<?x3x5x5xf32>
-    %3 = "onnx.Transpose"(%2) {perm = [0, 2, 3, 1]} : (tensor<?x3x5x5xf32>) -> tensor<?x5x5x3xf32>
-    onnx.Return %3 : tensor<?x5x5x3xf32>
-
-    // CHECK-NEXT: "onnx.Concat"(%arg0, %arg1) {axis = 3 : si64} : (tensor<?x5x5x1xf32>, tensor<?x5x5x2xf32>) -> tensor<?x5x5x3xf32>
-    // CHECK-NOT: "onnx.Transpose"
-}
-
-// -----
-
 // CHECK-LABEL: func @identity_tile
 func.func @identity_tile(%arg0: tensor<32x64xf32>) -> tensor<32x64xf32> {
     %0 = onnx.Constant dense<1> : tensor<2xi64>
@@ -706,23 +690,25 @@ func.func @consecutive_clips(%arg0: tensor<3x1024x1024xf32> {onnx.name = "input"
 
 // -----
 
-// COM: Test rewriting GlobalAveragePool into ReduceMeanV13
+// COM: Test rewriting GlobalAveragePool into ReduceMean
 func.func @test_global_average_pool(%arg0: tensor<1x3x5x5xf32>) -> tensor<1x3x1x1xf32> {
   %0 = "onnx.GlobalAveragePool"(%arg0) : (tensor<1x3x5x5xf32>) -> tensor<1x3x1x1xf32>
   onnx.Return %0 : tensor<1x3x1x1xf32>
   // CHECK-LABEL: test_global_average_pool
-  // CHECK: [[RES:%.+]] = "onnx.ReduceMeanV13"(%arg0) {axes = [2, 3], keepdims = 1 : si64} : (tensor<1x3x5x5xf32>) -> tensor<1x3x1x1xf32>
+  // CHECK: [[AXES:%.+]] = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  // CHECK: [[RES:%.+]] = "onnx.ReduceMean"(%arg0, [[AXES]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x3x5x5xf32>, tensor<2xi64>) -> tensor<1x3x1x1xf32>
   // CHECK: onnx.Return [[RES]] : tensor<1x3x1x1xf32>
 }
 
 // -----
 
-// COM: Test rewriting GlobalAveragePool into ReduceMeanV13 with dynamic dimensions
+// COM: Test rewriting GlobalAveragePool into ReduceMean with dynamic dimensions
 func.func @test_global_average_pool_dyn_dims(%arg0: tensor<1x?x?x5xf32>) -> tensor<1x?x?x1xf32> {
   %0 = "onnx.GlobalAveragePool"(%arg0) : (tensor<1x?x?x5xf32>) -> tensor<1x?x?x1xf32>
   onnx.Return %0 : tensor<1x?x?x1xf32>
   // CHECK-LABEL: test_global_average_pool_dyn_dims
-  // CHECK: [[RES:%.+]] = "onnx.ReduceMeanV13"(%arg0) {axes = [2, 3], keepdims = 1 : si64} : (tensor<1x?x?x5xf32>) -> tensor<1x?x1x1xf32>
+  // CHECK: [[AXES:%.+]] = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  // CHECK: [[RES:%.+]] = "onnx.ReduceMean"(%arg0, [[AXES]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x?x?x5xf32>, tensor<2xi64>) -> tensor<1x?x1x1xf32>
   // CHECK: onnx.Return [[RES]] : tensor<1x?x1x1xf32>
 }
 
@@ -3722,6 +3708,17 @@ func.func @leaky_relu_alpha_zero_to_relu(%arg0: tensor<2x3xf32>) -> tensor<2x3xf
 
 // -----
 
+// LeakyRelu with alpha = 1 is the identity and is removed.
+// CHECK-LABEL:   func.func @leaky_relu_alpha_one_to_identity(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+func.func @leaky_relu_alpha_one_to_identity(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  // CHECK-NEXT:    onnx.Return %arg0 : tensor<2x3xf32>
+  // CHECK-NOT:     "onnx.LeakyRelu"
+  %0 = "onnx.LeakyRelu"(%arg0) {alpha = 1.000000e+00 : f32} : (tensor<2x3xf32>) -> tensor<2x3xf32>
+  onnx.Return %0 : tensor<2x3xf32>
+}
+
+// -----
+
 // CHECK-LABEL:   func.func @leaky_relu_alpha_default(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
 func.func @leaky_relu_alpha_default(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
   // CHECK-NEXT:    %{{[0-9]+}} = "onnx.LeakyRelu"(%arg0) {alpha = 0.00999999977 : f32} : (tensor<2x3xf32>) -> tensor<2x3xf32>
@@ -3784,6 +3781,8 @@ func.func @reduce_mean_keepdims_zero_unchanged(%arg0: tensor<1x3x1x5xf32>) -> te
   %0 = "onnx.ReduceMean"(%arg0, %axes) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x3x1x5xf32>, tensor<2xi64>) -> tensor<3x5xf32>
   onnx.Return %0 : tensor<3x5xf32>
   // CHECK: "onnx.ReduceMean"(%arg0, %{{.*}}) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+  // CHECK: onnx.Return %{{.*}}
+  // CHECK-NOT: "onnx.Reshape"
 }
 
 // -----

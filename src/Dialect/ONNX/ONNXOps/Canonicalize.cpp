@@ -63,8 +63,14 @@ static bool enableReshapeCanonicalization = true;
 // Populated by configurePositiveAxisCanonicalization().
 static bool enablePositiveAxisCanonicalization = true;
 
+// Populated by configureReduceKeepdimsCanonicalization().
+static bool enableReduceKeepdimsCanonicalization = true;
+
 // Populated by configureQDQDataMovementCanonicalization().
 static bool enableQDQDataMovementCanonicalization = false;
+
+// Populated by configureExpandCanonicalization().
+static bool enableExpandCanonicalization = false;
 
 using namespace mlir;
 using namespace onnx_mlir;
@@ -333,34 +339,6 @@ bool isNotConvProducer(mlir::Value val) {
   return true; // If no defining op, assume it's safe
 }
 
-// Get the index of the axis value in the given permutation array.
-IntegerAttr getIndexOfAxisInPerm(
-    PatternRewriter &rewriter, ArrayAttr permAttr, IntegerAttr axis) {
-  IntegerAttr result;
-  for (uint64_t i = 0; i < permAttr.getValue().size(); ++i) {
-    IntegerAttr attr = mlir::cast<IntegerAttr>(permAttr.getValue()[i]);
-    assert(attr && "Element in ArrayAttr is not IntegerAttr");
-    if (attr.getValue().getSExtValue() == axis.getValue().getSExtValue())
-      return rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), i);
-  }
-  return result;
-}
-
-// Transpose a variadic input using a permutation array.
-SmallVector<Value, 4> transposeVariadicInput(PatternRewriter &rewriter,
-    Location loc, ValueRange inputs, ArrayAttr permAttr) {
-  SmallVector<Value, 4> transposedInputs;
-  for (Value inp : inputs) {
-    ShapedType inpType = mlir::cast<ShapedType>(inp.getType());
-    assert(inpType && "Type is not ShapedType");
-    ONNXTransposeOp transposeOp = rewriter.create<ONNXTransposeOp>(
-        loc, UnrankedTensorType::get(inpType.getElementType()), inp, permAttr);
-    static_cast<void>(transposeOp.inferShapes([](Region &region) {}));
-    transposedInputs.emplace_back(transposeOp.getResult());
-  }
-  return transposedInputs;
-}
-
 // Cast a variadic input using the given `saturate` and `to`.
 SmallVector<Value, 4> castVariadicInput(PatternRewriter &rewriter, Location loc,
     ValueRange inputs, IntegerAttr saturate, TypeAttr to) {
@@ -372,15 +350,6 @@ SmallVector<Value, 4> castVariadicInput(PatternRewriter &rewriter, Location loc,
     castInputs.emplace_back(castOp.getResult());
   }
   return castInputs;
-}
-
-// Check if all values are produced by ONNXTransposeOp.
-bool areProducedByTransposeOp(ValueRange values) {
-  return llvm::all_of(values, [](Value v) {
-    if (mlir::isa<BlockArgument>(v))
-      return false;
-    return isa<ONNXTransposeOp>(v.getDefiningOp());
-  });
 }
 
 Value maxOrDefault(PatternRewriter &rewriter, Location loc, Value a, Value b) {
@@ -1054,6 +1023,98 @@ public:
     OnnxBuilder create(rewriter, op.getLoc());
     Value newAxes = create.constantInt64(remainingAxes);
     rewriter.modifyOpInPlace(op, [&] { op.getAxesMutable().assign(newAxes); });
+    return success();
+  }
+};
+
+// Upgrade ReduceMeanV13 latest ReduceMean. A present `axes` attribute becomes a
+// constant axes operand; an absent one becomes a None operand with
+// `noop_with_empty_axes = 0`, preserving the legacy "reduce over every
+// dimension" semantics.
+class UpgradeReduceMeanV13Pattern
+    : public OpRewritePattern<ONNXReduceMeanV13Op> {
+public:
+  using OpRewritePattern<ONNXReduceMeanV13Op>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXReduceMeanV13Op op, PatternRewriter &rewriter) const override {
+    OnnxBuilder create(rewriter, op.getLoc());
+    Value newAxes;
+    if (ArrayAttr axesAttr = op.getAxesAttr()) {
+      SmallVector<int64_t> axes;
+      for (size_t i = 0; i < axesAttr.size(); ++i)
+        axes.push_back(ArrayAttrIntVal(axesAttr, i));
+      newAxes = create.constantInt64(axes);
+    } else {
+      newAxes = create.none();
+    }
+    IntegerAttr noopWithEmptyAxes = IntegerAttr::get(
+        rewriter.getIntegerType(64, /*isSigned=*/true), APInt(64, 0, true));
+    rewriter.replaceOpWithNewOp<ONNXReduceMeanOp>(op, op.getResult().getType(),
+        op.getData(), newAxes, op.getKeepdimsAttr(), noopWithEmptyAxes);
+    return success();
+  }
+};
+
+// Materialize the implicit "reduce all axes" of a ReduceMean whose reduction
+// axes operand is absent (None). An omitted `axes` means "reduce over every
+// dimension" unless `noop_with_empty_axes = 1`, which is a no-op that
+// `ONNXReduceMeanOp::fold` already forwards.
+class MaterializeAbsentAxesReduceMeanPattern
+    : public OpRewritePattern<ONNXReduceMeanOp> {
+public:
+  using OpRewritePattern<ONNXReduceMeanOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXReduceMeanOp op, PatternRewriter &rewriter) const override {
+    if (!isNoneValue(op.getAxes()))
+      return rewriter.notifyMatchFailure(op, "axes already present");
+
+    if (op.getNoopWithEmptyAxes() != 0)
+      return rewriter.notifyMatchFailure(op, "noop on empty axes");
+
+    auto dataType = mlir::dyn_cast<RankedTensorType>(op.getData().getType());
+    if (!dataType)
+      return rewriter.notifyMatchFailure(op, "data must be ranked");
+    const int64_t rank = dataType.getRank();
+
+    SmallVector<int64_t> axes(rank);
+    std::iota(axes.begin(), axes.end(), int64_t{0});
+    OnnxBuilder create(rewriter, op.getLoc());
+    Value newAxes = create.constantInt64(axes);
+    rewriter.modifyOpInPlace(op, [&] { op.getAxesMutable().assign(newAxes); });
+    return success();
+  }
+};
+
+// Rewrite keepdims=0 to keepdims=1 + Reshape to the original result shape.
+template <typename OP_TYPE>
+class ReduceKeepdimsCanonPattern : public OpRewritePattern<OP_TYPE> {
+public:
+  using OpRewritePattern<OP_TYPE>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      OP_TYPE op, PatternRewriter &rewriter) const override {
+    if (op.getKeepdims() != 0)
+      return failure();
+
+    Type resultType = op.getResult().getType();
+    if (!hasStaticShape(resultType))
+      return rewriter.notifyMatchFailure(op, "result must have static shape");
+
+    Type elemType = getElementTypeOrSelf(resultType);
+
+    OnnxBuilder create(rewriter, op.getLoc());
+    auto reduceOp = create.createTypedOpAndInferShapes<OP_TYPE>(
+        UnrankedTensorType::get(elemType), op.getData(), op.getAxes(),
+        int64_t{1}, op.getNoopWithEmptyAxes());
+
+    DenseElementsAttr shapeAttr =
+        createDenseElementsAttrFromShape(rewriter, op.getResult());
+    Value shapeConst = create.constant(shapeAttr);
+    Value reshaped = create.reshape(
+        resultType, reduceOp.getResult(), shapeConst, IntegerAttr());
+    rewriter.replaceOp(op, reshaped);
     return success();
   }
 };
@@ -1737,6 +1798,87 @@ public:
     rewriter.replaceOp(op, {res});
     return success();
   };
+};
+
+static bool getStaticExpandShapes(ONNXExpandOp expandOp,
+    ArrayRef<int64_t> &inputShape, ArrayRef<int64_t> &resultShape) {
+  Type inputType = expandOp.getInput().getType();
+  Type resultType = expandOp.getOutput().getType();
+  if (!hasStaticShape(inputType) || !hasStaticShape(resultType))
+    return false;
+  inputShape = getShape(inputType);
+  resultShape = getShape(resultType);
+  return true;
+}
+
+// Rewrite a same-rank static `Expand` into `Tile`. For each dimension the
+// repeat is `1` when the sizes already match and `resultDim` when the input
+// dim broadcasts from `1`; any other combination cannot be a pure tile.
+class ExpandToTilePattern : public OpRewritePattern<ONNXExpandOp> {
+public:
+  using OpRewritePattern<ONNXExpandOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXExpandOp expandOp, PatternRewriter &rewriter) const override {
+    ArrayRef<int64_t> inputShape;
+    ArrayRef<int64_t> resultShape;
+    if (!getStaticExpandShapes(expandOp, inputShape, resultShape))
+      return failure();
+    // Rank increases are normalized to equal rank by the reshape pattern first.
+    if (inputShape.size() != resultShape.size() || inputShape.empty())
+      return failure();
+
+    SmallVector<int64_t> repeats;
+    for (auto [inputDim, resultDim] : llvm::zip(inputShape, resultShape)) {
+      if (inputDim == resultDim)
+        repeats.push_back(1);
+      else if (inputDim == 1)
+        repeats.push_back(resultDim);
+      else
+        return failure();
+    }
+
+    MultiDialectBuilder<OnnxBuilder> create(rewriter, expandOp.getLoc());
+    Value tile = rewriter.create<ONNXTileOp>(expandOp.getLoc(),
+        expandOp.getOutput().getType(), expandOp.getInput(),
+        create.onnx.constantInt64(repeats));
+    rewriter.replaceOp(expandOp, tile);
+    return success();
+  }
+};
+
+// Normalize a rank-increasing static `Expand` by left-padding the input with
+// unit dims via `Reshape`, leaving a same-rank `Expand` that the pattern above
+// can turn into `Tile`.
+class ExpandRankIncreaseToReshapeExpandPattern
+    : public OpRewritePattern<ONNXExpandOp> {
+public:
+  using OpRewritePattern<ONNXExpandOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXExpandOp expandOp, PatternRewriter &rewriter) const override {
+    ArrayRef<int64_t> inputShape;
+    ArrayRef<int64_t> resultShape;
+    if (!getStaticExpandShapes(expandOp, inputShape, resultShape))
+      return failure();
+    if (inputShape.size() >= resultShape.size())
+      return failure();
+
+    SmallVector<int64_t> reshapedShape(
+        resultShape.size() - inputShape.size(), 1);
+    reshapedShape.append(inputShape.begin(), inputShape.end());
+
+    MultiDialectBuilder<OnnxBuilder> create(rewriter, expandOp.getLoc());
+    Value input = expandOp.getInput();
+    Type reshapedType =
+        RankedTensorType::get(reshapedShape, getElementType(input.getType()));
+    Value reshaped = create.onnx.reshape(
+        reshapedType, input, create.onnx.constantInt64(reshapedShape));
+    Value newExpand = create.onnx.expand(
+        expandOp.getOutput().getType(), reshaped, expandOp.getShape());
+    rewriter.replaceOp(expandOp, newExpand);
+    return success();
+  }
 };
 
 /// The pattern is to replace two consecutive ReshapeOp with a single ReshapeOp.
@@ -3700,6 +3842,28 @@ public:
   }
 };
 
+// LeakyRelu with alpha == 1.0 is the identity function f(x) = x.
+class LeakyReluAlphaOneToIdentityPattern
+    : public OpRewritePattern<ONNXLeakyReluOp> {
+public:
+  using OpRewritePattern<ONNXLeakyReluOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXLeakyReluOp op, PatternRewriter &rewriter) const override {
+    FloatAttr alphaAttr = op.getAlphaAttr();
+    assert(alphaAttr);
+    if (alphaAttr.getValueAsDouble() != 1.0)
+      return failure();
+
+    // Only eliminate the op when the input and result types match.
+    if (op.getX().getType() != op.getResult().getType())
+      return failure();
+
+    rewriter.replaceOp(op, op.getX());
+    return success();
+  }
+};
+
 // onnx.Abs(onnx.Abs(x)) -> onnx.Abs(x) by reusing the inner Abs result.
 class AbsAbsPattern : public OpRewritePattern<ONNXAbsOp> {
 public:
@@ -4607,6 +4771,15 @@ void ONNXEqualOp::getCanonicalizationPatterns(
   result.insert<BinaryOpBroadcastAxisPattern<ONNXEqualOp>>(context);
 }
 
+/// on the ONNXExpandOp.
+void ONNXExpandOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableExpandCanonicalization) {
+    result.insert<ExpandToTilePattern>(context);
+    result.insert<ExpandRankIncreaseToReshapeExpandPattern>(context);
+  }
+}
+
 /// on the ONNXGlobalAveragePoolOp.
 void ONNXGlobalAveragePoolOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
@@ -4649,6 +4822,7 @@ void ONNXLayoutTransformOp::getCanonicalizationPatterns(
 void ONNXLeakyReluOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<LeakyReluAlphaZeroToReluPattern>(context);
+  results.insert<LeakyReluAlphaOneToIdentityPattern>(context);
 }
 
 /// on the ONNXLessOp.
@@ -4698,10 +4872,89 @@ void ONNXOrOp::getCanonicalizationPatterns(
   result.insert<BinaryOpBroadcastAxisPattern<ONNXOrOp>>(context);
 }
 
+/// on the ONNXReduceL1Op.
+void ONNXReduceL1Op::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableReduceKeepdimsCanonicalization)
+    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceL1Op>>(context);
+}
+
+/// on the ONNXReduceL2Op.
+void ONNXReduceL2Op::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableReduceKeepdimsCanonicalization)
+    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceL2Op>>(context);
+}
+
+/// on the ONNXReduceLogSumOp.
+void ONNXReduceLogSumOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableReduceKeepdimsCanonicalization)
+    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceLogSumOp>>(context);
+}
+
+/// on the ONNXReduceLogSumExpOp.
+void ONNXReduceLogSumExpOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableReduceKeepdimsCanonicalization)
+    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceLogSumExpOp>>(context);
+}
+
+/// on the ONNXReduceMaxOp.
+void ONNXReduceMaxOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableReduceKeepdimsCanonicalization)
+    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceMaxOp>>(context);
+}
+
 /// on the ONNXReduceMeanOp.
 void ONNXReduceMeanOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReduceMeanPattern>(context);
   result.insert<DropUnitAxesFromReduceMeanPattern>(context);
+  if (enableReduceKeepdimsCanonicalization)
+    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceMeanOp>>(context);
+}
+
+/// on the ONNXReduceMeanV13Op.
+void ONNXReduceMeanV13Op::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  result.insert<UpgradeReduceMeanV13Pattern>(context);
+}
+
+/// on the ONNXReduceMinOp.
+void ONNXReduceMinOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableReduceKeepdimsCanonicalization)
+    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceMinOp>>(context);
+}
+
+/// on the ONNXReduceProdOp.
+void ONNXReduceProdOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableReduceKeepdimsCanonicalization)
+    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceProdOp>>(context);
+}
+
+/// on the ONNXReduceSumOp.
+void ONNXReduceSumOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableReduceKeepdimsCanonicalization)
+    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceSumOp>>(context);
+}
+
+/// on the ONNXReduceSumSquareOp.
+void ONNXReduceSumSquareOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableReduceKeepdimsCanonicalization)
+    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceSumSquareOp>>(context);
+}
+
+/// on the ONNXReduceSumV11Op.
+void ONNXReduceSumV11Op::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  result.insert<ReduceSumV11ToLatestPattern1>(context);
+  result.insert<ReduceSumV11ToLatestPattern2>(context);
 }
 
 /// on the ONNXReshapeOp.
@@ -4848,7 +5101,6 @@ void ONNXTransposeOp::getCanonicalizationPatterns(
   result.insert<FuseTransposeAndTanPattern>(context);
   result.insert<FuseTransposeAndTanhPattern>(context);
   result.insert<RemoveIdentityTransposePattern>(context);
-  result.insert<SwapTransposeConcatPattern>(context);
 }
 
 /// on the ONNXUnsqueezeOp.
@@ -4942,6 +5194,10 @@ bool onnx_mlir::isPositiveAxisCanonicalizationEnabled() {
   return enablePositiveAxisCanonicalization;
 }
 
+void onnx_mlir::configureReduceKeepdimsCanonicalization(bool enable) {
+  enableReduceKeepdimsCanonicalization = enable;
+}
+
 void onnx_mlir::configureQDQDataMovementCanonicalization(
     bool enableQDQDataMovementCanonicalizationOption) {
   enableQDQDataMovementCanonicalization =
@@ -4950,4 +5206,8 @@ void onnx_mlir::configureQDQDataMovementCanonicalization(
 
 bool onnx_mlir::isQDQDataMovementCanonicalizationEnabled() {
   return enableQDQDataMovementCanonicalization;
+}
+
+void onnx_mlir::configureExpandCanonicalization(bool enable) {
+  enableExpandCanonicalization = enable;
 }

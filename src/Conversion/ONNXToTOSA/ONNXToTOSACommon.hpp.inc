@@ -5,7 +5,7 @@
 //====------ ONNXToTOSACommon.hpp - ONNX dialects to TOSA lowering --------===//
 //
 // Copyright 2020 The TensorFlow Authors. All Rights Reserved.
-// Copyright (c) 2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -192,7 +192,7 @@ mlir::FailureOr<mlir::Value> convertPoolOp(
       return rewriter.notifyMatchFailure(op, "Could not infer shapes");
   }
 
-  TosaBuilder tosaBuilder(rewriter, loc);
+  MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(rewriter, loc);
 
   mlir::Value input = adaptor.getX();
   auto inputType = mlir::cast<mlir::TensorType>(input.getType());
@@ -218,7 +218,7 @@ mlir::FailureOr<mlir::Value> convertPoolOp(
 
   // ONNX Mlir uses NCHW as an input while TOSA expects NHWC. Insert a
   // transpose to change the format
-  input = tosaBuilder.transpose(input, {0, 2, 3, 1});
+  input = create.onnx.transposeInt64(input, {0, 2, 3, 1});
 
   if (!IndexExpr::isLiteral(shapeHelper.pads)) {
     (void)rewriter.notifyMatchFailure(op, "could not determine pad values");
@@ -240,10 +240,11 @@ mlir::FailureOr<mlir::Value> convertPoolOp(
   llvm::SmallVector<int64_t, 4> reorderedPads = {
       pads[0], pads[2] + ceilConstants[0], pads[1], pads[3] + ceilConstants[1]};
 
-  mlir::FailureOr<mlir::Value> resizedInput = tosaBuilder.resizeWindowBasedOps(
-      input, mlir::cast<mlir::RankedTensorType>(input.getType()).getShape(),
-      {kernelShapeVec[0], kernelShapeVec[1]}, reorderedPads,
-      shapeHelper.strides, shapeHelper.dilations);
+  mlir::FailureOr<mlir::Value> resizedInput =
+      create.tosa.resizeWindowBasedOps(create.onnx, input,
+          mlir::cast<mlir::RankedTensorType>(input.getType()).getShape(),
+          {kernelShapeVec[0], kernelShapeVec[1]}, reorderedPads,
+          shapeHelper.strides, shapeHelper.dilations);
 
   if (failed(resizedInput)) {
     return rewriter.notifyMatchFailure(
@@ -280,6 +281,6 @@ mlir::FailureOr<mlir::Value> convertPoolOp(
 
   // Revert to original shape (NCHW)
   // Construct the old result shape out of the new one
-  mlir::Value transpose = tosaBuilder.transpose(input, {0, 3, 1, 2});
+  mlir::Value transpose = create.onnx.transposeInt64(input, {0, 3, 1, 2});
   return transpose;
 }

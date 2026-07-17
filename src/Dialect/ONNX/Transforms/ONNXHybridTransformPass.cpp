@@ -118,7 +118,8 @@ struct ONNXHybridTransformPass
     }
 
     if (constantPropagation) {
-      getConstPropONNXToONNXPatterns(cumulativePatterns, qdqConstProp);
+      getConstPropONNXToONNXPatterns(
+          cumulativePatterns, qdqConstProp, quantConstFold);
     }
 
     if (decomposition) {
@@ -131,8 +132,7 @@ struct ONNXHybridTransformPass
           enableSplitToSliceDecompose, enableConcatFuse, enableLstmSeqDecompose,
           enableReduceL2Decompose,
           /*disableGenericDecompositions=*/false, enableGatherToSlice,
-          enableHardSwishDecompose, enableGroupQueryAttentionCacheSlicing,
-          enableDepthToSpaceDecompose);
+          enableHardSwishDecompose, enableDepthToSpaceDecompose);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
       if (target == "stablehlo") {
@@ -143,8 +143,8 @@ struct ONNXHybridTransformPass
     }
 
     if (recomposition) {
-      getRecomposeONNXToONNXPatterns(
-          cumulativePatterns, enableRotaryEmbeddingRecompose);
+      getRecomposeONNXToONNXPatterns(cumulativePatterns,
+          enableRotaryEmbeddingRecompose, enableReduceL2Recompositions);
     }
 
     patterns = FrozenRewritePatternSet(std::move(cumulativePatterns));

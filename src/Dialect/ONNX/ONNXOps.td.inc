@@ -1482,6 +1482,13 @@ def ONNXConcatOp:ONNX_Op<"Concat",
       return sh;
     }
   }];
+  let builders = [
+  OpBuilder<(ins "ValueRange":$inputs, "IntegerAttr":$axis), [{
+   auto elementType = mlir::cast<ShapedType>(inputs[0].getType()).getElementType();
+   auto resultType = UnrankedTensorType::get(elementType);
+   build($_builder, $_state, resultType, inputs, axis);
+  }]>
+  ];
   let hasVerifier = 1;
 }
 
@@ -2483,6 +2490,7 @@ def ONNXExpOp:ONNX_Op<"Exp",
 
 def ONNXExpandOp:ONNX_Op<"Expand",
   [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Expand operation";
   let description = [{
   Broadcast the input tensor following the given shape and the broadcast rule.
@@ -2783,7 +2791,7 @@ def ONNXGatherOp:ONNX_Op<"Gather",
   ```
   }];
   let arguments = (ins AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$data,
-    AnyTypeOf<[TensorOf<[I32]>, TensorOf<[I64]>]>:$indices,
+    AnyTypeOf<[TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[I16]>]>:$indices,
     DefaultValuedAttr<SI64Attr, "0">:$axis);
   let results = (outs AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$output);
   let extraClassDeclaration = [{
@@ -6752,6 +6760,7 @@ def ONNXReciprocalOp:ONNX_Op<"Reciprocal",
 
 def ONNXReduceL1Op:ONNX_Op<"ReduceL1",
   [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceL1 operation";
   let description = [{
   Computes the L1 norm of the input tensor's elements along the provided axes. The resulting
@@ -6829,6 +6838,7 @@ def ONNXReduceL1V13Op:ONNX_Op<"ReduceL1V13",
 
 def ONNXReduceL2Op:ONNX_Op<"ReduceL2",
   [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceL2 operation";
   let description = [{
   Computes the L2 norm of the input tensor's elements along the provided axes. The resulting
@@ -6906,6 +6916,7 @@ def ONNXReduceL2V13Op:ONNX_Op<"ReduceL2V13",
 
 def ONNXReduceLogSumOp:ONNX_Op<"ReduceLogSum",
   [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceLogSum operation";
   let description = [{
   Computes the log sum of the input tensor's elements along the provided axes. The resulting
@@ -6993,6 +7004,7 @@ def ONNXReduceLogSumV13Op:ONNX_Op<"ReduceLogSumV13",
 
 def ONNXReduceLogSumExpOp:ONNX_Op<"ReduceLogSumExp",
   [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceLogSumExp operation";
   let description = [{
   Computes the log sum exponent of the input tensor's elements along the provided axes. The resulting
@@ -7070,6 +7082,7 @@ def ONNXReduceLogSumExpV13Op:ONNX_Op<"ReduceLogSumExpV13",
 
 def ONNXReduceMaxOp:ONNX_Op<"ReduceMax",
   [Pure, OpVersionTrait<20>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceMax operation";
   let description = [{
   Computes the max of the input tensor's elements along the provided axes. The resulting
@@ -7259,6 +7272,7 @@ def ONNXReduceMeanOp:ONNX_Op<"ReduceMean",
 
 def ONNXReduceMeanV13Op:ONNX_Op<"ReduceMeanV13",
   [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceMean operation";
   let description = [{
   Computes the mean of the input tensor's elements along the provided axes. The resulting
@@ -7297,6 +7311,7 @@ def ONNXReduceMeanV13Op:ONNX_Op<"ReduceMeanV13",
 
 def ONNXReduceMinOp:ONNX_Op<"ReduceMin",
   [Pure, OpVersionTrait<20>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceMin operation";
   let description = [{
   Computes the min of the input tensor's elements along the provided axes. The resulting
@@ -7415,6 +7430,7 @@ def ONNXReduceMinV13Op:ONNX_Op<"ReduceMinV13",
 
 def ONNXReduceProdOp:ONNX_Op<"ReduceProd",
   [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceProd operation";
   let description = [{
   Computes the product of the input tensor's elements along the provided axes. The resulting
@@ -7492,6 +7508,7 @@ def ONNXReduceProdV13Op:ONNX_Op<"ReduceProdV13",
 
 def ONNXReduceSumOp:ONNX_Op<"ReduceSum",
   [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceSum operation";
   let description = [{
   Computes the sum of the input tensor's elements along the provided axes. The resulting
@@ -7541,6 +7558,7 @@ def ONNXReduceSumOp:ONNX_Op<"ReduceSum",
 
 def ONNXReduceSumV11Op:ONNX_Op<"ReduceSumV11",
   [Pure, OpVersionTrait<11>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceSum operation";
   let description = [{
   Computes the sum of the input tensor's element along the provided axes. The resulting
@@ -7587,6 +7605,7 @@ def ONNXReduceSumV11Op:ONNX_Op<"ReduceSumV11",
 
 def ONNXReduceSumSquareOp:ONNX_Op<"ReduceSumSquare",
   [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceSumSquare operation";
   let description = [{
   Computes the sum square of the input tensor's elements along the provided axes. The resulting

@@ -344,6 +344,32 @@ func.func @ResultNames_update_input(%arg0: tensor<1x4xf32>) -> tensor<1x4xi8> {
 
 // -----
 
+func.func @ResultNames_multi_results(%arg0: tensor<1x4x128xf32>) -> tensor<1x4x128xi8> {
+  %0 = onnx.Constant {value = dense<10> : tensor<i8>} : tensor<!quant.uniform<i8:f32, 5.000000e+00>>
+  %1 = onnx.Constant dense<5.000000e-01> : tensor<f32>
+  %2 = onnx.Constant dense<0> : tensor<i8>
+  %3 = "onnx.NoValue"() {value} : () -> none
+  %4 = onnx.Constant {value = dense<255> : tensor<128xui8>} : tensor<128x!quant.uniform<u8:f32, 0.0039215688593685627>>
+  %5 = "onnx.QuantizeLinear"(%arg0, %1, %2) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x4x128xf32>, tensor<f32>, tensor<i8>) -> tensor<1x4x128xi8>
+  %6 = quant.scast %5 : tensor<1x4x128xi8> to tensor<1x4x128x!quant.uniform<i8:f32, 5.000000e-01>>
+  %Y, %Mean, %InvStdDev = "onnx.LayerNormalization"(%6, %4, %3) {axis = -1 : si64, epsilon = 9.99999974E-6 : f32, stash_type = 1 : si64} : (tensor<1x4x128x!quant.uniform<i8:f32, 5.000000e-01>>, tensor<128x!quant.uniform<u8:f32, 0.0039215688593685627>>, none) -> (tensor<1x4x128x!quant.uniform<i8:f32, 5.000000e-01>>, none, none)
+  %7 = "onnx.Add"(%Y, %0) {ResultNames = ["add_Quant_output"]} : (tensor<1x4x128x!quant.uniform<i8:f32, 5.000000e-01>>, tensor<!quant.uniform<i8:f32, 5.000000e+00>>) -> tensor<1x4x128x!quant.uniform<i8:f32, 5.000000e-01>>
+  %8 = "onnx.Identity"(%7) : (tensor<1x4x128x!quant.uniform<i8:f32, 5.000000e-01>>) -> tensor<1x4x128x!quant.uniform<i8:f32, 5.000000e-01>>
+  %9 = quant.scast %8 : tensor<1x4x128x!quant.uniform<i8:f32, 5.000000e-01>> to tensor<1x4x128xi8>
+  return %9 : tensor<1x4x128xi8>
+}
+
+
+// CHECK-LABEL: @ResultNames_multi_results
+// CHECK: onnx.LayerNormalization
+// CHECK-SAME: ResultNames = ["add_Quant_output", "", ""]
+// CHECK-NEXT: quant.scast
+// CHECK-SAME: quant.uniform<i8:f32, 5.000000e-01:100>
+// CHECK-NEXT: quant.scast
+// CHECK-NEXT: onnx.Identity
+
+// -----
+
 func.func @ResultNames_update_output(%arg0: tensor<1x4xf32>) -> (tensor<1x4xf32>, tensor<1x4x!quant.uniform<i8:f32, 0.10000000149011612>>) {
   %0 = onnx.Constant dense<2.000000e-01> : tensor<f32>
   %1 = onnx.Constant dense<1.000000e+01> : tensor<f32>

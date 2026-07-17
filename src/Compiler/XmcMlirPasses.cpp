@@ -24,7 +24,7 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   // Replaced by createXmcRequantizePass below (runs post-quant-types).
   // pm.addNestedPass<func::FuncOp>(
   //     onnx_mlir::createOptimizeOnnxRequantizationPass());
-  pm.addNestedPass<func::FuncOp>(createONNXCSEPass());
+  pm.addNestedPass<func::FuncOp>(createDedupDQsPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createConvertQDQToRequantizePass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createQuantTypesPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createReplaceErfToGeluPass());
@@ -88,6 +88,8 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   //     onnx_mlir::createConvertSCastPairToRequantizePass());
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createTransferSoftmaxAxisToLastPass());
+  pm.addNestedPass<func::FuncOp>(
+      onnx_mlir::createQuantizeConcatConstInputPass());
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createONNXTransposeOptimizationPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createConstPropONNXToONNXPass());

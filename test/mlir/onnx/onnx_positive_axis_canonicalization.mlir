@@ -54,7 +54,9 @@ func.func @positive_axes_reduce_attr(%arg0: tensor<2x3x4xf32>) -> tensor<2x1x1xf
   %0 = "onnx.ReduceMeanV13"(%arg0) {axes = [-1, -2], keepdims = 1 : si64} : (tensor<2x3x4xf32>) -> tensor<2x1x1xf32>
   return %0 : tensor<2x1x1xf32>
 // CHECK-LABEL: func.func @positive_axes_reduce_attr
-// CHECK: "onnx.ReduceMeanV13"{{.*}} {axes = [2, 1], keepdims = 1 : si64}
+// CHECK: onnx.Constant dense<[2, 1]> : tensor<2xi64>
+// CHECK: "onnx.ReduceMean"{{.*}} {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
+// CHECK-NOT: "onnx.ReduceMeanV13"
 }
 
 // -----

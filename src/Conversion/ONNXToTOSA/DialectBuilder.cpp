@@ -4,7 +4,7 @@
 
 //====------ DialectBuilder.hpp - TOSA dialect builder --------------------===//
 //
-// Copyright (c) 2022-2024 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -18,6 +18,7 @@
 #include "src/Conversion/ONNXToTOSA/DialectBuilder.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
+#include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 
 using namespace mlir;
@@ -367,8 +368,8 @@ static bool containsNonZero(llvm::SmallVectorImpl<int64_t> &values) {
   return llvm::any_of(values, [](int64_t value) { return value != 0; });
 }
 
-FailureOr<Value> TosaBuilder::resizeWindowBasedOps(mlir::Value &value,
-    const llvm::ArrayRef<int64_t> inputShape,
+FailureOr<Value> TosaBuilder::resizeWindowBasedOps(OnnxBuilder &onnxBuilder,
+    mlir::Value &value, const llvm::ArrayRef<int64_t> inputShape,
     const llvm::ArrayRef<int64_t> weightSpatialShape,
     llvm::SmallVectorImpl<int64_t> &padding,
     const llvm::ArrayRef<int64_t> strides,
@@ -426,10 +427,11 @@ FailureOr<Value> TosaBuilder::resizeWindowBasedOps(mlir::Value &value,
 
   // Only slice if we actually need it
   if (containsNonZero(cellsToCut)) {
-    value = this->slice(value,
-        {inputShape[0], inputShape[1] - cellsToCut[0],
-            inputShape[2] - cellsToCut[1], inputShape[3]},
-        {0, 0, 0, 0});
+    llvm::SmallVector<int64_t, 4> sliceSizes = {inputShape[0],
+        inputShape[1] - cellsToCut[0], inputShape[2] - cellsToCut[1],
+        inputShape[3]};
+    llvm::SmallVector<int64_t, 4> sliceStarts(4, 0);
+    value = onnxBuilder.slice(value, sliceStarts, sliceSizes);
   }
   padding[1] = cellsToPad[0];
   padding[3] = cellsToPad[1];

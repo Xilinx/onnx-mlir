@@ -196,7 +196,7 @@ func.func @test_maxpool_to_channel_last(%arg0: tensor<1x64x28x28xf32>) -> tensor
   onnx.Return %0 : tensor<1x64x14x14xf32>
 
   // CHECK: [[INPUT_CHANNEL_LAST:%.+]] = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x64x28x28xf32>) -> tensor<1x28x28x64xf32>
-  // CHECK: [[POOL_CHANNEL_LAST:%.+]] = "onnx.XFEMaxPool"([[INPUT_CHANNEL_LAST]]) {auto_pad = "NOTSET", ceil_mode = 0 : si64, dilations = [1, 1], kernel_shape = [2, 2], pads = [0, 0, 0, 0], storage_order = 0 : si64, strides = [2, 2]} : (tensor<1x28x28x64xf32>) -> tensor<1x14x14x64xf32>
+  // CHECK: [[POOL_CHANNEL_LAST:%.+]] = "onnx.XFEMaxPool"([[INPUT_CHANNEL_LAST]]) {auto_pad = "NOTSET", ceil_mode = 0 : si64, dilations = [1, 1], kernel_shape = [2, 2], pads = [0, 0, 0, 0], strides = [2, 2]} : (tensor<1x28x28x64xf32>) -> tensor<1x14x14x64xf32>
   // CHECK: [[OUTPUT_NCHW:%.+]] = "onnx.Transpose"([[POOL_CHANNEL_LAST]]) {perm = [0, 3, 1, 2]} : (tensor<1x14x14x64xf32>) -> tensor<1x64x14x14xf32>
   // CHECK: onnx.Return [[OUTPUT_NCHW]] : tensor<1x64x14x14xf32>
 }
@@ -270,7 +270,7 @@ func.func @test_batchnorm_3d_ncd(%arg0: tensor<1x64x256xf32>, %arg1: tensor<64xf
   onnx.Return %0 : tensor<1x64x256xf32>
 
   // CHECK: [[INPUT_NDC:%.+]] = "onnx.Transpose"(%arg0) {perm = [0, 2, 1]} : (tensor<1x64x256xf32>) -> tensor<1x256x64xf32>
-  // CHECK: [[BN_NDC:%.+]] = "onnx.XFEBatchNormalization"([[INPUT_NDC]], %arg1, %arg2, %arg3, %arg4) {epsilon = 9.99999974E-6 : f32, momentum = 0.899999976 : f32} : (tensor<1x256x64xf32>, tensor<64xf32>, tensor<64xf32>, tensor<64xf32>, tensor<64xf32>) -> tensor<1x256x64xf32>
+  // CHECK: [[BN_NDC:%.+]] = "onnx.XFEBatchNormalization"([[INPUT_NDC]], %arg1, %arg2, %arg3, %arg4) {epsilon = 9.99999974E-6 : f32} : (tensor<1x256x64xf32>, tensor<64xf32>, tensor<64xf32>, tensor<64xf32>, tensor<64xf32>) -> tensor<1x256x64xf32>
   // CHECK: [[OUTPUT_NCD:%.+]] = "onnx.Transpose"([[BN_NDC]]) {perm = [0, 2, 1]} : (tensor<1x256x64xf32>) -> tensor<1x64x256xf32>
   // CHECK: onnx.Return [[OUTPUT_NCD]] : tensor<1x64x256xf32>
 }

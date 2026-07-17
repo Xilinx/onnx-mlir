@@ -101,6 +101,11 @@ Value OnnxBuilder::clip(
         toTensor(input), toTensor(min), toTensor(max));
 }
 
+Value OnnxBuilder::concat(ValueRange inputs, int64_t axis) const {
+  assert(inputs.size() >= 1 && "Expect at least one input");
+  return createOpAndInferShapes<ONNXConcatOp>(inputs, getSignedInt64Attr(axis));
+}
+
 Value OnnxBuilder::concat(
     Type outputType, ValueRange inputs, int64_t axis) const {
   IntegerAttr concatAxisAttr = getSignedInt64Attr(axis);
@@ -476,6 +481,26 @@ Value OnnxBuilder::slice(Type outputType, Value input, Value starts, Value ends,
   return createTypedOpAndInferShapes<ONNXSliceOp>(toTensor(outputType),
       toTensor(input), toTensor(starts), toTensor(ends), toTensor(axes),
       toTensor(steps));
+}
+
+Value OnnxBuilder::slice(
+    Value input, ArrayRef<int64_t> starts, ArrayRef<int64_t> sizes) const {
+  assert(starts.size() == sizes.size() && "starts/sizes rank mismatch");
+  const int64_t rank = static_cast<int64_t>(starts.size());
+  SmallVector<int64_t> ends(rank);
+  SmallVector<int64_t> axes(rank);
+  SmallVector<int64_t> steps(rank, 1);
+  for (int64_t i = 0; i < rank; ++i) {
+    ends[i] = starts[i] + sizes[i];
+    axes[i] = i;
+  }
+  Value startsVal = constant(b().getI64TensorAttr(starts));
+  Value endsVal = constant(b().getI64TensorAttr(ends));
+  Value axesVal = constant(b().getI64TensorAttr(axes));
+  Value stepsVal = constant(b().getI64TensorAttr(steps));
+  auto inputType = mlir::cast<ShapedType>(input.getType());
+  Type outputType = RankedTensorType::get(sizes, inputType.getElementType());
+  return slice(outputType, input, startsVal, endsVal, axesVal, stepsVal);
 }
 
 // 1D slice: take ints instead of values, and axis is by default 0 since we deal

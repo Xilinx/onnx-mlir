@@ -322,6 +322,10 @@ void registerOMPasses(int optLevel) {
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createQuantizeConcatConstInputPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createONNXHybridTransformPass();
   });
 
@@ -418,6 +422,7 @@ void registerOMPasses(int optLevel) {
 
   mlir::registerPass(createQuantTypesPass);
   mlir::registerPass(createONNXCSEPass);
+  mlir::registerPass(createDedupDQsPass);
   mlir::registerPass(createFixNegScalePass);
   mlir::registerPass(createInferTensorNames);
   mlir::registerPass(createCanonicalizeWithResultNamesPass);

@@ -59,6 +59,7 @@ add_onnx_mlir_library(OMONNXRewrite
   SetONNXNodeName.cpp
   Recompose.cpp
   LegalizeQuarkQuantizedOps.cpp
+  DedupDQs.cpp
   ONNXCSE.cpp
   QuantTypes.cpp
   FixNegScale.cpp
@@ -123,6 +124,7 @@ add_onnx_mlir_library(OMONNXRewrite
   xmc/TransferScaleToDwConv2dPass.cpp
   xmc/ONNXTransposeOptimizationPass.cpp
   xmc/ONNXTransposeOptimizationAxisChangePatterns.cpp
+  xmc/QuantizeConcatConstInputPass.cpp
   xmc/ConvWithBiasPass.cpp
   xmc/FuseMatMulAddToXFEMatMulBiasPass.cpp
   xmc/RemoveRedundantReshapePass.cpp

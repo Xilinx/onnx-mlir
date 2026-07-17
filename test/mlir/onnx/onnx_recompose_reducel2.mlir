@@ -93,6 +93,42 @@ func.func @test_recompose_reducesumsquare(%arg0: tensor<2x3x4xf32>, %arg1: tenso
 
 // -----
 
+func.func @test_recompose_reducesumsquare_from_pow(%arg0: tensor<1x512x10xf32>, %arg1: tensor<1xi64>) -> tensor<1x1x10xf32> {
+  %0 = onnx.Constant dense<2.000000e+00> : tensor<f32>
+  %1 = "onnx.Pow"(%arg0, %0) : (tensor<1x512x10xf32>, tensor<f32>) -> tensor<1x512x10xf32>
+  %2 = "onnx.ReduceSum"(%1, %arg1) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x512x10xf32>, tensor<1xi64>) -> tensor<1x1x10xf32>
+  onnx.Return %2 : tensor<1x1x10xf32>
+// CHECK-LABEL:  func.func @test_recompose_reducesumsquare_from_pow
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x512x10xf32>, [[PARAM_1_:%.+]]: tensor<1xi64>) -> tensor<1x1x10xf32> {
+// CHECK-NEXT:      [[VAR_0_:%.+]] = "onnx.ReduceSumSquare"([[PARAM_0_]], [[PARAM_1_]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x512x10xf32>, tensor<1xi64>) -> tensor<1x1x10xf32>
+// CHECK-NEXT:      onnx.Return [[VAR_0_]] : tensor<1x1x10xf32>
+// CHECK-NEXT:    }
+}
+
+// DISABLED-CHECK-LABEL:  func.func @test_recompose_reducesumsquare_from_pow
+// DISABLED-CHECK-NOT:       "onnx.ReduceSumSquare"
+
+// -----
+
+func.func @test_recompose_reducel2_from_pow_reduce_sum_pow(%arg0: tensor<1x512x10xf32>, %arg1: tensor<1xi64>) -> tensor<1x1x10xf32> {
+  %0 = onnx.Constant dense<2.000000e+00> : tensor<f32>
+  %1 = "onnx.Pow"(%arg0, %0) : (tensor<1x512x10xf32>, tensor<f32>) -> tensor<1x512x10xf32>
+  %2 = "onnx.ReduceSum"(%1, %arg1) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x512x10xf32>, tensor<1xi64>) -> tensor<1x1x10xf32>
+  %3 = onnx.Constant dense<5.000000e-01> : tensor<f32>
+  %4 = "onnx.Pow"(%2, %3) : (tensor<1x1x10xf32>, tensor<f32>) -> tensor<1x1x10xf32>
+  onnx.Return %4 : tensor<1x1x10xf32>
+// CHECK-LABEL:  func.func @test_recompose_reducel2_from_pow_reduce_sum_pow
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x512x10xf32>, [[PARAM_1_:%.+]]: tensor<1xi64>) -> tensor<1x1x10xf32> {
+// CHECK-NEXT:      [[VAR_0_:%.+]] = "onnx.ReduceL2"([[PARAM_0_]], [[PARAM_1_]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x512x10xf32>, tensor<1xi64>) -> tensor<1x1x10xf32>
+// CHECK-NEXT:      onnx.Return [[VAR_0_]] : tensor<1x1x10xf32>
+// CHECK-NEXT:    }
+}
+
+// DISABLED-CHECK-LABEL:  func.func @test_recompose_reducel2_from_pow_reduce_sum_pow
+// DISABLED-CHECK-NOT:       "onnx.ReduceL2"
+
+// -----
+
 // Mul(x,y) should break the pattern
 func.func @test_recompose_reducel2_not_square(%arg0: tensor<2x3x4xf32>, %arg1: tensor<2x3x4xf32>, %arg2: tensor<1xi64>) -> tensor<?x?xf32> {
   %0 = "onnx.Mul"(%arg0, %arg1) : (tensor<2x3x4xf32>, tensor<2x3x4xf32>) -> tensor<2x3x4xf32>

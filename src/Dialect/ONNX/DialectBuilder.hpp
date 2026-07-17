@@ -67,6 +67,7 @@ struct OnnxBuilder : DialectBuilder {
       bool scalarType = false) const;
 
   // ONNXConcatOp
+  mlir::Value concat(mlir::ValueRange inputs, int64_t axis) const;
   mlir::Value concat(
       mlir::Type outputType, mlir::ValueRange inputs, int64_t axis) const;
 
@@ -209,6 +210,8 @@ struct OnnxBuilder : DialectBuilder {
   mlir::Value slice(mlir::Type outputType, mlir::Value input,
       mlir::Value starts, mlir::Value ends, mlir::Value axes,
       mlir::Value steps) const;
+  mlir::Value slice(mlir::Value input, llvm::ArrayRef<int64_t> starts,
+      llvm::ArrayRef<int64_t> sizes) const;
   mlir::Value slice(mlir::Type outputType, mlir::Value input, int64_t start,
       int64_t end, int64_t step = 1) const; // 1D slice
 
