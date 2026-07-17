@@ -2443,31 +2443,6 @@ private:
   size_t iterArraySize;
 };
 
-int64_t indexToOffset(
-    llvm::ArrayRef<int64_t> shape, llvm::ArrayRef<int64_t> index) {
-  int64_t offset = 0;
-  for (size_t i = 0; i < shape.size(); i++) {
-    offset = offset * shape[i] + index[i];
-  }
-  return offset;
-}
-
-SmallVector<int64_t> offsetToIndex(
-    llvm::ArrayRef<int64_t> shape, int64_t offset) {
-  auto rank = shape.size();
-  // The rank of the index will be equal to the rank of the shape
-  SmallVector<int64_t> resultIndex;
-  resultIndex.reserve(rank);
-  // Compute all the index values from the last to the first one, reverse the
-  // vector afterwards as there is no convenient push_front.
-  for (int32_t i = rank - 1; i >= 0; i--) {
-    resultIndex.push_back(offset % shape[i]);
-    offset /= shape[i];
-  }
-  std::reverse(resultIndex.begin(), resultIndex.end());
-  return resultIndex;
-}
-
 class IndicesContiguousCounter {
 public:
   explicit IndicesContiguousCounter(
@@ -2505,8 +2480,8 @@ public:
   //   (since 5 * 4 + 3 == 23, the same element in the [6, 4] view).
   SmallVector<int64_t> reshapedCounter(
       ArrayRef<int64_t> currentShape, ArrayRef<int64_t> newShape) {
-    auto idxToOffsetValue = indexToOffset(currentShape, counter);
-    return offsetToIndex(newShape, idxToOffsetValue);
+    auto idxToOffsetValue = onnx_mlir::indexToOffset(currentShape, counter);
+    return onnx_mlir::offsetToIndex(newShape, idxToOffsetValue);
   }
 
 private:
@@ -2890,8 +2865,8 @@ struct CanonicalizeScatterNDWithMultiAxis
 
     const auto firstIndex =
         indicesFlatAccessor[0]; // Safe, we have checked the length before
-    if (failed(checkScatterNDFirstIndexShift(scatterNDOp, rewriter, firstIndex,
-            [&](uint64_t idx) {
+    if (failed(checkScatterNDFirstIndexShift(
+            scatterNDOp, rewriter, firstIndex, [&](uint64_t idx) {
               return llvm::is_contained(splitAxes, idx);
             }))) {
       return failure();

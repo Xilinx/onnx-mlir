@@ -219,6 +219,23 @@ bool getI64ValuesFromONNXConstantOp(
 // Note: It's ok to inline the isa<NoneType> test and not call this function.
 inline bool isNoneValue(mlir::Value value);
 
+/// Flatten a multi-dimensional index into a linear (row-major) offset.
+/// Given a tensor `shape` and a same-rank `index`, returns the position of that
+/// element in row-major (C-contiguous) memory, i.e.
+/// `((index[0] * shape[1] + index[1]) * shape[2] + ...)`.
+/// This is the inverse of `offsetToIndex`.
+/// Example: shape = [2, 3, 4], index = [1, 2, 3] -> ((1*3 + 2)*4 + 3) = 23.
+int64_t indexToOffset(
+    llvm::ArrayRef<int64_t> shape, llvm::ArrayRef<int64_t> index);
+
+/// Expand a linear (row-major) offset into a multi-dimensional index.
+/// Given a tensor `shape` and a flat `offset`, returns the coordinates of that
+/// element under row-major (C-contiguous) layout. The result has the same rank
+/// as `shape`. This is the inverse of `indexToOffset`.
+/// Example: shape = [2, 3, 4], offset = 23 -> [1, 2, 3].
+llvm::SmallVector<int64_t> offsetToIndex(
+    llvm::ArrayRef<int64_t> shape, int64_t offset);
+
 //===----------------------------------------------------------------------===//
 // Support for BatchNorm
 
