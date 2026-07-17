@@ -90,7 +90,7 @@ mlir::DenseElementsAttr expandDilatedWeightsNCHW(
 }
 
 // Preserve native dilated depthwise conv for shapes supported by the AIE
-// backend (e.g. DeepLabV3 ASPP: OH=OW=65, k3, stride=1, dilation=2/4).
+// backend (OH=OW=65, k3, stride=1, dilation=2/4).
 // Do not expand these to k5/k9 with dilation=1.
 bool shouldPreserveNativeDilatedDepthwiseConv(
     ONNXConvOp convOp, int64_t orgKernel, int64_t dilation) {
