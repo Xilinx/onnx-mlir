@@ -90,7 +90,7 @@ mlir::DenseElementsAttr expandDilatedWeightsNCHW(
 }
 
 // Preserve native dilated depthwise conv for shapes supported by the AIE
-// backend (e.g. DeepLabV3 ASPP: OH=OW=65, k3, stride=1, dilation=2/4).
+// backend (OH=OW=65, k3, stride=1, dilation=2/4).
 // Do not expand these to k5/k9 with dilation=1.
 bool shouldPreserveNativeDilatedDepthwiseConv(
     ONNXConvOp convOp, int64_t orgKernel, int64_t dilation) {
@@ -125,7 +125,11 @@ bool shouldPreserveNativeDilatedDepthwiseConv(
 //===----------------------------------------------------------------------===//
 
 struct RemoveDilationConv : public OpRewritePattern<ONNXConvOp> {
-  using OpRewritePattern<ONNXConvOp>::OpRewritePattern;
+  RemoveDilationConv(
+      MLIRContext *context, bool preserveNativeDilatedDepthwiseConv)
+      : OpRewritePattern<ONNXConvOp>(context),
+        preserveNativeDilatedDepthwiseConv(preserveNativeDilatedDepthwiseConv) {
+  }
 
   LogicalResult matchAndRewrite(
       ONNXConvOp convOp, PatternRewriter &rewriter) const override {
@@ -181,7 +185,8 @@ struct RemoveDilationConv : public OpRewritePattern<ONNXConvOp> {
 
     int64_t org_kernel = originalShape[2];
 
-    if (shouldPreserveNativeDilatedDepthwiseConv(convOp, org_kernel, dilation))
+    if (preserveNativeDilatedDepthwiseConv &&
+        shouldPreserveNativeDilatedDepthwiseConv(convOp, org_kernel, dilation))
       return failure();
 
     // Calculate new kernel size
@@ -230,6 +235,9 @@ struct RemoveDilationConv : public OpRewritePattern<ONNXConvOp> {
 
     return success();
   }
+
+private:
+  bool preserveNativeDilatedDepthwiseConv;
 };
 
 } // namespace
@@ -248,10 +256,19 @@ struct RemoveDilationConvPass
            "expanded kernels";
   }
 
+  bool preserveNativeDilatedDepthwiseConv = false;
+
+  RemoveDilationConvPass() = default;
+  RemoveDilationConvPass(bool preserveNativeDilatedDepthwiseConv)
+      : preserveNativeDilatedDepthwiseConv(preserveNativeDilatedDepthwiseConv) {}
+
+  RemoveDilationConvPass(const RemoveDilationConvPass &pass) = default;
+
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
-    patterns.add<RemoveDilationConv>(context);
+    patterns.add<RemoveDilationConv>(
+        context, preserveNativeDilatedDepthwiseConv);
 
     GreedyRewriteConfig config;
     config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
@@ -264,8 +281,10 @@ struct RemoveDilationConvPass
   }
 };
 
-std::unique_ptr<mlir::Pass> createRemoveDilationConv() {
-  return std::make_unique<RemoveDilationConvPass>();
+std::unique_ptr<mlir::Pass> createRemoveDilationConv(
+    bool preserveNativeDilatedDepthwiseConv) {
+  return std::make_unique<RemoveDilationConvPass>(
+      preserveNativeDilatedDepthwiseConv);
 }
 
 } // namespace onnx_mlir

@@ -215,7 +215,8 @@ std::unique_ptr<mlir::Pass> createReplaceQDQReductionPass();
 std::unique_ptr<mlir::Pass> createTransferConvSliceToConvPass();
 
 /// Pass for removing dilation from Conv operations.
-std::unique_ptr<mlir::Pass> createRemoveDilationConv();
+std::unique_ptr<mlir::Pass> createRemoveDilationConv(
+    bool preserveNativeDilatedDepthwiseConv = false);
 
 /// Pass for converting InstanceNorm to GroupNorm.
 std::unique_ptr<mlir::Pass> createConvertInstanceNormToGroupNormPass();
