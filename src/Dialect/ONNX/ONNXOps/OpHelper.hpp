@@ -34,8 +34,10 @@
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -203,6 +205,56 @@ mlir::ONNXConstantOp getONNXConstantOp(mlir::Value value);
 bool getI64ValuesFromONNXConstantOp(
     mlir::Value val, mlir::SmallVectorImpl<int64_t> &iRes);
 
+// Classifies operands that carry scalar axis or axes values. UnsqueezeAxes is
+// distinct because negative insertion axes are normalized against output rank.
+enum class ONNXAxisOperandKind { None, Scalar, Axes, UnsqueezeAxes };
+enum class ONNXAxisValueSource { Attribute, Operand };
+enum class ONNXAxisRankKind {
+  None,
+  FirstOperand,
+  FirstOperandMinusOne,
+  FirstOperandPlusOne,
+  ConcatFromSequence,
+  UnsqueezeOutput
+};
+
+struct ONNXAxisValueSpec {
+  ONNXAxisOperandKind kind;
+  ONNXAxisValueSource source;
+  llvm::StringRef attrName;
+  unsigned index;
+  bool canCanonicalize;
+  ONNXAxisRankKind rankKind;
+  bool includeRank;
+};
+
+// Returns the known axis/axes attribute or operand for an ONNX op.
+std::optional<ONNXAxisValueSpec> getONNXAxisValueSpec(mlir::Operation *op);
+
+// Reads axis values for a spec returned by getONNXAxisValueSpec().
+[[nodiscard]] bool getONNXAxisValues(mlir::Operation *op,
+    const ONNXAxisValueSpec &spec, mlir::SmallVectorImpl<int64_t> &values);
+
+// Returns the rank used to validate and normalize the axis values for `spec`.
+// `axesCount` is only used for Unsqueeze, where axes are normalized against the
+// output rank.
+[[nodiscard]] std::optional<int64_t> getONNXAxisNormalizationRank(
+    mlir::Operation *op, const ONNXAxisValueSpec &spec, int64_t axesCount);
+
+// Normalizes an axis to its non-negative equivalent. Returns std::nullopt when
+// the axis is out of range.
+[[nodiscard]] std::optional<int64_t> normalizeONNXAxisValue(
+    int64_t axis, int64_t rank, bool includeRank = false);
+
+// Normalizes a list of axes. The returned bool indicates whether any value
+// changed; failure means one of the axes was out of range.
+[[nodiscard]] mlir::FailureOr<bool> normalizeONNXAxisValues(
+    llvm::ArrayRef<int64_t> axes, int64_t rank, bool includeRank,
+    mlir::SmallVectorImpl<int64_t> &normalized);
+
+// Returns true if the op carries any known negative axis value.
+[[nodiscard]] bool hasNegativeONNXAxisValue(mlir::Operation *op);
+
 // Read a single-element i64 ONNX constant `v` into `out`. Returns false if
 // the value is not a 1-element i64 constant.
 [[nodiscard]] bool extractI64Scalar(mlir::Value v, int64_t &out);
@@ -218,6 +270,23 @@ bool getI64ValuesFromONNXConstantOp(
 // optional result of some other op (e.g. ONNXDropoutOp mask result).
 // Note: It's ok to inline the isa<NoneType> test and not call this function.
 inline bool isNoneValue(mlir::Value value);
+
+/// Flatten a multi-dimensional index into a linear (row-major) offset.
+/// Given a tensor `shape` and a same-rank `index`, returns the position of that
+/// element in row-major (C-contiguous) memory, i.e.
+/// `((index[0] * shape[1] + index[1]) * shape[2] + ...)`.
+/// This is the inverse of `offsetToIndex`.
+/// Example: shape = [2, 3, 4], index = [1, 2, 3] -> ((1*3 + 2)*4 + 3) = 23.
+int64_t indexToOffset(
+    llvm::ArrayRef<int64_t> shape, llvm::ArrayRef<int64_t> index);
+
+/// Expand a linear (row-major) offset into a multi-dimensional index.
+/// Given a tensor `shape` and a flat `offset`, returns the coordinates of that
+/// element under row-major (C-contiguous) layout. The result has the same rank
+/// as `shape`. This is the inverse of `indexToOffset`.
+/// Example: shape = [2, 3, 4], offset = 23 -> [1, 2, 3].
+llvm::SmallVector<int64_t> offsetToIndex(
+    llvm::ArrayRef<int64_t> shape, int64_t offset);
 
 //===----------------------------------------------------------------------===//
 // Support for BatchNorm

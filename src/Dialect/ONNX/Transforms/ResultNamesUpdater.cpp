@@ -159,7 +159,6 @@ std::unique_ptr<mlir::Pass> createInferTensorNames() {
 struct CanonicalizeWithResultNamesPass
     : public mlir::PassWrapper<CanonicalizeWithResultNamesPass,
           mlir::OperationPass<func::FuncOp>> {
-
   llvm::StringRef getArgument() const override {
     return "canonicalize-with-rn";
   }
@@ -178,6 +177,8 @@ struct CanonicalizeWithResultNamesPass
 
     if (isQDQDataMovementCanonicalizationEnabled())
       populateQDQDataMovementCanonicalizationPatterns(patterns);
+    if (isPositiveAxisCanonicalizationEnabled())
+      populateONNXPositiveAxisCanonicalizationPatterns(patterns);
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
