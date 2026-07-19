@@ -260,7 +260,8 @@ struct RemoveDilationConvPass
 
   RemoveDilationConvPass() = default;
   RemoveDilationConvPass(bool preserveNativeDilatedDepthwiseConv)
-      : preserveNativeDilatedDepthwiseConv(preserveNativeDilatedDepthwiseConv) {}
+      : preserveNativeDilatedDepthwiseConv(preserveNativeDilatedDepthwiseConv) {
+  }
 
   RemoveDilationConvPass(const RemoveDilationConvPass &pass) = default;
 
