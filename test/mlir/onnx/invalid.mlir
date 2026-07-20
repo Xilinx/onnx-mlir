@@ -83,6 +83,15 @@ func.func @test_concat_from_sequence_verifier_2(%arg0 : !onnx.Seq<tensor<5x5x1x3
 
 // -----
 
+func.func @test_expand_verifier_static_mismatch(%arg0 : tensor<8xf32>) -> tensor<*xf32> {
+  %shape = onnx.Constant dense<[16]> : tensor<1xi64>
+  // expected-error @+1 {{onnx.Expand: input dimension 8 at index 0 is incompatible with target shape dimension 16 at index 0: two corresponding dimensions must have the same value, or one of them is equal to 1}}
+  %0 = "onnx.Expand"(%arg0, %shape) : (tensor<8xf32>, tensor<1xi64>) -> tensor<*xf32>
+  "onnx.Return"(%0) : (tensor<*xf32>) -> ()
+}
+
+// -----
+
 func.func @test_dim_verifier_1(%arg0 : tensor<*xf32>) -> tensor<i64> {
   // expected-error @+1 {{input must have shape and rank}}
   %1 = "onnx.Dim"(%arg0) {axis = 0 : si64} : (tensor<*xf32>)  -> tensor<i64>

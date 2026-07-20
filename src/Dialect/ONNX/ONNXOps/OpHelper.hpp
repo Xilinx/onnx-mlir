@@ -205,6 +205,10 @@ mlir::ONNXConstantOp getONNXConstantOp(mlir::Value value);
 bool getI64ValuesFromONNXConstantOp(
     mlir::Value val, mlir::SmallVectorImpl<int64_t> &iRes);
 
+// Reads the integer values of any ConstantLike producer as int64_t, returning
+// an empty vector when the value is not a constant integer tensor.
+mlir::SmallVector<int64_t> valToVector(mlir::Value val);
+
 // Classifies operands that carry scalar axis or axes values. UnsqueezeAxes is
 // distinct because negative insertion axes are normalized against output rank.
 enum class ONNXAxisOperandKind { None, Scalar, Axes, UnsqueezeAxes };

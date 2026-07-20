@@ -36,7 +36,6 @@ std::unique_ptr<Transform> fromOp(mlir::Operation *op);
 /// Utility methods to be used by sub-classes or OpInterface implementations
 mlir::SmallVector<int64_t> arrayToVector(mlir::ArrayAttr arrayAttr);
 mlir::SmallVector<int64_t> denseToVector(mlir::DenseIntElementsAttr denseAttr);
-mlir::SmallVector<int64_t> valToVector(mlir::Value val);
 mlir::SmallVector<int64_t> axesToVector(mlir::Value val, size_t rank);
 mlir::ArrayAttr vecToAttr(
     mlir::MLIRContext *context, mlir::ArrayRef<int64_t> vector);
