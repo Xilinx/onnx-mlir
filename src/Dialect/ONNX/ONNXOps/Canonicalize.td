@@ -611,13 +611,13 @@ def SwapCastSlicePattern: Pat<
 // Canonicalization for ONNXTileOp
 //===----------------------------------------------------------------------===//
 
-def IsFromONNXConstantOpWithOnes: Constraint<
-    And<[CPred<"onnx_mlir::isDenseONNXConstant($_self)">,
+def IsFromConstantLikeWithOnes: Constraint<
+    And<[CPred<"static_cast<bool>(onnx_mlir::getDenseOrDisposableConstLikeElements($_self))">,
          CPred<"::llvm::all_of("
-               "onnx_mlir::getElementAttributeFromONNXValue($_self)"
+               "onnx_mlir::getDenseOrDisposableConstLikeElements($_self)"
                ".getValues<int64_t>(), "
                "[](int64_t repeat) { return repeat == 1;})">
-        ]>, "Value is not a ONNXConstantOp with an ElementsAttr of ones">;
+        ]>, "Value is not a ConstantLike op with an ElementsAttr of ones">;
 
 def RemoveIdentityTilePattern:  Pat<
   // Tile with `repeats` of all constant 1's
@@ -625,7 +625,7 @@ def RemoveIdentityTilePattern:  Pat<
   // Remove the tile.
   (replaceWithValue $val),
   // Check that we have indeed a identity tile pattern.
-  [(IsFromONNXConstantOpWithOnes:$r), (HaveSameShapedType $val,$result)]>;
+  [(IsFromConstantLikeWithOnes:$r), (HaveSameShapedType $val,$result)]>;
 
 //===----------------------------------------------------------------------===//
 // Canonicalization for ONNXLayoutTransformOp

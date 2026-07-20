@@ -21,6 +21,7 @@
 
 #include "mlir/IR/DialectResourceBlobManager.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Path.h"
 
@@ -396,6 +397,264 @@ bool getI64ValuesFromONNXConstantOp(
   return true;
 }
 
+static bool hasLegacyBroadcastAxis(Operation *op) {
+  return op->hasAttr("broadcast") && op->hasAttr("axis");
+}
+
+struct ONNXAxisFieldConfig {
+  ONNXAxisOperandKind kind;
+  ONNXAxisRankKind rankKind;
+  bool includeRank = false;
+  bool canCanonicalize = true;
+};
+
+static std::optional<ONNXAxisFieldConfig> getAxisAttrConfig(Operation *op) {
+  if (hasLegacyBroadcastAxis(op))
+    return std::nullopt;
+
+  const StringRef name = op->getName().getStringRef();
+  if (name == "onnx.Flatten")
+    return ONNXAxisFieldConfig{ONNXAxisOperandKind::Scalar,
+        ONNXAxisRankKind::FirstOperand, /*includeRank=*/true};
+  if (name == "onnx.ConcatFromSequence")
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::Scalar, ONNXAxisRankKind::ConcatFromSequence};
+  if (name == "onnx.OneHot")
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::Scalar, ONNXAxisRankKind::FirstOperandPlusOne};
+  if (name == "onnx.DFTV17")
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::Scalar, ONNXAxisRankKind::FirstOperandMinusOne};
+
+  if (name == "onnx.ArgMax" || name == "onnx.ArgMin" ||
+      name == "onnx.Compress" || name == "onnx.Concat" ||
+      name == "onnx.DequantizeLinear" || name == "onnx.Gather" ||
+      name == "onnx.GatherElements" || name == "onnx.Hardmax" ||
+      name == "onnx.LayerNormalization" || name == "onnx.LogSoftmax" ||
+      name == "onnx.LpNormalization" || name == "onnx.QuantizeLinear" ||
+      name == "onnx.Scatter" || name == "onnx.ScatterElements" ||
+      name == "onnx.Softmax" || name == "onnx.Split" ||
+      name == "onnx.SplitV11" || name == "onnx.SplitV13" ||
+      name == "onnx.SplitToSequence" || name == "onnx.TopK" ||
+      name == "onnx.Unique")
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::Scalar, ONNXAxisRankKind::FirstOperand};
+
+  return std::nullopt;
+}
+
+static std::optional<ONNXAxisFieldConfig> getAxesAttrConfig(Operation *op) {
+  const StringRef name = op->getName().getStringRef();
+  if (name == "onnx.UnsqueezeV11")
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::UnsqueezeAxes, ONNXAxisRankKind::UnsqueezeOutput};
+  if (name == "onnx.SqueezeV11" || name.starts_with("onnx.Reduce"))
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::Axes, ONNXAxisRankKind::FirstOperand};
+
+  if (name == "onnx.Resize")
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::Axes, ONNXAxisRankKind::FirstOperand};
+
+  return std::nullopt;
+}
+
+struct ONNXAxisOperandSpec {
+  ONNXAxisOperandKind kind;
+  unsigned index;
+  ONNXAxisRankKind rankKind;
+};
+
+static ONNXAxisOperandSpec getONNXAxisOperandSpec(Operation *op) {
+  const StringRef name = op->getName().getStringRef();
+  if (name == "onnx.CumSum")
+    return {ONNXAxisOperandKind::Scalar, 1, ONNXAxisRankKind::FirstOperand};
+  if (name == "onnx.DFT")
+    return {
+        ONNXAxisOperandKind::Scalar, 2, ONNXAxisRankKind::FirstOperandMinusOne};
+  if (name == "onnx.Slice")
+    return {ONNXAxisOperandKind::Axes, 3, ONNXAxisRankKind::FirstOperand};
+  if (name == "onnx.Pad" || name == "onnx.PadV18")
+    return {ONNXAxisOperandKind::Axes, 3, ONNXAxisRankKind::FirstOperand};
+  if (name == "onnx.Squeeze")
+    return {ONNXAxisOperandKind::Axes, 1, ONNXAxisRankKind::FirstOperand};
+  if (name == "onnx.Unsqueeze")
+    return {ONNXAxisOperandKind::UnsqueezeAxes, 1,
+        ONNXAxisRankKind::UnsqueezeOutput};
+  if (name.starts_with("onnx.Reduce") && op->getNumOperands() >= 2)
+    return {ONNXAxisOperandKind::Axes, 1, ONNXAxisRankKind::FirstOperand};
+  return {ONNXAxisOperandKind::None, 0, ONNXAxisRankKind::None};
+}
+
+std::optional<ONNXAxisValueSpec> getONNXAxisValueSpec(Operation *op) {
+  if (op->getName().getDialectNamespace() != ONNXDialect::getDialectNamespace())
+    return std::nullopt;
+
+  std::optional<ONNXAxisValueSpec> spec;
+  bool duplicateSpec = false;
+  auto setSpec = [&](ONNXAxisValueSpec newSpec) {
+    assert(!spec && "expected at most one known ONNX axis/axes source per op");
+    if (spec) {
+      duplicateSpec = true;
+      return;
+    }
+    spec = newSpec;
+  };
+
+  if (op->getAttrOfType<IntegerAttr>("axis") && !hasLegacyBroadcastAxis(op)) {
+    const std::optional<ONNXAxisFieldConfig> config = getAxisAttrConfig(op);
+    setSpec({config ? config->kind : ONNXAxisOperandKind::Scalar,
+        ONNXAxisValueSource::Attribute, "axis", 0,
+        config ? config->canCanonicalize : false,
+        config ? config->rankKind : ONNXAxisRankKind::None,
+        config ? config->includeRank : false});
+  }
+
+  if (op->getAttrOfType<ArrayAttr>("axes")) {
+    const std::optional<ONNXAxisFieldConfig> config = getAxesAttrConfig(op);
+    setSpec({config ? config->kind : ONNXAxisOperandKind::Axes,
+        ONNXAxisValueSource::Attribute, "axes", 0,
+        config ? config->canCanonicalize : false,
+        config ? config->rankKind : ONNXAxisRankKind::None,
+        config ? config->includeRank : false});
+  }
+
+  const ONNXAxisOperandSpec operandSpec = getONNXAxisOperandSpec(op);
+  if (operandSpec.kind != ONNXAxisOperandKind::None) {
+    setSpec({operandSpec.kind, ONNXAxisValueSource::Operand, "",
+        operandSpec.index, /*canCanonicalize=*/true, operandSpec.rankKind,
+        /*includeRank=*/false});
+  }
+  if (duplicateSpec)
+    return std::nullopt;
+  return spec;
+}
+
+bool getONNXAxisValues(Operation *op, const ONNXAxisValueSpec &spec,
+    SmallVectorImpl<int64_t> &values) {
+  assert(values.empty() && "expected caller to provide empty output vector");
+  if (spec.source == ONNXAxisValueSource::Attribute) {
+    if (spec.kind == ONNXAxisOperandKind::Scalar) {
+      const auto axisAttr = op->getAttrOfType<IntegerAttr>(spec.attrName);
+      if (!axisAttr)
+        return false;
+      values.push_back(axisAttr.getValue().getSExtValue());
+      return true;
+    }
+
+    const auto axesAttr = op->getAttrOfType<ArrayAttr>(spec.attrName);
+    if (!axesAttr || axesAttr.empty())
+      return false;
+    for (const Attribute attr : axesAttr) {
+      const auto axisAttr = mlir::dyn_cast<IntegerAttr>(attr);
+      if (!axisAttr)
+        return false;
+      values.push_back(axisAttr.getValue().getSExtValue());
+    }
+    return true;
+  }
+
+  if (spec.index >= op->getNumOperands())
+    return false;
+  const Value axisOperand = op->getOperand(spec.index);
+  if (mlir::isa<NoneType>(axisOperand.getType()))
+    return false;
+  if (!getI64ValuesFromONNXConstantOp(axisOperand, values) || values.empty())
+    return false;
+  return spec.kind != ONNXAxisOperandKind::Scalar || values.size() == 1;
+}
+
+static std::optional<int64_t> getTensorOrSequenceElementRank(Type type) {
+  if (const auto rankedTensorType = mlir::dyn_cast<RankedTensorType>(type))
+    return rankedTensorType.getRank();
+  if (const auto seqType = mlir::dyn_cast<SeqType>(type))
+    if (const auto elementType =
+            mlir::dyn_cast<RankedTensorType>(seqType.getElementType()))
+      return elementType.getRank();
+  return std::nullopt;
+}
+
+static std::optional<int64_t> getFirstOperandTensorRank(Operation *op) {
+  if (op->getNumOperands() == 0)
+    return std::nullopt;
+  return getTensorOrSequenceElementRank(op->getOperand(0).getType());
+}
+
+static std::optional<int64_t> getConcatFromSequenceAxisRank(Operation *op) {
+  const std::optional<int64_t> elementRank = getFirstOperandTensorRank(op);
+  if (!elementRank)
+    return std::nullopt;
+  const auto newAxisAttr = op->getAttrOfType<IntegerAttr>("new_axis");
+  return *elementRank +
+         ((newAxisAttr && newAxisAttr.getValue().getSExtValue() == 1) ? 1 : 0);
+}
+
+std::optional<int64_t> getONNXAxisNormalizationRank(
+    Operation *op, const ONNXAxisValueSpec &spec, int64_t axesCount) {
+  switch (spec.rankKind) {
+  case ONNXAxisRankKind::None:
+    return std::nullopt;
+  case ONNXAxisRankKind::FirstOperand:
+    return getFirstOperandTensorRank(op);
+  case ONNXAxisRankKind::FirstOperandMinusOne: {
+    const std::optional<int64_t> rank = getFirstOperandTensorRank(op);
+    if (!rank || *rank <= 0)
+      return std::nullopt;
+    return *rank - 1;
+  }
+  case ONNXAxisRankKind::FirstOperandPlusOne:
+    if (const std::optional<int64_t> rank = getFirstOperandTensorRank(op))
+      return *rank + 1;
+    return std::nullopt;
+  case ONNXAxisRankKind::ConcatFromSequence:
+    return getConcatFromSequenceAxisRank(op);
+  case ONNXAxisRankKind::UnsqueezeOutput:
+    if (const std::optional<int64_t> rank = getFirstOperandTensorRank(op))
+      return *rank + axesCount;
+    return std::nullopt;
+  }
+  llvm_unreachable("unknown ONNX axis rank kind");
+}
+
+std::optional<int64_t> normalizeONNXAxisValue(
+    int64_t axis, int64_t rank, bool includeRank) {
+  if (!isAxisInRange(axis, rank, includeRank))
+    return std::nullopt;
+  return axis;
+}
+
+FailureOr<bool> normalizeONNXAxisValues(ArrayRef<int64_t> axes, int64_t rank,
+    bool includeRank, SmallVectorImpl<int64_t> &normalized) {
+  bool changed = false;
+  assert(
+      normalized.empty() && "expected caller to provide empty output vector");
+
+  normalized.reserve(axes.size());
+  for (const int64_t axis : axes) {
+    const std::optional<int64_t> normalizedAxis =
+        normalizeONNXAxisValue(axis, rank, includeRank);
+    if (!normalizedAxis)
+      return failure();
+    normalized.push_back(*normalizedAxis);
+    changed |= *normalizedAxis != axis;
+  }
+  return changed;
+}
+
+bool hasNegativeONNXAxisValue(Operation *op) {
+  const std::optional<ONNXAxisValueSpec> spec = getONNXAxisValueSpec(op);
+  if (!spec)
+    return false;
+
+  SmallVector<int64_t> values;
+  if (!getONNXAxisValues(op, *spec, values))
+    return false;
+  for (const int64_t value : values)
+    if (value < 0)
+      return true;
+  return false;
+}
+
 bool extractI64Scalar(mlir::Value v, int64_t &out) {
   llvm::SmallVector<int64_t, 1> values;
   if (!getI64ValuesFromONNXConstantOp(v, values))
@@ -415,6 +674,28 @@ bool extractSlice1DConst(mlir::ONNXSliceOp sliceOp, int64_t &axis,
          extractI64Scalar(sliceOp.getEnds(), end) &&
          extractI64Scalar(sliceOp.getAxes(), axis) &&
          extractI64Scalar(sliceOp.getSteps(), step);
+}
+
+int64_t indexToOffset(
+    llvm::ArrayRef<int64_t> shape, llvm::ArrayRef<int64_t> index) {
+  int64_t offset = 0;
+  for (size_t i = 0; i < shape.size(); i++) {
+    offset = offset * shape[i] + index[i];
+  }
+  return offset;
+}
+
+SmallVector<int64_t> offsetToIndex(
+    llvm::ArrayRef<int64_t> shape, int64_t offset) {
+  auto rank = shape.size();
+  // The rank of the index will be equal to the rank of the shape
+  SmallVector<int64_t> resultIndex;
+  for (int32_t i = rank - 1; i >= 0; i--) {
+    resultIndex.push_back(offset % shape[i]);
+    offset /= shape[i];
+  }
+  std::reverse(resultIndex.begin(), resultIndex.end());
+  return resultIndex;
 }
 
 //===----------------------------------------------------------------------===//

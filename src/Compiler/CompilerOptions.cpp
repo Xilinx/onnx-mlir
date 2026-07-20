@@ -40,6 +40,7 @@ std::string march;                                     // common for both
 InstrumentStages instrumentStage;                      // common for both
 bool onnxConstPropRoundFPToInt;                        // common for both
 int onnxConstPropExpansionBound;                       // common for both
+int64_t onnxConstPropMaxTileFoldSize;                  // common for both
 std::vector<std::string> onnxConstPropDisablePatterns; // common for both
 bool enableONNXHybridPass;                             // common for both
 std::vector<std::string> functionsToDecompose;         // common for both
@@ -53,6 +54,7 @@ std::string onnxTransformOptions;                      // onnx-mlir only
 bool enableQuarkQuantizerLegalization;                 // common for both
 bool disableBatchNormDecompose;                        // common for both
 bool enableReshapeCanonicalization;                    // common for both
+bool enablePositiveAxisCanonicalization;               // common for both
 bool enableExpandCanonicalization;                     // common for both
 bool enableReduceKeepdimsCanonicalization;             // common for both
 bool enableXFEONNXOpsetVerifier;                       // common for both
@@ -225,6 +227,16 @@ static llvm::cl::opt<int, true> onnxConstPropExpansionBoundOpt(
     llvm::cl::location(onnxConstPropExpansionBound), llvm::cl::init(-1),
     llvm::cl::cat(OnnxMlirCommonOptions));
 
+static llvm::cl::opt<int64_t, true> onnxConstPropMaxTileFoldSizeOpt(
+    "onnx-const-prop-max-tile-fold-size",
+    llvm::cl::desc(
+        "Maximum size in bytes of the constant produced when constant "
+        "propagating an onnx.Tile.\n"
+        "The Tile is not folded if the resulting constant would exceed this "
+        "size.\nSet to 0 (the default) to disable the limit."),
+    llvm::cl::location(onnxConstPropMaxTileFoldSize), llvm::cl::init(0),
+    llvm::cl::cat(OnnxMlirCommonOptions));
+
 static llvm::cl::list<std::string, std::vector<std::string>>
     onnxConstPropDisablePatternsOpt("onnx-const-prop-disable-pattern",
         llvm::cl::desc("Named constant propagation pattern to disable.\n"
@@ -350,6 +362,14 @@ static llvm::cl::opt<bool, true> enableReshapeCanonicalizationOpt(
         "(default=true, i.e. the rewrite is enabled by default)."),
     llvm::cl::location(enableReshapeCanonicalization), llvm::cl::init(true),
     llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enablePositiveAxisCanonicalizationOpt(
+    "enable-positive-axis-canonicalization",
+    llvm::cl::desc(
+        "Enable canonicalization of negative ONNX axis/axes values to "
+        "positive equivalents when rank is known"),
+    llvm::cl::location(enablePositiveAxisCanonicalization),
+    llvm::cl::init(true), llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true> enableExpandCanonicalizationOpt(
     "enable-expand-canonicalization",

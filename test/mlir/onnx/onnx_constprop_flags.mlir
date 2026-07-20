@@ -2,6 +2,7 @@
 // RUN: onnx-mlir-opt --constprop-onnx --onnx-const-prop-round-fp-to-int=true %s -split-input-file | FileCheck --check-prefix=ROUND %s
 // RUN: onnx-mlir-opt --constprop-onnx --onnx-const-prop-round-fp-to-int=false %s -split-input-file | FileCheck --check-prefix=TRUNCATE %s
 // RUN: onnx-mlir-opt --constprop-onnx --onnx-const-prop-expansion-bound=1 %s -split-input-file | FileCheck --check-prefix=EXPANSIONBOUND1 %s
+// RUN: onnx-mlir-opt --constprop-onnx --onnx-const-prop-max-tile-fold-size=16 %s -split-input-file | FileCheck --check-prefix=MAXTILE16 %s
 // RUN: onnx-mlir-opt --constprop-onnx %s -split-input-file | FileCheck --check-prefix=NOBOUND %s
 
 //===----------------------------------------------------------------------===//
@@ -108,3 +109,42 @@ func.func @test_pad_doesnt_fold_over_uint32max_elements() -> tensor<1x4294967296
 }
 // NOBOUND-LABEL: @test_pad_doesnt_fold_over_uint32max_elements() -> tensor<1x4294967296xf32>
 // NOBOUND:       "onnx.Pad"({{.*}}) {mode = "constant"} : (tensor<1x1xf32>, tensor<4xi64>, none, none) -> tensor<1x4294967296xf32>
+
+// -----
+
+func.func @test_tile_propagates_expansion_bound() -> tensor<4x2xf32> {
+  %data = onnx.Constant dense<[[1.0, 2.0]]> : tensor<1x2xf32>
+  %repeats = onnx.Constant dense<[4, 1]> : tensor<2xi64>
+  %1 = "onnx.Tile"(%data, %repeats) : (tensor<1x2xf32>, tensor<2xi64>) -> tensor<4x2xf32>
+  onnx.Return %1 : tensor<4x2xf32>
+}
+// EXPANSIONBOUND2-LABEL: @test_tile_propagates_expansion_bound() -> tensor<4x2xf32>
+// EXPANSIONBOUND2:        onnx.Constant {{.*}} : tensor<4x2xf32>
+// EXPANSIONBOUND2-NOT:    onnx.Tile
+//
+// EXPANSIONBOUND1-LABEL: @test_tile_propagates_expansion_bound() -> tensor<4x2xf32>
+// EXPANSIONBOUND1:        "onnx.Tile"({{.*}}) : (tensor<1x2xf32>, tensor<2xi64>) -> tensor<4x2xf32>
+
+// -----
+
+func.func @test_tile_folds_within_max_size() -> tensor<2x2xf32> {
+  %data = onnx.Constant dense<[[1.0, 2.0]]> : tensor<1x2xf32>
+  %repeats = onnx.Constant dense<[2, 1]> : tensor<2xi64>
+  %1 = "onnx.Tile"(%data, %repeats) : (tensor<1x2xf32>, tensor<2xi64>) -> tensor<2x2xf32>
+  onnx.Return %1 : tensor<2x2xf32>
+}
+// MAXTILE16-LABEL: @test_tile_folds_within_max_size() -> tensor<2x2xf32>
+// MAXTILE16:        onnx.Constant {{.*}} : tensor<2x2xf32>
+// MAXTILE16-NOT:    onnx.Tile
+
+// -----
+
+// Output = 4×2×4 = 32 bytes > 16 → does not fold.
+func.func @test_tile_doesnt_fold_over_max_size() -> tensor<4x2xf32> {
+  %data = onnx.Constant dense<[[1.0, 2.0]]> : tensor<1x2xf32>
+  %repeats = onnx.Constant dense<[4, 1]> : tensor<2xi64>
+  %1 = "onnx.Tile"(%data, %repeats) : (tensor<1x2xf32>, tensor<2xi64>) -> tensor<4x2xf32>
+  onnx.Return %1 : tensor<4x2xf32>
+}
+// MAXTILE16-LABEL: @test_tile_doesnt_fold_over_max_size() -> tensor<4x2xf32>
+// MAXTILE16:        "onnx.Tile"({{.*}}) : (tensor<1x2xf32>, tensor<2xi64>) -> tensor<4x2xf32>
