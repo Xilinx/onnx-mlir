@@ -2801,37 +2801,65 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
       return failure();
     }
 
+    // Strategy for the decomposition (nested peel/rebuild):
+    // Isolate the hyper-rectangular block one split axis at a time with a
+    // 3-way Split into [before, band, after]; the band is carried into the next
+    // peel and the surrounding before/after slabs are kept. The innermost band
+    // is the block region and is discarded. Then stitch the updates back in
+    // with a Concat(before, result, after) per axis. For a single differing
+    // axis this reduces exactly to the classic
+    // `before, band, after = split(data, [s, b, D-s-b]); concat(before,
+    // updates, after)` (before/after may be zero-sized, matching prior
+    // behavior).
     onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
         rewriter, scatterNDOp->getLoc());
-    // Strategy for the decomposition:
-    // Split at the split axis, concat the update and part of the split
-    // a, b = split(input)
-    // a1, a2 = split(a)
-    // concat(a1, update, b)
-    // In onnx this split can be done in one:
-    // a1, a2, b = split(input)
-    const auto firstSplitPosition =
-        (splitAxis < firstIndex.size()) ? firstIndex[splitAxis] : 0;
-    const auto secondSplitPosition =
-        updateShape[splitAxis] + firstSplitPosition;
-    SmallVector<int64_t> splitTyFirstQuarter(dataShape);
-    splitTyFirstQuarter[splitAxis] = firstSplitPosition;
-    SmallVector<int64_t> splitTySecondQuarter(dataShape);
-    splitTySecondQuarter[splitAxis] = updateShape[splitAxis];
-    SmallVector<int64_t> splitTySecondHalf(dataShape);
-    splitTySecondHalf[splitAxis] -= secondSplitPosition;
-    Value splitSize = create.onnx.constantInt64({firstSplitPosition,
-        updateShape[splitAxis], splitTySecondHalf[splitAxis]});
-    const Type dataElementType = dataType.getElementType();
-    ValueRange split = create.onnx.split(
-        {RankedTensorType::get(splitTyFirstQuarter, dataElementType),
-            RankedTensorType::get(splitTySecondQuarter, dataElementType),
-            RankedTensorType::get(splitTySecondHalf, dataElementType)},
-        scatterNDOp.getData(), splitSize, splitAxis);
+    const Type elemTy = dataType.getElementType();
 
-    Value concat = create.onnx.concat(
-        dataType, {split[0], scatterNDOp.getUpdates(), split[2]}, splitAxis);
-    rewriter.replaceOp(scatterNDOp, concat);
+    // firstIndex holds the block start on the indexed axes; 0 elsewhere.
+    auto blockStart = [&](uint64_t axis) -> int64_t {
+      return (axis < firstIndex.size()) ? firstIndex[axis] : 0;
+    };
+
+    // Peel innermost split axis to outermost. `kept` records the surrounding
+    // slabs (in inner->outer order) to be re-stitched during rebuild.
+    struct KeptPieces {
+      uint64_t axis;
+      Value before;
+      Value after;
+    };
+    SmallVector<KeptPieces> kept;
+    Value current = scatterNDOp.getData();
+    SmallVector<int64_t> currentShape(dataShape);
+    for (uint64_t axis : llvm::reverse(splitAxes)) {
+      const int64_t s = blockStart(axis);
+      const int64_t b = updateShape[axis];
+      const int64_t after = currentShape[axis] - s - b;
+
+      auto pieceTy = [&](int64_t sz) {
+        SmallVector<int64_t> shp(currentShape);
+        shp[axis] = sz;
+        return RankedTensorType::get(shp, elemTy);
+      };
+      ValueRange parts =
+          create.onnx.split({pieceTy(s), pieceTy(b), pieceTy(after)}, current,
+              create.onnx.constantInt64({s, b, after}), axis);
+
+      kept.push_back({axis, parts[0], parts[2]});
+      current = parts[1]; // descend into the block band
+      currentShape[axis] = b;
+    }
+
+    // Rebuild outermost split axis to innermost (reverse of the peel order),
+    // starting from the updates.
+    Value result = scatterNDOp.getUpdates();
+    SmallVector<int64_t> resultShape(updateShape);
+    for (const KeptPieces &kp : llvm::reverse(kept)) {
+      resultShape[kp.axis] = dataShape[kp.axis];
+      result = create.onnx.concat(RankedTensorType::get(resultShape, elemTy),
+          {kp.before, result, kp.after}, kp.axis);
+    }
+
+    rewriter.replaceOp(scatterNDOp, result);
     return success();
   }
 };
