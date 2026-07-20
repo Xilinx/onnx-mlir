@@ -1,10 +1,11 @@
-/*
- * SPDX-License-Identifier: Apache-2.0
- */
-
 //===------------ SliceOpOptimization.cpp - ONNX Slice rewrites -----------===//
 //
-// Copyright 2025-2026 Advanced Micro Devices, Inc. or its affiliates
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+// Modifications (c) Copyright 2025-2026 Advanced Micro Devices, Inc. or its
+// affiliates
 //
 // =============================================================================
 //
@@ -12,6 +13,9 @@
 // rewrite patterns. Passes that run canonicalization can add them via
 // populateSliceOpOptimizationPatterns() when --enable-slice-canonicalization
 // is set (see configureSliceCanonicalization / isSliceCanonicalizationEnabled).
+//
+// The Slice-through-Tile/Pad/Concat rewrites are adapted from the MLIR TOSA
+// patterns in mlir/lib/Dialect/Tosa/IR/TosaCanonicalizations.cpp.
 //
 //===----------------------------------------------------------------------===//
 
