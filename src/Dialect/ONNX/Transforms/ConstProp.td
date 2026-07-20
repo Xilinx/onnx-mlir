@@ -69,6 +69,14 @@ def IsVariadicOperandDenseONNXConstantOp:
     Constraint<CPred<"isVariadicOperandFromDenseONNXConstantOp($_self)">,
   "All variadic operands are produced by dense ConstantLike ops">;
 
+def IsFromSplatDenseConstLike:
+    Constraint<And<[
+      CPred<"static_cast<bool>(getDenseOrDisposableConstLikeElements($_self))">,
+      CPred<"getDenseOrDisposableConstLikeElements($_self).isSplat()">
+    ]>,
+  "Value is produced by a ConstantLike op that folds to a splat dense "
+  "ElementsAttr (DenseElementsAttr or DisposableElementsAttr)">;
+
 def HasStaticShape: Constraint<CPred<
   "hasStaticShape($_self.getType())">,
   "A value has static shape"
@@ -126,6 +134,9 @@ def OpIsLikelyToBeFusedWithBias: Constraint<
 
 def SatisfiesExpansionBound: Constraint<
   CPred<"satisfiesExpansionBound($_self)">>;
+
+def SatisfiesMaxTileFoldSize: Constraint<
+  CPred<"satisfiesMaxTileFoldSize($_self)">>;
 
 class IsNotDisabled<string name>: Constraint<
   CPred<"isNotDisabled(\"" # name # "\")">>;
@@ -315,6 +326,9 @@ def CreateConcatOfConst:
 
 def CreateExpandOfConst:
    NativeCodeCall<"ConstPropExpand($_builder, $0, $1)">;
+
+def CreateTileOfConst:
+   NativeCodeCall<"ConstPropTile($_builder, $0, $1)">;
 
 def CreateGatherOfConst:
    NativeCodeCall<"ConstPropGather($_builder, $0, $1, $2)">;
@@ -1312,6 +1326,26 @@ def ExpandofConst : NamedPat<"ExpandofConst",
     [(IsFromDenseConstLike:$input), (IsFromDenseConstLike:$shape),
      (HasStaticShape:$resOp), (ValuesHaveSameDType $resOp, $input),
      (SatisfiesExpansionBound:$resOp)]>;
+
+//===----------------------------------------------------------------------===//
+// Patterns to enable opportunities with Tile operations.
+//===----------------------------------------------------------------------===//
+
+def TileofConst : NamedPat<"TileofConst",
+    // From Tile (x, repeats)
+    (ONNXTileOp:$resOp $input, $repeats),
+    // To c where c is the tiled value.
+    (CreateTileOfConst $resOp, $input),
+    [(IsFromDenseConstLike:$input), (IsIntOrFloatType:$input),
+     (HasStaticShape:$resOp), (ValuesHaveSameDType $resOp, $input),
+     (SatisfiesExpansionBound:$resOp), (SatisfiesMaxTileFoldSize:$resOp)]>;
+
+def SplatTileofConst : NamedPat<"SplatTileofConst",
+    (ONNXTileOp:$resOp $input, $repeats),
+    (CreateTileOfConst $resOp, $input),
+    [(IsFromSplatDenseConstLike:$input), (IsIntOrFloatType:$input),
+     (HasStaticShape:$resOp), (ValuesHaveSameDType $resOp, $input)],
+    [], (addBenefit 1)>;
 
 //===----------------------------------------------------------------------===//
 // Patterns to enable opportunities with Gather operations.

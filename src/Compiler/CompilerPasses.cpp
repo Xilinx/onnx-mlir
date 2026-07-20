@@ -67,10 +67,11 @@ void configurePasses() {
   configureConstPropONNXToONNXPass(onnxConstPropRoundFPToInt,
       onnxConstPropExpansionBound, onnxConstPropDisablePatterns,
       disableConstantProp);
+  configureConstPropMaxTileFoldSize(onnxConstPropMaxTileFoldSize);
   configureUnsafeMathCanonicalization(enableUnsafeMathOptimizations);
   configurePositiveAxisCanonicalization(enablePositiveAxisCanonicalization);
-  configureExpandCanonicalization(enableExpandCanonicalization);
   configureReduceKeepdimsCanonicalization(enableReduceKeepdimsCanonicalization);
+  configureExpandCanonicalization(enableExpandCanonicalization);
   configureQDQDataMovementCanonicalization(
       enableQDQDataMovementCanonicalization);
 #ifdef ONNX_MLIR_ENABLE_KRNL
