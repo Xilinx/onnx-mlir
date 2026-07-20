@@ -10,6 +10,7 @@
 #include <mlir/Interfaces/SideEffectInterfaces.h>
 
 #include "src/Dialect/ONNX/ONNXOps.hpp"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/TensorName.hpp"
 #include "src/Interface/TensorNameInference.hpp"
 
@@ -63,14 +64,14 @@ SmallVector<int64_t> denseToVector(DenseIntElementsAttr denseAttr) {
 }
 
 SmallVector<int64_t> valToVector(Value val) {
-  if (auto constOp = val.getDefiningOp<ONNXConstantOp>()) {
-    if (auto arrayAttr = dyn_cast<ArrayAttr>(constOp.getValueAttr()))
-      return arrayToVector(arrayAttr);
-    else if (auto denseAttr =
-                 dyn_cast<DenseIntElementsAttr>(constOp.getValueAttr()))
-      return denseToVector(denseAttr);
-  }
-  return {};
+  ElementsAttr elements = getDenseOrDisposableConstLikeElements(val);
+  if (!elements || !getElementType(elements.getType()).isIntOrIndex())
+    return {};
+
+  SmallVector<int64_t> vector;
+  for (APInt v : elements.getValues<APInt>())
+    vector.push_back(v.getSExtValue());
+  return vector;
 }
 
 SmallVector<int64_t> axesToVector(Value val, size_t rank) {
