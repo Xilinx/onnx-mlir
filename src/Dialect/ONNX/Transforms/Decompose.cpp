@@ -2606,9 +2606,62 @@ LogicalResult checkScatterNDContiguousIndices(ONNXScatterNDOp scatterNDOp,
   return success();
 }
 
+// Collects, in ascending order, the axes where data and updates differ in
+// size. These are the axes along which a contiguous-block ScatterND writes a
+// sub-range (and where the Split/Concat decomposition peels/rebuilds).
+SmallVector<uint64_t> getScatterNDSplitAxes(
+    ArrayRef<int64_t> dataShape, ArrayRef<int64_t> updateShape) {
+  SmallVector<uint64_t> splitAxes;
+  for (auto [idx, dimData, dimUpdates] :
+      llvm::enumerate(dataShape, updateShape)) {
+    if (dimData != dimUpdates)
+      splitAxes.push_back(idx);
+  }
+  return splitAxes;
+}
+
+// Returns true iff the axes are consecutive (a, a+1, ..., a+N-1).
+bool areAxesConsecutive(ArrayRef<uint64_t> axes) {
+  for (size_t i = 0; i + 1 < axes.size(); ++i)
+    if (axes[i] + 1 != axes[i + 1])
+      return false;
+  return true;
+}
+
+// The written block maps to a single contiguous run once the (consecutive)
+// split axes are merged (row-major flattened) iff, scanning them from outer to
+// inner, after the first axis that writes a partial range (updateSize > 1)
+// every more-inner split axis is full-width (updateSize == dataSize). Trailing
+// non-split (slice) axes are always full-width, so they never break
+// contiguity. When this holds, CanonicalizeScatterNDWithMultiAxis (reshape +
+// merge) is the cheaper lowering; otherwise the block is multi-interval and is
+// lowered by the nested Split+Concat in DecomposeScatterNDPattern.
+//
+// Example (single interval): data [6,4,4], updates [6,2,4], splitAxes {1,2}.
+//   axis 1 is partial (2 < 4) but axis 2 (the inner one) is full-width (4 ==
+//   4). Flattening axes 1,2 into 16, rows [0,1] cover merged offsets [0..7] --
+//   one contiguous run per batch -> returns true (reshape/merge path).
+//
+// Counter-example (multi-interval): data [6,4,4], updates [6,2,3], splitAxes
+//   {1,2}. axis 1 is partial (2 < 4) and the inner axis 2 is also partial
+//   (3 < 4). Flattening into 16, row 0 covers offsets [0..2] and row 1 covers
+//   [4..6] -- two separate runs with a gap at offset 3 -> returns false (nested
+//   Split+Concat path).
+bool isSingleMergedInterval(ArrayRef<int64_t> dataShape,
+    ArrayRef<int64_t> updateShape, ArrayRef<uint64_t> splitAxes) {
+  bool seenPartial = false;
+  for (uint64_t ax : splitAxes) {
+    if (seenPartial && updateShape[ax] != dataShape[ax])
+      return false;
+    if (updateShape[ax] > 1)
+      seenPartial = true;
+  }
+  return true;
+}
+
 } // namespace
 
-// Decomposes ScatterNDs into a single Split and Concat.
+// Decomposes contiguous-block ScatterNDs into Split and Concat operations.
 // We can always split ScatterNDs by splitting the input tensor together with
 // the indices and their updates belonging to that part of the input tensor,
 // performing the ScatterNDs on each split, and the concatenating the result.
@@ -2617,6 +2670,17 @@ LogicalResult checkScatterNDContiguousIndices(ONNXScatterNDOp scatterNDOp,
 // affect their parts of the input tensor), and the middle ScatterND overwrites
 // the full input with sequential indices (i.e. can be replaced by a copy of its
 // update).
+//
+// The write region must be a hyper-rectangular block over one or more
+// *consecutive* differing axes. A single differing axis lowers to one
+// Split + Concat. When several consecutive axes differ, the block is peeled one
+// axis at a time (innermost to outermost) with a Split and re-stitched with a
+// Concat per axis, so a rank-r ScatterND spanning N differing axes lowers to N
+// Split/Concat pairs. The special case where merging the differing axes yields
+// a single contiguous run is left to CanonicalizeScatterNDWithMultiAxis, which
+// produces a cheaper reshape-based single-axis Split + Concat; this pattern
+// therefore only handles the multi-interval multi-axis case (and all
+// single-axis cases).
 //
 // Example:
 // ` %indices = onnx.Constant dense<[[[[0, 1, 0], [0, 1, 1], [0, 1, 2],
@@ -2651,8 +2715,8 @@ LogicalResult checkScatterNDContiguousIndices(ONNXScatterNDOp scatterNDOp,
 // To ensure that this decomposition to split and concat is
 // valid, the following constraints need to hold:
 // - r == rank(updates)
-// - The shape of data and updates differs only in one dimension 'a'
-// -- 'a' is the dimension where the split and concat will happen
+// - The shape of data and updates differs only in consecutive dimensions
+// -- Those are the dimensions where the (nested) split and concat will happen
 // - The update indices need to be contiguous
 // -- The update indices are the last dim in indices
 // -- We call them contiguous, if each idx in indices is indexing the element
@@ -2679,25 +2743,19 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
     const auto updateShape = updatesType.getShape();
     const auto indicesShape = indicesType.getShape();
 
-    const auto splitAxis = [&]() -> uint64_t {
-      // Split at the dim where the update and original data have a
-      // different size
-      for (auto [idx, dimData, dimUpdates] :
-          llvm::enumerate(dataShape, updateShape)) {
-        if (dimData != dimUpdates) {
-          return idx;
-        }
-      }
-      return dataType.getRank() -
-             1; // Edge case, all elements get updated, split on the last dim
-    }();
+    // Collect the axes where data and updates differ. These are the axes along
+    // which the scatter writes a sub-range and where we peel/rebuild.
+    SmallVector<uint64_t> splitAxes =
+        getScatterNDSplitAxes(dataShape, updateShape);
+    if (splitAxes.empty()) {
+      // Edge case: data and updates have the same shape (the whole tensor is
+      // overwritten); split on the last dim.
+      splitAxes.push_back(dataType.getRank() - 1);
+    }
 
-    for (auto [idx, dimData, dimUpdates] :
-        llvm::enumerate(dataShape, updateShape)) {
-      if (idx != splitAxis && dimData != dimUpdates) {
-        return rewriter.notifyMatchFailure(
-            scatterNDOp, "Only a single differing dimension is supported");
-      }
+    if (!areAxesConsecutive(splitAxes)) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "Only consecutive differing axes are supported");
     }
 
     SmallVector<int64_t> indicesAsFlatArray;
@@ -2708,10 +2766,29 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
     const auto indicesLastDimSize = indicesShape.back();
     SubArrayAccessHelper<int64_t> indicesFlatAccessor(
         indicesAsFlatArray, indicesLastDimSize);
+
+    // Real differing axes always lie within the indexed prefix (the trailing
+    // r-k slice axes agree between data and updates), so no explicit prefix
+    // guard is needed here; the empty-splitAxes fallback deliberately splits
+    // the full slice axis (whole-tensor overwrite) and must be allowed through.
+
+    // For two or more differing axes that collapse to a single contiguous run,
+    // the reshape-based merge (CanonicalizeScatterNDWithMultiAxis) is the
+    // cheaper lowering; defer to it. Single-axis scatters are always handled
+    // here.
+    if (splitAxes.size() >= 2 &&
+        isSingleMergedInterval(dataShape, updateShape, splitAxes)) {
+      return rewriter.notifyMatchFailure(scatterNDOp,
+          "Single-interval multi-axis block is handled by "
+          "CanonicalizeScatterNDWithMultiAxis");
+    }
+
     const auto firstIndex =
         indicesFlatAccessor[0]; // Safe, we have checked the length before
-    if (failed(checkScatterNDFirstIndexShift(scatterNDOp, rewriter, firstIndex,
-            [&](uint64_t idx) { return idx == splitAxis; }))) {
+    if (failed(checkScatterNDFirstIndexShift(
+            scatterNDOp, rewriter, firstIndex, [&](uint64_t idx) {
+              return llvm::is_contained(splitAxes, idx);
+            }))) {
       return failure();
     }
 
@@ -2826,26 +2903,28 @@ struct CanonicalizeScatterNDWithMultiAxis
     const auto updateShape = updatesType.getShape();
     const auto indicesShape = indicesType.getShape();
 
-    SmallVector<uint64_t> splitAxes;
-    // Split at the dim where the update and original data have a
-    // different size
-    for (auto [idx, dimData, dimUpdates] :
-        llvm::enumerate(dataShape, updateShape)) {
-      if (dimData != dimUpdates) {
-        splitAxes.push_back(idx);
-      }
-    }
+    // Split at the dims where the update and original data have a
+    // different size.
+    SmallVector<uint64_t> splitAxes =
+        getScatterNDSplitAxes(dataShape, updateShape);
 
     if (splitAxes.size() < 2) {
       return rewriter.notifyMatchFailure(
           scatterNDOp, "This pattern needs at least two split axes");
     }
 
-    for (size_t i = 0; i < splitAxes.size() - 1; ++i) {
-      if (splitAxes[i] + 1 != splitAxes[i + 1]) {
-        return rewriter.notifyMatchFailure(
-            scatterNDOp, "This pattern needs consecutive split axes");
-      }
+    if (!areAxesConsecutive(splitAxes)) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "This pattern needs consecutive split axes");
+    }
+
+    // Merging the axes only yields a valid single-axis scatter when the block
+    // maps to one contiguous run. Multi-interval blocks are left to
+    // DecomposeScatterNDPattern's nested Split+Concat lowering.
+    if (!isSingleMergedInterval(dataShape, updateShape, splitAxes)) {
+      return rewriter.notifyMatchFailure(scatterNDOp,
+          "Merged block is multi-interval; handled by "
+          "DecomposeScatterNDPattern");
     }
 
     SmallVector<int64_t> indicesAsFlatArray;
