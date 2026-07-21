@@ -75,10 +75,6 @@ struct InputDictatesRequantizePattern : public OpRewritePattern<OpType> {
     auto resultTy = cast<RankedTensorType>(result.getType());
     auto retypedTy = RankedTensorType::get(resultTy.getShape(), inQ);
 
-    // Recreate the data-flow op producing the input quant type. Drop the
-    // inherited ResultNames so the greedy driver's ResultNamesUpdater listener
-    // can derive a fresh intermediate name for it; the boundary name migrates
-    // onto the Requantize via the replaceOp below.
     auto newDataFlow = rewriter.create<OpType>(
         op.getLoc(), TypeRange{retypedTy}, op->getOperands(), op->getAttrs());
     newDataFlow->removeAttr("ResultNames");
