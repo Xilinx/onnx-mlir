@@ -202,3 +202,17 @@ func.func @per_axis_skipped(%arg0: tensor<16x3x3x3x!quant.uniform<i8:f32:0, {0.1
 // CHECK-LABEL: func.func @per_axis_skipped
 // CHECK-NOT: onnx.XCOMPILERRequantize
 // CHECK: onnx.Identity
+
+// -----
+// ResultNames on a single-input data-flow op migrates onto the inserted
+// Requantize (the boundary edge consumers read), not the retyped data-flow op.
+func.func @transpose_resultnames_migrates(%arg0: tensor<1x8x16x4x!quant.uniform<i8:f32, 0.1>>) -> tensor<1x8x4x16x!quant.uniform<i8:f32, 0.2>> {
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 1, 3, 2], ResultNames = ["X"]} : (tensor<1x8x16x4x!quant.uniform<i8:f32, 0.1>>) -> tensor<1x8x4x16x!quant.uniform<i8:f32, 0.2>>
+  return %0 : tensor<1x8x4x16x!quant.uniform<i8:f32, 0.2>>
+}
+// CHECK-LABEL: func.func @transpose_resultnames_migrates
+// CHECK: %[[T:.*]] = "onnx.Transpose"(%arg0)
+// CHECK-NOT: ResultNames = ["X"]
+// CHECK: %[[REQ:.*]] = "onnx.XCOMPILERRequantize"(%[[T]])
+// CHECK-SAME: ResultNames = ["X"]
+// CHECK: return %[[REQ]]
