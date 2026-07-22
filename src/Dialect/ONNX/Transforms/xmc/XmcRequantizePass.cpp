@@ -75,15 +75,16 @@ struct InputDictatesRequantizePattern : public OpRewritePattern<OpType> {
     auto resultTy = cast<RankedTensorType>(result.getType());
     auto retypedTy = RankedTensorType::get(resultTy.getShape(), inQ);
 
-    rewriter.modifyOpInPlace(op, [&]() { result.setType(retypedTy); });
+    auto newDataFlow = rewriter.create<OpType>(
+        op.getLoc(), TypeRange{retypedTy}, op->getOperands(), op->getAttrs());
+    newDataFlow->removeAttr("ResultNames");
 
-    rewriter.setInsertionPointAfter(op);
-    auto requant =
-        rewriter.create<XCOMPILERRequantizeOp>(op.getLoc(), resultTy, result,
-            buildScaleAttr(rewriter, inQ), buildZeroPointAttr(rewriter, inQ),
-            buildScaleAttr(rewriter, outQ), buildZeroPointAttr(rewriter, outQ));
+    auto requant = rewriter.create<XCOMPILERRequantizeOp>(op.getLoc(), resultTy,
+        newDataFlow->getResult(0), buildScaleAttr(rewriter, inQ),
+        buildZeroPointAttr(rewriter, inQ), buildScaleAttr(rewriter, outQ),
+        buildZeroPointAttr(rewriter, outQ));
 
-    rewriter.replaceAllUsesExcept(result, requant.getResult(), requant);
+    rewriter.replaceOp(op, requant.getResult());
     return success();
   }
 };
