@@ -176,6 +176,16 @@ func.func @positive_axis_layer_normalization(%arg0: tensor<2x3x4xf32>, %scale: t
 
 // -----
 
+func.func @positive_axis_rms_layer_normalization(%arg0: tensor<2x3x4xf32>, %scale: tensor<4xf32>) -> tensor<2x3x4xf32> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %0, %1 = "onnx.RMSLayerNormalization"(%arg0, %scale, %none) {axis = -1 : si64, epsilon = 9.99999974E-6 : f32, stash_type = 1 : si64} : (tensor<2x3x4xf32>, tensor<4xf32>, none) -> (tensor<2x3x4xf32>, none)
+  return %0 : tensor<2x3x4xf32>
+// CHECK-LABEL: func.func @positive_axis_rms_layer_normalization
+// CHECK: "onnx.RMSLayerNormalization"{{.*}}axis = 2 : si64
+}
+
+// -----
+
 func.func @positive_axis_logsoftmax(%arg0: tensor<2x3x4xf32>) -> tensor<2x3x4xf32> {
   %0 = "onnx.LogSoftmax"(%arg0) {axis = -1 : si64} : (tensor<2x3x4xf32>) -> tensor<2x3x4xf32>
   return %0 : tensor<2x3x4xf32>

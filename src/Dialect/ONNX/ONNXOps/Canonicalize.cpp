@@ -22,6 +22,7 @@
 #include <numeric>
 
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
+#include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/Dialect/Traits.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
@@ -1839,9 +1840,9 @@ public:
     }
 
     MultiDialectBuilder<OnnxBuilder> create(rewriter, expandOp.getLoc());
+    Value repeatsValue = create.onnx.constantInt64(repeats);
     Value tile = rewriter.create<ONNXTileOp>(expandOp.getLoc(),
-        expandOp.getOutput().getType(), expandOp.getInput(),
-        create.onnx.constantInt64(repeats));
+        expandOp.getOutput().getType(), expandOp.getInput(), repeatsValue);
     rewriter.replaceOp(expandOp, tile);
     return success();
   }
@@ -3274,6 +3275,28 @@ struct PullReluLikeOpsThroughSplitPattern
     for (Operation *op : reluLikeOps) {
       rewriter.replaceOp(op, op->getOperands());
     }
+    return success();
+  }
+};
+
+struct SoftmaxNegativeAxisPattern : public OpRewritePattern<ONNXSoftmaxOp> {
+  using OpRewritePattern<ONNXSoftmaxOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(
+      ONNXSoftmaxOp softmaxOp, PatternRewriter &rewriter) const final {
+
+    auto inputType = dyn_cast<RankedTensorType>(softmaxOp.getInput().getType());
+    if (!inputType)
+      return rewriter.notifyMatchFailure(
+          softmaxOp, "Input is not a ranked tensor");
+
+    const int64_t axis = softmaxOp.getAxis();
+    const int64_t rank = inputType.getRank();
+
+    if (axis >= 0)
+      return failure(); // nothing to do.
+    assert(-rank <= axis && "axis is out of range");
+    rewriter.modifyOpInPlace(
+        softmaxOp, [&]() { softmaxOp.setAxis(rank + axis); });
     return success();
   }
 };
@@ -5014,6 +5037,7 @@ void ONNXSizeOp::getCanonicalizationPatterns(
 void ONNXSoftmaxOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<SoftmaxSizeOneAxisPattern>(context);
+  results.insert<SoftmaxNegativeAxisPattern>(context);
 }
 
 /// on the ONNXSoftmaxV11Op.

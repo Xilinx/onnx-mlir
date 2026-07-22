@@ -40,6 +40,7 @@ std::string march;                                     // common for both
 InstrumentStages instrumentStage;                      // common for both
 bool onnxConstPropRoundFPToInt;                        // common for both
 int onnxConstPropExpansionBound;                       // common for both
+int64_t onnxConstPropMaxTileFoldSize;                  // common for both
 std::vector<std::string> onnxConstPropDisablePatterns; // common for both
 bool enableONNXHybridPass;                             // common for both
 std::vector<std::string> functionsToDecompose;         // common for both
@@ -224,6 +225,16 @@ static llvm::cl::opt<int, true> onnxConstPropExpansionBoundOpt(
         "the aggregate operands' sizes by more than this factor\n"
         "Set to -1 to always propagate, which is the default."),
     llvm::cl::location(onnxConstPropExpansionBound), llvm::cl::init(-1),
+    llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<int64_t, true> onnxConstPropMaxTileFoldSizeOpt(
+    "onnx-const-prop-max-tile-fold-size",
+    llvm::cl::desc(
+        "Maximum size in bytes of the constant produced when constant "
+        "propagating an onnx.Tile.\n"
+        "The Tile is not folded if the resulting constant would exceed this "
+        "size.\nSet to 0 (the default) to disable the limit."),
+    llvm::cl::location(onnxConstPropMaxTileFoldSize), llvm::cl::init(0),
     llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::list<std::string, std::vector<std::string>>

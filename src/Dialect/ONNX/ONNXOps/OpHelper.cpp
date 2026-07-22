@@ -431,12 +431,12 @@ static std::optional<ONNXAxisFieldConfig> getAxisAttrConfig(Operation *op) {
       name == "onnx.DequantizeLinear" || name == "onnx.Gather" ||
       name == "onnx.GatherElements" || name == "onnx.Hardmax" ||
       name == "onnx.LayerNormalization" || name == "onnx.LogSoftmax" ||
-      name == "onnx.LpNormalization" || name == "onnx.QuantizeLinear" ||
-      name == "onnx.Scatter" || name == "onnx.ScatterElements" ||
-      name == "onnx.Softmax" || name == "onnx.Split" ||
-      name == "onnx.SplitV11" || name == "onnx.SplitV13" ||
-      name == "onnx.SplitToSequence" || name == "onnx.TopK" ||
-      name == "onnx.Unique")
+      name == "onnx.LpNormalization" || name == "onnx.RMSLayerNormalization" ||
+      name == "onnx.QuantizeLinear" || name == "onnx.Scatter" ||
+      name == "onnx.ScatterElements" || name == "onnx.Softmax" ||
+      name == "onnx.Split" || name == "onnx.SplitV11" ||
+      name == "onnx.SplitV13" || name == "onnx.SplitToSequence" ||
+      name == "onnx.TopK" || name == "onnx.Unique")
     return ONNXAxisFieldConfig{
         ONNXAxisOperandKind::Scalar, ONNXAxisRankKind::FirstOperand};
 
@@ -674,6 +674,28 @@ bool extractSlice1DConst(mlir::ONNXSliceOp sliceOp, int64_t &axis,
          extractI64Scalar(sliceOp.getEnds(), end) &&
          extractI64Scalar(sliceOp.getAxes(), axis) &&
          extractI64Scalar(sliceOp.getSteps(), step);
+}
+
+int64_t indexToOffset(
+    llvm::ArrayRef<int64_t> shape, llvm::ArrayRef<int64_t> index) {
+  int64_t offset = 0;
+  for (size_t i = 0; i < shape.size(); i++) {
+    offset = offset * shape[i] + index[i];
+  }
+  return offset;
+}
+
+SmallVector<int64_t> offsetToIndex(
+    llvm::ArrayRef<int64_t> shape, int64_t offset) {
+  auto rank = shape.size();
+  // The rank of the index will be equal to the rank of the shape
+  SmallVector<int64_t> resultIndex;
+  for (int32_t i = rank - 1; i >= 0; i--) {
+    resultIndex.push_back(offset % shape[i]);
+    offset /= shape[i];
+  }
+  std::reverse(resultIndex.begin(), resultIndex.end());
+  return resultIndex;
 }
 
 //===----------------------------------------------------------------------===//
