@@ -58,7 +58,6 @@ add_onnx_mlir_library(OMONNXRewrite
   ScrubDisposablePass.cpp
   SetONNXNodeName.cpp
   Recompose.cpp
-  SliceOpOptimization.cpp
   LegalizeQuarkQuantizedOps.cpp
   DedupDQs.cpp
   ONNXCSE.cpp

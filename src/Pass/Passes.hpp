@@ -99,7 +99,7 @@ void configureSliceCanonicalization(bool enableSliceCanonicalization);
 bool isSliceCanonicalizationEnabled();
 
 // Populate the (opt-in) Slice-through-Slice/Tile/Pad/Concat rewrite patterns.
-// Defined in Dialect/ONNX/Transforms/SliceOpOptimization.cpp.
+// Defined in Dialect/ONNX/ONNXOps/Tensor/Slice.cpp.
 void populateSliceOpOptimizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::MLIRContext *context);
 
