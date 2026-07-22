@@ -2017,6 +2017,7 @@ struct ONNXTransposeOptimizationPass
     patterns.add<PushTransposeThroughAxisOp<ONNXReduceSumOp>>(context);
 
     patterns.add<PushTransposeThroughConcat>(context);
+    patterns.add<PushTransposeThroughConcatWithConst>(context);
 
     // Apply patterns with greedy rewrite
     GreedyRewriteConfig config;
