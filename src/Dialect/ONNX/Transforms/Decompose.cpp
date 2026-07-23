@@ -2811,6 +2811,20 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
     // `before, band, after = split(data, [s, b, D-s-b]); concat(before,
     // updates, after)` (before/after may be zero-sized, matching prior
     // behavior).
+    //
+    // Example: data<4x4x8>, updates<2x2x8> writing a 2x2 block at offset [1,1]
+    // (splitAxes = {0, 1}). Peel inner->outer, i.e. axis 1 then axis 0:
+    //   axis 1: split<4x4x8> -> before<4x1x8>, band<4x2x8>, after<4x1x8>
+    //           keep before/after; descend into band<4x2x8>.
+    //   axis 0: split<4x2x8> -> before<1x2x8>, band<2x2x8>, after<1x2x8>
+    //           keep before/after; band<2x2x8> is the block (discarded).
+    // Rebuild outer->inner starting from updates<2x2x8>:
+    //   axis 0: concat(before<1x2x8>, updates<2x2x8>, after<1x2x8>) -> <4x2x8>
+    //   axis 1: concat(before<4x1x8>,        <4x2x8>, after<4x1x8>) -> <4x4x8>
+    // yielding the original data with the 2x2 block replaced by the updates.
+    //
+    // The number of split axes drives the cost: N split axes produce exactly N
+    // (3-way) Splits during the peel and N Concats during the rebuild.
     onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
         rewriter, scatterNDOp->getLoc());
     const Type elemTy = dataType.getElementType();
@@ -2831,22 +2845,29 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
     Value current = scatterNDOp.getData();
     SmallVector<int64_t> currentShape(dataShape);
     for (uint64_t axis : llvm::reverse(splitAxes)) {
-      const int64_t s = blockStart(axis);
-      const int64_t b = updateShape[axis];
-      const int64_t after = currentShape[axis] - s - b;
+      // Split this axis into three contiguous slabs: the leading "before" slab
+      // [0, start), the "band" [start, start + bandSize) that holds the block
+      // region, and the trailing "after" slab [start + bandSize, dim). The
+      // before/after slabs are kept as-is; the band descends into the next
+      // peel. Either surrounding slab may be zero-sized when the block touches
+      // an axis boundary.
+      const int64_t before = blockStart(axis);    // length of the before slab
+      const int64_t bandSize = updateShape[axis]; // block extent on this axis
+      const int64_t after =
+          currentShape[axis] - before - bandSize; // after slab
 
-      auto pieceTy = [&](int64_t sz) {
-        SmallVector<int64_t> shp(currentShape);
-        shp[axis] = sz;
-        return RankedTensorType::get(shp, elemTy);
+      auto pieceTy = [&](int64_t size) {
+        SmallVector<int64_t> shape(currentShape);
+        shape[axis] = size;
+        return RankedTensorType::get(shape, elemTy);
       };
-      ValueRange parts =
-          create.onnx.split({pieceTy(s), pieceTy(b), pieceTy(after)}, current,
-              create.onnx.constantInt64({s, b, after}), axis);
+      ValueRange parts = create.onnx.split(
+          {pieceTy(before), pieceTy(bandSize), pieceTy(after)}, current,
+          create.onnx.constantInt64({before, bandSize, after}), axis);
 
       kept.push_back({axis, parts[0], parts[2]});
       current = parts[1]; // descend into the block band
-      currentShape[axis] = b;
+      currentShape[axis] = bandSize;
     }
 
     // Rebuild outermost split axis to innermost (reverse of the peel order),
