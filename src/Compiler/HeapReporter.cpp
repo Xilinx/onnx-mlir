@@ -43,8 +43,8 @@ void logMessage(StringRef logFilename, StringRef msg,
 
 HeapReporter::HeapReporter(std::string logFilename,
     std::vector<std::string> beforePasses, std::vector<std::string> afterPasses)
-    : logFilename(logFilename), beforePassesSet(beforePasses),
-      afterPassesSet(afterPasses) {
+    : logFilename(logFilename), beforePassesSet(llvm::from_range, beforePasses),
+      afterPassesSet(llvm::from_range, afterPasses) {
 
   reportBegin("onnx-mlir heap report"
               "\n--report-heap-before='" +
