@@ -74,11 +74,11 @@ func.func @test_slice_reverse_tensor(%arg0: tensor<3x2xi64>) -> tensor<3x2xi64> 
 
 // CHECK-LABEL:  func.func @test_slice_reverse_tensor
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3x2xi64>) -> tensor<3x2xi64> {
-// CHECK-DAG:       [[STEPS_:%.+]] = onnx.Constant dense<-1> : tensor<1xi64>
-// CHECK-DAG:       [[ENDS_:%.+]] = onnx.Constant dense<-9223372036854775807> : tensor<1xi64>
-// CHECK-DAG:       [[AXES_:%.+]] = onnx.Constant dense<0> : tensor<1xi64>
-// CHECK-DAG:       [[STARTS_:%.+]] = onnx.Constant dense<2> : tensor<1xi64>
-// CHECK:           [[VAR_3_:%.+]] = "onnx.Slice"([[PARAM_0_]], [[STARTS_]], [[ENDS_]], [[AXES_]], [[STEPS_]]) {onnx_node_name = "/Slice"} : (tensor<3x2xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<3x2xi64>
+// CHECK-DAG:       [[STARTS_:%.+]] = onnx.Constant dense<[2, 0]> : tensor<2xi64>
+// CHECK-DAG:       [[ENDS_:%.+]] = onnx.Constant dense<[-4, 2]> : tensor<2xi64>
+// CHECK-DAG:       [[AXES_:%.+]] = onnx.Constant dense<[0, 1]> : tensor<2xi64>
+// CHECK-DAG:       [[STEPS_:%.+]] = onnx.Constant dense<[-1, 1]> : tensor<2xi64>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.Slice"([[PARAM_0_]], [[STARTS_]], [[ENDS_]], [[AXES_]], [[STEPS_]]) {onnx_node_name = "/Slice"} : (tensor<3x2xi64>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>) -> tensor<3x2xi64>
 // CHECK:           return [[VAR_3_]] : tensor<3x2xi64>
 
 // -----

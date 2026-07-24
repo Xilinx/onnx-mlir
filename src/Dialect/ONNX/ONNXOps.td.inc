@@ -1275,7 +1275,6 @@ def ONNXClipOp:ONNX_Op<"Clip",
       return sh;
     }
   }];
-  let hasCanonicalizer = 1;
   let hasFolder = 1;
 }
 

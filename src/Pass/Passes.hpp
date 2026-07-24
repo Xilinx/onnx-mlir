@@ -98,6 +98,12 @@ void configureSliceCanonicalization(bool enableSliceCanonicalization);
 
 bool isSliceCanonicalizationEnabled();
 
+// Populate the semantics-preserving Slice operand normalization patterns.
+// Always available via ONNXSliceOp canonicalization. Defined in
+// Dialect/ONNX/ONNXOps/Tensor/Slice.cpp.
+void populateSliceOperandNormalizationPatterns(
+    mlir::RewritePatternSet &patterns, mlir::MLIRContext *context);
+
 // Populate the (opt-in) Slice-through-Slice/Tile/Pad/Concat rewrite patterns.
 // Defined in Dialect/ONNX/ONNXOps/Tensor/Slice.cpp.
 void populateSliceOpOptimizationPatterns(

@@ -9,7 +9,8 @@
 // =============================================================================
 //
 // This file provides definition of ONNX dialect Slice operation, including its
-// shape inference, folder, and the (opt-in) Slice-rooted rewrite patterns.
+// shape inference, folder, operand normalization, and (opt-in) Slice-rooted
+// graph optimization rewrite patterns.
 //
 // The Slice-through-Tile/Pad/Concat rewrites are adapted from the MLIR TOSA
 // patterns in mlir/lib/Dialect/Tosa/IR/TosaCanonicalizations.cpp.
@@ -29,7 +30,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 
-#include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
@@ -55,8 +55,15 @@ LogicalResult ONNXSliceOpShapeHelper::computeShape() {
   SmallVector<int64_t, 4> axesIntLit;
   Value axes = operandAdaptor.getAxes();
   if (isNoneValue(axes)) {
-    // If `axes` are omitted, they are set to `[0, ..., nDim-1]`."
-    for (uint64_t i = 0; i < dataRank; ++i)
+    // ONNX: if `axes` are omitted, default to `[0, ..., len(starts)-1]`.
+    auto startsTy =
+        mlir::dyn_cast<RankedTensorType>(operandAdaptor.getStarts().getType());
+    if (!startsTy)
+      return success();
+    int64_t startsLen = startsTy.getShape()[0];
+    if (startsLen == ShapedType::kDynamic)
+      return success();
+    for (int64_t i = 0; i < startsLen; ++i)
       axesIntLit.emplace_back(i);
   } else {
     SmallVector<IndexExpr, 4> axesSymbol;
@@ -170,8 +177,7 @@ LogicalResult ONNXSliceOpShapeHelper::computeShape() {
 // Shape Inference
 //===----------------------------------------------------------------------===//
 
-LogicalResult ONNXSliceOp::inferShapes(
-    std::function<void(Region &)> doShapeInference) {
+LogicalResult ONNXSliceOp::inferShapes(std::function<void(Region &)>) {
   // Cannot infer shape if no shape exists.
   if (!hasShapeAndRank(getData()))
     return success();
@@ -180,124 +186,11 @@ LogicalResult ONNXSliceOp::inferShapes(
     return success();
 
   Value axes = getAxes();
-  Value steps = getSteps();
 
   // Cannot infer shape if axes is not a constant. It can be a constant after
   // several rounds of shape-inference and constant propagation.
   if (!isNoneValue(axes) && !isConstLikeValue(axes))
     return success();
-
-  {
-    OpBuilder builder(this->getContext());
-    OnnxBuilder createONNX(builder, this->getLoc());
-    builder.setInsertionPoint(*this);
-
-    auto buildI64Const = [&](ArrayRef<int64_t> vals) -> Value {
-      auto ty = RankedTensorType::get(
-          {static_cast<int64_t>(vals.size())}, builder.getI64Type());
-      return createONNX.constant(DenseElementsAttr::get(ty, vals));
-    };
-
-    // Helper: return the static length of the starts tensor, or -1 if not
-    // yet known (unranked type or dynamic first dim).  Callers skip
-    // materialisation and let a later inferShapes round handle it.
-    auto getStartsLen = [&]() -> std::optional<int64_t> {
-      auto ty = mlir::dyn_cast<RankedTensorType>(getStarts().getType());
-      if (!ty)
-        return std::nullopt;
-      int64_t n = ty.getShape()[0];
-      return (n == ShapedType::kDynamic) ? std::nullopt
-                                         : std::optional<int64_t>(n);
-    };
-
-    // If axes is not specified, default to [0, ..., len(starts)-1].
-    if (isNoneValue(axes)) {
-      auto maybeN = getStartsLen();
-      if (!maybeN)
-        return success(); // starts shape not yet known; retry later
-      int64_t n = *maybeN;
-      SmallVector<int64_t> vals;
-      for (int64_t s = 0; s < n; ++s)
-        vals.push_back(s);
-      this->setOperand(3, buildI64Const(vals));
-    }
-
-    // If steps is not specified, default to [1, ..., 1] (same length as
-    // starts).
-    if (isNoneValue(steps)) {
-      auto maybeN = getStartsLen();
-      if (!maybeN)
-        return success(); // starts shape not yet known; retry later
-      int64_t n = *maybeN;
-      SmallVector<int64_t> vals(n, 1);
-      this->setOperand(4, buildI64Const(vals));
-    }
-
-    // Normalize axes to non-negative, and starts/ends steps. Ends are only
-    // normalized for positive steps. This runs after None axes/steps have been
-    // materialized above, so all four operands are now explicit constants.
-
-    auto canonicalize = [&]() {
-      const auto dataTy = mlir::dyn_cast<RankedTensorType>(getData().getType());
-      if (!dataTy || !dataTy.hasStaticShape()) {
-        return;
-      }
-      SmallVector<int64_t> axesVals, stepsVals, startsVals, endsVals;
-      if (!onnx_mlir::getI64ValuesFromONNXConstantOp(getAxes(), axesVals) ||
-          !onnx_mlir::getI64ValuesFromONNXConstantOp(getSteps(), stepsVals) ||
-          !onnx_mlir::getI64ValuesFromONNXConstantOp(getStarts(), startsVals) ||
-          !onnx_mlir::getI64ValuesFromONNXConstantOp(getEnds(), endsVals)) {
-        return;
-      }
-      const int64_t rank = dataTy.getRank();
-      const auto dataShape = dataTy.getShape();
-      const auto numAxes = static_cast<int64_t>(axesVals.size());
-      SmallVector<int64_t> newAxes(axesVals);
-      SmallVector<int64_t> newStarts(startsVals);
-      SmallVector<int64_t> newEnds(endsVals);
-
-      // A step of 0 is invalid
-      if (llvm::any_of(stepsVals, [](int64_t s) { return s == 0; })) {
-        return;
-      }
-
-      for (int64_t i = 0; i < numAxes; ++i) {
-        int64_t axis = newAxes[i];
-        if (axis < 0)
-          axis += rank;
-        if (axis < 0 || axis >= rank) {
-          return;
-        }
-        newAxes[i] = axis;
-
-        const int64_t step = stepsVals[i];
-        const int64_t dim = dataShape[axis];
-
-        auto wrapAndClamp = [dim](int64_t v) -> int64_t {
-          if (v < 0)
-            v = (v < -dim) ? 0 : v + dim;
-          return std::clamp<int64_t>(v, 0LL, dim);
-        };
-        const int64_t startHi =
-            (step > 0) ? dim : std::max<int64_t>(0, dim - 1);
-        newStarts[i] =
-            std::clamp<int64_t>(wrapAndClamp(newStarts[i]), 0, startHi);
-        if (step < 0)
-          continue; // skip end: negative-step -1 sentinel not
-                    // idempotent
-        newEnds[i] = wrapAndClamp(newEnds[i]);
-      }
-
-      if (newAxes != axesVals)
-        this->setOperand(3, buildI64Const(newAxes));
-      if (newStarts != startsVals)
-        this->setOperand(1, buildI64Const(newStarts));
-      if (newEnds != endsVals)
-        this->setOperand(2, buildI64Const(newEnds));
-    };
-
-    canonicalize();
-  }
 
   Type elementType =
       mlir::cast<ShapedType>(getData().getType()).getElementType();
@@ -337,11 +230,6 @@ OpFoldResult ONNXSliceOp::fold(FoldAdaptor adaptor) {
 //===----------------------------------------------------------------------===//
 // Canonicalization patterns
 //===----------------------------------------------------------------------===//
-//
-// The (opt-in) Slice-through-Slice/Tile/Pad/Concat rewrite patterns. Passes
-// that run canonicalization add them via populateSliceOpOptimizationPatterns()
-// when --enable-slice-canonicalization is set (see
-// configureSliceCanonicalization / isSliceCanonicalizationEnabled).
 
 namespace onnx_mlir {
 namespace {
@@ -450,6 +338,49 @@ struct NormalizeSliceOperandsPattern : public OpRewritePattern<ONNXSliceOp> {
 
   LogicalResult matchAndRewrite(
       ONNXSliceOp sliceOp, PatternRewriter &rewriter) const override {
+    auto dataType = dyn_cast<RankedTensorType>(sliceOp.getData().getType());
+    if (!dataType || !dataType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          sliceOp, "slice data must have static shape");
+
+    // Materialize omitted axes/steps per ONNX before full-rank normalization.
+    if (isNoneValue(sliceOp.getAxes()) || isNoneValue(sliceOp.getSteps())) {
+      auto startsTy = dyn_cast<RankedTensorType>(sliceOp.getStarts().getType());
+      if (!startsTy || startsTy.getShape()[0] == ShapedType::kDynamic)
+        return rewriter.notifyMatchFailure(
+            sliceOp, "starts length must be static to materialize axes/steps");
+
+      const int64_t n = startsTy.getShape()[0];
+      SmallVector<int64_t> axesVals;
+      if (isNoneValue(sliceOp.getAxes())) {
+        for (int64_t i = 0; i < n; ++i)
+          axesVals.push_back(i);
+      } else if (!getI64ValuesFromONNXConstantOp(sliceOp.getAxes(), axesVals)) {
+        return rewriter.notifyMatchFailure(
+            sliceOp, "axes must be a static constant");
+      }
+
+      SmallVector<int64_t> stepsVals;
+      if (isNoneValue(sliceOp.getSteps())) {
+        stepsVals.assign(n, 1);
+      } else if (!getI64ValuesFromONNXConstantOp(
+                     sliceOp.getSteps(), stepsVals)) {
+        return rewriter.notifyMatchFailure(
+            sliceOp, "steps must be a static constant");
+      }
+
+      Value axesValue =
+          createI64TensorConstant(rewriter, sliceOp.getLoc(), axesVals);
+      Value stepsValue =
+          createI64TensorConstant(rewriter, sliceOp.getLoc(), stepsVals);
+      auto materializedSlice = rewriter.create<ONNXSliceOp>(sliceOp.getLoc(),
+          sliceOp.getOutput().getType(), sliceOp.getData(), sliceOp.getStarts(),
+          sliceOp.getEnds(), axesValue, stepsValue);
+      materializedSlice->setAttrs(sliceOp->getAttrDictionary());
+      rewriter.replaceOp(sliceOp, materializedSlice.getOutput());
+      return success();
+    }
+
     NormalizedSliceParams params;
     if (failed(getNormalizedSliceParams(sliceOp, params)))
       return rewriter.notifyMatchFailure(
@@ -915,9 +846,13 @@ struct SliceConcatPattern : public OpRewritePattern<ONNXSliceOp> {
 
 } // namespace
 
-void populateSliceOpOptimizationPatterns(
+void populateSliceOperandNormalizationPatterns(
     RewritePatternSet &patterns, MLIRContext *context) {
   patterns.add<NormalizeSliceOperandsPattern>(context);
+}
+
+void populateSliceOpOptimizationPatterns(
+    RewritePatternSet &patterns, MLIRContext *context) {
   patterns.add<FuseSliceSlicePattern>(context);
   patterns.add<SliceTilePattern>(context);
   patterns.add<SlicePadPattern>(context);
