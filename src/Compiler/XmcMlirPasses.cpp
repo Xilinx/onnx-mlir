@@ -84,9 +84,7 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   if (opts.enableMatmulToConv)
     pm.addNestedPass<func::FuncOp>(
         onnx_mlir::createConvertMatMulToXFEConvPass());
-  // Covered by createXmcRequantizePass (propagation-induced subset).
-  // pm.addNestedPass<func::FuncOp>(
-  //     onnx_mlir::createConvertSCastPairToRequantizePass());
+
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createTransferSoftmaxAxisToLastPass());
   pm.addNestedPass<func::FuncOp>(
@@ -94,6 +92,8 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createONNXTransposeOptimizationPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createConstPropONNXToONNXPass());
+  pm.addNestedPass<func::FuncOp>(
+      onnx_mlir::createConvertSCastPairToRequantizePass());
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createRemoveContinuousTransposeWithReshapePass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createTransferOp3dToOp2dPass());
