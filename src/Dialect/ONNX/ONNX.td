@@ -238,6 +238,15 @@ class ONNX_Op<string mnemonic, list<Trait> traits = []> :
 class OpVersionTrait<int version>
   : ParamNativeOpTrait<"OpVersionTrait", !cast<string>(version)>;
 
+def IsElementwiseUnaryTrait
+  : NativeOpTrait<"IsElementwiseUnary">;
+
+def IsElementwiseBinaryTrait
+  : NativeOpTrait<"IsElementwiseBinary">;
+
+def IsCommutativeElementwiseBinaryTrait
+  : NativeOpTrait<"IsCommutativeElementwiseBinary">;
+
 // The tablegen code onnxop.in is generated with gen_doc.py
 // clone and install onnx
 //    git clone --recursive https://github.com/onnx/onnx.git

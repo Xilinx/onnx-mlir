@@ -730,6 +730,11 @@ OpsWithSameOperandsAndResultShape = [
     "Tanh",
 ]
 
+OpsWithElementwiseUnary = OpsWithSameOperandsAndResultShape
+
+OpsWithElementwiseBinary = ["Add", "Sub", "Mul", "Div", "Min", "Max"]
+OpsWithCommutativeElementwiseBinary = ["Add", "Mul", "Min", "Max"]
+
 # Op with Helper functions
 OpsWithHelpers = {
     "EyeLike": """
@@ -1582,6 +1587,14 @@ def gen_op_def(schema, with_version=False):
     # Generate SameOperandsAndResultShape traits.
     if mlir_op_name in OpsWithSameOperandsAndResultShape:
         traits.append("SameOperandsAndResultShape")
+
+    # Generate elementwise traits.
+    if mlir_op_name in OpsWithElementwiseUnary:
+        traits.append("IsElementwiseUnaryTrait")
+    if mlir_op_name in OpsWithElementwiseBinary:
+        traits.append("IsElementwiseBinaryTrait")
+    if mlir_op_name in OpsWithCommutativeElementwiseBinary:
+        traits.append("IsCommutativeElementwiseBinaryTrait")
 
     # Generate ConstantLike traits.
     if mlir_op_name in OpsWithConstantLike:
