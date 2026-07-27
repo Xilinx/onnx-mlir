@@ -98,9 +98,8 @@ void configureSliceCanonicalization(bool enableSliceCanonicalization);
 
 bool isSliceCanonicalizationEnabled();
 
-// Populate the semantics-preserving Slice operand normalization patterns.
-// Always available via ONNXSliceOp canonicalization. Defined in
-// Dialect/ONNX/ONNXOps/Tensor/Slice.cpp.
+// Populate the (opt-in) semantics-preserving Slice operand normalization
+// patterns. Defined in Dialect/ONNX/ONNXOps/Tensor/Slice.cpp.
 void populateSliceOperandNormalizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::MLIRContext *context);
 

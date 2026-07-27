@@ -9,8 +9,8 @@
 // =============================================================================
 //
 // This file provides definition of ONNX dialect Slice operation, including its
-// shape inference, folder, operand normalization, and (opt-in) Slice-rooted
-// graph optimization rewrite patterns.
+// shape inference, folder, and the (opt-in) operand normalization and
+// Slice-rooted graph optimization rewrite patterns.
 //
 // The Slice-through-Tile/Pad/Concat rewrites are adapted from the MLIR TOSA
 // patterns in mlir/lib/Dialect/Tosa/IR/TosaCanonicalizations.cpp.

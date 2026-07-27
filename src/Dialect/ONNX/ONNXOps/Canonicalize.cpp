@@ -5190,9 +5190,10 @@ void ONNXShapeOp::getCanonicalizationPatterns(
 /// on the ONNXSliceOp.
 void ONNXSliceOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
-  populateSliceOperandNormalizationPatterns(results, context);
-  if (enableSliceCanonicalization)
+  if (enableSliceCanonicalization) {
+    populateSliceOperandNormalizationPatterns(results, context);
     populateSliceOpOptimizationPatterns(results, context);
+  }
 }
 
 /// on the ONNXSubOp.

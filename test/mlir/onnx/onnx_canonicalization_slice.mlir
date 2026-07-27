@@ -1,10 +1,11 @@
 // Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
-// RUN: onnx-mlir-opt --canonicalize %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --canonicalize --enable-slice-canonicalization %s -split-input-file | FileCheck %s
 //
 // Tests for NormalizeSliceOperandsPattern: the canonical owner for static
-// ONNX Slice operand normalization. Canonicalization materializes omitted
-// axes/steps, expands partial-rank operands to full rank, and normalizes
-// starts/ends/axes per ONNXSliceOpShapeHelper semantics.
+// ONNX Slice operand normalization, registered together with the other
+// (opt-in) Slice canonicalizations. It materializes omitted axes/steps,
+// expands partial-rank operands to full rank, and normalizes starts/ends/axes
+// per ONNXSliceOpShapeHelper semantics.
 
 // -----
 // INT64_MAX end clamped to dim (64); explicit step=1 and axis=3 preserved.

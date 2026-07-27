@@ -387,10 +387,7 @@ func.func @positive_axes_slice_operand(%arg0: tensor<2x3x4xf32>) -> tensor<2x3x2
   %0 = "onnx.Slice"(%arg0, %starts, %ends, %axes, %steps) : (tensor<2x3x4xf32>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<2x3x2xf32>
   return %0 : tensor<2x3x2xf32>
 // CHECK-LABEL: func.func @positive_axes_slice_operand
-// CHECK-DAG: onnx.Constant dense<0> : tensor<3xi64>
-// CHECK-DAG: onnx.Constant dense<[2, 3, 2]> : tensor<3xi64>
-// CHECK-DAG: onnx.Constant dense<[0, 1, 2]> : tensor<3xi64>
-// CHECK-DAG: onnx.Constant dense<1> : tensor<3xi64>
+// CHECK: onnx.Constant dense<2> : tensor<1xi64>
 // CHECK: "onnx.Slice"
 }
 

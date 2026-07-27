@@ -108,14 +108,13 @@ func.func @slice_moves_dq_and_q(%arg0: tensor<1x4xui8>, %arg1: tensor<1x4xf32>) 
 // CHECK-SAME:  (%[[QI:.*]]: tensor<1x4xui8>, %[[FI:.*]]: tensor<1x4xf32>)
 // CHECK-DAG:   %[[S:.*]] = onnx.Constant dense<1.000000e-01> : tensor<f32>
 // CHECK-DAG:   %[[Z:.*]] = onnx.Constant dense<128> : tensor<ui8>
-// CHECK-DAG:   %[[STARTS:.*]] = onnx.Constant dense<[1, 0]> : tensor<2xi64>
-// CHECK-DAG:   %[[ENDS:.*]] = onnx.Constant dense<[1, 4]> : tensor<2xi64>
-// CHECK-DAG:   %[[AXES:.*]] = onnx.Constant dense<[0, 1]> : tensor<2xi64>
-// CHECK-DAG:   %[[STEPS:.*]] = onnx.Constant dense<1> : tensor<2xi64>
-// CHECK-DAG:   %[[SLQ:.*]] = "onnx.Slice"(%[[QI]], %[[STARTS]], %[[ENDS]], %[[AXES]], %[[STEPS]]) : (tensor<1x4xui8>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>) -> tensor<1x2xui8>
+// CHECK-DAG:   %[[NONE:.*]] = "onnx.NoValue"() {value} : () -> none
+// CHECK-DAG:   %[[STARTS:.*]] = onnx.Constant dense<1> : tensor<1xi64>
+// CHECK-DAG:   %[[ENDS:.*]] = onnx.Constant dense<3> : tensor<1xi64>
+// CHECK-DAG:   %[[SLQ:.*]] = "onnx.Slice"(%[[QI]], %[[STARTS]], %[[ENDS]], %[[NONE]], %[[NONE]]) : (tensor<1x4xui8>, tensor<1xi64>, tensor<1xi64>, none, none) -> tensor<1x2xui8>
 // CHECK-DAG:   %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[SLQ]], %[[S]], %[[Z]]) {{.*}} : (tensor<1x2xui8>, tensor<f32>, tensor<ui8>) -> tensor<1x2xf32>
 // CHECK-DAG:   %[[QF:.*]] = "onnx.QuantizeLinear"(%[[FI]], %[[S]], %[[Z]]) {{.*}} : (tensor<1x4xf32>, tensor<f32>, tensor<ui8>) -> tensor<1x4xui8>
-// CHECK-DAG:   %[[SLQI:.*]] = "onnx.Slice"(%[[QF]], %[[STARTS]], %[[ENDS]], %[[AXES]], %[[STEPS]]) : (tensor<1x4xui8>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>) -> tensor<1x2xui8>
+// CHECK-DAG:   %[[SLQI:.*]] = "onnx.Slice"(%[[QF]], %[[STARTS]], %[[ENDS]], %[[NONE]], %[[NONE]]) : (tensor<1x4xui8>, tensor<1xi64>, tensor<1xi64>, none, none) -> tensor<1x2xui8>
 // CHECK:       return %[[DQ]], %[[SLQI]]
 
 // -----
