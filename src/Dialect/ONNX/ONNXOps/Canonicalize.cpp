@@ -4301,6 +4301,14 @@ struct FuseCastBetweenReshapesPattern : public OpRewritePattern<ONNXReshapeOp> {
 //===----------------------------------------------------------------------===//
 
 // Normalize auto_pad to NOTSET with explicit pads.
+//
+// SAME_UPPER / SAME_LOWER: compute the padding required to keep the output
+// the same spatial size as the input (with ceil-division for stride > 1).
+// VALID: all pads are zero.
+// NOTSET with no pads attribute: fill with zeros.
+//
+// Requires static input spatial dims for SAME_*
+// After the rewrite auto_pad == "NOTSET" and pads holds the explicit values.
 struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
   using OpRewritePattern<ONNXConvOp>::OpRewritePattern;
 

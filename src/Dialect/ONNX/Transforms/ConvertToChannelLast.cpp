@@ -217,6 +217,13 @@ struct ConvToChannelLastPattern : public OpRewritePattern<ONNXConvOp> {
     if (inputType.getRank() < 3 || weightType.getRank() < 3)
       return failure();
 
+    // Create XFEConv operation
+    FailureOr<onnx_mlir::ConvGeometry> geometry =
+        onnx_mlir::getConvGeometry(convOp);
+    if (failed(geometry))
+      return rewriter.notifyMatchFailure(
+          convOp, "cannot resolve conv geometry into explicit attributes");
+
     int64_t rank = inputType.getRank();
 
     // Transpose input to channel-last
@@ -226,13 +233,6 @@ struct ConvToChannelLastPattern : public OpRewritePattern<ONNXConvOp> {
     // Transpose weight to channel-last
     Value weightChannelLast = createWeightTranspose(
         rewriter, loc, weight, rank, weightType.getElementType());
-
-    // Create XFEConv operation
-    FailureOr<onnx_mlir::ConvGeometry> geometry =
-        onnx_mlir::getConvGeometry(convOp);
-    if (failed(geometry))
-      return rewriter.notifyMatchFailure(
-          convOp, "cannot resolve conv geometry into explicit attributes");
 
     auto origOutputType = mlir::cast<ShapedType>(convOp.getType());
     Type outputElementType = origOutputType.getElementType();

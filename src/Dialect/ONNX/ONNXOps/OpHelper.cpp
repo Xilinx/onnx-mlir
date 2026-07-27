@@ -365,9 +365,23 @@ FailureOr<ConvGeometry> getConvGeometry(ONNXConvOp convOp) {
     if (ShapedType::isDynamic(inputSize))
       return failure();
 
-    // SAME padding fixes the output size to ceil(inputSize / stride). The last
-    // window starts at (outputSize - 1) * stride and spans effectiveKernel
-    // input positions, so the padded input must be at least that large.
+    // The last output window starts at (outputSize - 1) * stride and spans
+    // effectiveKernel input positions. The padded input must be large
+    // enough to cover that window:
+    //
+    //   inputSize + totalPad >=
+    //     (outputSize - 1) * stride + effectiveKernel
+    //
+    // Therefore the minimum total pad is:
+    //   totalPad = max(0,
+    //       (outputSize - 1) * stride + effectiveKernel - inputSize)
+    //
+    // This is equivalent to inverting:
+    //   outputSize = floor((inputSize + totalPad - effectiveKernel) /
+    //   stride) + 1
+    // The floor is accounted for by choosing the minimum totalPad that
+    // reaches the next output window; no extra floor is applied to
+    // totalPad itself.
     const int64_t stride = geometry.strides[i];
     const int64_t effectiveKernel =
         (wShape[firstSpatialAxis + i] - 1) * geometry.dilations[i] + 1;
