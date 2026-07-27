@@ -1,4 +1,4 @@
-// Copyright (C) 2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // RUN: onnx-mlir-opt --convert-xfe-conv-to-depthwise-conv %s --split-input-file | FileCheck %s
 
 // =============================================================================
@@ -15,10 +15,8 @@ func.func @depthwise_conv2d_basic(%arg0: tensor<1x56x56x64x!quant.uniform<i8:f32
     %none = "onnx.NoValue"() {value} : () -> none
     
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "NOTSET",
         dilations = [1, 1],
         group = 64 : si64,
-        kernel_shape = [3, 3],
         pads = [0, 0, 0, 0],
         strides = [1, 1]
     } : (tensor<1x56x56x64x!quant.uniform<i8:f32, 0.1:0>>, tensor<64x3x3x1x!quant.uniform<i8:f32, 0.05:0>>, none) -> tensor<1x54x54x64x!quant.uniform<i8:f32, 0.1:0>>
@@ -43,10 +41,8 @@ func.func @depthwise_conv2d_with_bias(%arg0: tensor<1x28x28x32x!quant.uniform<i8
     %bias = onnx.Constant {value = dense<0> : tensor<32xi32>} : tensor<32x!quant.uniform<i32:f32, 0.005:0>>
     
     %conv = "onnx.XFEConv"(%arg0, %weights, %bias) {
-        auto_pad = "SAME_UPPER",
         dilations = [1, 1],
         group = 32 : si64,
-        kernel_shape = [3, 3],
         pads = [1, 1, 1, 1],
         strides = [1, 1]
     } : (tensor<1x28x28x32x!quant.uniform<i8:f32, 0.1:0>>, tensor<32x3x3x1x!quant.uniform<i8:f32, 0.05:0>>, tensor<32x!quant.uniform<i32:f32, 0.005:0>>) -> tensor<1x28x28x32x!quant.uniform<i8:f32, 0.1:0>>
@@ -57,7 +53,7 @@ func.func @depthwise_conv2d_with_bias(%arg0: tensor<1x28x28x32x!quant.uniform<i8
 // Weight should be transposed from OHWI [32,3,3,1] to IHWO [1,3,3,32]
 // CHECK: onnx.Constant {{.*}} tensor<1x3x3x32xi8>
 // CHECK: onnx.XCOMPILERDepthwiseConv
-// CHECK-SAME: auto_pad = "SAME_UPPER"
+// CHECK-SAME: auto_pad = "NOTSET"
 
 // -----
 
@@ -71,10 +67,8 @@ func.func @depthwise_conv2d_strided(%arg0: tensor<1x112x112x64x!quant.uniform<u8
     %none = "onnx.NoValue"() {value} : () -> none
     
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "SAME_UPPER",
         dilations = [1, 1],
         group = 64 : si64,
-        kernel_shape = [3, 3],
         pads = [0, 0, 1, 1],
         strides = [2, 2]
     } : (tensor<1x112x112x64x!quant.uniform<u8:f32, 0.1:128>>, tensor<64x3x3x1x!quant.uniform<i8:f32, 0.05:0>>, none) -> tensor<1x56x56x64x!quant.uniform<u8:f32, 0.1:128>>
@@ -99,10 +93,8 @@ func.func @depthwise_conv2d_dilated(%arg0: tensor<1x64x64x128x!quant.uniform<i8:
     %none = "onnx.NoValue"() {value} : () -> none
     
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "NOTSET",
         dilations = [2, 2],
         group = 128 : si64,
-        kernel_shape = [3, 3],
         pads = [0, 0, 0, 0],
         strides = [1, 1]
     } : (tensor<1x64x64x128x!quant.uniform<i8:f32, 0.1:0>>, tensor<128x3x3x1x!quant.uniform<i8:f32, 0.05:0>>, none) -> tensor<1x60x60x128x!quant.uniform<i8:f32, 0.1:0>>
@@ -128,10 +120,8 @@ func.func @regular_conv_not_depthwise(%arg0: tensor<1x56x56x3x!quant.uniform<i8:
     %none = "onnx.NoValue"() {value} : () -> none
     
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "SAME_UPPER",
         dilations = [1, 1],
         group = 1 : si64,
-        kernel_shape = [3, 3],
         pads = [1, 1, 1, 1],
         strides = [1, 1]
     } : (tensor<1x56x56x3x!quant.uniform<i8:f32, 0.1:0>>, tensor<64x3x3x3x!quant.uniform<i8:f32, 0.05:0>>, none) -> tensor<1x56x56x64x!quant.uniform<i8:f32, 0.1:0>>
@@ -154,10 +144,8 @@ func.func @grouped_conv_not_depthwise(%arg0: tensor<1x56x56x64x!quant.uniform<i8
     %none = "onnx.NoValue"() {value} : () -> none
     
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "SAME_UPPER",
         dilations = [1, 1],
         group = 2 : si64,
-        kernel_shape = [3, 3],
         pads = [1, 1, 1, 1],
         strides = [1, 1]
     } : (tensor<1x56x56x64x!quant.uniform<i8:f32, 0.1:0>>, tensor<64x3x3x32x!quant.uniform<i8:f32, 0.05:0>>, none) -> tensor<1x56x56x64x!quant.uniform<i8:f32, 0.1:0>>
@@ -183,10 +171,8 @@ func.func @depthwise_conv3d_basic(%arg0: tensor<1x16x32x32x32x!quant.uniform<i8:
     %none = "onnx.NoValue"() {value} : () -> none
     
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "NOTSET",
         dilations = [1, 1, 1],
         group = 32 : si64,
-        kernel_shape = [3, 3, 3],
         pads = [0, 0, 0, 0, 0, 0],
         strides = [1, 1, 1]
     } : (tensor<1x16x32x32x32x!quant.uniform<i8:f32, 0.1:0>>, tensor<32x3x3x3x1x!quant.uniform<i8:f32, 0.05:0>>, none) -> tensor<1x14x30x30x32x!quant.uniform<i8:f32, 0.1:0>>
@@ -211,10 +197,8 @@ func.func @depthwise_conv2d_5x5_kernel(%arg0: tensor<1x28x28x96x!quant.uniform<i
     %none = "onnx.NoValue"() {value} : () -> none
     
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "SAME_UPPER",
         dilations = [1, 1],
         group = 96 : si64,
-        kernel_shape = [5, 5],
         pads = [2, 2, 2, 2],
         strides = [1, 1]
     } : (tensor<1x28x28x96x!quant.uniform<i8:f32, 0.1:0>>, tensor<96x5x5x1x!quant.uniform<i8:f32, 0.05:0>>, none) -> tensor<1x28x28x96x!quant.uniform<i8:f32, 0.1:0>>
@@ -241,20 +225,16 @@ func.func @multiple_depthwise_convs(%arg0: tensor<1x56x56x64x!quant.uniform<i8:f
     
     // First depthwise conv
     %conv1 = "onnx.XFEConv"(%arg0, %weights1, %none) {
-        auto_pad = "SAME_UPPER",
         dilations = [1, 1],
         group = 64 : si64,
-        kernel_shape = [3, 3],
         pads = [1, 1, 1, 1],
         strides = [1, 1]
     } : (tensor<1x56x56x64x!quant.uniform<i8:f32, 0.1:0>>, tensor<64x3x3x1x!quant.uniform<i8:f32, 0.05:0>>, none) -> tensor<1x56x56x64x!quant.uniform<i8:f32, 0.1:0>>
     
     // Second depthwise conv
     %conv2 = "onnx.XFEConv"(%conv1, %weights2, %none) {
-        auto_pad = "SAME_UPPER",
         dilations = [1, 1],
         group = 64 : si64,
-        kernel_shape = [3, 3],
         pads = [1, 1, 1, 1],
         strides = [1, 1]
     } : (tensor<1x56x56x64x!quant.uniform<i8:f32, 0.1:0>>, tensor<64x3x3x1x!quant.uniform<i8:f32, 0.05:0>>, none) -> tensor<1x56x56x64x!quant.uniform<i8:f32, 0.1:0>>
@@ -281,10 +261,8 @@ func.func @depthwise_conv2d_f32(%arg0: tensor<1x56x56x64xf32>) -> tensor<1x54x54
     %none = "onnx.NoValue"() {value} : () -> none
 
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "NOTSET",
         dilations = [1, 1],
         group = 64 : si64,
-        kernel_shape = [3, 3],
         pads = [0, 0, 0, 0],
         strides = [1, 1]
     } : (tensor<1x56x56x64xf32>, tensor<64x3x3x1xf32>, none) -> tensor<1x54x54x64xf32>
@@ -309,10 +287,8 @@ func.func @depthwise_conv2d_f32_with_bias(%arg0: tensor<1x28x28x32xf32>) -> tens
     %bias = onnx.Constant {value = dense<0.0> : tensor<32xf32>} : tensor<32xf32>
 
     %conv = "onnx.XFEConv"(%arg0, %weights, %bias) {
-        auto_pad = "SAME_UPPER",
         dilations = [1, 1],
         group = 32 : si64,
-        kernel_shape = [3, 3],
         pads = [1, 1, 1, 1],
         strides = [1, 1]
     } : (tensor<1x28x28x32xf32>, tensor<32x3x3x1xf32>, tensor<32xf32>) -> tensor<1x28x28x32xf32>
@@ -323,7 +299,7 @@ func.func @depthwise_conv2d_f32_with_bias(%arg0: tensor<1x28x28x32xf32>) -> tens
 // Weight should be transposed from OHWI [32,3,3,1] to IHWO [1,3,3,32]
 // CHECK: onnx.Constant {{.*}} tensor<1x3x3x32xf32>
 // CHECK: onnx.XCOMPILERDepthwiseConv
-// CHECK-SAME: auto_pad = "SAME_UPPER"
+// CHECK-SAME: auto_pad = "NOTSET"
 
 // -----
 
@@ -337,10 +313,8 @@ func.func @depthwise_conv2d_f16_strided(%arg0: tensor<1x112x112x64xf16>) -> tens
     %none = "onnx.NoValue"() {value} : () -> none
 
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "SAME_UPPER",
         dilations = [1, 1],
         group = 64 : si64,
-        kernel_shape = [3, 3],
         pads = [0, 0, 1, 1],
         strides = [2, 2]
     } : (tensor<1x112x112x64xf16>, tensor<64x3x3x1xf16>, none) -> tensor<1x56x56x64xf16>
@@ -365,10 +339,8 @@ func.func @depthwise_conv3d_f32(%arg0: tensor<1x16x32x32x32xf32>) -> tensor<1x14
     %none = "onnx.NoValue"() {value} : () -> none
 
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "NOTSET",
         dilations = [1, 1, 1],
         group = 32 : si64,
-        kernel_shape = [3, 3, 3],
         pads = [0, 0, 0, 0, 0, 0],
         strides = [1, 1, 1]
     } : (tensor<1x16x32x32x32xf32>, tensor<32x3x3x3x1xf32>, none) -> tensor<1x14x30x30x32xf32>
@@ -393,10 +365,8 @@ func.func @regular_conv_f32_not_depthwise(%arg0: tensor<1x56x56x3xf32>) -> tenso
     %none = "onnx.NoValue"() {value} : () -> none
 
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "SAME_UPPER",
         dilations = [1, 1],
         group = 1 : si64,
-        kernel_shape = [3, 3],
         pads = [1, 1, 1, 1],
         strides = [1, 1]
     } : (tensor<1x56x56x3xf32>, tensor<64x3x3x3xf32>, none) -> tensor<1x56x56x64xf32>
@@ -421,10 +391,8 @@ func.func @depthwise_conv2d_per_axis_quant(%arg0: tensor<1x8x8x4x!quant.uniform<
     %none = "onnx.NoValue"() {value} : () -> none
 
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "SAME_UPPER",
         dilations = [1, 1],
         group = 4 : si64,
-        kernel_shape = [3, 3],
         pads = [1, 1, 1, 1],
         strides = [1, 1]
     } : (tensor<1x8x8x4x!quant.uniform<i8:f32, 0.1:0>>, tensor<4x3x3x1x!quant.uniform<i8:f32:0, {0.01, 0.02, 0.03, 0.04}>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.1:0>>
@@ -450,10 +418,8 @@ func.func @single_channel_conv_not_depthwise(%arg0: tensor<1x720x1280x1x!quant.u
     %none = "onnx.NoValue"() {value} : () -> none
 
     %conv = "onnx.XFEConv"(%arg0, %weights, %none) {
-        auto_pad = "NOTSET",
         dilations = [1, 1],
         group = 1 : si64,
-        kernel_shape = [4, 4],
         pads = [0, 0, 0, 0],
         strides = [4, 4]
     } : (tensor<1x720x1280x1x!quant.uniform<i8:f32, 2.0:0>>, tensor<1x4x4x1x!quant.uniform<i8:f32, 9.765625E-4:0>>, none) -> tensor<1x180x320x1x!quant.uniform<i8:f32, 2.0:0>>

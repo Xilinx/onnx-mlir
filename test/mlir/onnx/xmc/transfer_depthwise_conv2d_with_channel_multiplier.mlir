@@ -1,4 +1,4 @@
-// Copyright (C) 2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 // RUN: onnx-mlir-opt --split-input-file --transfer-depthwise-conv2d-with-channel-multiplier %s | FileCheck %s
 
@@ -214,10 +214,8 @@ module {
     %weights = "onnx.Constant"() {value = dense<1.0> : tensor<8x1x3x3xf32>} : () -> tensor<8x1x3x3xf32>
     %none = "onnx.NoValue"() {value} : () -> none
     %0 = "onnx.XFEConv"(%arg0, %weights, %none) {
-      auto_pad = "NOTSET",
       dilations = [1, 1],
       group = 4 : si64,
-      kernel_shape = [3, 3],
       pads = [1, 1, 1, 1],
       strides = [1, 1]
     } : (tensor<1x8x8x4xf32>, tensor<8x1x3x3xf32>, none) -> tensor<1x8x8x8xf32>
@@ -236,10 +234,8 @@ module {
     %weights = "onnx.Constant"() {value = dense<1.0> : tensor<4x1x3x3xf32>} : () -> tensor<4x1x3x3xf32>
     %none = "onnx.NoValue"() {value} : () -> none
     %0 = "onnx.XFEConv"(%arg0, %weights, %none) {
-      auto_pad = "NOTSET",
       dilations = [1, 1],
       group = 4 : si64,
-      kernel_shape = [3, 3],
       pads = [1, 1, 1, 1],
       strides = [1, 1]
     } : (tensor<1x8x8x4xf32>, tensor<4x1x3x3xf32>, none) -> tensor<1x8x8x4xf32>
@@ -403,10 +399,8 @@ module {
     %weights = "onnx.Constant"() {value = dense<128> : tensor<8x1x3x3xui8>} : () -> tensor<8x1x3x3x!quant.uniform<u8:f32, 0.05:128>>
     %none = "onnx.NoValue"() {value} : () -> none
     %0 = "onnx.XFEConv"(%arg0, %weights, %none) {
-      auto_pad = "NOTSET",
       dilations = [1, 1],
       group = 4 : si64,
-      kernel_shape = [3, 3],
       pads = [1, 1, 1, 1],
       strides = [1, 1]
     } : (tensor<1x8x8x4x!quant.uniform<u8:f32, 0.1:128>>, tensor<8x1x3x3x!quant.uniform<u8:f32, 0.05:128>>, none) -> tensor<1x8x8x8x!quant.uniform<u8:f32, 0.1:128>>
@@ -425,10 +419,8 @@ module {
     %weights = "onnx.Constant"() {value = dense<128> : tensor<6x1x3x3xui8>} : () -> tensor<6x1x3x3x!quant.uniform<u8:f32, 0.05:128>>
     %bias = "onnx.Constant"() {value = dense<0> : tensor<6xi32>} : () -> tensor<6x!quant.uniform<i32:f32, 0.005:0>>
     %0 = "onnx.XFEConv"(%arg0, %weights, %bias) {
-      auto_pad = "NOTSET",
       dilations = [1, 1],
       group = 2 : si64,
-      kernel_shape = [3, 3],
       pads = [1, 1, 1, 1],
       strides = [1, 1]
     } : (tensor<1x8x8x2x!quant.uniform<u8:f32, 0.1:128>>, tensor<6x1x3x3x!quant.uniform<u8:f32, 0.05:128>>, tensor<6x!quant.uniform<i32:f32, 0.005:0>>) -> tensor<1x8x8x6x!quant.uniform<u8:f32, 0.1:128>>
