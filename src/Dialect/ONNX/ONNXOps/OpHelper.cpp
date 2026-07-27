@@ -442,12 +442,12 @@ static std::optional<ONNXAxisFieldConfig> getAxisAttrConfig(Operation *op) {
       name == "onnx.DequantizeLinear" || name == "onnx.Gather" ||
       name == "onnx.GatherElements" || name == "onnx.Hardmax" ||
       name == "onnx.LayerNormalization" || name == "onnx.LogSoftmax" ||
-      name == "onnx.LpNormalization" || name == "onnx.QuantizeLinear" ||
-      name == "onnx.Scatter" || name == "onnx.ScatterElements" ||
-      name == "onnx.Softmax" || name == "onnx.Split" ||
-      name == "onnx.SplitV11" || name == "onnx.SplitV13" ||
-      name == "onnx.SplitToSequence" || name == "onnx.TopK" ||
-      name == "onnx.Unique")
+      name == "onnx.LpNormalization" || name == "onnx.RMSLayerNormalization" ||
+      name == "onnx.QuantizeLinear" || name == "onnx.Scatter" ||
+      name == "onnx.ScatterElements" || name == "onnx.Softmax" ||
+      name == "onnx.Split" || name == "onnx.SplitV11" ||
+      name == "onnx.SplitV13" || name == "onnx.SplitToSequence" ||
+      name == "onnx.TopK" || name == "onnx.Unique")
     return ONNXAxisFieldConfig{
         ONNXAxisOperandKind::Scalar, ONNXAxisRankKind::FirstOperand};
 
