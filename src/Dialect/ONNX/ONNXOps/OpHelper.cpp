@@ -864,7 +864,7 @@ DenseElementsAttr createDenseArrayAttr(
 ONNXCastOp castTo(
     PatternRewriter &rewriter, Value val, Type newElementTy, int64_t saturate) {
   return rewriter.create<ONNXCastOp>(val.getLoc(),
-      val.getType().cast<RankedTensorType>().clone(newElementTy), val,
+      mlir::cast<RankedTensorType>(val.getType()).clone(newElementTy), val,
       rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), saturate),
       TypeAttr::get(newElementTy));
 }

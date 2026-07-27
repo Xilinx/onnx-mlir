@@ -433,9 +433,9 @@ struct TransferOp3dToOp2dPass
 
     // Apply patterns greedily
     GreedyRewriteConfig config;
-    config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
+    config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps);
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       signalPassFailure();

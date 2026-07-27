@@ -1850,7 +1850,7 @@ void ConstPropONNXToONNXPass::runOnOperation() {
   getConstPropONNXToONNXPatterns(patterns, enableQDQ, enableQuantConstFold);
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
-          GreedyRewriteConfig{.listener = &rnUpdater})))
+          GreedyRewriteConfig().setListener(&rnUpdater))))
     signalPassFailure();
 }
 

@@ -409,8 +409,8 @@ struct ConvertSCastPairToRequantizePass
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
-    config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
+    config.setListener(&rnUpdater);
+    config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps);
     if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       signalPassFailure();

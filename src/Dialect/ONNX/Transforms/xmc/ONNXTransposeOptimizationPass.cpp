@@ -2021,10 +2021,10 @@ struct ONNXTransposeOptimizationPass
 
     // Apply patterns with greedy rewrite
     GreedyRewriteConfig config;
-    config.maxIterations = maxIterations;
-    config.useTopDownTraversal = true;
+    config.setMaxIterations(maxIterations);
+    config.setUseTopDownTraversal(true);
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
 
     if (failed(applyPatternsGreedily(function, std::move(patterns), config))) {
       LLVM_DEBUG(llvm::dbgs() << "Pattern application failed!\n");

@@ -882,7 +882,7 @@ struct TransferConvSliceToConvPass
 
     ResultNamesUpdater rnUpdater;
     GreedyRewriteConfig config;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       signalPassFailure();
