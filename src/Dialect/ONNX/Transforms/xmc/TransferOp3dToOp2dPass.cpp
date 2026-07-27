@@ -362,8 +362,7 @@ static Value broadcastOperandTo5D(Value v, llvm::ArrayRef<int64_t> targetShape,
 
   // Constant operand: build a properly-shaped (tiled) constant.
   if (auto cst = v.getDefiningOp<ONNXConstantOp>()) {
-    if (auto dense =
-            dyn_cast_or_null<DenseElementsAttr>(cst.getValueAttr())) {
+    if (auto dense = dyn_cast_or_null<DenseElementsAttr>(cst.getValueAttr())) {
       auto tiledStorage =
           broadcastDenseTo(dense, vType.getShape(), targetShape);
       auto tiledResultType =
