@@ -21,6 +21,7 @@
 #include "RegisterPasses.hpp"
 
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "src/Accelerators/Accelerator.hpp"
 #include "src/Compiler/CompilerPasses.hpp"
 
@@ -455,7 +456,7 @@ void registerMLIRPasses() {
     return mlir::createLowerAffinePass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return mlir::createConvertSCFToCFPass();
+    return mlir::createSCFToControlFlowPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return mlir::createConvertVectorToLLVMPass();

@@ -22,6 +22,7 @@
 #include <numeric>
 
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
+#include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/Dialect/Traits.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
@@ -33,6 +34,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallSet.h"
@@ -58,6 +60,9 @@ static bool enableUnsafeMath = true;
 
 // Populated by configureReshapeCanonicalization().
 static bool enableReshapeCanonicalization = true;
+
+// Populated by configurePositiveAxisCanonicalization().
+static bool enablePositiveAxisCanonicalization = true;
 
 // Populated by configureReduceKeepdimsCanonicalization().
 static bool enableReduceKeepdimsCanonicalization = true;
@@ -1835,9 +1840,9 @@ public:
     }
 
     MultiDialectBuilder<OnnxBuilder> create(rewriter, expandOp.getLoc());
+    Value repeatsValue = create.onnx.constantInt64(repeats);
     Value tile = rewriter.create<ONNXTileOp>(expandOp.getLoc(),
-        expandOp.getOutput().getType(), expandOp.getInput(),
-        create.onnx.constantInt64(repeats));
+        expandOp.getOutput().getType(), expandOp.getInput(), repeatsValue);
     rewriter.replaceOp(expandOp, tile);
     return success();
   }
@@ -1965,6 +1970,16 @@ public:
     int64_t firstAllowZero = firstReshapeOp.getAllowzero();
     if (firstAllowZero != 0)
       return rewriter.notifyMatchFailure(op, "Does not support AllowZero != 0");
+
+    // Fuse only if bypassing the inner reshape is safe: it has one use, or all
+    // its consumers are reshapes. Otherwise preserve it.
+    bool safeToFold = firstReshapeOp.getResult().hasOneUse();
+    if (!safeToFold)
+      safeToFold = llvm::all_of(firstReshapeOp.getResult().getUsers(),
+          [](Operation *user) { return llvm::isa<ONNXReshapeOp>(user); });
+    if (!safeToFold)
+      return rewriter.notifyMatchFailure(
+          op, "Inner reshape has non-reshape consumers; preserve it");
 
     // Don't fuse if element types differ (e.g. quantized -> f32 boundary).
     auto firstDataElemType =
@@ -3899,6 +3914,163 @@ public:
     return success();
   }
 };
+
+namespace {
+
+// Normalizes a scalar `axis` attribute in place.
+bool normalizeAxisAttr(
+    Operation *op, const ONNXAxisValueSpec &spec, PatternRewriter &rewriter) {
+  SmallVector<int64_t, 1> axes;
+  if (!getONNXAxisValues(op, spec, axes) || axes.size() != 1)
+    return false;
+  const int64_t axis = axes[0];
+  if (axis >= 0)
+    return false;
+
+  const std::optional<int64_t> rank =
+      getONNXAxisNormalizationRank(op, spec, axes.size());
+  if (!rank)
+    return false;
+
+  const auto axisAttr = op->getAttrOfType<IntegerAttr>(spec.attrName);
+  if (!axisAttr)
+    return false;
+  const std::optional<int64_t> normalized =
+      normalizeONNXAxisValue(axis, *rank, spec.includeRank);
+  if (!normalized || *normalized == axis)
+    return false;
+
+  rewriter.modifyOpInPlace(op, [&]() {
+    op->setAttr(
+        spec.attrName, IntegerAttr::get(axisAttr.getType(), *normalized));
+  });
+  return true;
+}
+
+// Normalizes an `axes` array attribute in place.
+bool normalizeAxesAttr(
+    Operation *op, const ONNXAxisValueSpec &spec, PatternRewriter &rewriter) {
+  const auto axesAttr = op->getAttrOfType<ArrayAttr>(spec.attrName);
+  if (!axesAttr || axesAttr.empty())
+    return false;
+  SmallVector<IntegerAttr> axisAttrs;
+  axisAttrs.reserve(axesAttr.size());
+  for (const Attribute attr : axesAttr) {
+    const auto axisAttr = mlir::dyn_cast<IntegerAttr>(attr);
+    if (!axisAttr)
+      return false;
+    axisAttrs.push_back(axisAttr);
+  }
+
+  SmallVector<int64_t> axes;
+  if (!getONNXAxisValues(op, spec, axes))
+    return false;
+  const std::optional<int64_t> rank =
+      getONNXAxisNormalizationRank(op, spec, axes.size());
+  if (!rank)
+    return false;
+
+  SmallVector<int64_t> normalizedAxes;
+  const FailureOr<bool> changed =
+      normalizeONNXAxisValues(axes, *rank, spec.includeRank, normalizedAxes);
+  if (failed(changed) || !*changed)
+    return false;
+
+  SmallVector<Attribute> normalizedAttrs;
+  normalizedAttrs.reserve(axesAttr.size());
+  for (auto [axisAttr, axis] : llvm::zip_equal(axisAttrs, normalizedAxes)) {
+    normalizedAttrs.push_back(IntegerAttr::get(axisAttr.getType(),
+        APInt(axisAttr.getValue().getBitWidth(), axis, /*isSigned=*/true)));
+  }
+  rewriter.modifyOpInPlace(op, [&]() {
+    op->setAttr(
+        spec.attrName, ArrayAttr::get(op->getContext(), normalizedAttrs));
+  });
+  return true;
+}
+
+// Creates an ONNX integer constant with the same ranked tensor type as
+// `oldValue`.
+Value createIntegerConstantLike(PatternRewriter &rewriter, Location loc,
+    Value oldValue, ArrayRef<int64_t> values) {
+  const ElementsAttr elemsAttr = getElementAttributeFromONNXValue(oldValue);
+  if (!elemsAttr)
+    return {};
+  const auto tensorType = mlir::dyn_cast<RankedTensorType>(elemsAttr.getType());
+  if (!tensorType)
+    return {};
+  const auto intType = mlir::dyn_cast<IntegerType>(tensorType.getElementType());
+  if (!intType)
+    return {};
+  SmallVector<APInt> apValues;
+  apValues.reserve(values.size());
+  for (const int64_t value : values)
+    apValues.emplace_back(intType.getWidth(), value, /*isSigned=*/true);
+  const auto newAttr = DenseElementsAttr::get(tensorType, apValues);
+  return rewriter.create<ONNXConstantOp>(loc, /*sparse_value=*/Attribute(),
+      /*value=*/newAttr);
+}
+
+// Normalizes a constant `axis` or `axes` operand in place.
+bool normalizeAxisOperand(
+    Operation *op, const ONNXAxisValueSpec &spec, PatternRewriter &rewriter) {
+  assert(spec.index < op->getNumOperands() &&
+         "axis operand spec index must be valid for op");
+
+  const Value axisOperand = op->getOperand(spec.index);
+  if (mlir::isa<NoneType>(axisOperand.getType()))
+    return false;
+
+  SmallVector<int64_t> axes;
+  if (!getONNXAxisValues(op, spec, axes))
+    return false;
+
+  const std::optional<int64_t> rank =
+      getONNXAxisNormalizationRank(op, spec, axes.size());
+  if (!rank)
+    return false;
+
+  SmallVector<int64_t> normalizedAxes;
+  const FailureOr<bool> changed =
+      normalizeONNXAxisValues(axes, *rank, spec.includeRank, normalizedAxes);
+  if (failed(changed) || !*changed)
+    return false;
+
+  const Value newAxisOperand = createIntegerConstantLike(
+      rewriter, axisOperand.getLoc(), axisOperand, normalizedAxes);
+  if (!newAxisOperand)
+    return false;
+
+  rewriter.modifyOpInPlace(
+      op, [&]() { op->setOperand(spec.index, newAxisOperand); });
+  return true;
+}
+
+struct ONNXPositiveAxisCanonicalizationPattern : public RewritePattern {
+  ONNXPositiveAxisCanonicalizationPattern(
+      MLIRContext *context, PatternBenefit benefit)
+      : RewritePattern(MatchAnyOpTypeTag(), benefit, context) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, PatternRewriter &rewriter) const override {
+    if (op->getName().getDialectNamespace() !=
+        ONNXDialect::getDialectNamespace())
+      return failure();
+
+    const std::optional<ONNXAxisValueSpec> spec = getONNXAxisValueSpec(op);
+    if (!spec || !spec->canCanonicalize)
+      return failure();
+
+    if (spec->source == ONNXAxisValueSource::Operand)
+      return success(normalizeAxisOperand(op, *spec, rewriter));
+    if (spec->kind == ONNXAxisOperandKind::Scalar)
+      return success(normalizeAxisAttr(op, *spec, rewriter));
+    return success(normalizeAxesAttr(op, *spec, rewriter));
+  }
+};
+
+} // namespace
+
 namespace {
 bool hasScalarConstantQDQParams(ONNXDequantizeLinearOp op) {
   return isScalarConstantTensor(op.getXScale()) &&
@@ -4581,6 +4753,13 @@ void ONNXConcatOp::getCanonicalizationPatterns(
   results.insert<EliminateCarveOutAroundRotaryEmbeddingPattern>(context);
 }
 
+/// on the ONNXConvOp.
+void ONNXConvOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<NormalizeConvAutoPadPattern>(context);
+  results.insert<FuseConv1x1IntoConvPattern>(context);
+}
+
 /// on the ONNXClipOp.
 void ONNXClipOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
@@ -4867,8 +5046,8 @@ void ONNXSizeOp::getCanonicalizationPatterns(
 /// on the ONNXSoftmaxOp.
 void ONNXSoftmaxOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
-  results.insert<SoftmaxNegativeAxisPattern>(context);
   results.insert<SoftmaxSizeOneAxisPattern>(context);
+  results.insert<SoftmaxNegativeAxisPattern>(context);
 }
 
 /// on the ONNXSoftmaxV11Op.
@@ -5021,11 +5200,10 @@ void onnx_mlir::populateQDQDataMovementCanonicalizationPatterns(
       patterns.getContext(), benefit);
 }
 
-/// on the ONNXConvOp.
-void ONNXConvOp::getCanonicalizationPatterns(
-    RewritePatternSet &results, MLIRContext *context) {
-  results.insert<NormalizeConvAutoPadPattern>(context);
-  results.insert<FuseConv1x1IntoConvPattern>(context);
+void onnx_mlir::populateONNXPositiveAxisCanonicalizationPatterns(
+    RewritePatternSet &patterns, PatternBenefit benefit) {
+  patterns.add<ONNXPositiveAxisCanonicalizationPattern>(
+      patterns.getContext(), benefit);
 }
 
 void onnx_mlir::configureBatchNormCanonicalization(
@@ -5040,6 +5218,14 @@ void onnx_mlir::configureUnsafeMathCanonicalization(
 
 void onnx_mlir::configureReshapeCanonicalization(bool enable) {
   enableReshapeCanonicalization = enable;
+}
+
+void onnx_mlir::configurePositiveAxisCanonicalization(bool enable) {
+  enablePositiveAxisCanonicalization = enable;
+}
+
+bool onnx_mlir::isPositiveAxisCanonicalizationEnabled() {
+  return enablePositiveAxisCanonicalization;
 }
 
 void onnx_mlir::configureReduceKeepdimsCanonicalization(bool enable) {

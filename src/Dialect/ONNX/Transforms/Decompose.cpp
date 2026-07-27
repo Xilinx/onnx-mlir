@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <numeric>
 #include <type_traits>
@@ -55,6 +56,8 @@
 #include "src/Pass/Passes.hpp"
 #include "src/Support/TypeUtilities.hpp"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 
@@ -2468,15 +2471,197 @@ public:
     }
   }
 
+  // Re-expresses the current counter position under a different shape.
+  //
+  // The counter is a multi-dimensional index into `currentShape`. This first
+  // flattens it to a single linear (row-major) offset, then re-expands that
+  // same offset into a multi-dimensional index for `newShape`. In other words
+  // it recalculates and returns the equivalent index once the underlying tensor
+  // is viewed with `newShape` instead of `currentShape` (both must describe the
+  // same number of elements for the mapping to be meaningful).
+  //
+  // Example: currentShape = [2, 3, 4], counter = [1, 2, 3].
+  //   linear offset = ((1 * 3) + 2) * 4 + 3 = 23
+  //   reshapedCounter([2, 3, 4], [6, 4]) -> offsetToIndex([6, 4], 23) = [5, 3]
+  //   (since 5 * 4 + 3 == 23, the same element in the [6, 4] view).
+  SmallVector<int64_t> reshapedCounter(
+      ArrayRef<int64_t> currentShape, ArrayRef<int64_t> newShape) {
+    auto idxToOffsetValue = onnx_mlir::indexToOffset(currentShape, counter);
+    return onnx_mlir::offsetToIndex(newShape, idxToOffsetValue);
+  }
+
 private:
   SmallVector<int64_t> counter;
   ArrayRef<int64_t> firstElem;
   ArrayRef<int64_t> shapeToCheck;
 };
 
+// Shared preconditions for the ScatterND contiguous-block rewrites
+// (DecomposeScatterNDPattern and CanonicalizeScatterNDWithMultiAxis):
+// reduction must be "none", all operands must have a static shape, and
+// rank(data) == rank(updates). On success the operand tensor types are written
+// to the out-parameters.
+LogicalResult checkScatterNDPreconditions(ONNXScatterNDOp scatterNDOp,
+    PatternRewriter &rewriter, RankedTensorType &dataType,
+    RankedTensorType &updatesType, RankedTensorType &indicesType) {
+  if (scatterNDOp.getReductionAttr().strref() != "none") {
+    return rewriter.notifyMatchFailure(
+        scatterNDOp, "Scatters with reduction are not supported");
+  }
+  const auto data = scatterNDOp.getData();
+  const auto indices = scatterNDOp.getIndices();
+  const auto updates = scatterNDOp.getUpdates();
+  if (!onnx_mlir::hasStaticShape(data.getType()) ||
+      !onnx_mlir::hasStaticShape(indices.getType()) ||
+      !onnx_mlir::hasStaticShape(updates.getType())) {
+    return rewriter.notifyMatchFailure(
+        scatterNDOp, "All operands need to have a static shape");
+  }
+  dataType = cast<RankedTensorType>(data.getType());
+  updatesType = cast<RankedTensorType>(updates.getType());
+  indicesType = cast<RankedTensorType>(indices.getType());
+  if (dataType.getRank() != updatesType.getRank()) {
+    return rewriter.notifyMatchFailure(scatterNDOp,
+        "Only the case where data and update have the same rank "
+        "is supported");
+  }
+  return success();
+}
+
+// Extracts the ScatterND indices operand as a flat constant array. Fails if the
+// indices are not a constant tensor or are empty.
+LogicalResult getScatterNDConstantIndices(ONNXScatterNDOp scatterNDOp,
+    PatternRewriter &rewriter, SmallVectorImpl<int64_t> &indicesAsFlatArray) {
+  if (!onnx_mlir::getI64ValuesFromONNXConstantOp(
+          scatterNDOp.getIndices(), indicesAsFlatArray)) {
+    return rewriter.notifyMatchFailure(
+        scatterNDOp, "The indices need to be constant");
+  }
+  if (indicesAsFlatArray.empty()) {
+    return rewriter.notifyMatchFailure(
+        scatterNDOp, "Empty indices are not supported"); // Skip the edge case
+                                                         // of empty indices
+  }
+  return success();
+}
+
+// Validates the first index vector: it must be 0 on every non-split axis (the
+// block starts at the origin there) and non-negative on the split axes (ONNX
+// negative wrap-around indexing is not supported by these rewrites).
+// `isSplitAxis` returns true when the given axis is a split axis.
+LogicalResult checkScatterNDFirstIndexShift(ONNXScatterNDOp scatterNDOp,
+    PatternRewriter &rewriter, ArrayRef<int64_t> firstIndex,
+    llvm::function_ref<bool(uint64_t)> isSplitAxis) {
+  for (auto [idx, firstIndexDim] : llvm::enumerate(firstIndex)) {
+    if (!isSplitAxis(idx) && firstIndexDim != 0) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, " Shifting is only supported on the split axis");
+    }
+    if (isSplitAxis(idx) && firstIndexDim < 0) {
+      return rewriter.notifyMatchFailure(scatterNDOp,
+          "Negative values with wrap around are not yet "
+          "supported"); // onnx allows negative values with
+                        // wrap-around, this decomposition does
+                        // not (for now)
+    }
+  }
+  return success();
+}
+
+// Checks that all indices are contiguous.
+// - The check for contiguity and covering works the following way:
+// -- Iterated over all idx in indices and compare the idx against the
+//    expected index, fail if it differs
+// -- The expected index is calculated the following way:
+// --- The expected index is initialized with the first index in indices and
+//     then always incremented by one.
+// --- The increment works like a manual addition, the least significant
+//     digit/subindex gets incremented by one. If a digit overflows, it
+//     gets reset to the first index and the addition carries to the next,
+//     more significant digit. The addition overflows, if the index for an
+//     axis is equal to the size of this axis in updates/indices. (By
+//     definition the shape for indices.shape().drop(-1) must match the
+//     first dimensions in updates). If the addition overflows , the
+//     overflowing digit is reset to its value in the first index. This is
+//     zero for all axes, except for 'a', where it can be a positive number
+//     if the split/concat is in the middle of the tensor
+// `onIndex`, when set, is invoked with the running counter for every index
+// (before its contiguity comparison), letting callers reuse the same walk to
+// perform extra per-index work such as coordinate remapping.
+LogicalResult checkScatterNDContiguousIndices(ONNXScatterNDOp scatterNDOp,
+    PatternRewriter &rewriter, ArrayRef<int64_t> firstIndex,
+    ArrayRef<int64_t> counterShape,
+    const SubArrayAccessHelper<int64_t> &indicesFlatAccessor,
+    llvm::function_ref<void(IndicesContiguousCounter &)> onIndex = {}) {
+  IndicesContiguousCounter counter(firstIndex, counterShape);
+  for (size_t i = 0; i < indicesFlatAccessor.size(); ++i) {
+    if (onIndex)
+      onIndex(counter);
+    if (counter.getCounter() != indicesFlatAccessor[i]) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "Indices are not contiguous");
+    }
+    counter.increment();
+  }
+  return success();
+}
+
+// Collects, in ascending order, the axes where data and updates differ in
+// size. These are the axes along which a contiguous-block ScatterND writes a
+// sub-range (and where the Split/Concat decomposition peels/rebuilds).
+SmallVector<uint64_t> getScatterNDSplitAxes(
+    ArrayRef<int64_t> dataShape, ArrayRef<int64_t> updateShape) {
+  SmallVector<uint64_t> splitAxes;
+  for (auto [idx, dimData, dimUpdates] :
+      llvm::enumerate(dataShape, updateShape)) {
+    if (dimData != dimUpdates)
+      splitAxes.push_back(idx);
+  }
+  return splitAxes;
+}
+
+// Returns true iff the axes are consecutive (a, a+1, ..., a+N-1).
+bool areAxesConsecutive(ArrayRef<uint64_t> axes) {
+  for (size_t i = 0; i + 1 < axes.size(); ++i)
+    if (axes[i] + 1 != axes[i + 1])
+      return false;
+  return true;
+}
+
+// The written block maps to a single contiguous run once the (consecutive)
+// split axes are merged (row-major flattened) iff, scanning them from outer to
+// inner, after the first axis that writes a partial range (updateSize > 1)
+// every more-inner split axis is full-width (updateSize == dataSize). Trailing
+// non-split (slice) axes are always full-width, so they never break
+// contiguity. When this holds, CanonicalizeScatterNDWithMultiAxis (reshape +
+// merge) is the cheaper lowering; otherwise the block is multi-interval and is
+// lowered by the nested Split+Concat in DecomposeScatterNDPattern.
+//
+// Example (single interval): data [6,4,4], updates [6,2,4], splitAxes {1,2}.
+//   axis 1 is partial (2 < 4) but axis 2 (the inner one) is full-width (4 ==
+//   4). Flattening axes 1,2 into 16, rows [0,1] cover merged offsets [0..7] --
+//   one contiguous run per batch -> returns true (reshape/merge path).
+//
+// Counter-example (multi-interval): data [6,4,4], updates [6,2,3], splitAxes
+//   {1,2}. axis 1 is partial (2 < 4) and the inner axis 2 is also partial
+//   (3 < 4). Flattening into 16, row 0 covers offsets [0..2] and row 1 covers
+//   [4..6] -- two separate runs with a gap at offset 3 -> returns false (nested
+//   Split+Concat path).
+bool isSingleMergedInterval(ArrayRef<int64_t> dataShape,
+    ArrayRef<int64_t> updateShape, ArrayRef<uint64_t> splitAxes) {
+  bool seenPartial = false;
+  for (uint64_t ax : splitAxes) {
+    if (seenPartial && updateShape[ax] != dataShape[ax])
+      return false;
+    if (updateShape[ax] > 1)
+      seenPartial = true;
+  }
+  return true;
+}
+
 } // namespace
 
-// Decomposes ScatterNDs into a single Split and Concat.
+// Decomposes contiguous-block ScatterNDs into Split and Concat operations.
 // We can always split ScatterNDs by splitting the input tensor together with
 // the indices and their updates belonging to that part of the input tensor,
 // performing the ScatterNDs on each split, and the concatenating the result.
@@ -2485,6 +2670,17 @@ private:
 // affect their parts of the input tensor), and the middle ScatterND overwrites
 // the full input with sequential indices (i.e. can be replaced by a copy of its
 // update).
+//
+// The write region must be a hyper-rectangular block over one or more
+// *consecutive* differing axes. A single differing axis lowers to one
+// Split + Concat. When several consecutive axes differ, the block is peeled one
+// axis at a time (innermost to outermost) with a Split and re-stitched with a
+// Concat per axis, so a rank-r ScatterND spanning N differing axes lowers to N
+// Split/Concat pairs. The special case where merging the differing axes yields
+// a single contiguous run is left to CanonicalizeScatterNDWithMultiAxis, which
+// produces a cheaper reshape-based single-axis Split + Concat; this pattern
+// therefore only handles the multi-interval multi-axis case (and all
+// single-axis cases).
 //
 // Example:
 // ` %indices = onnx.Constant dense<[[[[0, 1, 0], [0, 1, 1], [0, 1, 2],
@@ -2519,8 +2715,8 @@ private:
 // To ensure that this decomposition to split and concat is
 // valid, the following constraints need to hold:
 // - r == rank(updates)
-// - The shape of data and updates differs only in one dimension 'a'
-// -- 'a' is the dimension where the split and concat will happen
+// - The shape of data and updates differs only in consecutive dimensions
+// -- Those are the dimensions where the (nested) split and concat will happen
 // - The update indices need to be contiguous
 // -- The update indices are the last dim in indices
 // -- We call them contiguous, if each idx in indices is indexing the element
@@ -2536,145 +2732,358 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
   LogicalResult matchAndRewrite(
       ONNXScatterNDOp scatterNDOp, PatternRewriter &rewriter) const final {
     // Check preconditions
-    if (scatterNDOp.getReductionAttr().strref() != "none") {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "Scatters with reduction are not supported");
+    RankedTensorType dataType;
+    RankedTensorType updatesType;
+    RankedTensorType indicesType;
+    if (failed(checkScatterNDPreconditions(
+            scatterNDOp, rewriter, dataType, updatesType, indicesType))) {
+      return failure();
     }
-    const auto data = scatterNDOp.getData();
-    const auto indices = scatterNDOp.getIndices();
-    const auto updates = scatterNDOp.getUpdates();
-    if (!onnx_mlir::hasStaticShape(data.getType()) ||
-        !onnx_mlir::hasStaticShape(indices.getType()) ||
-        !onnx_mlir::hasStaticShape(updates.getType())) {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "All operands need to have a static shape");
-    }
-    const auto dataType = cast<RankedTensorType>(data.getType());
     const auto dataShape = dataType.getShape();
-    const auto updatesType = cast<RankedTensorType>(updates.getType());
     const auto updateShape = updatesType.getShape();
-    const auto indicesType = cast<RankedTensorType>(indices.getType());
     const auto indicesShape = indicesType.getShape();
-    if (dataType.getRank() != updatesType.getRank()) {
-      return rewriter.notifyMatchFailure(scatterNDOp,
-          "Only the case where data and update have the same rank "
-          "is supported");
+
+    // Collect the axes where data and updates differ. These are the axes along
+    // which the scatter writes a sub-range and where we peel/rebuild.
+    SmallVector<uint64_t> splitAxes =
+        getScatterNDSplitAxes(dataShape, updateShape);
+    if (splitAxes.empty()) {
+      // Edge case: data and updates have the same shape (the whole tensor is
+      // overwritten); split on the last dim.
+      splitAxes.push_back(dataType.getRank() - 1);
     }
 
-    const auto splitAxis = [&]() -> uint64_t {
-      // Split at the dim where the update and original data have a
-      // different size
-      for (auto [idx, dimData, dimUpdates] :
-          llvm::enumerate(dataShape, updateShape)) {
-        if (dimData != dimUpdates) {
-          return idx;
-        }
-      }
-      return dataType.getRank() -
-             1; // Edge case, all elements get updated, split on the last dim
-    }();
-
-    for (auto [idx, dimData, dimUpdates] :
-        llvm::enumerate(dataShape, updateShape)) {
-      if (idx != splitAxis && dimData != dimUpdates) {
-        return rewriter.notifyMatchFailure(
-            scatterNDOp, "Only a single differing dimension is supported");
-      }
+    if (!areAxesConsecutive(splitAxes)) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "Only consecutive differing axes are supported");
     }
 
     SmallVector<int64_t> indicesAsFlatArray;
-    if (!onnx_mlir::getI64ValuesFromONNXConstantOp(
-            indices, indicesAsFlatArray)) {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "The indices need to be constant");
-    }
-    if (indicesAsFlatArray.empty()) {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "Empty indices are not supported"); // Skip the edge case
-                                                           // of empty indices
+    if (failed(getScatterNDConstantIndices(
+            scatterNDOp, rewriter, indicesAsFlatArray))) {
+      return failure();
     }
     const auto indicesLastDimSize = indicesShape.back();
     SubArrayAccessHelper<int64_t> indicesFlatAccessor(
         indicesAsFlatArray, indicesLastDimSize);
-    const auto firstIndex =
-        indicesFlatAccessor[0]; // Safe, we have checked the length before
-    for (auto [idx, firstIndexDim] : llvm::enumerate(firstIndex)) {
-      if (idx != splitAxis && firstIndexDim != 0) {
-        return rewriter.notifyMatchFailure(
-            scatterNDOp, " Shifting is only supported on the split axis");
-      }
-      if (idx == splitAxis && firstIndexDim < 0) {
-        return rewriter.notifyMatchFailure(scatterNDOp,
-            "Negative values with wrap around are not yet "
-            "supported"); // onnx allows negative values with
-                          // wrap-around, this decomposition does
-                          // not (for now)
-      }
+
+    // Real differing axes always lie within the indexed prefix (the trailing
+    // r-k slice axes agree between data and updates), so no explicit prefix
+    // guard is needed here; the empty-splitAxes fallback deliberately splits
+    // the full slice axis (whole-tensor overwrite) and must be allowed through.
+
+    // For two or more differing axes that collapse to a single contiguous run,
+    // the reshape-based merge (CanonicalizeScatterNDWithMultiAxis) is the
+    // cheaper lowering; defer to it. Single-axis scatters are always handled
+    // here.
+    if (splitAxes.size() >= 2 &&
+        isSingleMergedInterval(dataShape, updateShape, splitAxes)) {
+      return rewriter.notifyMatchFailure(scatterNDOp,
+          "Single-interval multi-axis block is handled by "
+          "CanonicalizeScatterNDWithMultiAxis");
     }
 
-    // Check that all indices are contiguous.
-    // - The check for contiguity and covering works the following way:
-    // -- Iterated over all idx in indices and compare the idx against the
-    //    expected index, fail if it differs
-    // -- The expected index is calculated the following way:
-    // --- The expected index is initialized with the first index in indices and
-    //     then always incremented by one.
-    // --- The increment works like a manual addition, the least significant
-    //     digit/subindex gets incremented by one. If a digit overflows, it
-    //     gets reset to the first index and the addition carries to the next,
-    //     more significant digit. The addition overflows, if the index for an
-    //     axis is equal to the size of this axis in updates/indices. (By
-    //     definition the shape for indices.shape().drop(-1) must match the
-    //     first dimensions in updates). If the addition overflows , the
-    //     overflowing digit is reset to its value in the first index. This is
-    //     zero for all axes, except for 'a', where it can be a positive number
-    //     if the split/concat is in the middle of the tensor
+    const auto firstIndex =
+        indicesFlatAccessor[0]; // Safe, we have checked the length before
+    if (failed(checkScatterNDFirstIndexShift(
+            scatterNDOp, rewriter, firstIndex, [&](uint64_t idx) {
+              return llvm::is_contained(splitAxes, idx);
+            }))) {
+      return failure();
+    }
+
     assert(
         updateShape.drop_back(updateShape.size() - (indicesShape.size() - 1)) ==
             indicesShape.drop_back(1) &&
         "Update and indicesShape should partially match for scatterNd");
-    {
-      IndicesContiguousCounter counter(firstIndex, indicesShape.drop_back(1));
-      for (size_t i = 0; i < indicesFlatAccessor.size(); ++i) {
-        if (counter.getCounter() != indicesFlatAccessor[i]) {
-          return rewriter.notifyMatchFailure(
-              scatterNDOp, "Indices are not contiguous");
-        }
-        counter.increment();
-      }
+    if (failed(checkScatterNDContiguousIndices(scatterNDOp, rewriter,
+            firstIndex, indicesShape.drop_back(1), indicesFlatAccessor))) {
+      return failure();
+    }
+
+    // Strategy for the decomposition (nested peel/rebuild):
+    // Isolate the hyper-rectangular block one split axis at a time with a
+    // 3-way Split into [before, band, after]; the band is carried into the next
+    // peel and the surrounding before/after slabs are kept. The innermost band
+    // is the block region and is discarded. Then stitch the updates back in
+    // with a Concat(before, result, after) per axis. For a single differing
+    // axis this reduces exactly to the classic
+    // `before, band, after = split(data, [s, b, D-s-b]); concat(before,
+    // updates, after)` (before/after may be zero-sized, matching prior
+    // behavior).
+    //
+    // Example: data<4x4x8>, updates<2x2x8> writing a 2x2 block at offset [1,1]
+    // (splitAxes = {0, 1}). Peel inner->outer, i.e. axis 1 then axis 0:
+    //   axis 1: split<4x4x8> -> before<4x1x8>, band<4x2x8>, after<4x1x8>
+    //           keep before/after; descend into band<4x2x8>.
+    //   axis 0: split<4x2x8> -> before<1x2x8>, band<2x2x8>, after<1x2x8>
+    //           keep before/after; band<2x2x8> is the block (discarded).
+    // Rebuild outer->inner starting from updates<2x2x8>:
+    //   axis 0: concat(before<1x2x8>, updates<2x2x8>, after<1x2x8>) -> <4x2x8>
+    //   axis 1: concat(before<4x1x8>,        <4x2x8>, after<4x1x8>) -> <4x4x8>
+    // yielding the original data with the 2x2 block replaced by the updates.
+    //
+    // The number of split axes drives the cost: N split axes produce exactly N
+    // (3-way) Splits during the peel and N Concats during the rebuild.
+    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+        rewriter, scatterNDOp->getLoc());
+    const Type elemTy = dataType.getElementType();
+
+    // firstIndex holds the block start on the indexed axes; 0 elsewhere.
+    auto blockStart = [&](uint64_t axis) -> int64_t {
+      return (axis < firstIndex.size()) ? firstIndex[axis] : 0;
+    };
+
+    // Peel innermost split axis to outermost. `kept` records the surrounding
+    // slabs (in inner->outer order) to be re-stitched during rebuild.
+    struct KeptPieces {
+      uint64_t axis;
+      Value before;
+      Value after;
+    };
+    SmallVector<KeptPieces> kept;
+    Value current = scatterNDOp.getData();
+    SmallVector<int64_t> currentShape(dataShape);
+    for (uint64_t axis : llvm::reverse(splitAxes)) {
+      // Split this axis into three contiguous slabs: the leading "before" slab
+      // [0, start), the "band" [start, start + bandSize) that holds the block
+      // region, and the trailing "after" slab [start + bandSize, dim). The
+      // before/after slabs are kept as-is; the band descends into the next
+      // peel. Either surrounding slab may be zero-sized when the block touches
+      // an axis boundary.
+      const int64_t before = blockStart(axis);    // length of the before slab
+      const int64_t bandSize = updateShape[axis]; // block extent on this axis
+      const int64_t after =
+          currentShape[axis] - before - bandSize; // after slab
+
+      auto pieceTy = [&](int64_t size) {
+        SmallVector<int64_t> shape(currentShape);
+        shape[axis] = size;
+        return RankedTensorType::get(shape, elemTy);
+      };
+      ValueRange parts = create.onnx.split(
+          {pieceTy(before), pieceTy(bandSize), pieceTy(after)}, current,
+          create.onnx.constantInt64({before, bandSize, after}), axis);
+
+      kept.push_back({axis, parts[0], parts[2]});
+      current = parts[1]; // descend into the block band
+      currentShape[axis] = bandSize;
+    }
+
+    // Rebuild outermost split axis to innermost (reverse of the peel order),
+    // starting from the updates.
+    Value result = scatterNDOp.getUpdates();
+    SmallVector<int64_t> resultShape(updateShape);
+    for (const KeptPieces &kp : llvm::reverse(kept)) {
+      resultShape[kp.axis] = dataShape[kp.axis];
+      result = create.onnx.concat(RankedTensorType::get(resultShape, elemTy),
+          {kp.before, result, kp.after}, kp.axis);
+    }
+
+    rewriter.replaceOp(scatterNDOp, result);
+    return success();
+  }
+};
+
+// Canonicalizes an ONNXScatterND that writes a contiguous block spanning two or
+// more *consecutive* axes into an equivalent ScatterND that writes along a
+// *single* axis, by merging those axes into one.
+//
+// Motivation: the contiguous-block ScatterND decomposition (Split + Concat, see
+// DecomposeScatterNDPattern) only handles the case where data and updates
+// differ in a single dimension. When the update region spans several adjacent
+// axes (e.g. it replaces a full [H, W] plane per batch), the scatter has
+// multiple differing axes and that pattern cannot apply. This canonicalization
+// folds the N differing axes together so the single-axis decomposition can take
+// over.
+//
+// It matches only when (all preconditions must hold, otherwise it bails):
+//   - reduction == "none",
+//   - data, indices and updates all have static shapes,
+//   - rank(data) == rank(updates),
+//   - at least two axes differ in size between data and updates, and they are
+//     all consecutive (splitAxes = {a, a+1, ..., a+N-1}),
+//   - indices is a constant, non-empty tensor,
+//   - the first index is 0 on every non-split axis (the block starts at the
+//     origin there) and non-negative on the split axes (no ONNX wrap-around),
+//   - the indices are contiguous and cover the whole merged block.
+//
+// The rewrite reshapes data, updates and indices so the N split axes become one
+// axis of size prod(data[a..a+N-1]), rebuilds the (constant) indices as linear
+// coordinates into the merged shape, emits a new ScatterND, and reshapes the
+// result back to the original data shape.
+//
+// Partial indexing (k = indices.shape[-1] < rank(data)) is supported: each
+// index then addresses a data.shape[k:] slice rather than a scalar. Merging N
+// indexed axes drops the index depth by N-1 (k -> k-N+1) and the coordinate
+// remap runs over the indexed prefix (the first k axes) only; the trailing r-k
+// slice axes ride along unchanged. For full indexing (k == rank(data)) the new
+// index depth equals the new data rank, matching the original behavior.
+//
+// Example: data:[6,4,4], updates:[6,1,1], indices:[6,1,1,3] holding [b,0,0].
+//   splitAxes = {1, 2} (4 != 1 on both) -> merge axes 1 and 2 (4*4 = 16):
+//     newDataShape    = [6, 16]
+//     newUpdateShape  = [6, 1]
+//     newIndicesShape = [6, 1, 2]   // last dim = new index depth k-1 = 2
+//   each index [b,0,0] (offset b*16 into [6,4,4]) becomes [b, 0] into [6,16].
+//   The resulting ScatterND now differs from data only on axis 1, so the
+//   Split+Concat decomposition can lower it. Reshapes wrap it back to [6,4,4].
+//
+// Partial-indexing example: data:[2,6,10,12], updates:[1,1,10,12],
+//   indices:[1,1,10,3] (k=3 < r=4). splitAxes = {0, 1} -> merge axes 0,1
+//   (2*6 = 12): newDataShape=[12,10,12], newUpdateShape=[1,10,12],
+//   newIndicesShape=[1,10,2] (index depth 3 -> 2). Index [1,1,l] becomes
+//   [7, l] into [12,10,12] (still a slice scatter over the last axis).
+struct CanonicalizeScatterNDWithMultiAxis
+    : public OpRewritePattern<ONNXScatterNDOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXScatterNDOp scatterNDOp, PatternRewriter &rewriter) const final {
+    // Check preconditions
+    RankedTensorType dataType;
+    RankedTensorType updatesType;
+    RankedTensorType indicesType;
+    if (failed(checkScatterNDPreconditions(
+            scatterNDOp, rewriter, dataType, updatesType, indicesType))) {
+      return failure();
+    }
+    const auto dataShape = dataType.getShape();
+    const auto updateShape = updatesType.getShape();
+    const auto indicesShape = indicesType.getShape();
+
+    // Split at the dims where the update and original data have a
+    // different size.
+    SmallVector<uint64_t> splitAxes =
+        getScatterNDSplitAxes(dataShape, updateShape);
+
+    if (splitAxes.size() < 2) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "This pattern needs at least two split axes");
+    }
+
+    if (!areAxesConsecutive(splitAxes)) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "This pattern needs consecutive split axes");
+    }
+
+    // Merging the axes only yields a valid single-axis scatter when the block
+    // maps to one contiguous run. Multi-interval blocks are left to
+    // DecomposeScatterNDPattern's nested Split+Concat lowering.
+    if (!isSingleMergedInterval(dataShape, updateShape, splitAxes)) {
+      return rewriter.notifyMatchFailure(scatterNDOp,
+          "Merged block is multi-interval; handled by "
+          "DecomposeScatterNDPattern");
+    }
+
+    SmallVector<int64_t> indicesAsFlatArray;
+    if (failed(getScatterNDConstantIndices(
+            scatterNDOp, rewriter, indicesAsFlatArray))) {
+      return failure();
+    }
+    const auto indicesLastDimSize = indicesShape.back();
+    SubArrayAccessHelper<int64_t> indicesFlatAccessor(
+        indicesAsFlatArray, indicesLastDimSize);
+
+    // The index depth k = indices.shape[-1] may be smaller than rank(data)
+    // (partial / slice indexing, where each index addresses a data.shape[k:]
+    // sub-tensor rather than a scalar). ScatterND guarantees data and updates
+    // agree on the trailing r-k slice axes, so any differing axis is always an
+    // indexed one; both merged axes must therefore lie within the first k axes.
+    // Guard defensively so the coordinate remap below never reads past the end
+    // of a length-k index vector.
+    if (splitAxes.back() >= static_cast<uint64_t>(indicesLastDimSize)) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "Split axes must lie within the indexed prefix");
+    }
+
+    const auto firstIndex =
+        indicesFlatAccessor[0]; // Safe, we have checked the length before
+    if (failed(checkScatterNDFirstIndexShift(
+            scatterNDOp, rewriter, firstIndex, [&](uint64_t idx) {
+              return llvm::is_contained(splitAxes, idx);
+            }))) {
+      return failure();
+    }
+
+    // Collapse the two adjacent axes firstSplitAxis and firstSplitAxis+1 into a
+    // single axis of their product, keeping the surrounding dims unchanged.
+    const auto firstSplitAxis = splitAxes.front();
+    auto collapseAdjacentSplitAxes =
+        [firstSplitAxis, splitAxes](
+            ArrayRef<int64_t> shape) -> SmallVector<int64_t> {
+      auto splitAxisSize = splitAxes.size();
+      SmallVector<int64_t> newShape =
+          llvm::to_vector(shape.take_front(firstSplitAxis));
+      auto collapsedShape = shape.slice(firstSplitAxis, splitAxisSize);
+      auto collapsedSize = std::accumulate(collapsedShape.begin(),
+          collapsedShape.end(), 1LL, std::multiplies<int64_t>());
+      newShape.push_back(collapsedSize);
+      newShape.append(llvm::to_vector(
+          shape.take_back(shape.size() - firstSplitAxis - splitAxisSize)));
+      return newShape;
+    };
+
+    SmallVector<int64_t> newDataShape = collapseAdjacentSplitAxes(dataShape);
+    SmallVector<int64_t> newUpdateShape =
+        collapseAdjacentSplitAxes(updateShape);
+    SmallVector<int64_t> newIndicesShape =
+        collapseAdjacentSplitAxes(indicesShape.drop_back(1));
+    auto newIndicesShapeDroppedLastDim = newIndicesShape;
+    // Merging N consecutive indexed axes into one reduces the index depth by
+    // N-1. For full indexing (k == rank(data)) this equals the new data rank
+    // (newDataShape.size()); for partial indexing (k < rank(data)) it is
+    // strictly smaller and the scatter stays a slice scatter.
+    const int64_t newIndexDepth =
+        indicesLastDimSize - (static_cast<int64_t>(splitAxes.size()) - 1);
+    newIndicesShape.push_back(newIndexDepth);
+
+    SmallVector<int64_t> newIndicesAsFlatArray;
+
+    assert(
+        updateShape.drop_back(updateShape.size() - (indicesShape.size() - 1)) ==
+            indicesShape.drop_back(1) &&
+        "Update and indicesShape should partially match for scatterNd");
+    if (failed(checkScatterNDContiguousIndices(scatterNDOp, rewriter,
+            firstIndex, indicesShape.drop_back(1), indicesFlatAccessor,
+            [&](IndicesContiguousCounter &counter) {
+              // Remap each length-k index coordinate through the axis merge,
+              // working only over the indexed prefix (the first k axes). Using
+              // the full data shape here would read past the end of the
+              // k-length coordinate when k < rank(data).
+              newIndicesAsFlatArray.append(counter.reshapedCounter(
+                  dataShape.take_front(indicesLastDimSize),
+                  ArrayRef<int64_t>(newDataShape).take_front(newIndexDepth)));
+            }))) {
+      return failure();
     }
 
     onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
         rewriter, scatterNDOp->getLoc());
-    // Strategy for the decomposition:
-    // Split at the split axis, concat the update and part of the split
-    // a, b = split(input)
-    // a1, a2 = split(a)
-    // concat(a1, update, b)
-    // In onnx this split can be done in one:
-    // a1, a2, b = split(input)
-    const auto firstSplitPosition =
-        (splitAxis < firstIndex.size()) ? firstIndex[splitAxis] : 0;
-    const auto secondSplitPosition =
-        updateShape[splitAxis] + firstSplitPosition;
-    SmallVector<int64_t> splitTyFirstQuarter(dataShape);
-    splitTyFirstQuarter[splitAxis] = firstSplitPosition;
-    SmallVector<int64_t> splitTySecondQuarter(dataShape);
-    splitTySecondQuarter[splitAxis] = updateShape[splitAxis];
-    SmallVector<int64_t> splitTySecondHalf(dataShape);
-    splitTySecondHalf[splitAxis] -= secondSplitPosition;
-    Value splitSize = create.onnx.constantInt64({firstSplitPosition,
-        updateShape[splitAxis], splitTySecondHalf[splitAxis]});
-    const Type dataElementType = dataType.getElementType();
-    ValueRange split = create.onnx.split(
-        {RankedTensorType::get(splitTyFirstQuarter, dataElementType),
-            RankedTensorType::get(splitTySecondQuarter, dataElementType),
-            RankedTensorType::get(splitTySecondHalf, dataElementType)},
-        scatterNDOp.getData(), splitSize, splitAxis);
 
-    Value concat = create.onnx.concat(
-        dataType, {split[0], scatterNDOp.getUpdates(), split[2]}, splitAxis);
-    rewriter.replaceOp(scatterNDOp, concat);
+    auto newDataTy =
+        RankedTensorType::get(newDataShape, dataType.getElementType());
+
+    auto reshapedScatterNDData = create.onnx.reshape(newDataTy,
+        scatterNDOp.getData(), create.onnx.constantInt64(newDataShape));
+
+    // New Indices
+    Value newIndices = create.onnx.constant(DenseElementsAttr::get(
+        RankedTensorType::get(newIndicesShape, indicesType.getElementType()),
+        ArrayRef<int64_t>(newIndicesAsFlatArray)));
+
+    auto reshapedScatterNDUpdates = create.onnx.reshape(
+        RankedTensorType::get(newUpdateShape, updatesType.getElementType()),
+        scatterNDOp.getUpdates(), create.onnx.constantInt64(newUpdateShape));
+
+    auto newScatterNDOp =
+        rewriter.create<ONNXScatterNDOp>(scatterNDOp->getLoc(), newDataTy,
+            reshapedScatterNDData, newIndices, reshapedScatterNDUpdates);
+
+    auto reshapedNewScatterND = create.onnx.reshape(dataType,
+        newScatterNDOp.getResult(), create.onnx.constantInt64(dataShape));
+
+    rewriter.replaceOp(scatterNDOp, reshapedNewScatterND);
     return success();
   }
 };
@@ -3302,8 +3711,12 @@ struct MicrosoftSkipSimplifiedLayerNorm : public CustomOpToOnnxOps {
 };
 
 struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
-  MicrosoftGroupQueryAttention(MLIRContext *ctx, PatternBenefit b = 1)
-      : CustomOpToOnnxOps(ctx, MicrosoftDomainName, "GroupQueryAttention", b) {}
+  MicrosoftGroupQueryAttention(
+      MLIRContext *ctx, bool enableUint16CacheSlotRewrite, PatternBenefit b = 1)
+      : CustomOpToOnnxOps(ctx, MicrosoftDomainName, "GroupQueryAttention", b),
+        enableUint16CacheSlotRewrite(enableUint16CacheSlotRewrite) {}
+
+  const bool enableUint16CacheSlotRewrite;
 
   using AttributeValidator = LogicalResult (*)(
       ONNXCustomOp, PatternRewriter &, Attribute);
@@ -3761,41 +4174,115 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
 
   // Build preallocated-cache present K/V. GQA updates one runtime slot:
   //   present[:, :, seqlens_k, :] = current K/V
-  // Convert current K/V from [B,1,H*D] to [B,H,1,D], expand seqlens_k to
-  // ScatterElements indices [B,H,1,D], then scatter into past K/V on axis 2.
-  // This preserves slot-write semantics that onnx.Attention's append-style
-  // present outputs cannot represent.
-  static FailureOr<Value> createPresentKVSlotWrite(PatternRewriter &rewriter,
-      Location loc, ONNXCustomOp customOp, Value pastKV, Value currentKV,
-      Value seqlensK, Type presentType, int64_t batchSize, int64_t kvSeqLen,
-      int64_t kvNumHeads, SmallVector<Value> &toCheck) {
-    auto pastType = cast<ShapedType>(pastKV.getType());
-    const int64_t headSize = pastType.getShape()[3];
-    auto current4dType = RankedTensorType::get(
-        {batchSize, kvNumHeads, kvSeqLen, headSize}, pastType.getElementType());
-    FailureOr<Value> current4dOr = createCurrentKV4D(rewriter, loc, customOp,
-        currentKV, batchSize, kvSeqLen, kvNumHeads, current4dType, toCheck);
-    if (failed(current4dOr))
+  // Both paths convert current K/V from [B,1,H*D] to [B,H,1,D].
+  // The uint16 rewrite builds one shared selector for K and V, then uses:
+  //   present = past + (current - past) * selector
+  // whereas the default path expands seqlens_k to i64 indices and uses
+  // ScatterElements.
+  static FailureOr<SmallVector<Value, 2>> createPresentKVSlotWrite(
+      PatternRewriter &rewriter, Location loc, ONNXCustomOp customOp,
+      Value pastKey, Value key, Type presentKeyType, Value pastValue,
+      Value value, Type presentValueType, Value seqlensK, int64_t batchSize,
+      int64_t cacheSeqLen, int64_t kvSeqLen, int64_t kvNumHeads,
+      bool enableUint16CacheSlotRewrite, SmallVector<Value> &toCheck) {
+    const int64_t maxUint16CacheCapacity =
+        static_cast<int64_t>(std::numeric_limits<uint16_t>::max()) + 1;
+    const bool useUint16CacheSlotRewrite =
+        enableUint16CacheSlotRewrite && cacheSeqLen <= maxUint16CacheCapacity;
+
+    Value slotSelector;
+    if (useUint16CacheSlotRewrite) {
+      // Build a broadcastable selector for the runtime cache slot:
+      //   positions_ui16 = Constant [1, 1, T, 1] = 0..T-1
+      //   seqlens_ui16   = Cast(seqlens_k -> ui16)
+      //   selected_i1    = Equal(positions_ui16, reshape(seqlens_ui16))
+      //   selector       = Cast(selected_i1 -> K/V element type)
+      Type ui16Type = rewriter.getIntegerType(16, false);
+      auto seqlensType = cast<ShapedType>(seqlensK.getType());
+      auto seqlensUI16Type =
+          seqlensType.clone(seqlensType.getShape(), ui16Type);
+      Value seqlensUI16 = rewriter.create<ONNXCastOp>(
+          loc, seqlensUI16Type, seqlensK, nullptr, TypeAttr::get(ui16Type));
+
+      Value seqlens4dShape = onnx_mlir::getONNXConstOpFromVector(
+          rewriter, loc, {batchSize, 1, 1, 1});
+      auto seqlens4dType =
+          RankedTensorType::get({batchSize, 1, 1, 1}, ui16Type);
+      Value seqlens4d = rewriter.create<ONNXReshapeOp>(
+          loc, seqlens4dType, seqlensUI16, seqlens4dShape, nullptr);
+
+      SmallVector<Attribute> positionAttrs = llvm::map_to_vector(
+          llvm::seq<int64_t>(cacheSeqLen), [&](int64_t i) -> Attribute {
+            return rewriter.getIntegerAttr(ui16Type, i);
+          });
+      auto positionsType =
+          RankedTensorType::get({1, 1, cacheSeqLen, 1}, ui16Type);
+      Value positions = rewriter.create<ONNXConstantOp>(loc, Attribute(),
+          DenseElementsAttr::get(positionsType, ArrayRef(positionAttrs)));
+
+      Value selectedSlot =
+          rewriter.create<ONNXEqualOp>(loc, positions, seqlens4d);
+      Type cacheElementType =
+          cast<ShapedType>(pastKey.getType()).getElementType();
+      auto selectorType = RankedTensorType::get(
+          {batchSize, 1, cacheSeqLen, 1}, cacheElementType);
+      slotSelector = rewriter.create<ONNXCastOp>(loc, selectorType,
+          selectedSlot, nullptr, TypeAttr::get(cacheElementType));
+      toCheck.append({seqlensUI16, seqlens4dShape, seqlens4d, positions,
+          selectedSlot, slotSelector});
+    }
+
+    auto createOneSlotWrite = [&](Value pastKV, Value currentKV,
+                                  Type presentType) -> FailureOr<Value> {
+      auto pastType = cast<ShapedType>(pastKV.getType());
+      const int64_t headSize = pastType.getShape()[3];
+      auto current4dType =
+          RankedTensorType::get({batchSize, kvNumHeads, kvSeqLen, headSize},
+              pastType.getElementType());
+      FailureOr<Value> current4dOr = createCurrentKV4D(rewriter, loc, customOp,
+          currentKV, batchSize, kvSeqLen, kvNumHeads, current4dType, toCheck);
+      if (failed(current4dOr))
+        return failure();
+      Value current4d = *current4dOr;
+
+      if (useUint16CacheSlotRewrite) {
+        Value delta =
+            rewriter.create<ONNXSubOp>(loc, presentType, current4d, pastKV);
+        Value selectedDelta =
+            rewriter.create<ONNXMulOp>(loc, presentType, delta, slotSelector);
+        Value present =
+            rewriter.create<ONNXAddOp>(loc, presentType, pastKV, selectedDelta);
+        toCheck.append({delta, selectedDelta, present});
+        return present;
+      } else {
+        Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
+        Value seqlens4d = reshapeI64(
+            rewriter, loc, seqlensI64, {batchSize, 1, 1, 1}, toCheck);
+        Value indexShape = onnx_mlir::getONNXConstOpFromVector(
+            rewriter, loc, {batchSize, kvNumHeads, 1, headSize});
+        auto indexType = RankedTensorType::get(
+            {batchSize, kvNumHeads, 1, headSize}, rewriter.getIntegerType(64));
+        Value indices = rewriter.create<ONNXExpandOp>(
+            loc, indexType, seqlens4d, indexShape);
+
+        Value present = rewriter.create<ONNXScatterElementsOp>(loc, presentType,
+            pastKV, indices, current4d,
+            rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), 2),
+            rewriter.getStringAttr("none"));
+        toCheck.append({indexShape, indices, present});
+        return present;
+      }
+    };
+
+    FailureOr<Value> presentKeyOr =
+        createOneSlotWrite(pastKey, key, presentKeyType);
+    if (failed(presentKeyOr))
       return failure();
-    Value current4d = *current4dOr;
-
-    Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
-    Value seqlens4d =
-        reshapeI64(rewriter, loc, seqlensI64, {batchSize, 1, 1, 1}, toCheck);
-    auto indexShape = onnx_mlir::getONNXConstOpFromVector(
-        rewriter, loc, {batchSize, kvNumHeads, 1, headSize});
-    auto indexType = RankedTensorType::get(
-        {batchSize, kvNumHeads, 1, headSize}, rewriter.getIntegerType(64));
-    Value indices =
-        rewriter.create<ONNXExpandOp>(loc, indexType, seqlens4d, indexShape);
-
-    // present[:, :, seqlens_k, :] = current K/V.
-    Value present = rewriter.create<ONNXScatterElementsOp>(loc, presentType,
-        pastKV, indices, current4d,
-        rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), 2),
-        rewriter.getStringAttr("none"));
-    toCheck.append({indexShape, indices, present});
-    return present;
+    FailureOr<Value> presentValueOr =
+        createOneSlotWrite(pastValue, value, presentValueType);
+    if (failed(presentValueOr))
+      return failure();
+    return SmallVector<Value, 2>{*presentKeyOr, *presentValueOr};
   }
 
   LogicalResult matchAndRewriteImpl(
@@ -4016,18 +4503,16 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
                 value, customOp.getResult(2).getType(), kvSeqLen,
                 kvNumHeads.getSInt())))
           return failure();
-        auto presentKeyOr = createPresentKVSlotWrite(rewriter, loc, customOp,
-            pastKey, key, seqlensK, customOp.getResult(1).getType(),
-            queryType.getShape()[0], kvSeqLen, kvNumHeads.getSInt(), toCheck);
-        if (failed(presentKeyOr))
+        FailureOr<SmallVector<Value, 2>> presentKVOr =
+            createPresentKVSlotWrite(rewriter, loc, customOp, pastKey, key,
+                customOp.getResult(1).getType(), pastValue, value,
+                customOp.getResult(2).getType(), seqlensK,
+                queryType.getShape()[0], pastSeqLen, kvSeqLen,
+                kvNumHeads.getSInt(), enableUint16CacheSlotRewrite, toCheck);
+        if (failed(presentKVOr))
           return failure();
-        auto presentValueOr = createPresentKVSlotWrite(rewriter, loc, customOp,
-            pastValue, value, seqlensK, customOp.getResult(2).getType(),
-            queryType.getShape()[0], kvSeqLen, kvNumHeads.getSInt(), toCheck);
-        if (failed(presentValueOr))
-          return failure();
-        presentKeyReplacement = *presentKeyOr;
-        presentValueReplacement = *presentValueOr;
+        presentKeyReplacement = (*presentKVOr)[0];
+        presentValueReplacement = (*presentKVOr)[1];
       }
     }
 
@@ -5378,7 +5863,8 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       enableGroupQueryAttentionDecompose, enableSplitToSliceDecompose,
       enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
       /*disableGenericDecompositions=*/false, enableGatherToSlice,
-      enableHardSwishDecompose, enableDepthToSpaceDecompose);
+      enableHardSwishDecompose, enableDepthToSpaceDecompose,
+      enableGQAUint16CacheSlotRewrite);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
   if (this->target == "stablehlo") {
@@ -5403,7 +5889,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool enableSplitToSliceDecompose, bool enableConcatFuse,
     bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
     bool disableGenericDecompositions, bool enableGatherToSlice,
-    bool enableHardSwishDecompose, bool enableDepthToSpaceDecompose) {
+    bool enableHardSwishDecompose, bool enableDepthToSpaceDecompose,
+    bool enableGQAUint16CacheSlotRewrite) {
   MLIRContext *context = patterns.getContext();
   if (!disableGenericDecompositions)
     populateWithGenerated(patterns);
@@ -5446,7 +5933,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     patterns.insert<MicrosoftSkipSimplifiedLayerNorm>(context);
   }
   if (enableGroupQueryAttentionDecompose)
-    patterns.insert<MicrosoftGroupQueryAttention>(context);
+    patterns.insert<MicrosoftGroupQueryAttention>(
+        context, enableGQAUint16CacheSlotRewrite);
   if (!disableGenericDecompositions)
     patterns.insert<MicrosoftRotaryEmbedding>(context);
   if (enableMatmulNBitsDecompose)
@@ -5454,6 +5942,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   if (!disableGenericDecompositions) {
     patterns.insert<DecomposeSlicePadPattern>(context);
     patterns.insert<DecomposeScatterNDPattern>(context);
+    patterns.insert<CanonicalizeScatterNDWithMultiAxis>(context);
     patterns.insert<SoftmaxCrossEntropyPattern>(context);
     patterns.insert<SumToAddPattern>(context);
   }
