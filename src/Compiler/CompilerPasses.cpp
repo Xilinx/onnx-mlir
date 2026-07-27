@@ -284,10 +284,13 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.enableReduceKeepdimsCanonicalization =
         enableReduceKeepdimsCanonicalization;
     opts.enableXFEONNXOpsetVerifier = enableXFEONNXOpsetVerifier;
+    opts.enableMatmulAddFusion = enableMatmulAddFusion;
+    opts.enableMatmulToConv = enableMatmulToConv;
     if (enableXMCPasses) {
       opts.hybrid.enableInstanceNormDecompose = false;
       opts.hybrid.enableGroupNormDecompose = false;
       opts.hybrid.enableConvTransposeDecomposeToPhasedConv = false;
+      opts.hybrid.enableSplitToSliceDecompose = true;
     }
 
     addONNXToMLIRPasses(pm, /*target CPU*/ false,
