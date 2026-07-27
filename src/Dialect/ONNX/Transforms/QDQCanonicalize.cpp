@@ -93,7 +93,7 @@ public:
   void runOnOperation() override {
     onnx_mlir::ResultNamesUpdater rnUpdater;
     if (failed(applyPatternsGreedily(getOperation(), frozenPatterns,
-            GreedyRewriteConfig{.listener = &rnUpdater})))
+            GreedyRewriteConfig().setListener(&rnUpdater))))
       signalPassFailure();
   }
 

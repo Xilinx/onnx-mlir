@@ -109,7 +109,7 @@ def ValuesHaveSameType : Constraint<
   "Values have same type">;
 
 def ValuesHaveSameDType : Constraint<
-  CPred<"$0.getType().cast<mlir::ShapedType>().getElementType() == $1.getType().cast<mlir::ShapedType>().getElementType()">,
+  CPred<"mlir::cast<mlir::ShapedType>($0.getType()).getElementType() == mlir::cast<mlir::ShapedType>($1.getType()).getElementType()">,
   "Values have same dtype">;
 
 def TransposeConstPropTypesMatch : Constraint<

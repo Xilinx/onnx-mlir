@@ -236,14 +236,13 @@ struct ReplaceQDQClipCastPass
     patterns.add<FuseQuantizedClipCastPattern>(context);
 
     GreedyRewriteConfig config;
-    config.useTopDownTraversal = true;
-    config.maxIterations = 10;
+    config.setUseTopDownTraversal(true);
+    config.setMaxIterations(10);
 
     onnx_mlir::ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
 
-    if (failed(applyPatternsAndFoldGreedily(
-            function, std::move(patterns), config)))
+    if (failed(applyPatternsGreedily(function, std::move(patterns), config)))
       signalPassFailure();
   }
 };

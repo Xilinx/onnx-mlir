@@ -129,9 +129,9 @@ struct RemovePairsAndMoveDownReshapePass
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
-    config.maxIterations = 10;
-    config.useTopDownTraversal = true;
-    config.listener = &rnUpdater;
+    config.setMaxIterations(10);
+    config.setUseTopDownTraversal(true);
+    config.setListener(&rnUpdater);
 
     if (failed(
             applyPatternsGreedily(getOperation(), std::move(patterns), config)))
