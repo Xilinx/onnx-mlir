@@ -2,6 +2,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 //
 // Pattern to convert ONNX operations to their ChannelLast variants.
@@ -225,17 +228,23 @@ struct ConvToChannelLastPattern : public OpRewritePattern<ONNXConvOp> {
         rewriter, loc, weight, rank, weightType.getElementType());
 
     // Create XFEConv operation
+    FailureOr<onnx_mlir::ConvGeometry> geometry =
+        onnx_mlir::getConvGeometry(convOp);
+    if (failed(geometry))
+      return rewriter.notifyMatchFailure(
+          convOp, "cannot resolve conv geometry into explicit attributes");
+
     auto origOutputType = mlir::cast<ShapedType>(convOp.getType());
     Type outputElementType = origOutputType.getElementType();
     Type nhwcOutputElemType = remapQuantTypeNchw2Nhwc(outputElementType, rank);
     auto convChannelLastOp = rewriter.create<XFEConvOp>(loc,
         UnrankedTensorType::get(nhwcOutputElemType), inputChannelLast,
         weightChannelLast, bias, rewriter.getStringAttr("NONE"),
-        convOp.getAutoPadAttr(), convOp.getDilationsAttr(),
-        convOp.getGroupAttr(), convOp.getKernelShapeAttr(),
-        /*leakyrelu_alpha=*/FloatAttr(), convOp.getPadsAttr(),
+        rewriter.getI64ArrayAttr(geometry->dilations), convOp.getGroupAttr(),
+        /*leakyrelu_alpha=*/FloatAttr(),
+        rewriter.getI64ArrayAttr(geometry->pads),
         /*prelu_in=*/IntegerAttr(), /*prelu_shift=*/IntegerAttr(),
-        convOp.getStridesAttr());
+        rewriter.getI64ArrayAttr(geometry->strides));
 
     // Transfer onnx_node_name attribute from original Conv to XFEConv
     transferOnnxNodeName(convOp, convChannelLastOp);

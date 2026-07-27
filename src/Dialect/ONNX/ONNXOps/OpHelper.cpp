@@ -317,6 +317,74 @@ void ArrayAttrIntVals(ArrayAttr a, mlir::SmallVectorImpl<int64_t> &i) {
     i.emplace_back(mlir::cast<IntegerAttr>(a.getValue()[k]).getInt());
 }
 
+FailureOr<ConvGeometry> getConvGeometry(ONNXConvOp convOp) {
+  Value W = convOp.getW();
+  if (!hasShapeAndRank(W))
+    return failure();
+  ArrayRef<int64_t> wShape = mlir::cast<ShapedType>(W.getType()).getShape();
+  const int64_t firstSpatialAxis = 2;
+  const int64_t spatialRank = wShape.size() - firstSpatialAxis;
+  if (spatialRank < 1)
+    return failure();
+
+  // ONNXConvOp::verify() has already checked the attribute ranks.
+  auto readOrFill = [spatialRank](std::optional<ArrayAttr> a, int64_t defVal) {
+    SmallVector<int64_t> vals(spatialRank, defVal);
+    if (a.has_value())
+      for (int64_t i = 0; i < spatialRank; ++i)
+        vals[i] = ArrayAttrIntVal(a, i);
+    return vals;
+  };
+
+  ConvGeometry geometry;
+  geometry.strides = readOrFill(convOp.getStrides(), 1);
+  geometry.dilations = readOrFill(convOp.getDilations(), 1);
+  geometry.pads.assign(2 * spatialRank, 0);
+
+  StringRef autoPad = convOp.getAutoPad();
+  if (autoPad == "NOTSET") {
+    if (auto padsAttr = convOp.getPads())
+      for (int64_t i = 0; i < 2 * spatialRank; ++i)
+        geometry.pads[i] = ArrayAttrIntVal(padsAttr, i);
+    return geometry;
+  }
+  // VALID leaves the pads at zero.
+  if (autoPad == "VALID")
+    return geometry;
+  if (autoPad != "SAME_UPPER" && autoPad != "SAME_LOWER")
+    return failure();
+
+  Value X = convOp.getX();
+  if (!hasShapeAndRank(X))
+    return failure();
+  ArrayRef<int64_t> xShape = mlir::cast<ShapedType>(X.getType()).getShape();
+  const bool isSameUpper = autoPad == "SAME_UPPER";
+
+  for (int64_t i = 0; i < spatialRank; ++i) {
+    const int64_t inputSize = xShape[firstSpatialAxis + i];
+    if (ShapedType::isDynamic(inputSize))
+      return failure();
+
+    // SAME padding fixes the output size to ceil(inputSize / stride). The last
+    // window starts at (outputSize - 1) * stride and spans effectiveKernel
+    // input positions, so the padded input must be at least that large.
+    const int64_t stride = geometry.strides[i];
+    const int64_t effectiveKernel =
+        (wShape[firstSpatialAxis + i] - 1) * geometry.dilations[i] + 1;
+    const int64_t outputSize = llvm::divideCeil(inputSize, stride);
+    const int64_t sumOfPad = std::max<int64_t>(
+        0, (outputSize - 1) * stride + effectiveKernel - inputSize);
+
+    // An odd total pad puts the extra element at the end for SAME_UPPER and at
+    // the beginning for SAME_LOWER.
+    const int64_t padBegin =
+        isSameUpper ? sumOfPad / 2 : sumOfPad - sumOfPad / 2;
+    geometry.pads[i] = padBegin;
+    geometry.pads[spatialRank + i] = sumOfPad - padBegin;
+  }
+  return geometry;
+}
+
 ElementsAttr getElementAttributeFromONNXValue(Value value) {
   ONNXConstantOp constantOp = getONNXConstantOp(value);
   // In case the ConstantOp has not been normalized yet
