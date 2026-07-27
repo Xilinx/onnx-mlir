@@ -426,7 +426,10 @@ static std::optional<ONNXAxisFieldConfig> getAxisAttrConfig(Operation *op) {
     return ONNXAxisFieldConfig{
         ONNXAxisOperandKind::Scalar, ONNXAxisRankKind::FirstOperandMinusOne};
 
-  if (name == "onnx.ArgMax" || name == "onnx.ArgMin" ||
+  if (name == "onnx.AMDQuarkBFPQuantizeDequantizeOp" ||
+      name == "onnx.AMDQuarkExtendedDequantizeLinearOp" ||
+      name == "onnx.AMDQuarkExtendedQuantizeLinearOp" ||
+      name == "onnx.ArgMax" || name == "onnx.ArgMin" ||
       name == "onnx.Compress" || name == "onnx.Concat" ||
       name == "onnx.DequantizeLinear" || name == "onnx.Gather" ||
       name == "onnx.GatherElements" || name == "onnx.Hardmax" ||
