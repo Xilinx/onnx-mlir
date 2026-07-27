@@ -860,6 +860,7 @@ OpsWithResultTypeInference = [
     "Bernoulli",
     "Constant",
     "Cast",
+    "CastLike",
     "ConcatFromSequence",
     "ConstantOfShape",
     "EyeLike",
