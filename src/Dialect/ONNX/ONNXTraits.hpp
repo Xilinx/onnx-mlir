@@ -30,17 +30,8 @@ public:
 };
 
 template <typename ConcreteType>
-class IsElementwiseUnary
-    : public OpTrait::TraitBase<ConcreteType, IsElementwiseUnary> {};
-
-template <typename ConcreteType>
-class IsElementwiseBinary
-    : public OpTrait::TraitBase<ConcreteType, IsElementwiseBinary> {};
-
-template <typename ConcreteType>
-class IsCommutativeElementwiseBinary
-    : public OpTrait::TraitBase<ConcreteType, IsCommutativeElementwiseBinary> {
-};
+class ONNXElementwise
+    : public OpTrait::TraitBase<ConcreteType, ONNXElementwise> {};
 
 } // namespace OpTrait
 } // namespace mlir
