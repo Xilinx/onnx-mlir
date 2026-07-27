@@ -1971,6 +1971,16 @@ public:
     if (firstAllowZero != 0)
       return rewriter.notifyMatchFailure(op, "Does not support AllowZero != 0");
 
+    // Fuse only if bypassing the inner reshape is safe: it has one use, or all
+    // its consumers are reshapes. Otherwise preserve it.
+    bool safeToFold = firstReshapeOp.getResult().hasOneUse();
+    if (!safeToFold)
+      safeToFold = llvm::all_of(firstReshapeOp.getResult().getUsers(),
+          [](Operation *user) { return llvm::isa<ONNXReshapeOp>(user); });
+    if (!safeToFold)
+      return rewriter.notifyMatchFailure(
+          op, "Inner reshape has non-reshape consumers; preserve it");
+
     // Don't fuse if element types differ (e.g. quantized -> f32 boundary).
     auto firstDataElemType =
         mlir::cast<ShapedType>(firstData.getType()).getElementType();
