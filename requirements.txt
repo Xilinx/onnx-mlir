@@ -3,7 +3,7 @@ lit~=15.0
 # and np.int which are used heavily in onnx-mlir.
 numpy==2.0.2
 onnx==1.21.0
-protobuf==4.25.9
+protobuf==6.33.5
 pyyaml==6.0.3
 pytest==8.3.5
 pytest-xdist==3.6.1
