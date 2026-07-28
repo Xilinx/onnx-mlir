@@ -984,6 +984,66 @@ struct PropagateConstantScalingInAttentionLayerPattern
   }
 };
 
+// Upgrade ReduceMeanV13 latest ReduceMean. A present `axes` attribute becomes a
+// constant axes operand; an absent one becomes a None operand with
+// `noop_with_empty_axes = 0`, preserving the legacy "reduce over every
+// dimension" semantics.
+class UpgradeReduceMeanV13Pattern
+    : public OpRewritePattern<ONNXReduceMeanV13Op> {
+public:
+  using OpRewritePattern<ONNXReduceMeanV13Op>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXReduceMeanV13Op op, PatternRewriter &rewriter) const override {
+    OnnxBuilder create(rewriter, op.getLoc());
+    Value newAxes;
+    if (ArrayAttr axesAttr = op.getAxesAttr()) {
+      SmallVector<int64_t> axes;
+      for (size_t i = 0; i < axesAttr.size(); ++i)
+        axes.push_back(ArrayAttrIntVal(axesAttr, i));
+      newAxes = create.constantInt64(axes);
+    } else {
+      newAxes = create.none();
+    }
+    IntegerAttr noopWithEmptyAxes = IntegerAttr::get(
+        rewriter.getIntegerType(64, /*isSigned=*/true), APInt(64, 0, true));
+    rewriter.replaceOpWithNewOp<ONNXReduceMeanOp>(op, op.getResult().getType(),
+        op.getData(), newAxes, op.getKeepdimsAttr(), noopWithEmptyAxes);
+    return success();
+  }
+};
+
+// Materialize the implicit "reduce all axes" of a ReduceMean whose reduction
+// axes operand is absent (None). An omitted `axes` means "reduce over every
+// dimension" unless `noop_with_empty_axes = 1`, which is a no-op that
+// `ONNXReduceMeanOp::fold` already forwards.
+class MaterializeAbsentAxesReduceMeanPattern
+    : public OpRewritePattern<ONNXReduceMeanOp> {
+public:
+  using OpRewritePattern<ONNXReduceMeanOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXReduceMeanOp op, PatternRewriter &rewriter) const override {
+    if (!isNoneValue(op.getAxes()))
+      return rewriter.notifyMatchFailure(op, "axes already present");
+
+    if (op.getNoopWithEmptyAxes() != 0)
+      return rewriter.notifyMatchFailure(op, "noop on empty axes");
+
+    auto dataType = mlir::dyn_cast<RankedTensorType>(op.getData().getType());
+    if (!dataType)
+      return rewriter.notifyMatchFailure(op, "data must be ranked");
+    const int64_t rank = dataType.getRank();
+
+    SmallVector<int64_t> axes(rank);
+    std::iota(axes.begin(), axes.end(), int64_t{0});
+    OnnxBuilder create(rewriter, op.getLoc());
+    Value newAxes = create.constantInt64(axes);
+    rewriter.modifyOpInPlace(op, [&] { op.getAxesMutable().assign(newAxes); });
+    return success();
+  }
+};
+
 // Drop reduction axes that point to dimensions of size 1 from
 // `onnx.ReduceMean`. Reducing a unit-sized dimension is a no-op, so the axis
 // can be removed from the `axes` operand without changing the result.
@@ -3949,7 +4009,14 @@ void ONNXOrOp::getCanonicalizationPatterns(
 /// on the ONNXReduceMeanOp.
 void ONNXReduceMeanOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReduceMeanPattern>(context);
   result.insert<DropUnitAxesFromReduceMeanPattern>(context);
+}
+
+/// on the ONNXReduceMeanV13Op.
+void ONNXReduceMeanV13Op::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  result.insert<UpgradeReduceMeanV13Pattern>(context);
 }
 
 /// on the ONNXReshapeOp.
