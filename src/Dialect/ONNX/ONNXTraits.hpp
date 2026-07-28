@@ -29,5 +29,9 @@ public:
   };
 };
 
+template <typename ConcreteType>
+class ONNXElementwise
+    : public OpTrait::TraitBase<ConcreteType, ONNXElementwise> {};
+
 } // namespace OpTrait
 } // namespace mlir
