@@ -168,6 +168,19 @@ func.func @tile_block_arg(%arg0: tensor<1x3xf32> {onnx.name = "input"}) -> tenso
 // CHECK-SAME: ResultNames = [
 // CHECK-SAME: ["input", ["Tile", [1, 3], [2, 2], [2, 6]]]]
 
+// Check tensor name inference reads Tile repeats from ConstantLike ops beyond
+// onnx.Constant.
+func.func @tile_tosa_const_repeats(%arg0: tensor<1x3xf32> {onnx.name = "input"}) -> tensor<2x6xf32> {
+  %0 = "tosa.const"() {value = dense<[2, 2]> : tensor<2xi64>} : () -> tensor<2xi64>
+  %1 = "onnx.Tile"(%arg0, %0) : (tensor<1x3xf32>, tensor<2xi64>) -> tensor<2x6xf32>
+  return %1 : tensor<2x6xf32>
+}
+
+// CHECK-LABEL: @tile_tosa_const_repeats
+// CHECK: onnx.Tile
+// CHECK-SAME: ResultNames = [
+// CHECK-SAME: ["input", ["Tile", [1, 3], [2, 2], [2, 6]]]]
+
 // Check tensor name of virtual reg with tile applied to it
 func.func @tile_operand(%arg0: tensor<1x4xf32> {onnx.name = "input"}) -> tensor<3x4xf32> {
   %0 = "onnx.Identity"(%arg0) : (tensor<1x4xf32>) -> tensor<1x4xf32>
