@@ -4734,14 +4734,78 @@ void ONNXBatchNormalizationV9Op::getCanonicalizationPatterns(
   results.insert<RemoveBatchNormV9Pattern>(context);
 }
 
+/// Fold Cast_final(Cast_intermediate(x)) when both casts are integer casts with
+/// identical signedness and intermediateWidth > finalWidth.
+struct FoldIntegerCastChainPattern : public OpRewritePattern<ONNXCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXCastOp outerCast, PatternRewriter &rewriter) const override {
+    auto innerCast = outerCast.getInput().getDefiningOp<ONNXCastOp>();
+    if (!innerCast)
+      return failure();
+
+    auto outerElemTy =
+        mlir::cast<ShapedType>(outerCast.getType()).getElementType();
+    auto innerResultElemTy =
+        mlir::cast<ShapedType>(innerCast.getType()).getElementType();
+
+    auto innerIntTy = dyn_cast<IntegerType>(innerResultElemTy);
+    auto outerIntTy = dyn_cast<IntegerType>(outerElemTy);
+    if (!innerIntTy || !outerIntTy)
+      return failure();
+    if (innerIntTy.isUnsigned() != outerIntTy.isUnsigned())
+      return failure();
+    if (innerIntTy.getWidth() < outerIntTy.getWidth())
+      return failure();
+
+    rewriter.modifyOpInPlace(outerCast,
+        [&]() { outerCast.getInputMutable().assign(innerCast.getInput()); });
+    return success();
+  }
+};
+
+/// Fold lossless narrow-float round trips: f16/bf16 -> f32 -> f16/bf16.
+struct FoldLosslessFloatCastRoundTripPattern
+    : public OpRewritePattern<ONNXCastOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXCastOp outerCast, PatternRewriter &rewriter) const override {
+    auto innerCast = outerCast.getInput().getDefiningOp<ONNXCastOp>();
+    if (!innerCast)
+      return failure();
+
+    auto sourceElemTy =
+        mlir::cast<ShapedType>(innerCast.getInput().getType()).getElementType();
+    auto intermediateElemTy =
+        mlir::cast<ShapedType>(innerCast.getType()).getElementType();
+    auto finalElemTy =
+        mlir::cast<ShapedType>(outerCast.getType()).getElementType();
+
+    auto isLosslessRoundTrip = [&](auto narrowTyTag) {
+      using NarrowTy = decltype(narrowTyTag);
+      return isa<NarrowTy>(sourceElemTy) &&
+             isa<Float32Type>(intermediateElemTy) && isa<NarrowTy>(finalElemTy);
+    };
+
+    if (!(isLosslessRoundTrip(BFloat16Type{}) ||
+            isLosslessRoundTrip(Float16Type{})))
+      return failure();
+
+    rewriter.replaceOp(outerCast, innerCast.getInput());
+    return success();
+  }
+};
+
 /// on the ONNXCastOp.
 void ONNXCastOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<CastEliminationPattern>(context);
   result.insert<SwapCastConcatPattern>(context);
   result.insert<SwapCastSlicePattern>(context);
-  // TODO: Reintroduce pattern for sound type combinations, see issue #2210.
-  // result.insert<FuseCastCastPattern>(context);
+  result.insert<FoldIntegerCastChainPattern>(context);
+  result.insert<FoldLosslessFloatCastRoundTripPattern>(context);
 }
 
 /// on the ONNXConcatOp.
