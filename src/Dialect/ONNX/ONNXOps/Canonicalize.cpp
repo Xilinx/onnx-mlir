@@ -4215,7 +4215,8 @@ void ONNXDequantizeLinearOp::getCanonicalizationPatterns(
 
 namespace {
 
-// Derive spatial rank from kernel_shape when present, otherwise from weight rank.
+// Derive spatial rank from kernel_shape when present, otherwise from weight
+// rank.
 static std::optional<int64_t> getConvSpatialRank(ONNXConvOp convOp) {
   if (auto kernelShape = convOp.getKernelShape(); kernelShape.has_value()) {
     const int64_t rank = ArrayAttrSize(kernelShape);
@@ -4228,8 +4229,7 @@ static std::optional<int64_t> getConvSpatialRank(ONNXConvOp convOp) {
   if (!hasShapeAndRank(W))
     return std::nullopt;
   const auto wShape = cast<ShapedType>(W.getType()).getShape();
-  const int64_t spatialRank =
-      static_cast<int64_t>(wShape.size()) - 2;
+  const int64_t spatialRank = static_cast<int64_t>(wShape.size()) - 2;
   if (spatialRank >= 1)
     return spatialRank;
   return std::nullopt;
