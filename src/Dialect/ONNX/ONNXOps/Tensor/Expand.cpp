@@ -10,9 +10,11 @@
 //
 // This file provides definition of ONNX dialect Expand operation.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
-#include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 
 using namespace mlir;
@@ -83,14 +85,47 @@ LogicalResult ONNXExpandOpShapeHelper::computeShape() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ONNXExpandOp::verify() {
-  ONNXExpandOpAdaptor operandAdaptor = ONNXExpandOpAdaptor(*this);
+  auto operandAdaptor = ONNXExpandOpAdaptor(*this);
   // Get operands.
+  auto input = operandAdaptor.getInput();
   auto shape = operandAdaptor.getShape();
   // Check input.
   auto shapeType = mlir::dyn_cast_or_null<ShapedType>(shape.getType());
   if (shapeType && shapeType.hasRank()) {
     if (shapeType.getRank() != 1)
       return emitOpError("Shape has a rank of 1");
+  }
+
+  auto inputType = mlir::dyn_cast_or_null<ShapedType>(input.getType());
+  if (!inputType || !inputType.hasRank())
+    return success();
+
+  SmallVector<int64_t> shapeVals = valToVector(shape);
+  if (shapeVals.empty())
+    return success();
+
+  ArrayRef<int64_t> inputShape = inputType.getShape();
+  int64_t inputIdx = inputShape.size() - 1;
+  int64_t shapeIdx = shapeVals.size() - 1;
+  for (; inputIdx >= 0 && shapeIdx >= 0; --inputIdx, --shapeIdx) {
+    int64_t inputDim = inputShape[inputIdx];
+    int64_t shapeDim = shapeVals[shapeIdx];
+
+    // Stay conservative: only flag a pair that is provably incompatible, i.e.
+    // both sides are static, positive, unequal, and neither one is 1.
+    if (ShapedType::isDynamic(inputDim))
+      continue;
+    if (shapeDim < 0)
+      return mlir::emitError(getLoc(), getOperationName())
+             << ": shape dimension " << shapeDim << " at index " << shapeIdx
+             << " is negative";
+    if (inputDim != shapeDim && inputDim != 1 && shapeDim != 1)
+      return mlir::emitError(getLoc(), getOperationName())
+             << ": input dimension " << inputDim << " at index " << inputIdx
+             << " is incompatible with target shape dimension " << shapeDim
+             << " at index " << shapeIdx
+             << ": two corresponding dimensions must have the same value, or "
+                "one of them is equal to 1";
   }
   return success();
 }

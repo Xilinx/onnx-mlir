@@ -46,38 +46,6 @@ func.func @test_expand_new_dims_out(%arg0: tensor<1x64x1xf32>) -> tensor<64x64x6
 
 // -----
 
-func.func @test_expand_new_dims_start(%arg0: tensor<256x256x16xf32>) -> tensor<1x512x256x16xf32> {
-  %0 = "onnx.Constant"() {value = dense<[1, 512, 256, 16]> : tensor<4xi64>} : () -> tensor<4xi64>
-  %1 = "onnx.Expand"(%arg0, %0) : (tensor<256x256x16xf32>, tensor<4xi64>) -> tensor<1x512x256x16xf32>
-  return %1 : tensor<1x512x256x16xf32>
-}
-
-// CHECK-LABEL:  func.func @test_expand_new_dims_start
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<256x256x16xf32>) -> tensor<1x512x256x16xf32> {
-// CHECK-DAG:       [[VAR_0_:%.+]] = "tosa.const"() <{value = dense<[1, 512, 256, 16]> : tensor<4xi64>}> : () -> tensor<4xi64>
-// CHECK-DAG:       [[VAR_1_:%.+]] = tosa.reshape [[PARAM_0_]] {new_shape = array<i64: 1, 256, 256, 16>} : (tensor<256x256x16xf32>) -> tensor<1x256x256x16xf32>
-// CHECK-DAG:       [[VAR_2_:%.+]] = tosa.const_shape  {value = dense<[1, 2, 1, 1]> : tensor<4xindex>} : () -> !tosa.shape<4>
-// CHECK:           [[VAR_3_:%.+]] = tosa.tile [[VAR_1_]], [[VAR_2_]] : (tensor<1x256x256x16xf32>, !tosa.shape<4>) -> tensor<1x512x256x16xf32>
-// CHECK:           return [[VAR_3_]] : tensor<1x512x256x16xf32>
-
-// -----
-
-func.func @test_expand_new_dims_mix(%arg0: tensor<128x64xf32>) -> tensor<1x128x16x128x16xf32> {
-  %0 = "onnx.Constant"() {value = dense<[1, 128, 16, 128, 16]> : tensor<5xi64>} : () -> tensor<5xi64>
-  %1 = "onnx.Expand"(%arg0, %0) : (tensor<128x64xf32>, tensor<5xi64>) -> tensor<1x128x16x128x16xf32>
-  return %1 : tensor<1x128x16x128x16xf32>
-}
-
-// CHECK-LABEL:  func.func @test_expand_new_dims_mix
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<128x64xf32>) -> tensor<1x128x16x128x16xf32> {
-// CHECK-DAG:       [[VAR_0_:%.+]] = "tosa.const"() <{value = dense<[1, 128, 16, 128, 16]> : tensor<5xi64>}> : () -> tensor<5xi64>
-// CHECK-DAG:       [[VAR_1_:%.+]] = tosa.reshape [[PARAM_0_]] {new_shape = array<i64: 1, 128, 1, 64, 1>} : (tensor<128x64xf32>) -> tensor<1x128x1x64x1xf32>
-// CHECK-DAG:       [[VAR_2_:%.+]] = tosa.const_shape  {value = dense<[1, 1, 16, 2, 16]> : tensor<5xindex>} : () -> !tosa.shape<5>
-// CHECK:           [[VAR_3_:%.+]] = tosa.tile [[VAR_1_]], [[VAR_2_]] : (tensor<1x128x1x64x1xf32>, !tosa.shape<5>) -> tensor<1x128x16x128x16xf32>
-// CHECK:           return [[VAR_3_]] : tensor<1x128x16x128x16xf32>
-
-// -----
-
 func.func @test_expand_no_tile(%arg0: tensor<128x16xf32>) -> tensor<1x1x128x16xf32> {
   %0 = "onnx.Constant"() {value = dense<[1, 1, 128, 16]> : tensor<4xi64>} : () -> tensor<4xi64>
   %1 = "onnx.Expand"(%arg0, %0) : (tensor<128x16xf32>, tensor<4xi64>) -> tensor<1x1x128x16xf32>
