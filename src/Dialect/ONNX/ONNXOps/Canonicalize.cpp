@@ -4734,9 +4734,57 @@ void ONNXBatchNormalizationV9Op::getCanonicalizationPatterns(
   results.insert<RemoveBatchNormV9Pattern>(context);
 }
 
-/// Matches an onnx.Cast whose input is produced by another onnx.Cast with a
-/// single use, and replaces the chain with a single onnx.Cast from the original
-/// source type to the final destination type.
+/// `src <= mid`: casting `src` to `mid` is lossless.
+///
+///   int   -> int    same signedness, no truncation
+///   int   -> float  significand covers the integer range
+///   float -> float  `mid`'s format represents all of `src`
+///   anything else   never (float -> int, quant types)
+static bool castPreservesAllValues(Type src, Type mid) {
+  auto srcIntTy = dyn_cast<IntegerType>(src);
+  auto midIntTy = dyn_cast<IntegerType>(mid);
+  auto srcFloatTy = dyn_cast<FloatType>(src);
+  auto midFloatTy = dyn_cast<FloatType>(mid);
+
+  if (srcIntTy && midIntTy)
+    return srcIntTy.getSignedness() == midIntTy.getSignedness() &&
+           srcIntTy.getWidth() <= midIntTy.getWidth();
+
+  // Signless counts as signed; the mantissa width includes the integer bit.
+  if (srcIntTy && midFloatTy) {
+    unsigned intBits = srcIntTy.getWidth();
+    unsigned neededBits = srcIntTy.isUnsigned() ? intBits : intBits - 1;
+    return neededBits <= midFloatTy.getFPMantissaWidth();
+  }
+
+  // Not a width comparison: bf16 and f16 are both 16-bit but neither
+  // represents the other.
+  if (srcFloatTy && midFloatTy)
+    return llvm::APFloatBase::isRepresentableBy(
+        srcFloatTy.getFloatSemantics(), midFloatTy.getFloatSemantics());
+
+  return false;
+}
+
+/// `mid >= dst`: casting to `dst` discards at least as much as casting to
+/// `mid` did, hiding the intermediate loss. Integer-only and one signedness
+/// throughout: int narrowing drops high bits while float rounding drops low
+/// ones, and two float casts round twice, which is not bit-accurate.
+static bool finalCastSubsumesIntermediate(Type src, Type mid, Type dst) {
+  auto srcIntTy = dyn_cast<IntegerType>(src);
+  auto midIntTy = dyn_cast<IntegerType>(mid);
+  auto dstIntTy = dyn_cast<IntegerType>(dst);
+  if (!srcIntTy || !midIntTy || !dstIntTy)
+    return false;
+
+  return srcIntTy.getSignedness() == midIntTy.getSignedness() &&
+         midIntTy.getSignedness() == dstIntTy.getSignedness() &&
+         dstIntTy.getWidth() <= midIntTy.getWidth();
+}
+
+/// Replaces a chain of two onnx.Casts `src -> mid -> dst` with a single cast
+/// `src -> dst`, whenever `mid` is unobservable: either `src -> mid` loses
+/// nothing, or `mid -> dst` loses everything `src -> mid` did.
 struct FoldConsecutiveCastPattern : public OpRewritePattern<ONNXCastOp> {
   using OpRewritePattern<ONNXCastOp>::OpRewritePattern;
 
@@ -4746,102 +4794,15 @@ struct FoldConsecutiveCastPattern : public OpRewritePattern<ONNXCastOp> {
     if (!innerCast)
       return failure();
 
-    // Only fold when the intermediate result has exactly one user.
     if (!innerCast.getResult().hasOneUse())
       return failure();
 
-    auto srcElemTy =
-        cast<ShapedType>(innerCast.getInput().getType()).getElementType();
-    auto midElemTy =
-        cast<ShapedType>(innerCast.getResult().getType()).getElementType();
+    Type src = getElementType(innerCast.getInput().getType());
+    Type mid = getElementType(innerCast.getResult().getType());
+    Type dst = getElementType(outerCast.getResult().getType());
 
-    // Bail out on quant types which are neither IntegerType nor FloatType.
-    auto srcIntTy = dyn_cast<IntegerType>(srcElemTy);
-    auto midIntTy = dyn_cast<IntegerType>(midElemTy);
-    auto srcFloatTy = dyn_cast<FloatType>(srcElemTy);
-    auto midFloatTy = dyn_cast<FloatType>(midElemTy);
-
-    if (!srcIntTy && !srcFloatTy)
-      return failure();
-    if (!midIntTy && !midFloatTy)
-      return failure();
-
-    // Check that the inner cast (src -> mid) is information-preserving.
-    bool bothInt = srcIntTy && midIntTy;
-    bool bothFloat = srcFloatTy && midFloatTy;
-    bool intToFloat = srcIntTy && midFloatTy;
-
-    if (bothInt) {
-      // int -> int: require same signedness and strict widening.
-      if (srcIntTy.getSignedness() != midIntTy.getSignedness())
-        return failure();
-      if (midIntTy.getWidth() <= srcIntTy.getWidth())
-        return failure();
-    } else if (bothFloat) {
-      // float -> float: the intermediate type must be able to represent every
-      // value of the source type. Examples: bf16 and f16 are both 16-bit but
-      // neither can represent the other; tf32 is 19-bit yet covers all of bf16.
-      const auto &srcSem = srcFloatTy.getFloatSemantics();
-      const auto &midSem = midFloatTy.getFloatSemantics();
-      if (!llvm::APFloatBase::isRepresentableBy(srcSem, midSem))
-        return failure();
-    } else if (intToFloat) {
-      // int -> float: safe when the float precision (significand bits including
-      // the integer bit) can represent all integer values.
-      // For unsigned: intBitWidth <= precision
-      // For signed:   intBitWidth - 1 <= precision
-      unsigned intBits = srcIntTy.getWidth();
-      unsigned floatPrec = midFloatTy.getFPMantissaWidth();
-      // Signless integers are treated as signed (conservative).
-      bool isUnsigned = srcIntTy.isUnsigned();
-      if (isUnsigned) {
-        if (intBits > floatPrec)
-          return failure();
-      } else {
-        // Signed or signless: need intBits - 1 <= precision.
-        if (intBits <= 1 ? false : (intBits - 1) > floatPrec)
-          return failure();
-      }
-    } else {
-      // float -> int or any other cross-category: not safe.
-      return failure();
-    }
-
-    rewriter.modifyOpInPlace(outerCast,
-        [&]() { outerCast.getInputMutable().assign(innerCast.getInput()); });
-    return success();
-  }
-};
-
-/// Fold an integer cast chain when the final type is strictly narrower than
-/// the intermediate type and all three types have identical signedness.
-struct FoldNarrowingIntegerCastChainPattern
-    : public OpRewritePattern<ONNXCastOp> {
-  using OpRewritePattern<ONNXCastOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(
-      ONNXCastOp outerCast, PatternRewriter &rewriter) const override {
-    auto innerCast = outerCast.getInput().getDefiningOp<ONNXCastOp>();
-    if (!innerCast || !innerCast.getResult().hasOneUse())
-      return failure();
-
-    auto srcElemTy =
-        cast<ShapedType>(innerCast.getInput().getType()).getElementType();
-    auto midElemTy =
-        cast<ShapedType>(innerCast.getResult().getType()).getElementType();
-    auto dstElemTy =
-        cast<ShapedType>(outerCast.getResult().getType()).getElementType();
-
-    auto srcIntTy = dyn_cast<IntegerType>(srcElemTy);
-    auto midIntTy = dyn_cast<IntegerType>(midElemTy);
-    auto dstIntTy = dyn_cast<IntegerType>(dstElemTy);
-    if (!srcIntTy || !midIntTy || !dstIntTy)
-      return failure();
-
-    if (srcIntTy.getSignedness() != midIntTy.getSignedness() ||
-        midIntTy.getSignedness() != dstIntTy.getSignedness())
-      return failure();
-    if (midIntTy.getWidth() <= dstIntTy.getWidth())
+    if (!castPreservesAllValues(src, mid) &&
+        !finalCastSubsumesIntermediate(src, mid, dst))
       return failure();
 
     rewriter.modifyOpInPlace(outerCast,
@@ -4857,7 +4818,6 @@ void ONNXCastOp::getCanonicalizationPatterns(
   result.insert<SwapCastConcatPattern>(context);
   result.insert<SwapCastSlicePattern>(context);
   result.insert<FoldConsecutiveCastPattern>(context);
-  result.insert<FoldNarrowingIntegerCastChainPattern>(context);
 }
 
 /// on the ONNXConcatOp.
