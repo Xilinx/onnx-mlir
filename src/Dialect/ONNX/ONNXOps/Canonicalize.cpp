@@ -4734,10 +4734,11 @@ void ONNXBatchNormalizationV9Op::getCanonicalizationPatterns(
   results.insert<RemoveBatchNormV9Pattern>(context);
 }
 
-/// Fold Cast_final(Cast_intermediate(x)) when both casts are integer casts with
-/// identical signedness and intermediateWidth > finalWidth.
-struct FoldIntegerCastChainPattern : public OpRewritePattern<ONNXCastOp> {
-  using OpRewritePattern::OpRewritePattern;
+/// Matches an onnx.Cast whose input is produced by another onnx.Cast with a
+/// single use, and replaces the chain with a single onnx.Cast from the original
+/// source type to the final destination type.
+struct FoldConsecutiveCastPattern : public OpRewritePattern<ONNXCastOp> {
+  using OpRewritePattern<ONNXCastOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
       ONNXCastOp outerCast, PatternRewriter &rewriter) const override {
@@ -4745,55 +4746,69 @@ struct FoldIntegerCastChainPattern : public OpRewritePattern<ONNXCastOp> {
     if (!innerCast)
       return failure();
 
-    auto outerElemTy =
-        mlir::cast<ShapedType>(outerCast.getType()).getElementType();
-    auto innerResultElemTy =
-        mlir::cast<ShapedType>(innerCast.getType()).getElementType();
+    // Only fold when the intermediate result has exactly one user.
+    if (!innerCast.getResult().hasOneUse())
+      return failure();
 
-    auto innerIntTy = dyn_cast<IntegerType>(innerResultElemTy);
-    auto outerIntTy = dyn_cast<IntegerType>(outerElemTy);
-    if (!innerIntTy || !outerIntTy)
+    auto srcElemTy =
+        cast<ShapedType>(innerCast.getInput().getType()).getElementType();
+    auto midElemTy =
+        cast<ShapedType>(innerCast.getResult().getType()).getElementType();
+
+    // Bail out on quant types which are neither IntegerType nor FloatType.
+    auto srcIntTy = dyn_cast<IntegerType>(srcElemTy);
+    auto midIntTy = dyn_cast<IntegerType>(midElemTy);
+    auto srcFloatTy = dyn_cast<FloatType>(srcElemTy);
+    auto midFloatTy = dyn_cast<FloatType>(midElemTy);
+
+    if (!srcIntTy && !srcFloatTy)
       return failure();
-    if (innerIntTy.isUnsigned() != outerIntTy.isUnsigned())
+    if (!midIntTy && !midFloatTy)
       return failure();
-    if (innerIntTy.getWidth() < outerIntTy.getWidth())
+
+    // Check that the inner cast (src -> mid) is information-preserving.
+    bool bothInt = srcIntTy && midIntTy;
+    bool bothFloat = srcFloatTy && midFloatTy;
+    bool intToFloat = srcIntTy && midFloatTy;
+
+    if (bothInt) {
+      // int -> int: require same signedness and strict widening.
+      if (srcIntTy.getSignedness() != midIntTy.getSignedness())
+        return failure();
+      if (midIntTy.getWidth() <= srcIntTy.getWidth())
+        return failure();
+    } else if (bothFloat) {
+      // float -> float: the intermediate type must be able to represent every
+      // value of the source type. Examples: bf16 and f16 are both 16-bit but
+      // neither can represent the other; tf32 is 19-bit yet covers all of bf16.
+      const auto &srcSem = srcFloatTy.getFloatSemantics();
+      const auto &midSem = midFloatTy.getFloatSemantics();
+      if (!llvm::APFloatBase::isRepresentableBy(srcSem, midSem))
+        return failure();
+    } else if (intToFloat) {
+      // int -> float: safe when the float precision (significand bits including
+      // the integer bit) can represent all integer values.
+      // For unsigned: intBitWidth <= precision
+      // For signed:   intBitWidth - 1 <= precision
+      unsigned intBits = srcIntTy.getWidth();
+      unsigned floatPrec = midFloatTy.getFPMantissaWidth();
+      // Signless integers are treated as signed (conservative).
+      bool isUnsigned = srcIntTy.isUnsigned();
+      if (isUnsigned) {
+        if (intBits > floatPrec)
+          return failure();
+      } else {
+        // Signed or signless: need intBits - 1 <= precision.
+        if (intBits <= 1 ? false : (intBits - 1) > floatPrec)
+          return failure();
+      }
+    } else {
+      // float -> int or any other cross-category: not safe.
       return failure();
+    }
 
     rewriter.modifyOpInPlace(outerCast,
         [&]() { outerCast.getInputMutable().assign(innerCast.getInput()); });
-    return success();
-  }
-};
-
-/// Fold lossless narrow-float round trips: f16/bf16 -> f32 -> f16/bf16.
-struct FoldLosslessFloatCastRoundTripPattern
-    : public OpRewritePattern<ONNXCastOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(
-      ONNXCastOp outerCast, PatternRewriter &rewriter) const override {
-    auto innerCast = outerCast.getInput().getDefiningOp<ONNXCastOp>();
-    if (!innerCast)
-      return failure();
-
-    auto sourceElemTy =
-        mlir::cast<ShapedType>(innerCast.getInput().getType()).getElementType();
-    auto intermediateElemTy =
-        mlir::cast<ShapedType>(innerCast.getType()).getElementType();
-    auto finalElemTy =
-        mlir::cast<ShapedType>(outerCast.getType()).getElementType();
-
-    auto isLosslessRoundTrip = [&](auto narrowTyTag) {
-      using NarrowTy = decltype(narrowTyTag);
-      return isa<NarrowTy>(sourceElemTy) &&
-             isa<Float32Type>(intermediateElemTy) && isa<NarrowTy>(finalElemTy);
-    };
-
-    if (!(isLosslessRoundTrip(BFloat16Type{}) ||
-            isLosslessRoundTrip(Float16Type{})))
-      return failure();
-
-    rewriter.replaceOp(outerCast, innerCast.getInput());
     return success();
   }
 };
@@ -4804,8 +4819,7 @@ void ONNXCastOp::getCanonicalizationPatterns(
   result.insert<CastEliminationPattern>(context);
   result.insert<SwapCastConcatPattern>(context);
   result.insert<SwapCastSlicePattern>(context);
-  result.insert<FoldIntegerCastChainPattern>(context);
-  result.insert<FoldLosslessFloatCastRoundTripPattern>(context);
+  result.insert<FoldConsecutiveCastPattern>(context);
 }
 
 /// on the ONNXConcatOp.
