@@ -92,6 +92,14 @@ func.func @test_expand_verifier_static_mismatch(%arg0 : tensor<8xf32>) -> tensor
 
 // -----
 
+func.func @test_expand_verifier_target_one_is_legal(%arg0 : tensor<2x1x6x5xf32>) -> tensor<2x3x6x5xf32> {
+  %shape = onnx.Constant dense<[1, 3, 6, 1]> : tensor<4xi64>
+  %0 = "onnx.Expand"(%arg0, %shape) : (tensor<2x1x6x5xf32>, tensor<4xi64>) -> tensor<2x3x6x5xf32>
+  "onnx.Return"(%0) : (tensor<2x3x6x5xf32>) -> ()
+}
+
+// -----
+
 func.func @test_dim_verifier_1(%arg0 : tensor<*xf32>) -> tensor<i64> {
   // expected-error @+1 {{input must have shape and rank}}
   %1 = "onnx.Dim"(%arg0) {axis = 0 : si64} : (tensor<*xf32>)  -> tensor<i64>
