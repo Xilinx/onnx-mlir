@@ -105,7 +105,7 @@ func.func @test_loop_derive_max_trip_count_non_constant_ub(%arg0: tensor<?x30xf3
 // CHECK:           [[VAR_9_:%.+]] = "onnx.Div"([[VAR_7_]], [[VAR_8_]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
 // CHECK:           [[VAR_10_:%.+]] = "onnx.Ceil"([[VAR_9_]]) : (tensor<f32>) -> tensor<f32>
 // CHECK:           [[VAR_11_:%.+]] = "onnx.Cast"([[VAR_10_]]) {saturate = 1 : si64, to = i64} : (tensor<f32>) -> tensor<i64>
-// CHECK:           [[VAR_12_:%.+]] = "onnx.Min"([[VAR_1_]], [[VAR_1_]]1) : (tensor<i64>, tensor<i64>) -> tensor<i64>
+// CHECK:           [[VAR_12_:%.+]] = "onnx.Min"([[VAR_11_]], [[VAR_1_]]) : (tensor<i64>, tensor<i64>) -> tensor<i64>
 // CHECK:           [[VAR_13_:%.+]]:4 = "onnx.Loop"([[VAR_12_]], [[VAR_2_]], [[VAR_3_]], [[PARAM_1_]], [[PARAM_0_]]) ({
 // CHECK:           ^bb0([[arg2_:%.+]]: tensor<i64>, [[arg3_:%.+]]: tensor<i1>, [[arg4_:%.+]]: tensor<i32>, [[arg5_:%.+]]: tensor<i32>, [[arg6_:%.+]]: tensor<?x30xf32>):
 // CHECK-DAG:         [[VAR_14_:%.+]] = "onnx.Add"([[arg4_]], [[VAR_0_]]) : (tensor<i32>, tensor<i32>) -> tensor<i32>
