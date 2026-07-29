@@ -92,6 +92,24 @@ func.func @test_expand_verifier_static_mismatch(%arg0 : tensor<8xf32>) -> tensor
 
 // -----
 
+func.func @test_expand_verifier_negative_shape(%arg0 : tensor<8xf32>) -> tensor<*xf32> {
+  %shape = onnx.Constant dense<[-1]> : tensor<1xi64>
+  // expected-error @+1 {{onnx.Expand: shape dimension -1 at index 0 is negative}}
+  %0 = "onnx.Expand"(%arg0, %shape) : (tensor<8xf32>, tensor<1xi64>) -> tensor<*xf32>
+  "onnx.Return"(%0) : (tensor<*xf32>) -> ()
+}
+
+// -----
+
+func.func @test_expand_verifier_negative_shape_multidim(%arg0 : tensor<2x8xf32>) -> tensor<*xf32> {
+  %shape = onnx.Constant dense<[3, -2]> : tensor<2xi64>
+  // expected-error @+1 {{onnx.Expand: shape dimension -2 at index 1 is negative}}
+  %0 = "onnx.Expand"(%arg0, %shape) : (tensor<2x8xf32>, tensor<2xi64>) -> tensor<*xf32>
+  "onnx.Return"(%0) : (tensor<*xf32>) -> ()
+}
+
+// -----
+
 func.func @test_expand_verifier_target_one_is_legal(%arg0 : tensor<2x1x6x5xf32>) -> tensor<2x3x6x5xf32> {
   %shape = onnx.Constant dense<[1, 3, 6, 1]> : tensor<4xi64>
   %0 = "onnx.Expand"(%arg0, %shape) : (tensor<2x1x6x5xf32>, tensor<4xi64>) -> tensor<2x3x6x5xf32>

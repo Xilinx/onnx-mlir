@@ -113,8 +113,12 @@ LogicalResult ONNXExpandOp::verify() {
 
     // Stay conservative: only flag a pair that is provably incompatible, i.e.
     // both sides are static, positive, unequal, and neither one is 1.
-    if (ShapedType::isDynamic(inputDim) || shapeDim <= 0)
+    if (ShapedType::isDynamic(inputDim))
       continue;
+    if (shapeDim < 0)
+      return mlir::emitError(getLoc(), getOperationName())
+             << ": shape dimension " << shapeDim << " at index " << shapeIdx
+             << " is negative";
     if (inputDim != shapeDim && inputDim != 1 && shapeDim != 1)
       return mlir::emitError(getLoc(), getOperationName())
              << ": input dimension " << inputDim << " at index " << inputIdx
