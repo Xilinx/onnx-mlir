@@ -17,6 +17,28 @@ func.func @cast_identity_elimination(%arg0: tensor<2xf32>) -> tensor<2xf32> {
 /// Integer cast-chain folding.
 //===----------------------------------------------------------------------===//
 
+// CHECK-LABEL: @integer_cast_chain_narrowing
+func.func @integer_cast_chain_narrowing(%arg0: tensor<3xi32>) -> tensor<3xi8> {
+  %0 = "onnx.Cast"(%arg0) {to = i16} : (tensor<3xi32>) -> tensor<3xi16>
+  %1 = "onnx.Cast"(%0) {to = i8} : (tensor<3xi16>) -> tensor<3xi8>
+  return %1 : tensor<3xi8>
+  // CHECK: "onnx.Cast"(%arg0) {saturate = 1 : si64, to = i8}
+  // CHECK-NOT: {to = i16}
+}
+
+// -----
+
+// CHECK-LABEL: @unsigned_integer_cast_chain_narrowing
+func.func @unsigned_integer_cast_chain_narrowing(%arg0: tensor<3xui32>) -> tensor<3xui8> {
+  %0 = "onnx.Cast"(%arg0) {to = ui16} : (tensor<3xui32>) -> tensor<3xui16>
+  %1 = "onnx.Cast"(%0) {to = ui8} : (tensor<3xui16>) -> tensor<3xui8>
+  return %1 : tensor<3xui8>
+  // CHECK: "onnx.Cast"(%arg0) {saturate = 1 : si64, to = ui8}
+  // CHECK-NOT: {to = ui16}
+}
+
+// -----
+
 // CHECK-LABEL: @integer_cast_chain_full_elimination
 func.func @integer_cast_chain_full_elimination(%arg0: tensor<3xi8>) -> tensor<3xi8> {
   %0 = "onnx.Cast"(%arg0) {to = i16} : (tensor<3xi8>) -> tensor<3xi16>

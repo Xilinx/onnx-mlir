@@ -4813,6 +4813,43 @@ struct FoldConsecutiveCastPattern : public OpRewritePattern<ONNXCastOp> {
   }
 };
 
+/// Fold an integer cast chain when the final type is strictly narrower than
+/// the intermediate type and all three types have identical signedness.
+struct FoldNarrowingIntegerCastChainPattern
+    : public OpRewritePattern<ONNXCastOp> {
+  using OpRewritePattern<ONNXCastOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXCastOp outerCast, PatternRewriter &rewriter) const override {
+    auto innerCast = outerCast.getInput().getDefiningOp<ONNXCastOp>();
+    if (!innerCast || !innerCast.getResult().hasOneUse())
+      return failure();
+
+    auto srcElemTy =
+        cast<ShapedType>(innerCast.getInput().getType()).getElementType();
+    auto midElemTy =
+        cast<ShapedType>(innerCast.getResult().getType()).getElementType();
+    auto dstElemTy =
+        cast<ShapedType>(outerCast.getResult().getType()).getElementType();
+
+    auto srcIntTy = dyn_cast<IntegerType>(srcElemTy);
+    auto midIntTy = dyn_cast<IntegerType>(midElemTy);
+    auto dstIntTy = dyn_cast<IntegerType>(dstElemTy);
+    if (!srcIntTy || !midIntTy || !dstIntTy)
+      return failure();
+
+    if (srcIntTy.getSignedness() != midIntTy.getSignedness() ||
+        midIntTy.getSignedness() != dstIntTy.getSignedness())
+      return failure();
+    if (midIntTy.getWidth() <= dstIntTy.getWidth())
+      return failure();
+
+    rewriter.modifyOpInPlace(outerCast,
+        [&]() { outerCast.getInputMutable().assign(innerCast.getInput()); });
+    return success();
+  }
+};
+
 /// on the ONNXCastOp.
 void ONNXCastOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
@@ -4820,6 +4857,7 @@ void ONNXCastOp::getCanonicalizationPatterns(
   result.insert<SwapCastConcatPattern>(context);
   result.insert<SwapCastSlicePattern>(context);
   result.insert<FoldConsecutiveCastPattern>(context);
+  result.insert<FoldNarrowingIntegerCastChainPattern>(context);
 }
 
 /// on the ONNXConcatOp.
