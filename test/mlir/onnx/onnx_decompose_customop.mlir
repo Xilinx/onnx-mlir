@@ -13,7 +13,7 @@ func.func @customop_fusedmatmul_onnxruntime(%arg0: tensor<3x5x7x9xf32>, %arg1:te
 // CHECK-DAG:       [[VAR_0_:%.+]] = "onnx.Transpose"([[PARAM_0_]]) {perm = [0, 1, 3, 2]} : (tensor<3x5x7x9xf32>) -> tensor<3x5x9x7xf32>
 // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<1.250000e-01> : tensor<1xf32>
 // CHECK:           [[VAR_2_:%.+]] = "onnx.MatMul"([[VAR_0_]], [[PARAM_1_]]) : (tensor<3x5x9x7xf32>, tensor<3x5x7x9xf32>) -> tensor<3x5x9x9xf32>
-// CHECK:           [[VAR_3_:%.+]] = "onnx.Mul"([[VAR_1_]], [[VAR_2_]]) : (tensor<1xf32>, tensor<3x5x9x9xf32>) -> tensor<3x5x9x9xf32>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.Mul"([[VAR_2_]], [[VAR_1_]]) : (tensor<3x5x9x9xf32>, tensor<1xf32>) -> tensor<3x5x9x9xf32>
 // CHECK:           onnx.Return [[VAR_3_]] : tensor<3x5x9x9xf32>
 // CHECK:         }
 }
@@ -28,7 +28,7 @@ func.func @customop_fusedmatmul_onnxruntime_no_transpose(%arg0: tensor<*xf32>, %
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<*xf32>, [[PARAM_1_:%.+]]: tensor<*xf32>) -> tensor<*xf32> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.250000e-01> : tensor<1xf32>
 // CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.MatMul"([[PARAM_0_]], [[PARAM_1_]]) : (tensor<*xf32>, tensor<*xf32>) -> tensor<*xf32>
-// CHECK:           [[VAR_2_:%.+]] = "onnx.Mul"([[VAR_0_]], [[VAR_1_]]) : (tensor<1xf32>, tensor<*xf32>) -> tensor<*xf32>
+// CHECK:           [[VAR_2_:%.+]] = "onnx.Mul"([[VAR_1_]], [[VAR_0_]]) : (tensor<*xf32>, tensor<1xf32>) -> tensor<*xf32>
 // CHECK:           onnx.Return [[VAR_2_]] : tensor<*xf32>
 // CHECK:         }
 }
@@ -46,7 +46,7 @@ func.func @customop_fusedmatmul_onnxruntime_transA(%arg0: tensor<*xf32>, %arg1:t
 // CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.Transpose"([[PARAM_0_]]) {perm = [0, 2, 1, 3]} : (tensor<*xf32>) -> tensor<*xf32>
 // CHECK:           [[VAR_2_:%.+]] = "onnx.Transpose"([[VAR_1_]]) {perm = [0, 1, 3, 2]} : (tensor<*xf32>) -> tensor<*xf32>
 // CHECK:           [[VAR_3_:%.+]] = "onnx.MatMul"([[VAR_2_]], [[PARAM_1_]]) : (tensor<*xf32>, tensor<*xf32>) -> tensor<*xf32>
-// CHECK:           [[VAR_4_:%.+]] = "onnx.Mul"([[VAR_0_]], [[VAR_3_]]) : (tensor<1xf32>, tensor<*xf32>) -> tensor<*xf32>
+// CHECK:           [[VAR_4_:%.+]] = "onnx.Mul"([[VAR_3_]], [[VAR_0_]]) : (tensor<*xf32>, tensor<1xf32>) -> tensor<*xf32>
 // CHECK:           onnx.Return [[VAR_4_]] : tensor<*xf32>
 }
 
@@ -63,7 +63,7 @@ func.func @customop_fusedmatmul_onnxruntime_transB(%arg0: tensor<*xf32>, %arg1:t
 // CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.Transpose"([[PARAM_1_]]) {perm = [0, 2, 1, 3]} : (tensor<*xf32>) -> tensor<*xf32>
 // CHECK:           [[VAR_2_:%.+]] = "onnx.Transpose"([[VAR_1_]]) {perm = [0, 1, 3, 2]} : (tensor<*xf32>) -> tensor<*xf32>
 // CHECK:           [[VAR_3_:%.+]] = "onnx.MatMul"([[PARAM_0_]], [[VAR_2_]]) : (tensor<*xf32>, tensor<*xf32>) -> tensor<*xf32>
-// CHECK:           [[VAR_4_:%.+]] = "onnx.Mul"([[VAR_0_]], [[VAR_3_]]) : (tensor<1xf32>, tensor<*xf32>) -> tensor<*xf32>
+// CHECK:           [[VAR_4_:%.+]] = "onnx.Mul"([[VAR_3_]], [[VAR_0_]]) : (tensor<*xf32>, tensor<1xf32>) -> tensor<*xf32>
 // CHECK:           onnx.Return [[VAR_4_]] : tensor<*xf32>
 }
 
@@ -1024,7 +1024,7 @@ func.func @gqa_preallocated_cache_slot_write(
 // CHECK:       %[[SEQLENS_UI16:.*]] = "onnx.Cast"({{.*}}) {saturate = 1 : si64, to = ui16} : (tensor<1x1xi32>) -> tensor<1x1xui16>
 // CHECK:       %[[SEQLENS_4D:.*]] = "onnx.Reshape"(%[[SEQLENS_UI16]], {{.*}}) {allowzero = 0 : si64} : (tensor<1x1xui16>, tensor<4xi64>) -> tensor<1x1x1x1xui16>
 // CHECK-NOT:   "onnx.Expand"
-// CHECK:       %[[SELECTED_SLOT:.*]] = "onnx.Equal"(%[[POSITIONS]], %[[SEQLENS_4D]]) : (tensor<1x1x512x1xui16>, tensor<1x1x1x1xui16>) -> tensor<1x1x512x1xi1>
+// CHECK:       %[[SELECTED_SLOT:.*]] = "onnx.Equal"(%[[SEQLENS_4D]], %[[POSITIONS]]) : (tensor<1x1x1x1xui16>, tensor<1x1x512x1xui16>) -> tensor<1x1x512x1xi1>
 // CHECK:       %[[SLOT_SELECTOR:.*]] = "onnx.Cast"(%[[SELECTED_SLOT]]) {saturate = 1 : si64, to = f32} : (tensor<1x1x512x1xi1>) -> tensor<1x1x512x1xf32>
 // CHECK:       %[[CURRENT_K:.*]] = "onnx.Transpose"({{.*}}) {perm = [0, 2, 1, 3]} : (tensor<1x1x16x96xf32>) -> tensor<1x16x1x96xf32>
 // CHECK:       %[[K_DELTA:.*]] = "onnx.Sub"(%[[CURRENT_K]], %[[PAST_K]]) : (tensor<1x16x1x96xf32>, tensor<1x16x512x96xf32>) -> tensor<1x16x512x96xf32>
@@ -1106,7 +1106,7 @@ func.func @gqa_preallocated_cache_slot_write_with_attention_bias(
 // CHECK:       %[[SEQLENS_UI16:.*]] = "onnx.Cast"({{.*}}) {saturate = 1 : si64, to = ui16} : (tensor<1x1xi32>) -> tensor<1x1xui16>
 // CHECK:       %[[SEQLENS_4D:.*]] = "onnx.Reshape"(%[[SEQLENS_UI16]], {{.*}}) {allowzero = 0 : si64} : (tensor<1x1xui16>, tensor<4xi64>) -> tensor<1x1x1x1xui16>
 // CHECK-NOT:   "onnx.Expand"
-// CHECK:       %[[SELECTED_SLOT:.*]] = "onnx.Equal"(%[[POSITIONS]], %[[SEQLENS_4D]]) : (tensor<1x1x512x1xui16>, tensor<1x1x1x1xui16>) -> tensor<1x1x512x1xi1>
+// CHECK:       %[[SELECTED_SLOT:.*]] = "onnx.Equal"(%[[SEQLENS_4D]], %[[POSITIONS]]) : (tensor<1x1x1x1xui16>, tensor<1x1x512x1xui16>) -> tensor<1x1x512x1xi1>
 // CHECK:       %[[SLOT_SELECTOR:.*]] = "onnx.Cast"(%[[SELECTED_SLOT]]) {saturate = 1 : si64, to = f32} : (tensor<1x1x512x1xi1>) -> tensor<1x1x512x1xf32>
 // CHECK:       %[[CURRENT_K:.*]] = "onnx.Transpose"({{.*}}) {perm = [0, 2, 1, 3]} : (tensor<1x1x16x96xf32>) -> tensor<1x16x1x96xf32>
 // CHECK:       %[[K_DELTA:.*]] = "onnx.Sub"(%[[CURRENT_K]], %[[PAST_K]]) : (tensor<1x16x1x96xf32>, tensor<1x16x512x96xf32>) -> tensor<1x16x512x96xf32>

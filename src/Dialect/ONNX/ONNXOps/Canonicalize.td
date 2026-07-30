@@ -586,12 +586,6 @@ def CastEliminationPattern : Pat<
 	(replaceWithValue $arg),
   [(HasSameElementType $arg, $type)]>;
 
-// TODO: Reintroduce pattern for sound type combinations, see issue #2210.
-//// onnx.Cast (onnx.Cast (%X, $type1)), $type2 = onnx.Cast (%X, $type2)
-//def FuseCastCastPattern : Pat<
-//  (ONNXCastOp (ONNXCastOp $arg, $_), $type),
-//  (ONNXCastOp $arg, $type)>;
-
 // Do cast on concat's inputs instead of output in order to propagate
 // cast operations together, which brings concat close to reshape
 // because concat is used for shape in reshape.

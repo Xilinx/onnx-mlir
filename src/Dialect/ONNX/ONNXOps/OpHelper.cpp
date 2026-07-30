@@ -479,6 +479,17 @@ bool getI64ValuesFromONNXConstantOp(
   return true;
 }
 
+SmallVector<int64_t> valToVector(Value val) {
+  ElementsAttr elements = getDenseOrDisposableConstLikeElements(val);
+  if (!elements || !getElementType(elements.getType()).isIntOrIndex())
+    return {};
+
+  SmallVector<int64_t> vector;
+  for (APInt v : elements.getValues<APInt>())
+    vector.push_back(v.getSExtValue());
+  return vector;
+}
+
 static bool hasLegacyBroadcastAxis(Operation *op) {
   return op->hasAttr("broadcast") && op->hasAttr("axis");
 }
@@ -508,7 +519,10 @@ static std::optional<ONNXAxisFieldConfig> getAxisAttrConfig(Operation *op) {
     return ONNXAxisFieldConfig{
         ONNXAxisOperandKind::Scalar, ONNXAxisRankKind::FirstOperandMinusOne};
 
-  if (name == "onnx.ArgMax" || name == "onnx.ArgMin" ||
+  if (name == "onnx.AMDQuarkBFPQuantizeDequantizeOp" ||
+      name == "onnx.AMDQuarkExtendedDequantizeLinearOp" ||
+      name == "onnx.AMDQuarkExtendedQuantizeLinearOp" ||
+      name == "onnx.ArgMax" || name == "onnx.ArgMin" ||
       name == "onnx.Compress" || name == "onnx.Concat" ||
       name == "onnx.DequantizeLinear" || name == "onnx.Gather" ||
       name == "onnx.GatherElements" || name == "onnx.Hardmax" ||
