@@ -149,6 +149,10 @@ std::unique_ptr<mlir::Pass> createSetONNXNodeNamePass();
 /// Supports: Conv, AveragePool, MaxPool, GlobalAveragePool, GlobalMaxPool,
 /// InstanceNormalization, DepthToSpace, SpaceToDepth
 std::unique_ptr<mlir::Pass> createConvertToChannelLastPass();
+/// Converts only the ops named in `whitelist` (e.g. "onnx.Conv"). An empty
+/// list converts every supported op.
+std::unique_ptr<mlir::Pass> createConvertToChannelLastPass(
+    llvm::ArrayRef<std::string> whitelist);
 
 /// Pass for merging Slice->Concat patterns with downstream ops.
 std::unique_ptr<mlir::Pass> createMergeSliceConcatPass();

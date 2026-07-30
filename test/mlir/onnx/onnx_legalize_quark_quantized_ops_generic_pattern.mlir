@@ -90,7 +90,7 @@ func.func @onnx_add_static_with_splat_constant(%arg0: tensor<1xbf16>) -> tensor<
 // CHECK-LABEL:   func.func @onnx_add_static_with_splat_constant(
 // CHECK-SAME:                                             %[[VAL_0:.*]]: tensor<1xbf16>) -> tensor<3xbf16> {
 // CHECK:           %[[VAL_1:.*]] = onnx.Constant dense<-1.984380e+00> : tensor<3xbf16>
-// CHECK:           %[[VAL_2:.*]] = "onnx.Add"(%[[VAL_1]], %[[VAL_0]]) : (tensor<3xbf16>, tensor<1xbf16>) -> tensor<3xbf16>
+// CHECK:           %[[VAL_2:.*]] = "onnx.Add"(%[[VAL_0]], %[[VAL_1]]) : (tensor<1xbf16>, tensor<3xbf16>) -> tensor<3xbf16>
 // CHECK:           return %[[VAL_2]] : tensor<3xbf16>
 // CHECK:         }
 
@@ -107,7 +107,7 @@ func.func @onnx_add_static_with_constants(%arg0: tensor<1xbf16>) -> tensor<3xbf1
 // CHECK-LABEL:   func.func @onnx_add_static_with_constants(
 // CHECK-SAME:                                              %[[VAL_0:.*]]: tensor<1xbf16>) -> tensor<3xbf16> {
 // CHECK:           %[[VAL_1:.*]] = onnx.Constant dense<[-8.192000e+03, -1.187500e+00, 1.187500e+00]> : tensor<3xbf16>
-// CHECK:           %[[VAL_2:.*]] = "onnx.Add"(%[[VAL_1]], %[[VAL_0]]) : (tensor<3xbf16>, tensor<1xbf16>) -> tensor<3xbf16>
+// CHECK:           %[[VAL_2:.*]] = "onnx.Add"(%[[VAL_0]], %[[VAL_1]]) : (tensor<1xbf16>, tensor<3xbf16>) -> tensor<3xbf16>
 // CHECK:           return %[[VAL_2]] : tensor<3xbf16>
 // CHECK:         }
 
@@ -143,7 +143,7 @@ func.func @onnx_add_dynamic_with_splat_constant(%arg0: tensor<?x?x?xbf16>) -> te
 // CHECK-LABEL:   func.func @onnx_add_dynamic_with_splat_constant(
 // CHECK-SAME:                                              %[[VAL_0:.*]]: tensor<?x?x?xbf16>) -> tensor<?x?x?xbf16> {
 // CHECK:           %[[VAL_2:.*]] = onnx.Constant dense<-1.984380e+00> : tensor<3xbf16>
-// CHECK:           %[[VAL_3:.*]] = "onnx.Add"(%[[VAL_2]], %[[VAL_0]]) : (tensor<3xbf16>, tensor<?x?x?xbf16>) -> tensor<?x?x?xbf16>
+// CHECK:           %[[VAL_3:.*]] = "onnx.Add"(%[[VAL_0]], %[[VAL_2]]) : (tensor<?x?x?xbf16>, tensor<3xbf16>) -> tensor<?x?x?xbf16>
 // CHECK:           return %[[VAL_3]] : tensor<?x?x?xbf16>
 // CHECK:         }
 
@@ -162,7 +162,7 @@ func.func @onnx_add_dynamic_with_constants(%arg0: tensor<?x?x?xbf16>) -> tensor<
 // CHECK-LABEL:   func.func @onnx_add_dynamic_with_constants(
 // CHECK-SAME:                                                   %[[VAL_0:.*]]: tensor<?x?x?xbf16>) -> tensor<?x?x?xbf16> {
 // CHECK:           %[[VAL_2:.*]] = onnx.Constant dense<[-8.192000e+03, -1.187500e+00, 1.187500e+00]> : tensor<3xbf16>
-// CHECK:           %[[VAL_3:.*]] = "onnx.Add"(%[[VAL_2]], %[[VAL_0]]) : (tensor<3xbf16>, tensor<?x?x?xbf16>) -> tensor<?x?x?xbf16>
+// CHECK:           %[[VAL_3:.*]] = "onnx.Add"(%[[VAL_0]], %[[VAL_2]]) : (tensor<?x?x?xbf16>, tensor<3xbf16>) -> tensor<?x?x?xbf16>
 // CHECK:           return %[[VAL_3]] : tensor<?x?x?xbf16>
 // CHECK:         }
 

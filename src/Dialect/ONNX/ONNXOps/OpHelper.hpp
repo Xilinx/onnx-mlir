@@ -180,6 +180,19 @@ int64_t ArrayAttrIntVal(mlir::ArrayAttr a, int i);
 int64_t ArrayAttrIntVal(std::optional<mlir::ArrayAttr> a, int i);
 void ArrayAttrIntVals(mlir::ArrayAttr a, mlir::SmallVectorImpl<int64_t> &i);
 
+/// Explicit convolution geometry. `strides` and `dilations` hold one entry per
+/// spatial dim; `pads` holds two, laid out as
+/// [x1_begin, ..., xN_begin, x1_end, ..., xN_end].
+struct ConvGeometry {
+  llvm::SmallVector<int64_t> strides;
+  llvm::SmallVector<int64_t> dilations;
+  llvm::SmallVector<int64_t> pads;
+};
+
+/// Get the geometry of `convOp`, substituting the ONNX defaults for
+/// absent attributes and resolving auto_pad into explicit pads.
+mlir::FailureOr<ConvGeometry> getConvGeometry(mlir::ONNXConvOp convOp);
+
 mlir::ElementsAttr getElementAttributeFromONNXValue(mlir::Value value);
 
 // Get a ElementsAttr from a value that is defined by a ConstantLike op that
@@ -204,6 +217,10 @@ mlir::ONNXConstantOp getONNXConstantOp(mlir::Value value);
 // Return true if successfully obtaining the array. Otherwise, false.
 bool getI64ValuesFromONNXConstantOp(
     mlir::Value val, mlir::SmallVectorImpl<int64_t> &iRes);
+
+// Reads the integer values of any ConstantLike producer as int64_t, returning
+// an empty vector when the value is not a constant integer tensor.
+mlir::SmallVector<int64_t> valToVector(mlir::Value val);
 
 // Classifies operands that carry scalar axis or axes values. UnsqueezeAxes is
 // distinct because negative insertion axes are normalized against output rank.

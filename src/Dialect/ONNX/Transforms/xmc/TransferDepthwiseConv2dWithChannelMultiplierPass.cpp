@@ -1,4 +1,4 @@
-// Copyright (C) 2019 - 2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2019-2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 // This pass splits depthwise conv2d operations with channel multiplier > 1
 // into multiple depthwise convs with channel_multiplier=1, followed by concat.
@@ -577,8 +577,7 @@ struct SplitXFEDepthwiseConvPattern : public OpRewritePattern<XFEConvOp> {
       // Create split XFE depthwise conv
       auto splitConvOp = rewriter.create<XFEConvOp>(loc, splitOutputType,
           convOp.getX(), splitWeight, splitBias, convOp.getActivationAttr(),
-          convOp.getAutoPadAttr(), convOp.getDilationsAttr(),
-          convOp.getGroupAttr(), convOp.getKernelShapeAttr(),
+          convOp.getDilationsAttr(), convOp.getGroupAttr(),
           convOp.getLeakyreluAlphaAttr(), convOp.getPadsAttr(),
           convOp.getPreluInAttr(), convOp.getPreluShiftAttr(),
           convOp.getStridesAttr());

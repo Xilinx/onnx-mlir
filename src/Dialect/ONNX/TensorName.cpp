@@ -63,17 +63,6 @@ SmallVector<int64_t> denseToVector(DenseIntElementsAttr denseAttr) {
   return SmallVector<int64_t>(denseAttr.getValues<int64_t>());
 }
 
-SmallVector<int64_t> valToVector(Value val) {
-  ElementsAttr elements = getDenseOrDisposableConstLikeElements(val);
-  if (!elements || !getElementType(elements.getType()).isIntOrIndex())
-    return {};
-
-  SmallVector<int64_t> vector;
-  for (APInt v : elements.getValues<APInt>())
-    vector.push_back(v.getSExtValue());
-  return vector;
-}
-
 SmallVector<int64_t> axesToVector(Value val, size_t rank) {
   if (isa<NoneType>(val.getType())) {
     SmallVector<int64_t> axes(rank);

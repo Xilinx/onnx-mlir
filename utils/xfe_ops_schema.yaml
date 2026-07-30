@@ -69,26 +69,22 @@
     description: Output data tensor with channel-last layout
     type_str: T
   attributes:
-  - name: auto_pad
-    description: Auto padding strategy (NOTSET, SAME_UPPER, SAME_LOWER, VALID)
-    type: string
-    default_value: NOTSET
   - name: dilations
     description: Dilation value along each spatial axis
     type: list(int)
+    required: true
   - name: group
     description: Number of groups for grouped convolution
     type: int
     default_value: 1
-  - name: kernel_shape
-    description: Shape of the convolution kernel
-    type: list(int)
   - name: pads
     description: Padding for the beginning and ending along each spatial axis
     type: list(int)
+    required: true
   - name: strides
     description: Stride along each spatial axis
     type: list(int)
+    required: true
   - name: activation
     description: Fused activation function type (NONE, RELU, LEAKYRELU, PRELU, HSIGMOID, RELU6, SIGMOID). Defaults to NONE (no activation).
     type: string

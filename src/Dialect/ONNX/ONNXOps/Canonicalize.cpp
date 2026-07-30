@@ -4304,89 +4304,18 @@ struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
 
   LogicalResult matchAndRewrite(
       ONNXConvOp convOp, PatternRewriter &rewriter) const override {
-    const StringRef autoPad = convOp.getAutoPad();
-
-    // Nothing to do if already normalised.
-    if (autoPad == "NOTSET" && convOp.getPads().has_value())
+    if (convOp.getAutoPad() == "NOTSET" && convOp.getPads().has_value())
       return rewriter.notifyMatchFailure(
           convOp, "auto_pad is already NOTSET with explicit pads");
 
-    // Require ranked weight to derive spatial rank and kernel sizes.
-    const Value W = convOp.getW();
-    if (!hasShapeAndRank(W))
+    FailureOr<ConvGeometry> geometry = getConvGeometry(convOp);
+    if (failed(geometry))
       return rewriter.notifyMatchFailure(
-          convOp, "weight is unranked or missing shape");
-    const auto wShape = cast<ShapedType>(W.getType()).getShape();
-    const int64_t firstSpatialDimAxis = 2;
-    const int64_t spatialRank =
-        static_cast<int64_t>(wShape.size()) - firstSpatialDimAxis;
-    assert(spatialRank >= 1 && "conv must have at least one spatial dim");
-
-    // Pads are stored as [x1_begin, x2_begin, ..., x1_end, x2_end, ...].
-    // Initialise to zero; VALID and NOTSET-without-pads leave them that way.
-    SmallVector<int64_t> pads(2 * spatialRank, 0);
-
-    if (autoPad == "SAME_UPPER" || autoPad == "SAME_LOWER") {
-      // Pad computation requires static input spatial dims.
-      const Value X = convOp.getX();
-      if (!hasShapeAndRank(X))
-        return rewriter.notifyMatchFailure(
-            convOp, "input is unranked or missing shape");
-      const auto xShape = cast<ShapedType>(X.getType()).getShape();
-
-      const auto stridesOpt = convOp.getStrides();
-      const auto dilationsOpt = convOp.getDilations();
-      const bool isSameUpper = (autoPad == "SAME_UPPER");
-
-      for (int64_t i = 0; i < spatialRank; ++i) {
-        const int64_t inputSize = xShape[firstSpatialDimAxis + i];
-        if (inputSize == ShapedType::kDynamic)
-          return rewriter.notifyMatchFailure(
-              convOp, "dynamic spatial dim: cannot compute pads statically");
-
-        const int64_t kernelSize = wShape[firstSpatialDimAxis + i];
-        const int64_t stride =
-            stridesOpt.has_value() ? ArrayAttrIntVal(stridesOpt, i) : 1;
-        const int64_t dilation =
-            dilationsOpt.has_value() ? ArrayAttrIntVal(dilationsOpt, i) : 1;
-
-        // ONNX SAME padding fixes the output size first:
-        //   outputSize = ceil(inputSize / stride).
-        const int64_t outputSize = llvm::divideCeil(inputSize, stride);
-        // The last output window starts at (outputSize - 1) * stride and spans
-        // effectiveKernel input positions. The padded input must be large
-        // enough to cover that window:
-        //
-        //   inputSize + totalPad >=
-        //     (outputSize - 1) * stride + effectiveKernel
-        //
-        // Therefore the minimum total pad is:
-        //   totalPad = max(0,
-        //       (outputSize - 1) * stride + effectiveKernel - inputSize)
-        //
-        // This is equivalent to inverting:
-        //   outputSize = floor((inputSize + totalPad - effectiveKernel) /
-        //   stride) + 1
-        // The floor is accounted for by choosing the minimum totalPad that
-        // reaches the next output window; no extra floor is applied to
-        // totalPad itself.
-        const int64_t effectiveKernel = (kernelSize - 1) * dilation + 1;
-        const int64_t sumOfPad = std::max<int64_t>(
-            0, (outputSize - 1) * stride + effectiveKernel - inputSize);
-
-        // SAME_UPPER adds the extra pad (when sumOfPad is odd) at the end;
-        // SAME_LOWER adds it at the beginning.
-        const int64_t padBegin =
-            isSameUpper ? sumOfPad / 2 : sumOfPad - sumOfPad / 2;
-        const int64_t padEnd = sumOfPad - padBegin;
-        pads[i] = padBegin;
-        pads[spatialRank + i] = padEnd;
-      }
-    }
+          convOp, "cannot resolve auto_pad into explicit pads");
 
     rewriter.modifyOpInPlace(convOp, [&] {
       convOp.setAutoPadAttr(rewriter.getStringAttr("NOTSET"));
-      convOp.setPadsAttr(rewriter.getI64ArrayAttr(pads));
+      convOp.setPadsAttr(rewriter.getI64ArrayAttr(geometry->pads));
     });
     return success();
   }
@@ -4724,14 +4653,90 @@ void ONNXBatchNormalizationV9Op::getCanonicalizationPatterns(
   results.insert<RemoveBatchNormV9Pattern>(context);
 }
 
+/// `src <= mid`: casting `src` to `mid` is lossless.
+///
+///   int   -> int    same signedness, no truncation
+///   int   -> float  significand covers the integer range
+///   float -> float  `mid`'s format represents all of `src`
+///   anything else   never (float -> int, quant types)
+static bool castPreservesAllValues(Type src, Type mid) {
+  auto srcIntTy = dyn_cast<IntegerType>(src);
+  auto midIntTy = dyn_cast<IntegerType>(mid);
+  auto srcFloatTy = dyn_cast<FloatType>(src);
+  auto midFloatTy = dyn_cast<FloatType>(mid);
+
+  if (srcIntTy && midIntTy)
+    return srcIntTy.getSignedness() == midIntTy.getSignedness() &&
+           srcIntTy.getWidth() <= midIntTy.getWidth();
+
+  // Signless counts as signed; the mantissa width includes the integer bit.
+  if (srcIntTy && midFloatTy) {
+    unsigned intBits = srcIntTy.getWidth();
+    unsigned neededBits = srcIntTy.isUnsigned() ? intBits : intBits - 1;
+    return neededBits <= midFloatTy.getFPMantissaWidth();
+  }
+
+  // Not a width comparison: bf16 and f16 are both 16-bit but neither
+  // represents the other.
+  if (srcFloatTy && midFloatTy)
+    return llvm::APFloatBase::isRepresentableBy(
+        srcFloatTy.getFloatSemantics(), midFloatTy.getFloatSemantics());
+
+  return false;
+}
+
+/// `mid >= dst`: casting to `dst` discards at least as much as casting to
+/// `mid` did, hiding the intermediate loss. Integer-only and one signedness
+/// throughout: int narrowing drops high bits while float rounding drops low
+/// ones, and two float casts round twice, which is not bit-accurate.
+static bool finalCastSubsumesIntermediate(Type src, Type mid, Type dst) {
+  auto srcIntTy = dyn_cast<IntegerType>(src);
+  auto midIntTy = dyn_cast<IntegerType>(mid);
+  auto dstIntTy = dyn_cast<IntegerType>(dst);
+  if (!srcIntTy || !midIntTy || !dstIntTy)
+    return false;
+
+  return srcIntTy.getSignedness() == midIntTy.getSignedness() &&
+         midIntTy.getSignedness() == dstIntTy.getSignedness() &&
+         dstIntTy.getWidth() <= midIntTy.getWidth();
+}
+
+/// Replaces a chain of two onnx.Casts `src -> mid -> dst` with a single cast
+/// `src -> dst`, whenever `mid` is unobservable: either `src -> mid` loses
+/// nothing, or `mid -> dst` loses everything `src -> mid` did.
+struct FoldConsecutiveCastPattern : public OpRewritePattern<ONNXCastOp> {
+  using OpRewritePattern<ONNXCastOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXCastOp outerCast, PatternRewriter &rewriter) const override {
+    auto innerCast = outerCast.getInput().getDefiningOp<ONNXCastOp>();
+    if (!innerCast)
+      return failure();
+
+    if (!innerCast.getResult().hasOneUse())
+      return failure();
+
+    Type src = getElementType(innerCast.getInput().getType());
+    Type mid = getElementType(innerCast.getResult().getType());
+    Type dst = getElementType(outerCast.getResult().getType());
+
+    if (!castPreservesAllValues(src, mid) &&
+        !finalCastSubsumesIntermediate(src, mid, dst))
+      return failure();
+
+    rewriter.modifyOpInPlace(outerCast,
+        [&]() { outerCast.getInputMutable().assign(innerCast.getInput()); });
+    return success();
+  }
+};
+
 /// on the ONNXCastOp.
 void ONNXCastOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<CastEliminationPattern>(context);
   result.insert<SwapCastConcatPattern>(context);
   result.insert<SwapCastSlicePattern>(context);
-  // TODO: Reintroduce pattern for sound type combinations, see issue #2210.
-  // result.insert<FuseCastCastPattern>(context);
+  result.insert<FoldConsecutiveCastPattern>(context);
 }
 
 /// on the ONNXConcatOp.

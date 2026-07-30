@@ -2533,6 +2533,18 @@ func.func @test_expand_with_constant(%arg0 : tensor<2x1x6x1xf32>) -> tensor<*xf3
 
 // -----
 
+func.func @test_expand_with_constant_legal_broadcast(%arg0 : tensor<?x1x8x1xf32>) -> tensor<*xf32> {
+  %0 = onnx.Constant dense<[1, 5, 8, 3]> : tensor<4xi64>
+  %1 = "onnx.Expand"(%arg0, %0) : (tensor<?x1x8x1xf32>, tensor<4xi64>) -> tensor<*xf32>
+  "onnx.Return"(%1) : (tensor<*xf32>) -> ()
+
+  // CHECK-LABEL: test_expand_with_constant_legal_broadcast
+  // CHECK: [[RES:%.+]] = "onnx.Expand"(%arg0, %0) : (tensor<?x1x8x1xf32>, tensor<4xi64>) -> tensor<?x5x8x3xf32>
+  // CHECK: onnx.Return [[RES]] : tensor<?x5x8x3xf32>
+}
+
+// -----
+
 func.func @test_expand_with_shape(%arg0 : tensor<2x1x6x1xf32>, %arg1: tensor<6x2xf32>) -> tensor<*xf32> {
   %0 = "onnx.Shape"(%arg1) : (tensor<6x2xf32>) -> tensor<*xi64>
   %1 = "onnx.Expand"(%arg0, %0) : (tensor<2x1x6x1xf32>, tensor<*xi64>) -> tensor<*xf32>
