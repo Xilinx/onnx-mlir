@@ -218,6 +218,13 @@ struct ConvToChannelLastPattern : public OpRewritePattern<ONNXConvOp> {
     if (inputType.getRank() < 3 || weightType.getRank() < 3)
       return failure();
 
+    // Create XFEConv operation
+    FailureOr<onnx_mlir::ConvGeometry> geometry =
+        onnx_mlir::getConvGeometry(convOp);
+    if (failed(geometry))
+      return rewriter.notifyMatchFailure(
+          convOp, "cannot resolve conv geometry into explicit attributes");
+
     int64_t rank = inputType.getRank();
 
     // Transpose input to channel-last
@@ -228,18 +235,17 @@ struct ConvToChannelLastPattern : public OpRewritePattern<ONNXConvOp> {
     Value weightChannelLast = createWeightTranspose(
         rewriter, loc, weight, rank, weightType.getElementType());
 
-    // Create XFEConv operation
     auto origOutputType = mlir::cast<ShapedType>(convOp.getType());
     Type outputElementType = origOutputType.getElementType();
     Type nhwcOutputElemType = remapQuantTypeNchw2Nhwc(outputElementType, rank);
     auto convChannelLastOp = rewriter.create<XFEConvOp>(loc,
         UnrankedTensorType::get(nhwcOutputElemType), inputChannelLast,
         weightChannelLast, bias, rewriter.getStringAttr("NONE"),
-        convOp.getAutoPadAttr(), convOp.getDilationsAttr(),
-        convOp.getGroupAttr(), convOp.getKernelShapeAttr(),
-        /*leakyrelu_alpha=*/FloatAttr(), convOp.getPadsAttr(),
+        rewriter.getI64ArrayAttr(geometry->dilations), convOp.getGroupAttr(),
+        /*leakyrelu_alpha=*/FloatAttr(),
+        rewriter.getI64ArrayAttr(geometry->pads),
         /*prelu_in=*/IntegerAttr(), /*prelu_shift=*/IntegerAttr(),
-        convOp.getStridesAttr());
+        rewriter.getI64ArrayAttr(geometry->strides));
 
     // Transfer onnx_node_name attribute from original Conv to XFEConv
     transferOnnxNodeName(convOp, convChannelLastOp);

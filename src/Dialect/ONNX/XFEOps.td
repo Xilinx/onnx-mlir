@@ -96,15 +96,13 @@ def XFEConvOp:ONNX_Op<"XFEConv",
     AnyTypeOf<[TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[BF16]>, TensorOf<[I8]>, TensorOf<[UI8]>, TensorOf<[quant_QuantizedType]>]>:$W,
     AnyTypeOf<[TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[BF16]>, TensorOf<[I32]>, TensorOf<[quant_QuantizedType]>, NoneType]>:$B,
     DefaultValuedStrAttr<StrAttr, "NONE">:$activation,
-    DefaultValuedStrAttr<StrAttr, "NOTSET">:$auto_pad,
-    OptionalAttr<I64ArrayAttr>:$dilations,
+    I64ArrayAttr:$dilations,
     DefaultValuedAttr<SI64Attr, "1">:$group,
-    OptionalAttr<I64ArrayAttr>:$kernel_shape,
     OptionalAttr<F32Attr>:$leakyrelu_alpha,
-    OptionalAttr<I64ArrayAttr>:$pads,
+    I64ArrayAttr:$pads,
     OptionalAttr<SI64Attr>:$prelu_in,
     OptionalAttr<SI64Attr>:$prelu_shift,
-    OptionalAttr<I64ArrayAttr>:$strides);
+    I64ArrayAttr:$strides);
   let results = (outs AnyTypeOf<[TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[BF16]>, TensorOf<[I8]>, TensorOf<[UI8]>, TensorOf<[quant_QuantizedType]>]>:$Y);
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {

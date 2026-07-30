@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+
 // IMPLEMENT YOUR VERIFY LOGIC HERE
 // Move to: src/Dialect/ONNX/ONNXOps/Additional/XFEVerify.cpp
 
@@ -205,6 +207,24 @@ LogicalResult XFEConvOpVerify(Operation *op) {
   if (xShape.size() < 3 || wShape.size() < 3 || xShape.size() != wShape.size())
     return op->emitError("ConvChannelLast requires matching rank tensors with "
                          "at least 3 dimensions");
+
+  const size_t numSpatialDims = xShape.size() - 2;
+  if (convOp.getStrides().size() != numSpatialDims ||
+      convOp.getDilations().size() != numSpatialDims ||
+      convOp.getPads().size() != 2 * numSpatialDims)
+    return op->emitError(
+        "strides, dilations, and pads must match the spatial rank");
+
+  auto isPositive = [](const APInt &v) { return v.getSExtValue() >= 1; };
+  if (!llvm::all_of(
+          convOp.getStrides().getAsValueRange<IntegerAttr>(), isPositive))
+    return op->emitError("strides must be positive");
+  if (!llvm::all_of(
+          convOp.getDilations().getAsValueRange<IntegerAttr>(), isPositive))
+    return op->emitError("dilations must be positive");
+  if (!llvm::all_of(convOp.getPads().getAsValueRange<IntegerAttr>(),
+          [](const APInt &v) { return !v.isNegative(); }))
+    return op->emitError("pads must be nonnegative");
 
   return XFEChannelWiseQuantizationVerify(op);
 }

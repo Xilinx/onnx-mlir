@@ -12,8 +12,8 @@ func.func @test_relu_implicit_uint8_zp0(
     -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:0>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "RELU", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "RELU", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
@@ -37,8 +37,8 @@ func.func @test_relu_uint8_nonzero_zp_stays_relu(
     -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "RELU", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "RELU", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
@@ -62,8 +62,8 @@ func.func @test_relu_signed_stays_relu(
     -> tensor<1x4x4x16x!quant.uniform<i8:f32, 0.02:0>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "RELU", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "RELU", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<i8:f32, 0.02:0>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
@@ -87,8 +87,8 @@ func.func @test_leakyrelu_alpha_zero_to_relu(
     -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "LEAKYRELU", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3],
+      {activation = "LEAKYRELU", dilations = [1, 1],
+       group = 1 : si64,
        leakyrelu_alpha = 0.000000e+00 : f32,
        pads = [1, 1, 1, 1], strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
@@ -114,8 +114,8 @@ func.func @test_leakyrelu_standard_alpha(
 
   // 26/256 = 0.1015625
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "LEAKYRELU", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3],
+      {activation = "LEAKYRELU", dilations = [1, 1],
+       group = 1 : si64,
        leakyrelu_alpha = 0.1015625 : f32,
        pads = [1, 1, 1, 1], strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
@@ -143,8 +143,8 @@ func.func @test_leakyrelu_nonstandard_alpha(
   // alpha=0.3 != 26/256 → should become PRELU
   // M = round(2^8 * 0.3) = round(76.8) = 77, N = 8
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "LEAKYRELU", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3],
+      {activation = "LEAKYRELU", dilations = [1, 1],
+       group = 1 : si64,
        leakyrelu_alpha = 3.000000e-01 : f32,
        pads = [1, 1, 1, 1], strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
@@ -169,8 +169,8 @@ func.func @test_hsigmoid_passthrough(
     -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.004:0>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "HSIGMOID", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "HSIGMOID", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.05:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.01>>,
@@ -192,8 +192,8 @@ func.func @test_relu6_passthrough(
     -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "RELU6", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "RELU6", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
@@ -215,8 +215,8 @@ func.func @test_none_unchanged(
     -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
