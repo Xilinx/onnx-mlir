@@ -321,8 +321,13 @@ Value createFullRankSlice(PatternRewriter &rewriter, Location loc,
 }
 
 bool hasI64Values(Value value, ArrayRef<int64_t> expected) {
-  SmallVector<int64_t> values;
-  return getI64ValuesFromONNXConstantOp(value, values) && values == expected;
+  // Accept any ConstantLike producer, not just onnx.Constant, so that operands
+  // already in canonical form are left untouched whichever dialect built them.
+  ElementsAttr elemsAttr = getElementAttributeFromConstLikeValue(value);
+  if (!elemsAttr || !getElementType(elemsAttr.getType()).isInteger(64))
+    return false;
+  SmallVector<int64_t> values(elemsAttr.getValues<int64_t>());
+  return ArrayRef<int64_t>(values) == expected;
 }
 
 bool hasCanonicalSliceOperands(
