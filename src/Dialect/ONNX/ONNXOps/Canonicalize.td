@@ -76,6 +76,13 @@ def createDenseElementsAttrFromSize : NativeCodeCall<
 def subtractOrNeg: NativeCodeCall<
   "onnx_mlir::subtractOrNeg($_builder, $0.getDefiningOp()->getLoc(), $1, $2)">;
 
+// Rename the scale / bias branch of a decomposed BatchNorm so their reshapes
+// get distinct names instead of both inheriting the BatchNorm name.
+def NameBatchNormScaleBranch : NativeCodeCall<
+  "onnx_mlir::nameBatchNormBranch($_builder, $0, $1, \"scale\")">;
+def NameBatchNormBiasBranch : NativeCodeCall<
+  "onnx_mlir::nameBatchNormBranch($_builder, $0, $1, \"bias\")">;
+
 // Get the rank of the given value.
 def getRankOf :
 	NativeCodeCall<"mlir::cast<ShapedType>($0.getType()).getRank()">;
@@ -1033,23 +1040,27 @@ def RewriteBatchNormInferenceModeConvPattern1: Pat<
      // x * a
      (ONNXMulOp
         $x,
-        (ONNXUnsqueezeOp
-           (ONNXDivOp:$a
-              (castWithSameRankDifferentElementType $scale, $x),
-              (ONNXSqrtOp
-                 (ONNXAddOp
-                    (castWithSameRankDifferentElementType $var, $x),
-                    (ONNXConstantOpFromDenseAttr
-                       (createDenseElementsAttrFromFloatAttr $res, $epsilon))))),
-           (createConstantOpWithOneToRankOfExclusive $x))),
+        (NameBatchNormScaleBranch
+          (ONNXUnsqueezeOp
+             (ONNXDivOp:$a
+                (castWithSameRankDifferentElementType $scale, $x),
+                (ONNXSqrtOp
+                   (ONNXAddOp
+                      (castWithSameRankDifferentElementType $var, $x),
+                      (ONNXConstantOpFromDenseAttr
+                         (createDenseElementsAttrFromFloatAttr $res, $epsilon))))),
+             (createConstantOpWithOneToRankOfExclusive $x)),
+          $res)),
      // b
-     (ONNXUnsqueezeOp
-       (ONNXSubOp
-          (castWithSameRankDifferentElementType $bias, $x),
-          (ONNXMulOp
-            (castWithSameRankDifferentElementType $mean, $x),
-            $a)),
-       (createConstantOpWithOneToRankOfExclusive $x))),
+     (NameBatchNormBiasBranch
+       (ONNXUnsqueezeOp
+         (ONNXSubOp
+            (castWithSameRankDifferentElementType $bias, $x),
+            (ONNXMulOp
+              (castWithSameRankDifferentElementType $mean, $x),
+              $a)),
+         (createConstantOpWithOneToRankOfExclusive $x)),
+       $res)),
   [(HasRankGT<2> $x)], [], (addBenefit 0)
 >;
 

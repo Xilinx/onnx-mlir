@@ -89,6 +89,24 @@ Value subtractOrNeg(PatternRewriter &rewriter, Location loc, Value A, Value B) {
   return rewriter.create<ONNXSubOp>(loc, A, B);
 }
 
+// Rename a decomposed BatchNorm branch op (the scale/bias unsqueeze) so its
+// reshape no longer inherits the BatchNorm name shared by the sibling branch.
+// No-op when the BatchNorm has no NameLoc to derive a base from.
+Value nameBatchNormBranch(
+    PatternRewriter &rewriter, Value branchVal, Value bnResult, StringRef role) {
+  Operation *branchOp = branchVal.getDefiningOp();
+  Operation *bnOp = bnResult.getDefiningOp();
+  if (!branchOp || !bnOp)
+    return branchVal;
+  auto bnName = bnOp->getLoc()->findInstanceOf<NameLoc>();
+  if (!bnName)
+    return branchVal;
+  std::string newName =
+      (llvm::Twine(bnName.getName().getValue()) + "_" + role).str();
+  branchOp->setLoc(NameLoc::get(rewriter.getStringAttr(newName)));
+  return branchVal;
+}
+
 // Create an ArrayAttr of IntegerAttr(s) of values in [N, M].
 ArrayAttr createArrayAttrOfNToM(PatternRewriter &rewriter, int N, int M) {
   SmallVector<int64_t, 4> vals;
