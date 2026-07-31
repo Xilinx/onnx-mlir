@@ -409,7 +409,7 @@ struct ReplaceQuantizedTileToAddPass
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
-    patterns.add<MoveBroadcastTileForwardPattern>(context);
+    //    patterns.add<MoveBroadcastTileForwardPattern>(context);
     patterns.add<ReplaceQuantizedTileToAddPattern>(context);
     patterns.add<ReplaceIntegerTileToQuantizedTile>(context);
 
