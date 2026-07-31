@@ -201,6 +201,15 @@ struct ScaleToDwConv2dPattern : public OpRewritePattern<ONNXMulOp> {
     if (!inputType || !scaleType)
       return failure();
 
+    // Scale-fold to a depthwise XFEConv is only valid for float or quantized
+    // activations (covers f32 and QDQ models). Skip integer Muls such as i64
+    // NMS index arithmetic (e.g. /end2end/Mul_2 = gathered_index * stride):
+    // XFEConv's operand cannot be i64, so forming one there fails verification.
+    Type scaleFoldInEltType = inputType.getElementType();
+    if (!isa<FloatType>(scaleFoldInEltType) &&
+        !isa<quant::QuantizedType>(scaleFoldInEltType))
+      return failure();
+
     auto inputShape = inputType.getShape();
     auto scaleShape = scaleType.getShape();
     int64_t inputRank = inputShape.size();
