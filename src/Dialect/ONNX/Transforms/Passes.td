@@ -18,7 +18,13 @@ def SharedDecomposeRecomposePatternOptions {
   list<Option> options = [
     Option<"target", "target", "std::string", /*default=*/"\"\"",
            "Target dialect to decompose/recompose into (e.g. stablehlo); "
-           "empty string means the default ONNX-to-ONNX behavior.">
+           "empty string means the default ONNX-to-ONNX behavior.">,
+    Option<"enableDepthToSpaceDecompose",
+           "enable-depthtospace-decompose",
+           "bool", /*default=*/"false",
+           "Decompose onnx.DepthToSpace (DCR and CRD) into "
+           "Reshape/Transpose/Reshape so backends without a DepthToSpace "
+           "kernel can run it.">
   ];
 }
 
@@ -108,12 +114,6 @@ def ONNXDecomposePatternOptions {
            "(DCR) as the final interleave instead of "
            "Reshape/Transpose/Reshape.">,
 
-    Option<"enableDepthToSpaceDecompose",
-           "enable-depthtospace-decompose",
-           "bool", /*default=*/"false",
-           "Decompose onnx.DepthToSpace (DCR and CRD) into "
-           "Reshape/Transpose/Reshape so backends without a DepthToSpace "
-           "kernel can run it.">
   ];
 }
 
