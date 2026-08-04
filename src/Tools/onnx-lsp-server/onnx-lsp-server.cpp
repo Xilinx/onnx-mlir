@@ -33,7 +33,8 @@ static llvm::cl::list<accel::Accelerator::Kind,
 
 int main(int argc, char **argv) {
 
-  auto registry = onnx_mlir::registerDialects(maccel);
+  mlir::DialectRegistry registry;
+  onnx_mlir::registerDialects(registry, maccel);
 
   return failed(MlirLspServerMain(argc, argv, registry));
 }
