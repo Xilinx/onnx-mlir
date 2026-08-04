@@ -4,7 +4,7 @@
 
 //===------------- ONNXDequantizeLinearOp.cpp - ONNXDequantizeLinearOp-----===//
 //
-// Copyright (c) 2023-2025 Advanced Micro Devices, Inc.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -32,7 +32,7 @@ public:
   LogicalResult matchAndRewrite(ONNXDequantizeLinearOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(rewriter, loc);
     Value x = op.getX();
 
     auto resultType = dyn_cast_if_present<ShapedType>(
@@ -82,12 +82,12 @@ public:
 
     // Cast the operands of (x - zero_point) to float32 to avoid underflows
     Type arithType = rewriter.getF32Type();
-    Value casted = tosaBuilder.castToNewTensorElementType(x, arithType);
+    Value casted = create.onnx.castToNewTensorElementType(x, arithType);
     if (zeroPoint) {
       auto zpConst = tosa::expandShape(
           rewriter, loc, zeroPoint, axis, resultType.getRank());
       Value zpConstCast =
-          tosaBuilder.castToNewTensorElementType(zpConst, arithType);
+          create.onnx.castToNewTensorElementType(zpConst, arithType);
       casted = tosa::CreateOpAndInfer<mlir::tosa::SubOp>(
           rewriter, loc, casted.getType(), casted, zpConstCast)
                    .getResult();
@@ -95,12 +95,12 @@ public:
     auto scaleFactorConst = tosa::expandShape(
         rewriter, loc, adaptor.getXScale(), axis, resultType.getRank());
     Value scaleFactorCast =
-        tosaBuilder.castToNewTensorElementType(scaleFactorConst, arithType);
+        create.onnx.castToNewTensorElementType(scaleFactorConst, arithType);
     Value shiftConst = tosa::createMulShiftConst(rewriter, loc, 0);
     Value mulOp = tosa::CreateOpAndInfer<mlir::tosa::MulOp>(
         rewriter, loc, casted.getType(), casted, scaleFactorCast, shiftConst)
                       .getResult();
-    Value castOp = tosaBuilder.castToNewTensorElementType(
+    Value castOp = create.onnx.castToNewTensorElementType(
         mulOp, resultType.getElementType());
 
     rewriter.replaceOp(op, castOp);

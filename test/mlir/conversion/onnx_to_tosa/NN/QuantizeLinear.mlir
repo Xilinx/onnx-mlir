@@ -1,4 +1,5 @@
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa -cse %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="excluded-ops=Cast" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDE-CAST
 
 func.func @test_quantizeLinear(%arg0 : tensor<32x3x224x224xf32>) -> tensor<32x3x224x224xi8> {
   %0 = onnx.Constant dense<3.125000e-02> : tensor<f32>                       
@@ -18,6 +19,10 @@ func.func @test_quantizeLinear(%arg0 : tensor<32x3x224x224xf32>) -> tensor<32x3x
 // CHECK-DAG:    %[[CLAMP:.*]] = tosa.clamp %[[ADD]] {max_fp = 1.270000e+02 : f32, max_int = 127 : i64, min_fp = -1.280000e+02 : f32, min_int = -128 : i64} : (tensor<32x3x224x224xi32>) -> tensor<32x3x224x224xi32>
 // CHECK-DAG:    %[[CAST:.*]]  = tosa.cast %[[CLAMP]] : (tensor<32x3x224x224xi32>) -> tensor<32x3x224x224xi8>
 // CHECK-DAG:    return %[[CAST]] : tensor<32x3x224x224xi8>
+// EXCLUDE-CAST-LABEL: @test_quantizeLinear
+// EXCLUDE-CAST: onnx.Cast
+// EXCLUDE-CAST-NOT: tosa.cast
+// EXCLUDE-CAST: return
 
 // -----
 
@@ -136,3 +141,53 @@ func.func @dynamic_static(%arg0 : tensor<?xf32>, %arg1 : tensor<f32>, %arg2 : te
 // CHECK:         %[[CLAMP:.*]] = tosa.clamp
 // CHECK:         %[[OUT:.*]] = tosa.cast %[[CLAMP]] : (tensor<1xi32>) -> tensor<1xi8>
 // CHECK:         return %[[OUT]] : tensor<1xi8>
+
+// -----
+
+// ONNX requires (x / y_scale) to be rounded to the nearest even before the
+// (potentially odd) zero point is added: 2.7 -> 3, 8.5 -> 8, 9.5 -> 10.
+// Truncating towards zero instead would bias every element by up to one
+// quantization step, so the two lowerings below have to stay numerically equal.
+func.func @test_quantizeLinear_round_half_even(%arg0: tensor<8x2xf32>) -> tensor<8x2xi8> {
+  %0 = onnx.Constant dense<3.125000e-02> : tensor<f32>
+  %1 = onnx.Constant dense<1> : tensor<i8>
+  %2 = "onnx.QuantizeLinear"(%arg0, %0, %1) {axis = 1 : si64} : (tensor<8x2xf32>, tensor<f32>, tensor<i8>) -> tensor<8x2xi8>
+  return %2 : tensor<8x2xi8>
+}
+
+// tosa.cast float-to-int already rounds half-to-even, so it must do the
+// rounding and the widening to i32 in one operation. Any floor/select rounding
+// appearing here means the rounding was re-expressed, which is only correct if
+// it reproduces round-half-to-even exactly.
+// CHECK-LABEL:  @test_quantizeLinear_round_half_even
+// CHECK:          %[[MUL:.*]] = tosa.mul %arg0
+// CHECK-NEXT:     %[[ROUNDED:.*]] = tosa.cast %[[MUL]] : (tensor<8x2xf32>) -> tensor<8x2xi32>
+// CHECK-NOT:      tosa.floor
+// CHECK-NOT:      tosa.select
+// CHECK:          return
+
+// onnx.Cast truncates towards zero, so with cast lowering isolated the rounding
+// is spelled out first: y = floor(x); r = x - y; y is incremented when r > 0.5,
+// and on a tie (r == 0.5) only when y is odd, i.e. y - 2 * floor(0.5 * y) == 1.
+// Truncating the already integral result is exact.
+// EXCLUDE-CAST-LABEL:  @test_quantizeLinear_round_half_even
+// EXCLUDE-CAST:          %[[MUL:.*]] = tosa.mul %arg0
+// EXCLUDE-CAST-DAG:      %[[ONE:.*]] = "tosa.const"() <{value = dense<1.000000e+00> : tensor<1x1xf32>}>
+// EXCLUDE-CAST-DAG:      %[[TWO:.*]] = "tosa.const"() <{value = dense<2.000000e+00> : tensor<1x1xf32>}>
+// EXCLUDE-CAST-DAG:      %[[HALF:.*]] = "tosa.const"() <{value = dense<5.000000e-01> : tensor<1x1xf32>}>
+// EXCLUDE-CAST:          %[[Y:.*]] = tosa.floor %[[MUL]] : (tensor<8x2xf32>) -> tensor<8x2xf32>
+// EXCLUDE-CAST:          %[[R:.*]] = tosa.sub %[[MUL]], %[[Y]]
+// EXCLUDE-CAST:          %[[YP1:.*]] = tosa.add %[[Y]], %[[ONE]]
+// EXCLUDE-CAST:          %[[GT:.*]] = tosa.greater %[[R]], %[[HALF]]
+// EXCLUDE-CAST:          %[[NEAREST:.*]] = tosa.select %[[GT]], %[[YP1]], %[[Y]]
+// EXCLUDE-CAST:          %[[HALFY:.*]] = tosa.mul %[[HALF]], %[[Y]]
+// EXCLUDE-CAST:          %[[FLOORHY:.*]] = tosa.floor %[[HALFY]]
+// EXCLUDE-CAST:          %[[EVENY:.*]] = tosa.mul %[[FLOORHY]], %[[TWO]]
+// EXCLUDE-CAST:          %[[PARITY:.*]] = tosa.sub %[[Y]], %[[EVENY]]
+// EXCLUDE-CAST:          %[[ODD:.*]] = tosa.equal %[[PARITY]], %[[ONE]]
+// EXCLUDE-CAST:          %[[EVENNB:.*]] = tosa.select %[[ODD]], %[[YP1]], %[[Y]]
+// EXCLUDE-CAST:          %[[TIE:.*]] = tosa.equal %[[R]], %[[HALF]]
+// EXCLUDE-CAST:          %[[ROUNDED:.*]] = tosa.select %[[TIE]], %[[EVENNB]], %[[NEAREST]]
+// EXCLUDE-CAST:          %[[NARROWED:.*]] = "onnx.Cast"(%[[ROUNDED]]) {{.*}}to = i32{{.*}} : (tensor<8x2xf32>) -> tensor<8x2xi32>
+// EXCLUDE-CAST-NOT:      tosa.cast
+// EXCLUDE-CAST:          return

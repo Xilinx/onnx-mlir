@@ -58,6 +58,8 @@ struct OnnxBuilder : DialectBuilder {
       mlir::Value input, mlir::IntegerAttr saturate, mlir::TypeAttr to) const;
   mlir::Value cast(mlir::Value input, mlir::TypeAttr to) const;
   mlir::Value cast(mlir::Value input, mlir::Type to) const;
+  [[nodiscard]] mlir::Value castToNewTensorElementType(
+      mlir::Value input, mlir::Type newElemTy) const;
 
   // ONNXCeilOp
   mlir::Value ceil(mlir::Value input) const;

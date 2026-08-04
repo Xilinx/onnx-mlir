@@ -136,11 +136,8 @@ std::optional<Value> convertGatherOp(PatternRewriter &rewriter, Location loc,
 
   // onnx allows i64 indices (specification extended by i16), but tosa does not.
   if (!indicesType.getElementType().isInteger(32)) {
-    indicesType =
-        dyn_cast<RankedTensorType>(indicesType.clone(rewriter.getI32Type()));
-    indicesValue = CreateOpAndInfer<mlir::tosa::CastOp>(
-        rewriter, loc, indicesType, indicesValue)
-                       .getResult();
+    indicesValue = create.onnx.cast(indicesValue, rewriter.getI32Type());
+    indicesType = cast<RankedTensorType>(indicesValue.getType());
   }
 
   // Sizes for each of these fields.
