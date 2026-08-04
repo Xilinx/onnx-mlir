@@ -20,9 +20,8 @@ using namespace mlir;
 
 namespace onnx_mlir {
 
-DialectRegistry registerDialects(ArrayRef<accel::Accelerator::Kind> accels) {
-  DialectRegistry registry;
-
+void registerDialects(DialectRegistry &registry,
+    ArrayRef<accel::Accelerator::Kind> accels) {
   // Note that we cannot consult command line options because they have not yet
   // been parsed when registerDialects() is called.
 
@@ -57,8 +56,6 @@ DialectRegistry registerDialects(ArrayRef<accel::Accelerator::Kind> accels) {
 
   // Register TensorName inference
   registerTensorNameInferenceExternalModels(registry);
-
-  return registry;
 }
 
 } // namespace onnx_mlir
