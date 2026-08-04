@@ -952,7 +952,7 @@ struct ConvertMatMulToXFEConvPass
 
     GreedyRewriteConfig config;
     onnx_mlir::ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(applyPatternsGreedily(func, std::move(patterns), config))) {
       signalPassFailure();
     }

@@ -163,7 +163,7 @@ struct ReplaceQDQReduceL2Pass
     patterns.add<ReplaceQDQReduceL2Pattern>(context);
     ResultNamesUpdater rnUpdater;
     GreedyRewriteConfig config;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(
             applyPatternsGreedily(getOperation(), std::move(patterns), config)))
       signalPassFailure();

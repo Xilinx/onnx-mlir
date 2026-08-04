@@ -4,6 +4,6 @@
 git init llvm-project
 cd llvm-project
 git remote add origin https://github.com/xilinx/llvm-aie.git
-git fetch --depth 1 origin b3221c8e98a45af3b0868ed98070c631ed280cfb
+git fetch --depth 1 origin c60ed356b69096edbb268a9d2a94dcc9113fee9a
 git checkout FETCH_HEAD
 cd ..

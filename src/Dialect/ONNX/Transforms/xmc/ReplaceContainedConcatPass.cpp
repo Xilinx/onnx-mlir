@@ -186,10 +186,10 @@ struct ReplaceContainedConcatPass
     patterns.add<ReplaceContainedConcatPattern>(context);
 
     GreedyRewriteConfig config;
-    config.maxIterations = 10;
-    config.useTopDownTraversal = false;
+    config.setMaxIterations(10);
+    config.setUseTopDownTraversal(false);
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
 
     if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {

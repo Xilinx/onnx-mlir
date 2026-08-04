@@ -2133,7 +2133,7 @@ void RecomposeONNXToONNXPass::runOnOperation() {
 
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
-          GreedyRewriteConfig{.listener = &rnUpdater})))
+          GreedyRewriteConfig().setListener(&rnUpdater))))
     signalPassFailure();
 }
 

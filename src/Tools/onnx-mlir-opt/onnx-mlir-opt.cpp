@@ -212,7 +212,9 @@ int main(int argc, char **argv) {
   MlirOptMainConfig config;
   config.setPassPipelineSetupFn(passManagerSetupFn)
       .splitInputFile(split_input_file ? kDefaultSplitMarker : "")
-      .verifyDiagnostics(verify_diagnostics)
+      .verifyDiagnostics(verify_diagnostics
+                             ? SourceMgrDiagnosticVerifierHandler::Level::All
+                             : SourceMgrDiagnosticVerifierHandler::Level::None)
       .verifyPasses(verify_passes)
       .allowUnregisteredDialects(allowUnregisteredDialects)
       .emitBytecode(false)

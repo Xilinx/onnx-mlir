@@ -310,9 +310,9 @@ struct ReplaceQDQReductionPass
         ReshapeReduceTo4DPattern<mlir::ONNXReduceMinOp>>(context);
 
     mlir::GreedyRewriteConfig config;
-    config.strictMode = mlir::GreedyRewriteStrictness::ExistingAndNewOps;
+    config.setStrictness(mlir::GreedyRewriteStrictness::ExistingAndNewOps);
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (mlir::failed(mlir::applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       signalPassFailure();

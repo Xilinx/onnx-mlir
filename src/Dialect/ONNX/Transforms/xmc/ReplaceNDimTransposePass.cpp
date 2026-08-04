@@ -106,9 +106,9 @@ struct ReplaceNDimTransposePass : public PassWrapper<ReplaceNDimTransposePass,
     RewritePatternSet patterns(context);
     patterns.add<ReplaceNDimTransposePattern>(context);
     GreedyRewriteConfig config;
-    config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
+    config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps);
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(
             applyPatternsGreedily(getOperation(), std::move(patterns), config)))
       signalPassFailure();

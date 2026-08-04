@@ -859,9 +859,9 @@ struct LowerReduceToPoolPass
     patterns.add<LowerReduceMaxToMaxPoolChannelPattern>(context);
 
     GreedyRewriteConfig config;
-    config.maxIterations = 3;
+    config.setMaxIterations(3);
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
 
     if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
