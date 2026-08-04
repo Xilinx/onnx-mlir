@@ -138,7 +138,8 @@ int main(int argc, char **argv) {
   // Remove unrelated options except common ones and the onnx-mlir-opt options
   removeUnrelatedOptions({&OnnxMlirCommonOptions, &OnnxMlirOptOptions});
 
-  DialectRegistry registry = registerDialects(maccel);
+  DialectRegistry registry;
+  registerDialects(registry, maccel);
   registry.insert<tosa::TosaDialect>();
   registry.insert<mlir::quant::QuantDialect>();
 
