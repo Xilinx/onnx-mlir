@@ -4213,6 +4213,71 @@ void ONNXDequantizeLinearOp::getCanonicalizationPatterns(
 // ONNXConvOp canonicalization
 //===----------------------------------------------------------------------===//
 
+namespace {
+
+// Derive spatial rank from kernel_shape when present, otherwise from weight
+// rank.
+static std::optional<int64_t> getConvSpatialRank(ONNXConvOp convOp) {
+  if (auto kernelShape = convOp.getKernelShape(); kernelShape.has_value()) {
+    const int64_t rank = ArrayAttrSize(kernelShape);
+    if (rank >= 1)
+      return rank;
+    return std::nullopt;
+  }
+
+  const Value W = convOp.getW();
+  if (!hasShapeAndRank(W))
+    return std::nullopt;
+  const auto wShape = cast<ShapedType>(W.getType()).getShape();
+  const int64_t spatialRank = static_cast<int64_t>(wShape.size()) - 2;
+  if (spatialRank >= 1)
+    return spatialRank;
+  return std::nullopt;
+}
+
+} // namespace
+
+// Materialize ONNX-default Conv attributes when omitted:
+//   strides/dilations -> 1 on each spatial axis
+//   pads              -> 0 when auto_pad is NOTSET or VALID
+//
+// SAME_UPPER / SAME_LOWER padding is left to NormalizeConvAutoPadPattern.
+struct MaterializeDefaultConvParamsPattern
+    : public OpRewritePattern<ONNXConvOp> {
+  using OpRewritePattern<ONNXConvOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXConvOp convOp, PatternRewriter &rewriter) const override {
+    const bool needStrides = !convOp.getStrides().has_value();
+    const bool needDilations = !convOp.getDilations().has_value();
+    const StringRef autoPad = convOp.getAutoPad();
+    const bool needPads = !convOp.getPads().has_value() &&
+                          (autoPad == "NOTSET" || autoPad == "VALID");
+
+    if (!needStrides && !needDilations && !needPads)
+      return failure();
+
+    const std::optional<int64_t> spatialRankOpt = getConvSpatialRank(convOp);
+    if (!spatialRankOpt.has_value())
+      return rewriter.notifyMatchFailure(
+          convOp, "cannot derive spatial rank from kernel_shape or weight");
+
+    const int64_t spatialRank = *spatialRankOpt;
+    const SmallVector<int64_t> unitSpatial(spatialRank, 1);
+    const SmallVector<int64_t> zeroPads(2 * spatialRank, 0);
+
+    rewriter.modifyOpInPlace(convOp, [&] {
+      if (needStrides)
+        convOp.setStridesAttr(rewriter.getI64ArrayAttr(unitSpatial));
+      if (needDilations)
+        convOp.setDilationsAttr(rewriter.getI64ArrayAttr(unitSpatial));
+      if (needPads)
+        convOp.setPadsAttr(rewriter.getI64ArrayAttr(zeroPads));
+    });
+    return success();
+  }
+};
+
 // Normalize auto_pad to NOTSET with explicit pads.
 //
 // SAME_UPPER / SAME_LOWER: compute the padding required to keep the output
@@ -4573,6 +4638,7 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
 /// on the ONNXConvOp.
 void ONNXConvOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
+  results.insert<MaterializeDefaultConvParamsPattern>(context);
   results.insert<NormalizeConvAutoPadPattern>(context);
   if (enableConv1x1IntoConvCanonicalization)
     results.insert<FuseConv1x1IntoConvPattern>(context);
