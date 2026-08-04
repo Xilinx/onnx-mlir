@@ -167,9 +167,8 @@ func.func @test_quantizeLinear_round_half_even(%arg0: tensor<8x2xf32>) -> tensor
 // CHECK:          return
 
 // onnx.Cast truncates towards zero, so with cast lowering isolated the rounding
-// is spelled out first: y = floor(x); r = x - y; y is incremented when r > 0.5,
-// and on a tie (r == 0.5) only when y is odd, i.e. y - 2 * floor(0.5 * y) == 1.
-// Truncating the already integral result is exact.
+// is spelled out first. On a tie, 2 * floor(0.5 * x + 0.5) is the even
+// neighbour. Truncating the already integral result is exact.
 // EXCLUDE-CAST-LABEL:  @test_quantizeLinear_round_half_even
 // EXCLUDE-CAST:          %[[MUL:.*]] = tosa.mul %arg0
 // EXCLUDE-CAST-DAG:      %[[ONE:.*]] = "tosa.const"() <{value = dense<1.000000e+00> : tensor<1x1xf32>}>
@@ -180,12 +179,10 @@ func.func @test_quantizeLinear_round_half_even(%arg0: tensor<8x2xf32>) -> tensor
 // EXCLUDE-CAST:          %[[YP1:.*]] = tosa.add %[[Y]], %[[ONE]]
 // EXCLUDE-CAST:          %[[GT:.*]] = tosa.greater %[[R]], %[[HALF]]
 // EXCLUDE-CAST:          %[[NEAREST:.*]] = tosa.select %[[GT]], %[[YP1]], %[[Y]]
-// EXCLUDE-CAST:          %[[HALFY:.*]] = tosa.mul %[[HALF]], %[[Y]]
-// EXCLUDE-CAST:          %[[FLOORHY:.*]] = tosa.floor %[[HALFY]]
-// EXCLUDE-CAST:          %[[EVENY:.*]] = tosa.mul %[[FLOORHY]], %[[TWO]]
-// EXCLUDE-CAST:          %[[PARITY:.*]] = tosa.sub %[[Y]], %[[EVENY]]
-// EXCLUDE-CAST:          %[[ODD:.*]] = tosa.equal %[[PARITY]], %[[ONE]]
-// EXCLUDE-CAST:          %[[EVENNB:.*]] = tosa.select %[[ODD]], %[[YP1]], %[[Y]]
+// EXCLUDE-CAST:          %[[HALFX:.*]] = tosa.mul %[[MUL]], %[[HALF]]
+// EXCLUDE-CAST:          %[[SHIFTED:.*]] = tosa.add %[[HALFX]], %[[HALF]]
+// EXCLUDE-CAST:          %[[FLOORSHIFTED:.*]] = tosa.floor %[[SHIFTED]]
+// EXCLUDE-CAST:          %[[EVENNB:.*]] = tosa.mul %[[FLOORSHIFTED]], %[[TWO]]
 // EXCLUDE-CAST:          %[[TIE:.*]] = tosa.equal %[[R]], %[[HALF]]
 // EXCLUDE-CAST:          %[[ROUNDED:.*]] = tosa.select %[[TIE]], %[[EVENNB]], %[[NEAREST]]
 // EXCLUDE-CAST:          %[[NARROWED:.*]] = "onnx.Cast"(%[[ROUNDED]]) {{.*}}to = i32{{.*}} : (tensor<8x2xf32>) -> tensor<8x2xi32>

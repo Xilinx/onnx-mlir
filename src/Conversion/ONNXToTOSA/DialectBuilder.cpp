@@ -365,12 +365,14 @@ Value TosaBuilder::sqrt(mlir::Value &input) {
 }
 
 Value TosaBuilder::roundEven(mlir::Value input) {
-  // TOSA has no round operator, so emulate numpy's rint.
-  //   y = floor(x);
-  //   r = x - y;
-  //   if (r > 0.5) y += 1.0;
-  //   if (r == 0.5) { if (y - 2.0 * floor(0.5 * y) == 1.0) y += 1.0; }
-  //   return y;
+  // TOSA has no round operator, so round half-to-even as:
+  // ```
+  // y = floor(x);
+  // r = x - y;
+  // if (r == 0.5)
+  //   return 2.0 * floor(0.5 * x + 0.5);
+  // return (r > 0.5) ? y + 1.0 : y;
+  // ```
   auto inputType = cast<ShapedType>(input.getType());
   Type elementType = inputType.getElementType();
   int64_t rank = inputType.getRank();
@@ -380,20 +382,15 @@ Value TosaBuilder::roundEven(mlir::Value input) {
 
   Value y = this->unaryOp<mlir::tosa::FloorOp>(input);
   Value r = this->binaryOp<mlir::tosa::SubOp>(input, y);
-  Value yPlusOne = this->binaryOp<mlir::tosa::AddOp>(y, one);
 
-  // Away from a tie, round to the nearest integer.
+  Value yPlusOne = this->binaryOp<mlir::tosa::AddOp>(y, one);
   Value roundUp = this->greater(r, half);
   Value nearest = this->select(roundUp, yPlusOne, y);
 
-  // On a tie, pick the even neighbour. y is odd exactly when
-  // y - 2 * floor(0.5 * y) is 1.
-  Value halfY = this->mul(half, y);
-  halfY = this->unaryOp<mlir::tosa::FloorOp>(halfY);
-  Value evenY = this->mul(halfY, two);
-  Value parity = this->binaryOp<mlir::tosa::SubOp>(y, evenY);
-  Value yIsOdd = this->equal(parity, one);
-  Value evenNeighbour = this->select(yIsOdd, yPlusOne, y);
+  Value halfX = this->mul(input, half);
+  Value shifted = this->binaryOp<mlir::tosa::AddOp>(halfX, half);
+  Value floored = this->unaryOp<mlir::tosa::FloorOp>(shifted);
+  Value evenNeighbour = this->mul(floored, two);
 
   Value isTie = this->equal(r, half);
   return this->select(isTie, evenNeighbour, nearest);
