@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 
 add_custom_target(unittest)
 set_target_properties(unittest PROPERTIES FOLDER "Tests")
@@ -25,9 +26,9 @@ function(add_onnx_mlir_unittest test_name)
 
   add_dependencies(unittest ${test_name})
   get_target_property(test_suite_folder unittest FOLDER)
-  if (test_suite_folder)
+  if(test_suite_folder)
     set_property(TARGET ${test_name} PROPERTY FOLDER "${test_suite_folder}")
-  endif ()
+  endif()
 
   # Optimization level set by ONNX_MLIR_TEST_OPTLEVEL, defaults to 3
   add_test(NAME ${test_name} COMMAND ${test_name})

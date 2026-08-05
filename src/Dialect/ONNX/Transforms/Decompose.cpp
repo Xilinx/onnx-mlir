@@ -915,30 +915,30 @@ ONNXConstantOp getONNXConstOpFromVector(
 // together to get the final output.
 // Below shows the high level view of the decomposition.
 // clang-format off
-//                                                                                             
-// +--------+     +--------+-------+--------+-------+--------+-------+                         
-// |ConvT   |     |        |       |        |       |        |       |                         
-// |        +---->| Conv1  |Conv2  | Conv1  |Conv2  | Conv1  |Conv2  |                         
-// |stride 2|     |        |       |        |       |        |       |                         
-// +--------+     +--------+-------+--------+-------+--------+-------+                         
-//                                                                                             
-// +--------+      +------+------+------+------+------+------+------+------+                   
-// |ConvT   |      |      |      |      |      |      |      |      |      |                   
-// |        +----> |conv1 |conv2 |conv3 |conv4 |conv1 |conv2 |conv3 |conv4 |                   
-// |stride4 |      +------+------+------+------+------+------+------+------+                   
-// +--------+                                                                                  
-//                                                                                             
-// +--------+                                                                                  
-// |ConvT   |   +------+------+------+------+-----+                                            
-// |        +-->|      |      |      |      |     |                                            
-// |Stride 5|   |conv1 |conv2 |conv3 |conv4 |conv5|                                            
-// +--------+   +------+------+------+------+-----+                                            
-//                                                                                             
-//                                                                                             
-//  ConvTranspose weights are sliced to generated phased conv weights                          
-//                                                                                             
-//  phased conv outputs are merged to get complete ofm                                         
-//                                                                                             
+//
+// +--------+     +--------+-------+--------+-------+--------+-------+
+// |ConvT   |     |        |       |        |       |        |       |
+// |        +---->| Conv1  |Conv2  | Conv1  |Conv2  | Conv1  |Conv2  |
+// |stride 2|     |        |       |        |       |        |       |
+// +--------+     +--------+-------+--------+-------+--------+-------+
+//
+// +--------+      +------+------+------+------+------+------+------+------+
+// |ConvT   |      |      |      |      |      |      |      |      |      |
+// |        +----> |conv1 |conv2 |conv3 |conv4 |conv1 |conv2 |conv3 |conv4 |
+// |stride4 |      +------+------+------+------+------+------+------+------+
+// +--------+
+//
+// +--------+
+// |ConvT   |   +------+------+------+------+-----+
+// |        +-->|      |      |      |      |     |
+// |Stride 5|   |conv1 |conv2 |conv3 |conv4 |conv5|
+// +--------+   +------+------+------+------+-----+
+//
+//
+//  ConvTranspose weights are sliced to generated phased conv weights
+//
+//  phased conv outputs are merged to get complete ofm
+//
 //                                                -
 // clang-format on
 // If no activation op ( lrelu or relu) found in the matching, the alpha value
@@ -1325,17 +1325,17 @@ Value decomposeConvT1dIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
 // Below shows the high level view of the decomposition.
 // clang-format off
 /*
- * +---------------+       +-----------+ 
- * | ConvT         |       |           | 
- * |               |       |   Conv    | 
- * |stride [1,1]   +--->   |           | 
- * |               |       |           | 
- * +---------------+       +-----------+ 
- *                                       
- *                                       
- *                                       
- *                                       
- *                         +-------+-------+-------+-------+-- --------------+  
+ * +---------------+       +-----------+
+ * | ConvT         |       |           |
+ * |               |       |   Conv    |
+ * |stride [1,1]   +--->   |           |
+ * |               |       |           |
+ * +---------------+       +-----------+
+ *
+ *
+ *
+ *
+ *                         +-------+-------+-------+-------+-- --------------+
  * +----------------+      | conv1 |conv3  | conv1 |conv3  |                 |
  * |  ConvT         |      |       |       |       |       |                 |
  * |                |      +-------+-------+-------+-------+                 |
@@ -1352,11 +1352,11 @@ Value decomposeConvT1dIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
  *                         |                                                 |
  *                         |                                                 |
  *                         +-------------------------------------------------+
- *                                                                            
- *                                                                            
- *                                 4 conv ofms merged                         
- *                                                                            
- *                                                                            
+ *
+ *
+ *                                 4 conv ofms merged
+ *
+ *
  * +-------------------+         +--------+-------+------+--------+-------+------+-+
  * |                   |         |conv1   |conv2  |conv7 |conv1   |conv2  |conv7 | |
  * |convT              |         |        |       |      |        |       |      | |
@@ -1380,7 +1380,7 @@ Value decomposeConvT1dIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
  *                               |                                                 |
  *                               |                                                 |
  *                               +-------------------------------------------------+
- *                               9 conv ofms are merged                             
+ *                               9 conv ofms are merged
  */
 // clang-format on
 // If no activation op ( lrelu or relu) found in the matching, the alpha value
