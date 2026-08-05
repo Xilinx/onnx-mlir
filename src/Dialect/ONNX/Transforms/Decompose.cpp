@@ -4690,6 +4690,15 @@ struct MicrosoftRotaryEmbedding : public CustomOpToOnnxOps {
   };
 };
 
+// Reads an integer attribute, falling back to the operator's documented default
+// when the exporter left it out.
+static int64_t getIntAttrOrDefault(
+    Operation *op, StringRef name, int64_t defaultValue) {
+  if (auto attr = op->getAttrOfType<IntegerAttr>(name))
+    return attr.getSInt();
+  return defaultValue;
+}
+
 // Converts Microsoft.MatmulNBits to onnx.DequantizeLinear and onnx.MatMul
 //   A    B  scales zps       A      B  scales zps
 //   │    │     │    │        │      │     │    │
@@ -4899,6 +4908,284 @@ struct MicrosoftMatmulNBits : public CustomOpToOnnxOps {
 
     rewriter.replaceOp(customOp, mm);
 
+    return success();
+  }
+};
+
+// Converts com.microsoft.GatherBlockQuantized into onnx.Gather on the still
+// quantized table plus a runtime dequantization of only the gathered rows.
+//
+//  data indices scales zps       data    zps    scales  indices
+//   │     │       │     │         │       │       │        │
+//  ui8   i32    fp32   ui8       ui8     ui8     fp32     i32
+//   │     │       │     │         │       │       │        │
+//   │     │       │     │      unpack  unpack     │        │
+//   └─┐ ┌─┘       │   ┌─┘         │       │       │        │
+//     ▼ ▼         ▼   ▼          i8      i8     fp32       │
+//  ┌──────────────────────┐       │       │       │        │
+//  │                      │       └───────┴───────┴──┐  ┌──┘
+//  │ GatherBlockQuantized │  =►                      ▼  ▼
+//  │                      │                    ┌───────────┐
+//  └──────────┬───────────┘                    │  Gather   │ one per constant
+//             │                                └─┬───┬───┬─┘
+//           fp32                            data │zps│   │ scales
+//             │                                  ▼   ▼   ▼
+//             ▼                                Cast Cast Expand
+//                                                │   │     │
+//                                                ▼   ▼     │
+//                                               ┌─────┐    │ Sub only when
+//                                               │ Sub │    │ zps is present
+//                                               └──┬──┘    │
+//                                                  ▼       ▼
+//                                                 ┌──────────┐
+//                                                 │   Mul    │
+//                                                 └────┬─────┘
+//                                                     fp32
+//                                                      ▼
+// Here, indices is an ifm and data, scales, and zps are constants. Gathering
+// the quantized table and dequantizing afterwards keeps the compiled constant
+// proportional to the quantized table instead of the dequantized one.
+//
+// The sub-byte data and zps constants are unpacked at compile time into signed
+// integers, i8 for bits 2 and 4 and i16 for bits 8. Without explicit zps the
+// implicit zero point 2^(bits-1) is folded into the unpacked table, which drops
+// the Sub. The per-block scales and zps are stretched over their block with
+// Unsqueeze + Expand + Reshape so they line up element-wise with the gathered
+// rows.
+struct MicrosoftGatherBlockQuantized : public CustomOpToOnnxOps {
+  MicrosoftGatherBlockQuantized(MLIRContext *ctx, PatternBenefit b = 1)
+      : CustomOpToOnnxOps(ctx, MicrosoftDomainName, "GatherBlockQuantized", b) {
+  }
+
+  // Builds `logicalShape` from already-unpacked values, dropping the tail of
+  // each row that sub-byte packing had to round up to a whole byte.
+  static Value buildUnpackedConstant(onnx_mlir::OnnxBuilder &b,
+      ArrayRef<int64_t> unpacked, ArrayRef<int64_t> logicalShape,
+      int64_t unpackedRowLen, int64_t zeroPoint, Type elementType) {
+    const unsigned width = elementType.getIntOrFloatBitWidth();
+    const int64_t rowLen = logicalShape.back();
+    assert(rowLen <= unpackedRowLen && "logical row longer than unpacked row");
+    assert(int64_t(unpacked.size()) ==
+               unpackedRowLen *
+                   (ShapedType::getNumElements(logicalShape) / rowLen) &&
+           "unpacked values do not tile the logical shape exactly");
+
+    SmallVector<APInt> values;
+    values.reserve(ShapedType::getNumElements(logicalShape));
+    for (int64_t row = 0; row + unpackedRowLen <= int64_t(unpacked.size());
+        row += unpackedRowLen)
+      for (int64_t i = 0; i < rowLen; ++i)
+        values.emplace_back(
+            width, unpacked[row + i] - zeroPoint, /*isSigned=*/true);
+    return b.constant(DenseElementsAttr::get(
+        RankedTensorType::get(logicalShape, elementType), values));
+  }
+
+  // substitute the axis dimension with the indices shape, e.g.
+  // 1x128x64 table gathered on axis 1 with 2x3 indices gives 1x2x3x64.
+  static SmallVector<int64_t> getGatherShape(
+      ArrayRef<int64_t> shape, ArrayRef<int64_t> indicesShape, int64_t axis) {
+    SmallVector<int64_t> gatheredShape(shape.take_front(axis));
+    llvm::append_range(gatheredShape, indicesShape);
+    llvm::append_range(gatheredShape, shape.drop_front(axis + 1));
+    return gatheredShape;
+  }
+
+  // Stretches per-block values over their block so they line up element-wise
+  // with the gathered quantized rows: Unsqueeze behind the block axis, Expand
+  // to the block size, then Reshape back onto the gathered shape. quantize_axis
+  // is the last table axis, so the blocks are always on the last axis of
+  // perBlock and the new axis simply goes at the end.
+  // e.g.: 2x3x3x4 per-block values, blockSize=16
+  // 1. unsqueeze to 2x3x3x4x1
+  // 2. expand to 2x3x3x4x16
+  // 3. reshape to 2x3x3x64
+  static Value expandBlocks(onnx_mlir::OnnxBuilder &b,
+      SmallVector<Value> &toCheck, Value perBlock, int64_t blockSize,
+      ArrayRef<int64_t> gatheredShape) {
+    Type elementType = getElementTypeOrSelf(perBlock.getType());
+    auto perBlockType = cast<ShapedType>(perBlock.getType());
+
+    SmallVector<int64_t> unsqueezedShape(perBlockType.getShape());
+    unsqueezedShape.push_back(1);
+    Value axes = b.constantInt64({perBlockType.getRank()});
+    toCheck.push_back(axes);
+    Value unsqueezed = b.unsqueeze(
+        RankedTensorType::get(unsqueezedShape, elementType), perBlock, axes);
+    toCheck.push_back(unsqueezed);
+
+    SmallVector<int64_t> blockShape(unsqueezedShape);
+    blockShape.back() = blockSize;
+    Value blockShapeConst = b.constantInt64(blockShape);
+    toCheck.push_back(blockShapeConst);
+    Value expanded = b.expand(RankedTensorType::get(blockShape, elementType),
+        unsqueezed, blockShapeConst);
+    toCheck.push_back(expanded);
+
+    Value gatheredShapeConst = b.constantInt64(gatheredShape);
+    toCheck.push_back(gatheredShapeConst);
+    Value reshaped =
+        b.reshape(RankedTensorType::get(gatheredShape, elementType), expanded,
+            gatheredShapeConst);
+    toCheck.push_back(reshaped);
+    return reshaped;
+  }
+
+  LogicalResult matchAndRewriteImpl(
+      ONNXCustomOp customOp, PatternRewriter &rewriter) const final {
+    const int64_t numIn = customOp.getNumOperands();
+    if (numIn != 3 && numIn != 4)
+      return rewriter.notifyMatchFailure(customOp, "expects 3 or 4 inputs");
+
+    Value data = customOp.getOperand(0);
+    Value indices = customOp.getOperand(1);
+    Value scales = customOp.getOperand(2);
+
+    Value zeroPoints;
+    if (numIn == 4 && !onnx_mlir::isNoneValue(customOp.getOperand(3)))
+      zeroPoints = customOp.getOperand(3);
+
+    const int64_t bits = getIntAttrOrDefault(customOp, "bits", 4);
+    if (bits != 2 && bits != 4 && bits != 8)
+      return rewriter.notifyMatchFailure(customOp, "expects bits in {2, 4, 8}");
+
+    const int64_t blockSize = getIntAttrOrDefault(customOp, "block_size", 128);
+    if (blockSize < 16 || !llvm::isPowerOf2_64(blockSize))
+      return rewriter.notifyMatchFailure(
+          customOp, "expects block_size to be a power of two and at least 16");
+
+    auto dataType = dyn_cast<ShapedType>(data.getType());
+    auto indicesType = dyn_cast<ShapedType>(indices.getType());
+    auto scalesType = dyn_cast<ShapedType>(scales.getType());
+    if (!dataType || !indicesType || !scalesType ||
+        !dataType.hasStaticShape() || !indicesType.hasStaticShape() ||
+        !scalesType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          customOp, "expects statically shaped data, indices and scales");
+
+    // Only the com.microsoft uint8 packing is handled here.
+    if (!dataType.getElementType().isUnsignedInteger(8))
+      return rewriter.notifyMatchFailure(customOp, "expects a uint8 table");
+
+    const int64_t rank = dataType.getRank();
+    const int64_t gatherAxis = getIntAttrOrDefault(customOp, "gather_axis", 0);
+    const int64_t quantizeAxis =
+        getIntAttrOrDefault(customOp, "quantize_axis", 1);
+    if (gatherAxis < 0 || gatherAxis >= rank || quantizeAxis < 0 ||
+        quantizeAxis >= rank)
+      return rewriter.notifyMatchFailure(customOp, "axis out of range");
+    if (gatherAxis == quantizeAxis)
+      return rewriter.notifyMatchFailure(
+          customOp, "expects gather_axis to differ from quantize_axis");
+    // unpackSubByteValues walks it linearly on the tensor, thus require
+    // quantization of the last axis.
+    if (quantizeAxis != rank - 1)
+      return rewriter.notifyMatchFailure(
+          customOp, "expects quantize_axis to be the last axis");
+
+    // The real exporters emit the table as [rows, blocks, blob] behind a
+    // Reshape to [rows, packed]. Reshape preserves row-major order, so the
+    // constant behind it can be unpacked directly against the reshaped logical
+    // shape.
+    Value packedTable = data;
+    if (auto reshape = dyn_cast_or_null<ONNXReshapeOp>(data.getDefiningOp()))
+      packedTable = reshape.getData();
+    ElementsAttr packedValues =
+        onnx_mlir::getElementAttributeFromONNXValue(packedTable);
+    if (!packedValues)
+      return rewriter.notifyMatchFailure(
+          customOp, "expects the table to be a constant");
+
+    const int64_t valuesPerByte = 8 / bits;
+    SmallVector<int64_t> tableShape(dataType.getShape());
+    tableShape.back() *= valuesPerByte;
+    if (tableShape[quantizeAxis] !=
+        scalesType.getShape()[quantizeAxis] * blockSize)
+      return rewriter.notifyMatchFailure(
+          customOp, "expects one scale per block along quantize_axis");
+    // quantize_axis is the last axis, so every other axis precedes it.
+    for (int64_t axis = 0; axis < rank - 1; ++axis)
+      if (tableShape[axis] != scalesType.getShape()[axis])
+        return rewriter.notifyMatchFailure(customOp,
+            "expects scales to match the table outside quantize_axis");
+
+    onnx_mlir::OnnxBuilder b(rewriter, customOp.getLoc());
+    SmallVector<Value> toCheck;
+
+    // handle the table: unpack + gather + cast
+    // bits = 8 spans the whole unsigned byte, so the zero-point-shifted values
+    // only fit in the next wider integer.
+    Type tableElementType = rewriter.getIntegerType(bits == 8 ? 16 : 8);
+    Value table = buildUnpackedConstant(b,
+        onnx_mlir::unpackSubByteValues<int64_t>(packedValues, bits), tableShape,
+        tableShape.back(), zeroPoints ? 0 : (int64_t(1) << (bits - 1)),
+        tableElementType);
+    toCheck.push_back(table);
+
+    SmallVector<int64_t> gatheredShape =
+        getGatherShape(tableShape, indicesType.getShape(), gatherAxis);
+
+    Value gatheredTable =
+        b.gather(RankedTensorType::get(gatheredShape, tableElementType), table,
+            indices, gatherAxis);
+    toCheck.push_back(gatheredTable);
+
+    Type scaleElementType = scalesType.getElementType();
+    Value quantized = b.cast(gatheredTable, scaleElementType);
+    toCheck.push_back(quantized);
+
+    // scales and zero_points both hold one value per block rather than per
+    // table element, so both gather into this shape and only line up with the
+    // gathered table after expandBlocks stretches them over their block.
+    SmallVector<int64_t> gatheredBlockShape = getGatherShape(
+        scalesType.getShape(), indicesType.getShape(), gatherAxis);
+
+    // handle zero points (if not folded): unpack + gather + cast + expand + sub
+    if (zeroPoints) {
+      auto zeroPointsType = dyn_cast<ShapedType>(zeroPoints.getType());
+      ElementsAttr packedZeroPoints =
+          onnx_mlir::getElementAttributeFromONNXValue(zeroPoints);
+      if (!zeroPointsType || !zeroPointsType.hasStaticShape() ||
+          !packedZeroPoints)
+        return rewriter.notifyMatchFailure(
+            customOp, "expects zero_points to be a statically shaped constant");
+
+      Value zeroPointTable = buildUnpackedConstant(b,
+          onnx_mlir::unpackSubByteValues<int64_t>(packedZeroPoints, bits),
+          scalesType.getShape(),
+          zeroPointsType.getShape().back() * valuesPerByte, /*zeroPoint=*/0,
+          tableElementType);
+      toCheck.push_back(zeroPointTable);
+
+      Value gatheredZeroPoints =
+          b.gather(RankedTensorType::get(gatheredBlockShape, tableElementType),
+              zeroPointTable, indices, gatherAxis);
+      toCheck.push_back(gatheredZeroPoints);
+      Value castZeroPoints = b.cast(gatheredZeroPoints, scaleElementType);
+      toCheck.push_back(castZeroPoints);
+      Value expandedZeroPoints =
+          expandBlocks(b, toCheck, castZeroPoints, blockSize, gatheredShape);
+      quantized = b.sub(quantized, expandedZeroPoints);
+      toCheck.push_back(quantized);
+    }
+
+    // handle the scales: gather + expand
+    Value gatheredScales =
+        b.gather(RankedTensorType::get(gatheredBlockShape, scaleElementType),
+            scales, indices, gatherAxis);
+    toCheck.push_back(gatheredScales);
+    Value expandedScales =
+        expandBlocks(b, toCheck, gatheredScales, blockSize, gatheredShape);
+
+    Value result =
+        b.mul(customOp.getResultTypes()[0], quantized, expandedScales);
+    toCheck.push_back(result);
+
+    if (failed(verifyOpsErasingOnError(toCheck, rewriter)))
+      return rewriter.notifyMatchFailure(
+          customOp, "Decomposition failed verification");
+
+    rewriter.replaceOp(customOp, result);
     return success();
   }
 };
@@ -5842,7 +6129,7 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
       /*disableGenericDecompositions=*/false, enableGatherToSlice,
       enableHardSwishDecompose, enableDepthToSpaceDecompose,
-      enableGQAUint16CacheSlotRewrite);
+      enableGQAUint16CacheSlotRewrite, enableGatherBlockQuantizedDecompose);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
   if (this->target == "stablehlo") {
@@ -5868,7 +6155,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
     bool disableGenericDecompositions, bool enableGatherToSlice,
     bool enableHardSwishDecompose, bool enableDepthToSpaceDecompose,
-    bool enableGQAUint16CacheSlotRewrite) {
+    bool enableGQAUint16CacheSlotRewrite,
+    bool enableGatherBlockQuantizedDecompose) {
   MLIRContext *context = patterns.getContext();
   if (!disableGenericDecompositions)
     populateWithGenerated(patterns);
@@ -5917,6 +6205,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     patterns.insert<MicrosoftRotaryEmbedding>(context);
   if (enableMatmulNBitsDecompose)
     patterns.insert<MicrosoftMatmulNBits>(context);
+  if (enableGatherBlockQuantizedDecompose)
+    patterns.insert<MicrosoftGatherBlockQuantized>(context);
   if (!disableGenericDecompositions) {
     patterns.insert<DecomposeSlicePadPattern>(context);
     patterns.insert<DecomposeScatterNDPattern>(context);
