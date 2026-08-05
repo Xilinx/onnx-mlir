@@ -409,16 +409,16 @@ struct ReplaceQuantizedTileToAddPass
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
-    patterns.add<MoveBroadcastTileForwardPattern>(context);
+    //    patterns.add<MoveBroadcastTileForwardPattern>(context);
     patterns.add<ReplaceQuantizedTileToAddPattern>(context);
     patterns.add<ReplaceIntegerTileToQuantizedTile>(context);
 
     GreedyRewriteConfig config;
-    config.enableRegionSimplification = GreedySimplifyRegionLevel::Disabled;
+    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Disabled);
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
 
-    if (failed(applyPatternsAndFoldGreedily(
+    if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       getOperation().emitError(
           "replace-quantized-tile-to-add: greedy pattern rewrite did not "

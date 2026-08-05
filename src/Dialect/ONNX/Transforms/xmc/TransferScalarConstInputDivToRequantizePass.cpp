@@ -244,7 +244,7 @@ struct TransferScalarConstInputDivToRequantizePass
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(
             applyPatternsGreedily(getOperation(), std::move(patterns), config)))
       signalPassFailure();

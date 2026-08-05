@@ -6,6 +6,9 @@
 //
 // Builds DisposableElementsAttr instances.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "src/Dialect/ONNX/ElementsAttr/ElementsAttrBuilder.hpp"
@@ -411,11 +414,13 @@ ElementsAttr ElementsAttrBuilder::castToIntElementType(
     //
     // TODO: Add configuration options to support other behaviors.
     //       See https://github.com/onnx/onnx-mlir/issues/2209
-    if (newElementType.isUnsigned() != oldElementType.isUnsignedInteger()) {
+    BType oldBType = btypeOfMlirType(oldElementType);
+    BType newBType = btypeOfMlirType(newElementType);
+    if (wideBTypeOfBType(oldBType) != wideBTypeOfBType(newBType)) {
       // DisposableElementsAttr requires transformation between integers with
       // different signs.
       // TODO: Consider relaxing the requirement and omit this transformation.
-      transformer = newElementType.isUnsigned()
+      transformer = wideBTypeOfBType(newBType) == BType::UINT64
                         ? functionTransformer(wideCast<uint64_t, int64_t>)
                         : functionTransformer(wideCast<int64_t, uint64_t>);
     } else {

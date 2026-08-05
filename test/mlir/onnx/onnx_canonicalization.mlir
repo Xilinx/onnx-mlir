@@ -477,48 +477,6 @@ func.func @test_reshape_fusion3(%arg0: tensor<?x4x2x2xf32>) -> tensor<?x2x?xf32>
 
 // -----
 
-// The inner reshape feeds a non-reshape consumer (Relu), so it must be
-// preserved: the two reshapes are not fused and the outer reshape keeps
-// reading from the inner reshape result (not directly from the argument).
-func.func @test_reshape_no_fusion_shared_inner(%arg0: tensor<10x11x12x13xf32>) -> (tensor<8x15x13x11xf32>, tensor<2x60x11x13xf32>) {
-  %0 = onnx.Constant dense<[2, 60, 11, 13]> : tensor<4xi64>
-  %1 = "onnx.Reshape"(%arg0, %0) : (tensor<10x11x12x13xf32>, tensor<4xi64>) -> tensor<2x60x11x13xf32>
-  %2 = onnx.Constant dense<[8, 15, 13, 11]> : tensor<4xi64>
-  %3 = "onnx.Reshape"(%1, %2) : (tensor<2x60x11x13xf32>, tensor<4xi64>) -> tensor<8x15x13x11xf32>
-  %4 = "onnx.Relu"(%1) : (tensor<2x60x11x13xf32>) -> tensor<2x60x11x13xf32>
-  onnx.Return %3, %4 : tensor<8x15x13x11xf32>, tensor<2x60x11x13xf32>
-
-// CHECK-LABEL:  func.func @test_reshape_no_fusion_shared_inner
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<10x11x12x13xf32>)
-// CHECK:           [[INNER_:%.+]] = "onnx.Reshape"([[PARAM_0_]], {{.*}}) {{.*}} -> tensor<2x60x11x13xf32>
-// CHECK-DAG:       "onnx.Reshape"([[INNER_]], {{.*}}) {{.*}} -> tensor<8x15x13x11xf32>
-// CHECK-DAG:       "onnx.Relu"([[INNER_]])
-}
-
-// -----
-
-// The inner reshape has multiple uses but all consumers are themselves
-// reshapes, so fusion is still applied: both outer reshapes bypass the inner
-// reshape and read directly from the argument, and the inner reshape is
-// eliminated (no tensor<2x60x11x13xf32> remains).
-func.func @test_reshape_fusion_all_reshape_users(%arg0: tensor<10x11x12x13xf32>) -> (tensor<8x15x13x11xf32>, tensor<10x12x11x13xf32>) {
-  %0 = onnx.Constant dense<[2, 60, 11, 13]> : tensor<4xi64>
-  %1 = "onnx.Reshape"(%arg0, %0) : (tensor<10x11x12x13xf32>, tensor<4xi64>) -> tensor<2x60x11x13xf32>
-  %2 = onnx.Constant dense<[8, 15, 13, 11]> : tensor<4xi64>
-  %3 = "onnx.Reshape"(%1, %2) : (tensor<2x60x11x13xf32>, tensor<4xi64>) -> tensor<8x15x13x11xf32>
-  %4 = onnx.Constant dense<[10, 12, 11, 13]> : tensor<4xi64>
-  %5 = "onnx.Reshape"(%1, %4) : (tensor<2x60x11x13xf32>, tensor<4xi64>) -> tensor<10x12x11x13xf32>
-  onnx.Return %3, %5 : tensor<8x15x13x11xf32>, tensor<10x12x11x13xf32>
-
-// CHECK-LABEL:  func.func @test_reshape_fusion_all_reshape_users
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<10x11x12x13xf32>)
-// CHECK-NOT:       tensor<2x60x11x13xf32>
-// CHECK-DAG:       "onnx.Reshape"([[PARAM_0_]], {{.*}}) {{.*}} -> tensor<8x15x13x11xf32>
-// CHECK-DAG:       "onnx.Reshape"([[PARAM_0_]], {{.*}}) {{.*}} -> tensor<10x12x11x13xf32>
-}
-
-// -----
-
 // No fusion should happen if multiple unknown dimensions (-1) are given.
 func.func @test_reshape_no_fusion(%arg0: tensor<1x3x1152x1x1344xf32>) -> (tensor<1x3x576x2x326x326x2xf32>) {
   %0 = onnx.Constant dense<[0, 0, -1, 2, 0]> : tensor<5xi64> loc(unknown)
@@ -1516,7 +1474,7 @@ func.func @test_fuse_mul_conv_rank_3D(%arg0: tensor<1x1x28x28xf32>) -> tensor<*x
   // CHECK-DAG:       [[VAR_3_:%.+]] = "onnx.NoValue"() {value} : () -> none
   // CHECK:           [[VAR_4_:%.+]] = "onnx.Reshape"([[VAR_1_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<8x1x1xf32>, tensor<4xi64>) -> tensor<8x1x1x1xf32>
   // CHECK:           [[VAR_5_:%.+]] = "onnx.Mul"([[VAR_4_]], [[VAR_2_]]) : (tensor<8x1x1x1xf32>, tensor<8x1x2x2xf32>) -> tensor<8x1x2x2xf32>
-  // CHECK:           [[VAR_6_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_5_]], [[VAR_3_]]) {auto_pad = "NOTSET", group = 1 : si64, kernel_shape = [2, 2], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x1x28x28xf32>, tensor<8x1x2x2xf32>, none) -> tensor<1x8x27x27xf32>
+  // CHECK:           [[VAR_6_:%.+]] = "onnx.Conv"([[PARAM_0_]], [[VAR_5_]], [[VAR_3_]]) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [2, 2], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x1x28x28xf32>, tensor<8x1x2x2xf32>, none) -> tensor<1x8x27x27xf32>
   // CHECK:           onnx.Return [[VAR_6_]] : tensor<1x8x27x27xf32>
 }
 

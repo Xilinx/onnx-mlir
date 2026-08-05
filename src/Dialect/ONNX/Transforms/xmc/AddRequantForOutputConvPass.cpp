@@ -102,7 +102,7 @@ struct AddRequantForOutputConvPass
     // producer-sourced ResultNames that the pattern just copied onto the
     // new Requantize.
     GreedyRewriteConfig config;
-    config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
+    config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps);
     if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       signalPassFailure();

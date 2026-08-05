@@ -1927,6 +1927,20 @@ func.func @test_cast_i32_i1_i32() -> tensor<4xi32> {
 
 // -----
 
+func.func @test_cast_i1_i32() -> tensor<4xi32> {
+  %0 = onnx.Constant dense<[false, true, false, true]> : tensor<4xi1>
+  %1 = "onnx.Cast"(%0) {to = i32} : (tensor<4xi1>) -> tensor<4xi32>
+  "onnx.Return"(%1) : (tensor<4xi32>) -> ()
+
+  // CHECK-LABEL:  func @test_cast_i1_i32
+  // CHECK-SAME:   () -> tensor<4xi32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[0, 1, 0, 1]> : tensor<4xi32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<4xi32>
+  // CHECK:         }
+}
+
+// -----
+
 func.func @test_cast_i32_i64() -> tensor<3x2xi64> {
   %0 = onnx.Constant dense<[[2, 3], [4, 5], [6, 7]]> : tensor<3x2xi32>
   %1 = "onnx.Cast"(%0) {to = i64} : (tensor<3x2xi32>) -> tensor<3x2xi64>

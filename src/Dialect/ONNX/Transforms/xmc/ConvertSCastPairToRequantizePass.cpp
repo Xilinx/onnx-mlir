@@ -185,7 +185,7 @@ struct ConvertSCastPairToRequantizePattern
     if (inputQType && outputQType) {
       // Per-tensor quantization
       // Skip if params are identical (not a requantization)
-      if (std::abs(inputQType.getScale() - outputQType.getScale()) < 1e-6 &&
+      if (inputQType.getScale() == outputQType.getScale() &&
           inputQType.getZeroPoint() == outputQType.getZeroPoint())
         return failure();
 
@@ -409,8 +409,8 @@ struct ConvertSCastPairToRequantizePass
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
-    config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
+    config.setListener(&rnUpdater);
+    config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps);
     if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       signalPassFailure();

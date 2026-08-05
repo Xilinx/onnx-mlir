@@ -44,17 +44,17 @@ def createDenseElementsAttrFromFloatAttr : NativeCodeCall<
 // TODO: Currently this will not saturate. We might need/want this for float8
 // types.
 def castWithSameRankDifferentElementType : NativeCodeCall<
-  "onnx_mlir::castTo($_builder, $0, $1.getType().cast<ShapedType>().getElementType(), /*saturate=*/ 0)">;
+  "onnx_mlir::castTo($_builder, $0, mlir::cast<ShapedType>($1.getType()).getElementType(), /*saturate=*/ 0)">;
 
 def createConstantOpWithOneToRankOfExclusive: NativeCodeCall<
   [{onnx_mlir::createConstantOp($_builder, $0.getLoc(),
                                // Create an ArrayAttr of IntergerAttr(s) of values in [1, N-2].
-                               onnx_mlir::createArrayAttrOfNToM($_builder, 1, $0.getType().cast<ShapedType>().getRank() - 2))}]>;
+                               onnx_mlir::createArrayAttrOfNToM($_builder, 1, mlir::cast<ShapedType>($0.getType()).getRank() - 2))}]>;
 
 def createConstantOpWithOneToRankOf : NativeCodeCall<
   [{onnx_mlir::createConstantOp($_builder, $0.getLoc(),
                                 // Create an ArrayAttr of IntergerAttr(s) of values in [1, N-1].
-                                onnx_mlir::createArrayAttrOfNToM($_builder, 1, $0.getType().cast<ShapedType>().getRank() - 1))}]>;
+                                onnx_mlir::createArrayAttrOfNToM($_builder, 1, mlir::cast<ShapedType>($0.getType()).getRank() - 1))}]>;
 
 // Create a DenseElementsAttr from the shape of the type of a value.
 def createDenseElementsAttrFromShape : NativeCodeCall<
@@ -259,7 +259,7 @@ def IsStaticShapeTensor:
 def HasRank:
   Constraint<
     CPred<
-      "$_self.getType().cast<::mlir::ShapedType>().hasRank()">,
+      "mlir::cast<::mlir::ShapedType>($_self.getType()).hasRank()">,
     "is a tensor of static rank">;
 
 def IsNoneValue: Constraint<
@@ -585,12 +585,6 @@ def CastEliminationPattern : Pat<
 	(ONNXCastOp $arg, $saturate, $type),
 	(replaceWithValue $arg),
   [(HasSameElementType $arg, $type)]>;
-
-// TODO: Reintroduce pattern for sound type combinations, see issue #2210.
-//// onnx.Cast (onnx.Cast (%X, $type1)), $type2 = onnx.Cast (%X, $type2)
-//def FuseCastCastPattern : Pat<
-//  (ONNXCastOp (ONNXCastOp $arg, $_), $type),
-//  (ONNXCastOp $arg, $type)>;
 
 // Do cast on concat's inputs instead of output in order to propagate
 // cast operations together, which brings concat close to reshape
