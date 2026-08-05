@@ -53,6 +53,7 @@
 #include "src/Dialect/ONNX/Transforms/Decompose.hpp"
 #include "src/Dialect/ONNX/Transforms/DecomposeEinsum.hpp"
 #include "src/Dialect/ONNX/Transforms/ResultNamesUpdater.hpp"
+#include "src/Dialect/ONNX/Transforms/SubByteUtils.hpp"
 #include "src/Pass/Passes.hpp"
 #include "src/Support/TypeUtilities.hpp"
 #include "llvm/ADT/ArrayRef.h"
@@ -4727,33 +4728,10 @@ struct MicrosoftMatmulNBits : public CustomOpToOnnxOps {
       int64_t N, int64_t allBlocksSize, int64_t targetSize) {
     auto uint8Type = b.getBuilder().getIntegerType(8, false);
 
-    DenseElementsAttr values;
-    if (auto disposable =
-            dyn_cast<DisposableElementsAttr>(constOp.getValueAttr())) {
-      values = disposable.toDenseElementsAttr();
-    } else {
-      values = cast<DenseElementsAttr>(constOp.getValueAttr());
-    }
     const int64_t numElements = N * allBlocksSize;
-    assert(values.getNumElements() == numElements);
-
-    SmallVector<int64_t> packedValues;
-    packedValues.reserve(numElements);
-    for (APInt v : values.getValues<APInt>())
-      packedValues.push_back(v.getSExtValue());
-
-    // Perform the unpacking:
-    // bits = 2: 1xuint8 0bAABBCCDD => 4xuint8 0bAA 0bBB 0bCC 0bDD
-    // bits = 4: 1xuint8 0bAAAABBBB => 2xuint8 0bAAAA 0bBBBB
-    SmallVector<uint8_t> unpackedValues;
-    unpackedValues.reserve(numElements * 8 / bits);
-    const uint8_t mask = (1 << bits) - 1;
-    for (int64_t i = 0; i < numElements; i++) {
-      for (int64_t j = 0; j < 8 / bits; j++) {
-        uint8_t value = uint8_t(packedValues[i] >> (j * bits)) & mask;
-        unpackedValues.push_back(value);
-      }
-    }
+    SmallVector<uint8_t> unpackedValues =
+        onnx_mlir::unpackSubByteValues<uint8_t>(constOp.getValueAttr(), bits);
+    assert(int64_t(unpackedValues.size()) == numElements * 8 / bits);
 
     SmallVector<int64_t> unpackedShape({1, N, allBlocksSize * 8 / bits});
     RankedTensorType unpackedType =
