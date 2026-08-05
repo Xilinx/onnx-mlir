@@ -99,6 +99,10 @@ struct OnnxBuilder : DialectBuilder {
   mlir::Value expand(
       mlir::Type outputType, mlir::Value input, mlir::Value shape) const;
 
+  // ONNXGatherOp
+  mlir::Value gather(mlir::Type outputType, mlir::Value data,
+      mlir::Value indices, int64_t axis = 0) const;
+
   // ONNXGeluOp
   mlir::Value gelu(mlir::Value input, mlir::StringAttr approximateAttr) const;
 

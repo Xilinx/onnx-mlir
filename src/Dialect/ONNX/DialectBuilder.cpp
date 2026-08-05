@@ -178,6 +178,12 @@ Value OnnxBuilder::expand(Type outputType, Value input, Value shape) const {
       outputType, toTensor(input), toTensor(shape));
 }
 
+Value OnnxBuilder::gather(
+    Type outputType, Value data, Value indices, int64_t axis) const {
+  return createTypedOpAndInferShapes<ONNXGatherOp>(toTensor(outputType),
+      toTensor(data), toTensor(indices), getSignedInt64Attr(axis));
+}
+
 Value OnnxBuilder::gelu(Value input, StringAttr approximateAttr) const {
   return createOpAndInferShapes<ONNXGeluOp>(
       toTensor(input.getType()), input, approximateAttr);
