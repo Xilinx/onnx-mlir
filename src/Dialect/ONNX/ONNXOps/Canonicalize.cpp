@@ -90,7 +90,7 @@ Value subtractOrNeg(PatternRewriter &rewriter, Location loc, Value A, Value B) {
 }
 
 // Rename a decomposed BatchNorm branch op (the scale/bias unsqueeze) so its
-// reshape no longer inherits the BatchNorm name shared by the sibling branch.
+// unsqueeze no longer inherits the BatchNorm name shared by the sibling branch.
 // No-op when the BatchNorm has no NameLoc to derive a base from.
 Value nameBatchNormBranch(
     PatternRewriter &rewriter, Value branchVal, Value bnResult, StringRef role) {
