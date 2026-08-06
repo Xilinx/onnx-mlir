@@ -1,0 +1,91 @@
+// RUN: onnx-mlir-opt --split-input-file --uplift-gather-above-layernorm %s | FileCheck %s
+
+// Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+// Tests for UpliftGatherAboveLayerNormPass (pattern from gather_uplift.onnx.mlir):
+//   dq0 -> LayerNorm -> q0 -> dq1 -> Gather -> q1 -> dq2
+// becomes:
+//   Gather -> dq0 -> LayerNorm -> q0 -> dq1 -> q1 -> dq2
+
+// CHECK-LABEL: @pooler_qdq_gather_chain
+// CHECK:       "onnx.Gather"({{.*}}) {axis = 1 : si64} : (tensor<1x64x768xui16>, tensor<i64>) -> tensor<1x768xui16>
+// CHECK:       "onnx.DequantizeLinear"{{.*}} : (tensor<1x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x768xf32>
+// CHECK:       "onnx.LayerNormalization"{{.*}} : (tensor<1x768xf32>, tensor<768xf32>, tensor<768xf32>) -> (tensor<1x768xf32>, none, none)
+// CHECK:       "onnx.QuantizeLinear"{{.*}} : (tensor<1x768xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x768xui16>
+// CHECK:       "onnx.DequantizeLinear"{{.*}} : (tensor<1x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x768xf32>
+// CHECK:       "onnx.QuantizeLinear"{{.*}} : (tensor<1x768xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x768xui16>
+// CHECK:       "onnx.DequantizeLinear"{{.*}} : (tensor<1x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x768xf32>
+// CHECK-NOT:   "onnx.Gather"({{.*}}) : (tensor<1x64x768xf32>
+// CHECK:       return
+func.func @pooler_qdq_gather_chain(%arg0: tensor<1x64x768xf32>) -> tensor<1x768xf32> {
+  %idx = onnx.Constant dense<0> : tensor<i64>
+  %zp_in = onnx.Constant dense<30800> : tensor<ui16>
+  %scale_in = onnx.Constant dense<6.42855535E-4> : tensor<f32>
+  %scale_ln = onnx.Constant dense<4.20910917E-4> : tensor<f32>
+  %zp_ln = onnx.Constant dense<29511> : tensor<ui16>
+  %weight = onnx.Constant dense<1.0> : tensor<768xf32>
+  %bias = onnx.Constant dense<0.0> : tensor<768xf32>
+
+  %q_in = "onnx.QuantizeLinear"(%arg0, %scale_in, %zp_in) {
+    axis = 1 : si64, output_dtype = 0 : si64, saturate = 1 : si64
+  } : (tensor<1x64x768xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x64x768xui16>
+  %dq0 = "onnx.DequantizeLinear"(%q_in, %scale_in, %zp_in) {
+    axis = 1 : si64
+  } : (tensor<1x64x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x64x768xf32>
+  %Y, %Mean, %InvStdDev = "onnx.LayerNormalization"(%dq0, %weight, %bias) {
+    axis = -1 : si64, epsilon = 1.000000e-07 : f32, stash_type = 1 : si64
+  } : (tensor<1x64x768xf32>, tensor<768xf32>, tensor<768xf32>) -> (tensor<1x64x768xf32>, none, none)
+  %q0 = "onnx.QuantizeLinear"(%Y, %scale_ln, %zp_ln) {
+    axis = 1 : si64, output_dtype = 0 : si64, saturate = 1 : si64
+  } : (tensor<1x64x768xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x64x768xui16>
+  %dq1 = "onnx.DequantizeLinear"(%q0, %scale_ln, %zp_ln) {
+    axis = 1 : si64
+  } : (tensor<1x64x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x64x768xf32>
+  %gather_out = "onnx.Gather"(%dq1, %idx) {
+    axis = 1 : si64
+  } : (tensor<1x64x768xf32>, tensor<i64>) -> tensor<1x768xf32>
+  %q1 = "onnx.QuantizeLinear"(%gather_out, %scale_ln, %zp_ln) {
+    axis = 1 : si64, output_dtype = 0 : si64, saturate = 1 : si64
+  } : (tensor<1x768xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x768xui16>
+  %dq2 = "onnx.DequantizeLinear"(%q1, %scale_ln, %zp_ln) {
+    axis = 1 : si64
+  } : (tensor<1x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x768xf32>
+  return %dq2 : tensor<1x768xf32>
+}
+
+// -----
+
+// Direct LayerNorm -> Gather (no q0/dq1 before Gather).
+
+// CHECK-LABEL: @layernorm_to_gather_f32
+// CHECK:       "onnx.Gather"({{.*}}) {axis = 1 : si64} : (tensor<1x64x768xf32>, tensor<i64>) -> tensor<1x768xf32>
+// CHECK-NEXT:  %{{.*}}, %{{.*}}, %{{.*}} = "onnx.LayerNormalization"{{.*}} : (tensor<1x768xf32>, tensor<768xf32>, tensor<768xf32>) -> (tensor<1x768xf32>, none, none)
+// CHECK-NOT:   "onnx.Gather"({{.*}}) : (tensor<1x64x768xf32>, {{.*}}) -> tensor<1x64x768xf32>
+func.func @layernorm_to_gather_f32(%arg0: tensor<1x64x768xf32>) -> tensor<1x768xf32> {
+  %idx = onnx.Constant dense<0> : tensor<i64>
+  %weight = onnx.Constant dense<1.0> : tensor<768xf32>
+  %bias = onnx.Constant dense<0.0> : tensor<768xf32>
+  %Y, %Mean, %InvStdDev = "onnx.LayerNormalization"(%arg0, %weight, %bias) {
+    axis = -1 : si64, epsilon = 1.000000e-07 : f32, stash_type = 1 : si64
+  } : (tensor<1x64x768xf32>, tensor<768xf32>, tensor<768xf32>) -> (tensor<1x64x768xf32>, none, none)
+  %out = "onnx.Gather"(%Y, %idx) {axis = 1 : si64} : (tensor<1x64x768xf32>, tensor<i64>) -> tensor<1x768xf32>
+  return %out : tensor<1x768xf32>
+}
+
+// -----
+
+// LN axis (-1 -> 2) is not greater than Gather axis (2): no uplift.
+
+// CHECK-LABEL: @gather_axis_equals_ln_axis_no_change
+// CHECK:       "onnx.LayerNormalization"
+// CHECK:       "onnx.Gather"({{.*}}) {axis = 2 : si64} : (tensor<1x64x768xf32>, tensor<i64>) -> tensor<1x64x768xf32>
+// CHECK-NOT:   "onnx.Gather"({{.*}}) : (tensor<1x64x768xui16>
+func.func @gather_axis_equals_ln_axis_no_change(%arg0: tensor<1x64x768xf32>) -> tensor<1x64x768xf32> {
+  %idx = onnx.Constant dense<0> : tensor<i64>
+  %weight = onnx.Constant dense<1.0> : tensor<768xf32>
+  %bias = onnx.Constant dense<0.0> : tensor<768xf32>
+  %Y, %Mean, %InvStdDev = "onnx.LayerNormalization"(%arg0, %weight, %bias) {
+    axis = -1 : si64, epsilon = 1.000000e-07 : f32, stash_type = 1 : si64
+  } : (tensor<1x64x768xf32>, tensor<768xf32>, tensor<768xf32>) -> (tensor<1x64x768xf32>, none, none)
+  %out = "onnx.Gather"(%Y, %idx) {axis = 2 : si64} : (tensor<1x64x768xf32>, tensor<i64>) -> tensor<1x64x768xf32>
+  return %out : tensor<1x64x768xf32>
+}

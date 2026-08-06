@@ -25,6 +25,9 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   // pm.addNestedPass<func::FuncOp>(
   //     onnx_mlir::createOptimizeOnnxRequantizationPass());
   pm.addNestedPass<func::FuncOp>(createDedupDQsPass());
+  if (opts.enableUpliftGatherAboveLayerNorm)
+    pm.addNestedPass<func::FuncOp>(
+        onnx_mlir::createUpliftGatherAboveLayerNormPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createConvertQDQToRequantizePass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createQuantTypesPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createReplaceQDQReduceL2Pass());
@@ -49,9 +52,6 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createTransferReduceMeanSumToConvPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createReplaceQDQReductionPass());
-  if (opts.enableUpliftGatherAboveLayerNorm)
-    pm.addNestedPass<func::FuncOp>(
-        onnx_mlir::createUpliftGatherAboveLayerNormPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createLowerReduceToPoolPass());
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createTransferPoolFixToDownsampleFixPass());
