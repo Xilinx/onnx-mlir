@@ -137,6 +137,10 @@ void registerOMPasses(int optLevel) {
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createUpliftGatherAboveLayerNormPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createTransferConvSliceToConvPass();
   });
 

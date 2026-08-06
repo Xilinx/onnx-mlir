@@ -206,6 +206,9 @@ std::unique_ptr<mlir::Pass> createTransferReduceHdimToReduceCdimPass();
 /// Reshape Reduce(Sum/Mean/Max/Min) so its input is rank-4 + keep_dims=true.
 std::unique_ptr<mlir::Pass> createReplaceQDQReductionPass();
 
+/// Uplift Gather/GatherElements above LayerNormalization (optional Q/DQ).
+std::unique_ptr<mlir::Pass> createUpliftGatherAboveLayerNormPass();
+
 /// Pass for transferring Conv->Slice patterns to Conv operations.
 std::unique_ptr<mlir::Pass> createTransferConvSliceToConvPass();
 
