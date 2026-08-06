@@ -101,7 +101,7 @@ func.func @test_loop_no_unroll_dynamic_trip(%trip: tensor<i64>) -> tensor<i64> {
 // -----
 
 // The default max-loop-unroll-count is 64, so this 65-trip loop is retained.
-// The MAX65 run above raises the bound and verifies that the same loop folds.
+// The MAX65 run raises the bound and verifies that the same loop folds.
 
 func.func @test_loop_no_unroll_too_large() -> tensor<i64> {
   %trip = onnx.Constant dense<65> : tensor<i64>

@@ -163,8 +163,7 @@ struct ONNXHybridTransformPass
           enableInstanceNormDecompose, enableGroupNormDecompose,
           enableMatmulNBitsDecompose, enableGroupQueryAttentionDecompose,
           enableSplitToSliceDecompose, enableConcatFuse, enableLstmSeqDecompose,
-          enableReduceL2Decompose,
-          enableLstmDecompose,
+          enableReduceL2Decompose, enableLstmDecompose,
           /*disableGenericDecompositions=*/false, enableGatherToSlice,
           enableHardSwishDecompose, enableGroupQueryAttentionCacheSlicing,
           enableDepthToSpaceDecompose);

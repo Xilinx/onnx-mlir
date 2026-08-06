@@ -3743,8 +3743,7 @@ public:
 
 // Fold constant gathers that select the sole element of a singleton axis.
 class FoldSingletonGatherPattern : public OpRewritePattern<ONNXGatherOp> {
-  static FailureOr<int64_t> getSingletonGatherAxis(
-      ONNXGatherOp gatherOp) {
+  static FailureOr<int64_t> getSingletonGatherAxis(ONNXGatherOp gatherOp) {
     auto dataType = dyn_cast<RankedTensorType>(gatherOp.getData().getType());
     auto indicesType =
         dyn_cast<RankedTensorType>(gatherOp.getIndices().getType());
