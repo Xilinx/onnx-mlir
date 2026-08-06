@@ -3741,6 +3741,60 @@ public:
   }
 };
 
+// Fold constant gathers that select the sole element of a singleton axis.
+class FoldSingletonGatherPattern : public OpRewritePattern<ONNXGatherOp> {
+  static FailureOr<int64_t> getSingletonGatherAxis(
+      ONNXGatherOp gatherOp) {
+    auto dataType = dyn_cast<RankedTensorType>(gatherOp.getData().getType());
+    auto indicesType =
+        dyn_cast<RankedTensorType>(gatherOp.getIndices().getType());
+    if (!dataType || !dataType.hasStaticShape() || !indicesType ||
+        (indicesType.getRank() != 0 && indicesType.getRank() != 1))
+      return failure();
+    if (indicesType.getRank() == 1 && indicesType.getDimSize(0) != 1)
+      return failure();
+
+    int64_t axis = gatherOp.getAxis();
+    if (axis < 0)
+      axis += dataType.getRank();
+    if (dataType.getDimSize(axis) != 1)
+      return failure();
+
+    ElementsAttr indicesAttr =
+        getElementAttributeFromConstLikeValue(gatherOp.getIndices());
+    if (!indicesAttr)
+      return failure();
+    const int64_t index =
+        (*indicesAttr.getValues<APInt>().begin()).getSExtValue();
+    if (index != 0 && index != -1)
+      return failure();
+    return axis;
+  }
+
+public:
+  using OpRewritePattern<ONNXGatherOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXGatherOp gatherOp, PatternRewriter &rewriter) const override {
+    FailureOr<int64_t> axis = getSingletonGatherAxis(gatherOp);
+    auto indicesType =
+        dyn_cast<RankedTensorType>(gatherOp.getIndices().getType());
+    if (failed(axis))
+      return failure();
+
+    if (indicesType.getRank() == 1) {
+      rewriter.replaceOp(gatherOp, gatherOp.getData());
+      return success();
+    }
+
+    OnnxBuilder onnx(rewriter, gatherOp.getLoc());
+    Value axes = onnx.constantInt64({*axis});
+    rewriter.replaceOpWithNewOp<ONNXSqueezeOp>(
+        gatherOp, gatherOp.getType(), gatherOp.getData(), axes);
+    return success();
+  }
+};
+
 /// Simplify Reshape(Cast(Reshape(x, s1)), s2) to Cast(x) when the outer
 /// Reshape's result shape equals the inner Reshape's input shape (i.e., the
 /// two Reshapes together form an identity).
@@ -3938,6 +3992,12 @@ void ONNXGRUOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<RNNOpRewriteLayoutPattern<ONNXGRUOp>>(context);
   results.insert<RNNOpRewriteSeqLenPattern<ONNXGRUOp>>(context);
+}
+
+/// on the ONNXGatherOp.
+void ONNXGatherOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<FoldSingletonGatherPattern>(context);
 }
 
 /// on the ONNXIdentityOp.

@@ -2716,6 +2716,7 @@ def ONNXGRUOp:ONNX_Op<"GRU",
 
 def ONNXGatherOp:ONNX_Op<"Gather",
   [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Gather operation";
   let description = [{
   Given `data` tensor of rank r >= 1, and `indices` tensor of rank q, gather
@@ -12056,4 +12057,3 @@ def ONNXMomentumOp:ONNX_Op<"Momentum",
     }
   }];
 }
-

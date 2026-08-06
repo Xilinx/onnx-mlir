@@ -541,6 +541,7 @@ OpsWithCanonicalizer = [
     "Dropout",
     "Equal",
     "Flatten",
+    "Gather",
     "GlobalAveragePool",
     "GlobalMaxPool",
     "Greater",
