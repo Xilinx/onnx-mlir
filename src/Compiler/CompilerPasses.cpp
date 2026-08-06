@@ -257,6 +257,7 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.profileIR = profileIR;
     opts.instrumentStage = instrumentStage;
     opts.enableXMCPasses = enableXMCPasses;
+    opts.enableUpliftGatherAboveLayerNorm = enableUpliftGatherAboveLayerNorm;
     if (enableXMCPasses) {
       opts.enableInstanceNormDecompose = false;
       opts.enableGroupNormDecompose = false;

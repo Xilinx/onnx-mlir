@@ -57,6 +57,7 @@ struct OnnxToMlirOptions {
 
   bool enableMatmulAddFusion = true;
   bool enableMatmulToConv = true;
+  bool enableUpliftGatherAboveLayerNorm = false;
 
   int onnxOpTransformThreshold = 3;
   bool onnxOpTransformReport = false;
