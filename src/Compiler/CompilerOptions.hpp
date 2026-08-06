@@ -146,6 +146,7 @@ extern bool enableConvOptPass;                    // onnx-mlir only
 extern bool enableXMCPasses;                      // onnx-mlir only
 extern bool enableMatmulAddFusion;                // onnx-mlir only
 extern bool enableMatmulToConv;                   // onnx-mlir only
+extern bool enableUpliftGatherAboveLayerNorm;     // onnx-mlir only
 extern bool disableConstantProp;                  // onnx-mlir only
 extern std::vector<std::string> extraLibPaths;    // onnx-mlir only
 extern std::vector<std::string> extraLibs;        // onnx-mlir only
