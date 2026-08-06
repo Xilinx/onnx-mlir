@@ -454,9 +454,6 @@ struct FuseSliceSlicePattern : public OpRewritePattern<ONNXSliceOp> {
     if (!innerSliceOp)
       return rewriter.notifyMatchFailure(
           sliceOp, "slice input must be another Slice");
-    if (!innerSliceOp->hasOneUse())
-      return rewriter.notifyMatchFailure(
-          sliceOp, "preceding Slice must have one use");
 
     NormalizedSliceParams outerParams;
     NormalizedSliceParams innerParams;

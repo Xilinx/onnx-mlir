@@ -146,9 +146,10 @@ func.func @fuse_slice_slice_inner_multi_use(%arg0: tensor<4x4xf32>) -> (tensor<2
       : (tensor<2x4xf32>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>) -> tensor<2x2xf32>
   return %inner, %outer : tensor<2x4xf32>, tensor<2x2xf32>
 // ENABLED-LABEL: func.func @fuse_slice_slice_inner_multi_use
-// ENABLED:       %[[INNER:.*]] = "onnx.Slice"(%arg0
-// ENABLED:       %[[OUTER:.*]] = "onnx.Slice"(%[[INNER]]
-// ENABLED:       return %[[INNER]], %[[OUTER]]
+// ENABLED-SAME:  (%[[ARG0:.*]]: tensor<4x4xf32>)
+// ENABLED:       %[[INNER:.*]] = "onnx.Slice"(%[[ARG0]]
+// ENABLED:       %[[FUSED:.*]] = "onnx.Slice"(%[[ARG0]]
+// ENABLED:       return %[[INNER]], %[[FUSED]]
 }
 
 // -----
