@@ -831,11 +831,9 @@ static llvm::cl::opt<bool, true> enableMatmulAddFusionOpt(
     llvm::cl::location(enableMatmulAddFusion), llvm::cl::init(true),
     llvm::cl::cat(OnnxMlirOptions));
 
-static llvm::cl::opt<bool, true> enableMatmulToConvOpt(
-    "enable-matmul-to-conv",
-    llvm::cl::desc(
-        "Enable converting MatMul to XFE Conv (XMC passes only). "
-        "Default is false."),
+static llvm::cl::opt<bool, true> enableMatmulToConvOpt("enable-matmul-to-conv",
+    llvm::cl::desc("Enable converting MatMul to XFE Conv (XMC passes only). "
+                   "Default is false."),
     llvm::cl::location(enableMatmulToConv), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirOptions));
 
