@@ -1791,6 +1791,66 @@ public:
   };
 };
 
+// Rewrite GatherElements(data, Tile(indices, repeats)) to
+// Gather(data, Reshape(indices)) when Tile broadcasts a one-dimensional index
+// vector across all non-axis dimensions of data.
+class FuseGatherElementsTilePattern
+    : public OpRewritePattern<ONNXGatherElementsOp> {
+public:
+  using OpRewritePattern<ONNXGatherElementsOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ONNXGatherElementsOp gatherElementsOp,
+      PatternRewriter &rewriter) const override {
+    auto tileOp = gatherElementsOp.getIndices().getDefiningOp<ONNXTileOp>();
+    if (!tileOp || !tileOp->hasOneUse())
+      return failure();
+
+    auto dataType =
+        dyn_cast<RankedTensorType>(gatherElementsOp.getData().getType());
+    auto indicesType = dyn_cast<RankedTensorType>(tileOp.getInput().getType());
+    auto tiledType = dyn_cast<RankedTensorType>(tileOp.getOutput().getType());
+    if (!dataType || !indicesType || !tiledType || !dataType.hasStaticShape() ||
+        !indicesType.hasStaticShape() || !tiledType.hasStaticShape())
+      return failure();
+
+    int64_t rank = dataType.getRank();
+    if (indicesType.getRank() != rank || tiledType.getRank() != rank)
+      return failure();
+
+    int64_t axis = gatherElementsOp.getAxis();
+    if (axis < 0)
+      axis += rank;
+
+    ArrayRef<int64_t> dataShape = dataType.getShape();
+    ArrayRef<int64_t> indicesShape = indicesType.getShape();
+    ArrayRef<int64_t> tiledShape = tiledType.getShape();
+
+    // All non-axis dimensions must be broadcastable.
+    int64_t numIndices = indicesShape[axis];
+    if (numIndices < 1 || tiledShape[axis] != numIndices)
+      return failure();
+    for (int64_t i = 0; i < rank; ++i)
+      if (i != axis && (indicesShape[i] != 1 || tiledShape[i] != dataShape[i]))
+        return failure();
+
+    SmallVector<int64_t> gatherShape(dataShape);
+    gatherShape[axis] = numIndices;
+    auto gatherType =
+        RankedTensorType::get(gatherShape, dataType.getElementType());
+    if (gatherType != gatherElementsOp.getOutput().getType())
+      return failure();
+
+    OnnxBuilder create(rewriter, gatherElementsOp.getLoc());
+    Value flattenedIndices = create.reshape(
+        RankedTensorType::get({numIndices}, indicesType.getElementType()),
+        tileOp.getInput(), create.constantInt64({numIndices}));
+    rewriter.replaceOpWithNewOp<ONNXGatherOp>(gatherElementsOp, gatherType,
+        gatherElementsOp.getData(), flattenedIndices,
+        gatherElementsOp.getAxisAttr());
+    return success();
+  }
+};
+
 /// The pattern is to replace two consecutive ReshapeOp with a single ReshapeOp.
 /// It's not successful for arbitrary ReshapeOp, so let's consider necessary
 /// condition for the replacement.
@@ -3913,6 +3973,12 @@ void ONNXDimOp::getCanonicalizationPatterns(
 void ONNXEqualOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<BinaryOpBroadcastAxisPattern<ONNXEqualOp>>(context);
+}
+
+/// on the ONNXGatherElementsOp.
+void ONNXGatherElementsOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  result.insert<FuseGatherElementsTilePattern>(context);
 }
 
 /// on the ONNXGlobalAveragePoolOp.
