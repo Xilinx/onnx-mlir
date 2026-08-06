@@ -101,8 +101,9 @@ Value nameBatchNormBranch(
   auto bnName = bnOp->getLoc()->findInstanceOf<NameLoc>();
   if (!bnName)
     return branchVal;
-  std::string newName =
-      (llvm::Twine(bnName.getName().getValue()) + "_" + role).str();
+  std::string newName = bnName.getName().getValue().str();
+  newName += "_";
+  newName += role.str();
   branchOp->setLoc(NameLoc::get(rewriter.getStringAttr(newName)));
   return branchVal;
 }

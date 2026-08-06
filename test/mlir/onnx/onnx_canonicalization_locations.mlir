@@ -122,3 +122,20 @@ func.func @test_fuse_add_conv_qdq_zero_bias_loc(%arg0 : tensor<1x3x4x4xf32>, %ar
 // CHECK-DAG:   [[LOC_DQ:#.+]] = loc("DQ")
 // CHECK-DAG:   [[LOC_ADDEND_DQ:#.+]] = loc("AddendDQ")
 // CHECK-DAG:   [[LOC_FUSED]] = loc(fused[[[LOC_MY_ADD]], [[LOC_MY_CONV]], [[LOC_Q]], [[LOC_DQ]], [[LOC_ADDEND_DQ]]])
+
+// -----
+
+// BatchNorm inference-mode decomposition tags its two broadcast Unsqueeze ops
+// with distinct, role-suffixed locations derived from the BatchNorm's location.
+func.func @test_batchnorm_inference_mode_locations(%arg0: tensor<1x64x112x112xf32>, %scale: tensor<64xf32>, %bias: tensor<64xf32>, %mean: tensor<64xf32>, %var: tensor<64xf32>) -> tensor<1x64x112x112xf32> {
+  %0 = "onnx.BatchNormalizationInferenceMode"(%arg0, %scale, %bias, %mean, %var) {epsilon = 1.00000007E-5 : f32} : (tensor<1x64x112x112xf32>, tensor<64xf32>, tensor<64xf32>, tensor<64xf32>, tensor<64xf32>) -> tensor<1x64x112x112xf32> loc("MyBN")
+  return %0 : tensor<1x64x112x112xf32>
+
+  // CHECK-LABEL: func.func @test_batchnorm_inference_mode_locations
+  // CHECK:       "onnx.Unsqueeze"
+  // CHECK-SAME:  loc([[LOC_SCALE:#.+]])
+  // CHECK:       "onnx.Unsqueeze"
+  // CHECK-SAME:  loc([[LOC_BIAS:#.+]])
+  // CHECK-DAG:   [[LOC_SCALE]] = loc("MyBN_scale")
+  // CHECK-DAG:   [[LOC_BIAS]] = loc("MyBN_bias")
+}
