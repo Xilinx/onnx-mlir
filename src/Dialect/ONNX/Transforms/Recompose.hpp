@@ -39,9 +39,14 @@ namespace onnx_mlir {
 // ReduceL2 from Sqrt(ReduceSumSquare(x)) into an onnx.ReduceL2 op and
 // Pow(ReduceSumSquare(x), 0.5) into an onnx.ReduceL2 op, and ReduceSumSquare
 // from ReduceSum(Mul(x, x)) or ReduceSum(Pow(x, 2)).
+// `enableDepthToSpaceDecompose` mirrors the decompose flag: when the
+// DepthToSpace decomposition is enabled, the DepthToSpace recompose patterns
+// must be disabled so they do not immediately fold the decomposed
+// reshape/transpose/reshape chain back into an onnx.DepthToSpace.
 void getRecomposeONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
     bool enableRotaryEmbeddingRecompose = false,
-    bool enableReduceL2Recompositions = false);
+    bool enableReduceL2Recompositions = false,
+    bool enableDepthToSpaceDecompose = false);
 
 } // namespace onnx_mlir
 #endif

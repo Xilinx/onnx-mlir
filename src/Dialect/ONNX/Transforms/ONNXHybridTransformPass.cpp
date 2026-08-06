@@ -145,7 +145,8 @@ struct ONNXHybridTransformPass
 
     if (recomposition) {
       getRecomposeONNXToONNXPatterns(cumulativePatterns,
-          enableRotaryEmbeddingRecompose, enableReduceL2Recompositions);
+          enableRotaryEmbeddingRecompose, enableReduceL2Recompositions,
+          enableDepthToSpaceDecompose);
     }
 
     patterns = FrozenRewritePatternSet(std::move(cumulativePatterns));
@@ -162,10 +163,10 @@ struct ONNXHybridTransformPass
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
-    config.useTopDownTraversal = true;
+    config.setListener(&rnUpdater);
+    config.setUseTopDownTraversal(true);
     if (maxNumRewritesOffset == -1) {
-      config.maxNumRewrites = GreedyRewriteConfig::kNoLimit;
+      config.setMaxNumRewrites(GreedyRewriteConfig::kNoLimit);
     } else {
       // Count all ops reachable from the function body, including ops inside
       // loop/if sub-regions.  Loop unrolling moves sub-region ops to the top
@@ -173,8 +174,8 @@ struct ONNXHybridTransformPass
       // failures on models with unrollable loops.
       int64_t numOps = 0;
       body.walk([&](Operation *) { ++numOps; });
-      config.maxNumRewrites =
-          maxNumRewritesOffset + maxNumRewritesMultiplier * numOps;
+      config.setMaxNumRewrites(
+          maxNumRewritesOffset + maxNumRewritesMultiplier * numOps);
     }
     if (failed(applyPatternsGreedily(body, patterns, config))) {
       llvm::errs() << "\nWarning: onnx-hybrid-transform didn't converge with "

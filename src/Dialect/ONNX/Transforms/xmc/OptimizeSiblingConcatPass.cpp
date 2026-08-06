@@ -231,10 +231,10 @@ struct OptimizeSiblingConcatPass : public PassWrapper<OptimizeSiblingConcatPass,
     patterns.add<OptimizeSiblingConcatPattern>(context);
 
     GreedyRewriteConfig config;
-    config.maxIterations = 10;
-    config.useTopDownTraversal = false;
+    config.setMaxIterations(10);
+    config.setUseTopDownTraversal(false);
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
 
     if (failed(
             applyPatternsGreedily(getOperation(), std::move(patterns), config)))

@@ -68,6 +68,7 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
       getDecomposeOnlyOptions(opts.hybrid)));
   if (opts.hybrid.recomposition) {
     onnx_mlir::RecomposeONNXToONNXPassOptions recomposeOpts{
+        .enableDepthToSpaceDecompose = opts.hybrid.enableDepthToSpaceDecompose,
         .enableRotaryEmbeddingRecompose =
             opts.hybrid.enableRotaryEmbeddingRecompose,
         .enableReduceL2Recompositions =

@@ -1188,7 +1188,7 @@ struct ConvertToChannelLastPass : public PassWrapper<ConvertToChannelLastPass,
 
     GreedyRewriteConfig config;
     onnx_mlir::ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(applyPatternsGreedily(function, std::move(patterns), config))) {
       signalPassFailure();
     }

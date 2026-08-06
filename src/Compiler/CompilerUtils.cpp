@@ -685,7 +685,9 @@ static int compileModuleToJniJar(
 }
 
 void loadDialects(mlir::MLIRContext &context) {
-  context.appendDialectRegistry(registerDialects(maccel));
+  mlir::DialectRegistry registry;
+  registerDialects(registry, maccel);
+  context.appendDialectRegistry(registry);
   context.loadAllAvailableDialects();
 }
 

@@ -414,11 +414,11 @@ struct ReplaceQuantizedTileToAddPass
     patterns.add<ReplaceIntegerTileToQuantizedTile>(context);
 
     GreedyRewriteConfig config;
-    config.enableRegionSimplification = GreedySimplifyRegionLevel::Disabled;
+    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Disabled);
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
 
-    if (failed(applyPatternsAndFoldGreedily(
+    if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       getOperation().emitError(
           "replace-quantized-tile-to-add: greedy pattern rewrite did not "
