@@ -67,6 +67,11 @@ def ONNXDecomposePatternOptions {
            "Enable sequence-length decomposition of LSTM (unroll a "
            "seq_len>1 LSTM into a chain of seq_len=1 LSTMs).">,
 
+    Option<"enableLstmDecompose", "enable-lstm-decomposition",
+           "bool", /*default=*/"false",
+           "Enable decomposition of static LSTM operations into basic ONNX "
+           "operations and bounded onnx.Loop operations.">,
+
     Option<"enableReduceL2Decompose", "enable-reducel2-decompose",
            "bool", /*default=*/"true",
            "Enable decomposition of ReduceL2 to Sqrt(ReduceSumSquare(x)).">,

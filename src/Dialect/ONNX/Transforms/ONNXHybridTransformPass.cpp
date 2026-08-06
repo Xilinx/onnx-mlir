@@ -105,6 +105,7 @@ struct ONNXHybridTransformPass
     options.enableSplitToSliceDecompose = enableSplitToSliceDecompose;
     options.enableConcatFuse = enableConcatFuse;
     options.enableLstmSeqDecompose = enableLstmSeqDecompose;
+    options.enableLstmDecompose = enableLstmDecompose;
     options.enableReduceL2Decompose = enableReduceL2Decompose;
     options.enableGatherToSlice = enableGatherToSlice;
     options.enableHardSwishDecompose = enableHardSwishDecompose;
@@ -163,6 +164,7 @@ struct ONNXHybridTransformPass
           enableMatmulNBitsDecompose, enableGroupQueryAttentionDecompose,
           enableSplitToSliceDecompose, enableConcatFuse, enableLstmSeqDecompose,
           enableReduceL2Decompose,
+          enableLstmDecompose,
           /*disableGenericDecompositions=*/false, enableGatherToSlice,
           enableHardSwishDecompose, enableGroupQueryAttentionCacheSlicing,
           enableDepthToSpaceDecompose);
