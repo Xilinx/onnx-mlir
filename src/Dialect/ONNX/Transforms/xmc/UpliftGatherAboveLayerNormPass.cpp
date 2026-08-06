@@ -306,11 +306,11 @@ struct UpliftGatherAboveLayerNormPattern : public OpRewritePattern<GatherOpTy> {
       rewriter.replaceOp(gatherOp, afterLn);
     }
 
-    if (dq0)
-      rewriter.eraseOp(dq0);
-    rewriter.eraseOp(layerNormOp);
     if (q0)
       rewriter.eraseOp(q0);
+    rewriter.eraseOp(layerNormOp);
+    if (dq0)
+      rewriter.eraseOp(dq0);
 
     return success();
   }
@@ -323,6 +323,12 @@ namespace onnx_mlir {
 struct UpliftGatherAboveLayerNormPass
     : public PassWrapper<UpliftGatherAboveLayerNormPass,
           OperationPass<func::FuncOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(UpliftGatherAboveLayerNormPass)
+
+  UpliftGatherAboveLayerNormPass() = default;
+  UpliftGatherAboveLayerNormPass(const UpliftGatherAboveLayerNormPass &pass)
+      : PassWrapper(pass) {}
+
   StringRef getArgument() const override {
     return "uplift-gather-above-layernorm";
   }
