@@ -7,10 +7,10 @@
 //   Gather -> dq0 -> LayerNorm -> q0 -> dq1 -> q1 -> dq2
 
 // CHECK-LABEL: @pooler_qdq_gather_chain
-// CHECK:       "onnx.Gather"({{.*}}) {axis = 1 : si64} : (tensor<1x64x768xui16>, tensor<i64>) -> tensor<1x768xui16>
+// CHECK:       "onnx.Gather"({{.*}}) {axis = 1 : si64, onnx_node_name = "/pooler/Gather"
 // CHECK:       "onnx.DequantizeLinear"{{.*}} : (tensor<1x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x768xf32>
-// CHECK:       "onnx.LayerNormalization"{{.*}} : (tensor<1x768xf32>, tensor<768xf32>, tensor<768xf32>) -> (tensor<1x768xf32>, none, none)
-// CHECK:       "onnx.QuantizeLinear"{{.*}} : (tensor<1x768xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x768xui16>
+// CHECK:       "onnx.LayerNormalization"({{.*}}) {onnx_node_name = "/model/layer_norm"
+// CHECK:       "onnx.QuantizeLinear"({{.*}}) {onnx_node_name = "/model/layer_norm_output_quant"
 // CHECK:       "onnx.DequantizeLinear"{{.*}} : (tensor<1x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x768xf32>
 // CHECK:       "onnx.QuantizeLinear"{{.*}} : (tensor<1x768xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x768xui16>
 // CHECK:       "onnx.DequantizeLinear"{{.*}} : (tensor<1x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x768xf32>
@@ -29,19 +29,21 @@ func.func @pooler_qdq_gather_chain(%arg0: tensor<1x64x768xf32>) -> tensor<1x768x
     axis = 1 : si64, output_dtype = 0 : si64, saturate = 1 : si64
   } : (tensor<1x64x768xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x64x768xui16>
   %dq0 = "onnx.DequantizeLinear"(%q_in, %scale_in, %zp_in) {
-    axis = 1 : si64
+    axis = 1 : si64, onnx_node_name = "/model/input_dequant"
   } : (tensor<1x64x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x64x768xf32>
   %Y, %Mean, %InvStdDev = "onnx.LayerNormalization"(%dq0, %weight, %bias) {
-    axis = -1 : si64, epsilon = 1.000000e-07 : f32, stash_type = 1 : si64
+    axis = -1 : si64, epsilon = 1.000000e-07 : f32, stash_type = 1 : si64,
+    onnx_node_name = "/model/layer_norm"
   } : (tensor<1x64x768xf32>, tensor<768xf32>, tensor<768xf32>) -> (tensor<1x64x768xf32>, none, none)
   %q0 = "onnx.QuantizeLinear"(%Y, %scale_ln, %zp_ln) {
-    axis = 1 : si64, output_dtype = 0 : si64, saturate = 1 : si64
+    axis = 1 : si64, output_dtype = 0 : si64, saturate = 1 : si64,
+    onnx_node_name = "/model/layer_norm_output_quant"
   } : (tensor<1x64x768xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x64x768xui16>
   %dq1 = "onnx.DequantizeLinear"(%q0, %scale_ln, %zp_ln) {
     axis = 1 : si64
   } : (tensor<1x64x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x64x768xf32>
   %gather_out = "onnx.Gather"(%dq1, %idx) {
-    axis = 1 : si64
+    axis = 1 : si64, onnx_node_name = "/pooler/Gather"
   } : (tensor<1x64x768xf32>, tensor<i64>) -> tensor<1x768xf32>
   %q1 = "onnx.QuantizeLinear"(%gather_out, %scale_ln, %zp_ln) {
     axis = 1 : si64, output_dtype = 0 : si64, saturate = 1 : si64

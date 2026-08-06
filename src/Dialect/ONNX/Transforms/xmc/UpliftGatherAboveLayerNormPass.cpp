@@ -108,6 +108,19 @@ LogicalResult inferShapesForOp(Operation *op) {
   return success();
 }
 
+// Keep origin-node resolution aligned with pre-uplift ONNX ops.
+void copyOnnxProvenance(Operation *from, Operation *to) {
+  if (!from || !to)
+    return;
+  to->setLoc(from->getLoc());
+  if (auto name = from->getAttrOfType<StringAttr>("onnx_node_name"))
+    to->setAttr("onnx_node_name", name);
+  if (auto resultNames = from->getAttrOfType<ArrayAttr>("ResultNames"))
+    to->setAttr("ResultNames", resultNames);
+  if (auto layout = from->getAttrOfType<StringAttr>("node_layout"))
+    to->setAttr("node_layout", layout);
+}
+
 struct LayerNormToGatherChain {
   ONNXLayerNormalizationOp layerNorm;
   ONNXQuantizeLinearOp q0;
@@ -194,7 +207,7 @@ struct UpliftGatherAboveLayerNormPattern : public OpRewritePattern<GatherOpTy> {
             lnRank))
       return failure();
 
-    Location loc = gatherOp.getLoc();
+    Location gatherLoc = gatherOp.getLoc();
     Type f32Type = rewriter.getF32Type();
 
     Value preGather = dq0 ? dq0.getX() : layerNormOp.getX();
@@ -220,21 +233,23 @@ struct UpliftGatherAboveLayerNormPattern : public OpRewritePattern<GatherOpTy> {
         dq0 ? dq0.getOperation() : layerNormOp.getOperation();
     rewriter.setInsertionPoint(insertAnchor);
 
-    auto newGather = rewriter.create<GatherOpTy>(loc, newGatherOutTy, preGather,
-        gatherOp.getIndices(), gatherOp.getAxisAttr());
+    auto newGather = rewriter.create<GatherOpTy>(gatherLoc, newGatherOutTy,
+        preGather, gatherOp.getIndices(), gatherOp.getAxisAttr());
     if (failed(inferShapesForOp(newGather.getOperation())))
       return failure();
+    copyOnnxProvenance(gatherOp.getOperation(), newGather.getOperation());
     newGatherOutTy = cast<RankedTensorType>(newGather.getType());
 
     auto lnInputF32Ty =
         RankedTensorType::get(newGatherOutTy.getShape(), f32Type);
     Value lnInput;
     if (dq0) {
-      auto newDq0 = rewriter.create<ONNXDequantizeLinearOp>(loc, lnInputF32Ty,
-          newGather.getResult(), dq0.getXScale(), dq0.getXZeroPoint(),
-          dq0.getAxisAttr(), dq0.getBlockSizeAttr());
+      auto newDq0 = rewriter.create<ONNXDequantizeLinearOp>(
+          dq0.getLoc(), lnInputF32Ty, newGather.getResult(), dq0.getXScale(),
+          dq0.getXZeroPoint(), dq0.getAxisAttr(), dq0.getBlockSizeAttr());
       if (failed(inferShapesForOp(newDq0.getOperation())))
         return failure();
+      copyOnnxProvenance(dq0.getOperation(), newDq0.getOperation());
       lnInputF32Ty = cast<RankedTensorType>(newDq0.getType());
       lnInput = newDq0.getResult();
     } else {
@@ -246,12 +261,13 @@ struct UpliftGatherAboveLayerNormPattern : public OpRewritePattern<GatherOpTy> {
         layerNormOp.getAxis(), layerNormOp.getMean().getType(),
         layerNormOp.getInvStdDev().getType(),
         cast<RankedTensorType>(layerNormOp.getY().getType()).getElementType());
-    auto newLayerNorm = rewriter.create<ONNXLayerNormalizationOp>(loc,
-        lnResultTypes, lnInput, layerNormOp.getScale(), layerNormOp.getB(),
-        layerNormOp.getAxisAttr(), layerNormOp.getEpsilonAttr(),
-        layerNormOp.getStashTypeAttr());
+    auto newLayerNorm = rewriter.create<ONNXLayerNormalizationOp>(
+        layerNormOp.getLoc(), lnResultTypes, lnInput, layerNormOp.getScale(),
+        layerNormOp.getB(), layerNormOp.getAxisAttr(),
+        layerNormOp.getEpsilonAttr(), layerNormOp.getStashTypeAttr());
     if (failed(inferShapesForOp(newLayerNorm.getOperation())))
       return failure();
+    copyOnnxProvenance(layerNormOp.getOperation(), newLayerNorm.getOperation());
 
     Value afterLn = newLayerNorm.getY();
     auto reducedShape =
@@ -260,11 +276,13 @@ struct UpliftGatherAboveLayerNormPattern : public OpRewritePattern<GatherOpTy> {
     if (q0) {
       auto q0OutTy = RankedTensorType::get(reducedShape,
           cast<RankedTensorType>(q0.getType()).getElementType());
-      auto newQ0 = rewriter.create<ONNXQuantizeLinearOp>(loc, q0OutTy, afterLn,
-          q0.getYScale(), q0.getYZeroPoint(), q0.getAxisAttr(),
-          q0.getBlockSizeAttr(), q0.getOutputDtypeAttr(), q0.getSaturateAttr());
+      auto newQ0 = rewriter.create<ONNXQuantizeLinearOp>(
+          q0.getLoc(), q0OutTy, afterLn, q0.getYScale(), q0.getYZeroPoint(),
+          q0.getAxisAttr(), q0.getBlockSizeAttr(), q0.getOutputDtypeAttr(),
+          q0.getSaturateAttr());
       if (failed(inferShapesForOp(newQ0.getOperation())))
         return failure();
+      copyOnnxProvenance(q0.getOperation(), newQ0.getOperation());
       afterLn = newQ0.getResult();
 
       if (dq1) {
