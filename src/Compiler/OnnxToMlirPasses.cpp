@@ -26,6 +26,9 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createOptimizeOnnxRequantizationPass());
   pm.addNestedPass<func::FuncOp>(createONNXCSEPass());
+  if (opts.enableUpliftGatherAboveLayerNorm)
+    pm.addNestedPass<func::FuncOp>(
+        onnx_mlir::createUpliftGatherAboveLayerNormPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createConvertQDQToRequantizePass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createQuantTypesPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createFoldQuantizedBinary());
@@ -265,6 +268,12 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     pm.addPass(onnx_mlir::createCanonicalizeWithResultNamesPass());
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
   }
+
+  // Uplift Gather above LayerNorm while Q/DQ chains are still explicit ONNX ops.
+  // DMAC does not run the full XMC pipeline (enableXMCPasses=false).
+  if (opts.enableUpliftGatherAboveLayerNorm)
+    pm.addNestedPass<func::FuncOp>(
+        onnx_mlir::createUpliftGatherAboveLayerNormPass());
 
   // Replace ONNXReturnOp with func::ReturnOp.
   pm.addPass(onnx_mlir::createStandardFuncReturnPass());
