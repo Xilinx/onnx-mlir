@@ -492,6 +492,9 @@ special_type_constraints = {
     "Gather": {
         "Tind": ["tensor(int16)"],
     },
+    "ReverseSequence": {
+        "T": ["tensor(bfloat16)"],
+    },
 }
 
 # Manual specification of attribute type.
