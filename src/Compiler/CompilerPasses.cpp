@@ -70,6 +70,8 @@ void configurePasses() {
   configureUnsafeMathCanonicalization(enableUnsafeMathOptimizations);
   configureConv1x1IntoConvCanonicalization(
       enableConv1x1IntoConvCanonicalization);
+  configureGatherElementsTileCanonicalization(
+      enableGatherElementsTileCanonicalization);
 #ifdef ONNX_MLIR_ENABLE_KRNL
   configureOnnxToKrnlLoweringPass(optReport == OptReport::Parallel,
       enableParallel, parallelizeOps, optReport == OptReport::Simd,
@@ -263,6 +265,8 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.instrumentStage = instrumentStage;
     opts.enableXMCPasses = enableXMCPasses;
     opts.enableReshapeCanonicalization = enableReshapeCanonicalization;
+    opts.enableGatherElementsTileCanonicalization =
+        enableGatherElementsTileCanonicalization;
     opts.enableXFEONNXOpsetVerifier = enableXFEONNXOpsetVerifier;
     if (enableXMCPasses) {
       opts.hybrid.enableInstanceNormDecompose = false;

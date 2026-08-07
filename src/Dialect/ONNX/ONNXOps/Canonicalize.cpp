@@ -58,6 +58,9 @@ static bool enableConv1x1IntoConvCanonicalization = false;
 // Populated by configureReshapeCanonicalization().
 static bool enableReshapeCanonicalization = true;
 
+// Populated by configureGatherElementsTileCanonicalization().
+static bool enableGatherElementsTileCanonicalization = true;
+
 using namespace mlir;
 using namespace onnx_mlir;
 
@@ -3978,7 +3981,8 @@ void ONNXEqualOp::getCanonicalizationPatterns(
 /// on the ONNXGatherElementsOp.
 void ONNXGatherElementsOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  result.insert<FuseGatherElementsTilePattern>(context);
+  if (enableGatherElementsTileCanonicalization)
+    result.insert<FuseGatherElementsTilePattern>(context);
 }
 
 /// on the ONNXGlobalAveragePoolOp.
@@ -4728,4 +4732,8 @@ void onnx_mlir::configureConv1x1IntoConvCanonicalization(
 
 void onnx_mlir::configureReshapeCanonicalization(bool enable) {
   enableReshapeCanonicalization = enable;
+}
+
+void onnx_mlir::configureGatherElementsTileCanonicalization(bool enable) {
+  enableGatherElementsTileCanonicalization = enable;
 }
