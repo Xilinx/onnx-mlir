@@ -970,13 +970,21 @@ struct PushTransposeThroughSCast
 
     LLVM_DEBUG(llvm::dbgs() << "Pushing transpose through quant.scast\n");
 
+    // scast is a pure data-preserving type reinterpret, so the transpose keeps
+    // its own ResultName as it moves through it (rather than inheriting the
+    // scast's name via the replace listener).
+    Attribute transposeResultNames = transposeOp->getAttr("ResultNames");
+
     // Create scast before transpose: scast(transpose_input)
     auto newSCast = rewriter.create<quant::StorageCastOp>(
         op.getLoc(), newOutputType, transposeOp.getOperand());
 
     // Create transpose after scast
-    rewriter.replaceOpWithNewOp<ONNXTransposeOp>(op, op.getType(),
-        newSCast.getResult(), rewriter.getI64ArrayAttr(*perm));
+    auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(op,
+        op.getType(), newSCast.getResult(), rewriter.getI64ArrayAttr(*perm));
+
+    if (transposeResultNames)
+      newTranspose->setAttr("ResultNames", transposeResultNames);
 
     return success();
   }

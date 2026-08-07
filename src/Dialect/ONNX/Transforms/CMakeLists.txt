@@ -91,6 +91,7 @@ add_onnx_mlir_library(OMONNXRewrite
   xmc/TransferReduceHdimToReduceCdimPass.cpp
   xmc/ReplaceQDQReductionPass.cpp
   xmc/UpliftGatherAboveLayerNormPass.cpp
+  xmc/ReplaceQDQReduceL2Pass.cpp
   xmc/ConvertMulToDepthwiseConv2dPass.cpp
   xmc/TransferOp3dToOp2dPass.cpp
   xmc/TransferPoolFixToDownsampleFixPass.cpp

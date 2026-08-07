@@ -209,6 +209,10 @@ std::unique_ptr<mlir::Pass> createReplaceQDQReductionPass();
 /// Uplift Gather above LayerNormalization (optional Q/DQ).
 std::unique_ptr<mlir::Pass> createUpliftGatherAboveLayerNormPass();
 
+/// Fuse quantized Pow(2)->ReduceSum->[eps-Add]->Sqrt (L2-norm) into
+/// onnx.ReduceL2 (AIESW-40266).
+std::unique_ptr<mlir::Pass> createReplaceQDQReduceL2Pass();
+
 /// Pass for transferring Conv->Slice patterns to Conv operations.
 std::unique_ptr<mlir::Pass> createTransferConvSliceToConvPass();
 

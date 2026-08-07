@@ -414,4 +414,26 @@ module {
   // CHECK: onnx.Reshape{{.*}} -> tensor<8x8x3x3x!quant.uniform<i8:f32:0, {5.000000e-02,5.000000e-02,5.000000e-02,5.000000e-02,6.000000e-02,6.000000e-02,6.000000e-02,6.000000e-02}>>
   // CHECK: onnx.Conv
   // CHECK: onnx.Reshape
+
+  // Test 21: 5D eltwise Add with a broadcast (size-1) constant operand.
+  // Regression for the YOLO detect-head grid Add: the grid-offset constant
+  // [1,1,20,20,2] must be materialized (tiled across the anchor dim) to the full
+  // [1,3,20,20,2] shape BEFORE the 4D flatten. A plain Reshape
+  // [1,1,20,20,2]->[1,60,20,2] would change the element count (800 vs 2400) and
+  // is invalid. After the fix, the constant is emitted at the full 5D shape and
+  // both operands flatten count-preservingly to [1,60,20,2].
+  func.func @test_eltwise_add_broadcast_const(%arg0: tensor<1x3x20x20x2xf32>) -> tensor<1x3x20x20x2xf32> {
+    %grid = onnx.Constant {value = dense<1.000000e+00> : tensor<1x1x20x20x2xf32>} : tensor<1x1x20x20x2xf32>
+    %0 = "onnx.Add"(%arg0, %grid) : (tensor<1x3x20x20x2xf32>, tensor<1x1x20x20x2xf32>) -> tensor<1x3x20x20x2xf32>
+    return %0 : tensor<1x3x20x20x2xf32>
+  }
+  // CHECK-LABEL: func.func @test_eltwise_add_broadcast_const
+  // The broadcast constant is materialized at the full 5D shape (tiled), not
+  // reshaped with a changed element count:
+  // CHECK: onnx.Constant{{.*}}tensor<1x3x20x20x2xf32>
+  // CHECK-NOT: tensor<1x1x20x20x2xf32>{{.*}}-> tensor<1x60x20x2xf32>
+  // CHECK: onnx.Reshape{{.*}}(tensor<1x3x20x20x2xf32>{{.*}}) -> tensor<1x60x20x2xf32>
+  // CHECK: onnx.Reshape{{.*}}(tensor<1x3x20x20x2xf32>{{.*}}) -> tensor<1x60x20x2xf32>
+  // CHECK: onnx.Add{{.*}}(tensor<1x60x20x2xf32>, tensor<1x60x20x2xf32>) -> tensor<1x60x20x2xf32>
+  // CHECK: onnx.Reshape{{.*}} -> tensor<1x3x20x20x2xf32>
 }

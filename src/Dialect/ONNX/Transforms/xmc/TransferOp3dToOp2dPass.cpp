@@ -314,23 +314,95 @@ struct Conv3dReluToConv2dPattern : public OpRewritePattern<ONNXReluOp> {
   }
 };
 
+/// Broadcast a constant DenseElementsAttr (storage-typed) from inShape to
+/// outShape following numpy/ONNX broadcast rules (size-1 dims replicated).
+/// Generic over rank; integer storage values are replicated by index mapping.
+static DenseElementsAttr broadcastDenseTo(DenseElementsAttr in,
+    llvm::ArrayRef<int64_t> inShape, llvm::ArrayRef<int64_t> outShape) {
+  auto storageElem = in.getType().getElementType();
+  auto outType = RankedTensorType::get(outShape, storageElem);
+  if (in.isSplat())
+    return DenseElementsAttr::get(outType, in.getSplatValue<mlir::Attribute>());
+
+  int rank = static_cast<int>(outShape.size());
+  llvm::SmallVector<int64_t> inStrides(rank, 1), outStrides(rank, 1);
+  for (int d = rank - 2; d >= 0; --d) {
+    inStrides[d] = inStrides[d + 1] * inShape[d + 1];
+    outStrides[d] = outStrides[d + 1] * outShape[d + 1];
+  }
+  int64_t outCount = 1;
+  for (auto s : outShape)
+    outCount *= s;
+
+  auto inVals = llvm::to_vector(in.getValues<llvm::APInt>());
+  llvm::SmallVector<llvm::APInt> outVals;
+  outVals.reserve(outCount);
+  for (int64_t o = 0; o < outCount; ++o) {
+    int64_t inIdx = 0;
+    for (int d = 0; d < rank; ++d) {
+      int64_t coord = (o / outStrides[d]) % outShape[d];
+      int64_t inCoord = (inShape[d] == 1) ? 0 : coord;
+      inIdx += inCoord * inStrides[d];
+    }
+    outVals.push_back(inVals[inIdx]);
+  }
+  return DenseElementsAttr::get(outType, outVals);
+}
+
+/// Broadcast an eltwise operand up to the 5D result shape *before* flattening,
+/// so the subsequent 4D reshape is count-preserving. A broadcast (size-1 dim)
+/// operand cannot be turned into a larger shape by Reshape; for constants we
+/// materialize a proper tiled constant (per Rachit's suggestion), otherwise we
+/// insert an Expand. Operands already at the full shape are returned as-is.
+static Value broadcastOperandTo5D(Value v, llvm::ArrayRef<int64_t> targetShape,
+    PatternRewriter &rewriter, Location loc) {
+  auto vType = dyn_cast<RankedTensorType>(v.getType());
+  if (!vType || vType.getShape() == targetShape)
+    return v;
+
+  // Constant operand: build a properly-shaped (tiled) constant.
+  if (auto cst = v.getDefiningOp<ONNXConstantOp>()) {
+    if (auto dense = dyn_cast_or_null<DenseElementsAttr>(cst.getValueAttr())) {
+      auto tiledStorage =
+          broadcastDenseTo(dense, vType.getShape(), targetShape);
+      auto tiledResultType =
+          RankedTensorType::get(targetShape, vType.getElementType());
+      auto valueNamedAttr = rewriter.getNamedAttr("value", tiledStorage);
+      return rewriter
+          .create<ONNXConstantOp>(loc, tiledResultType, mlir::ValueRange{},
+              mlir::ArrayRef<mlir::NamedAttribute>{valueNamedAttr})
+          .getResult();
+    }
+  }
+
+  // Non-constant broadcast operand: insert an Expand to the target shape.
+  auto targetType = RankedTensorType::get(targetShape, vType.getElementType());
+  auto shapeConst = createShapeConstant(rewriter, loc, targetShape);
+  return rewriter.create<ONNXExpandOp>(loc, targetType, v, shapeConst);
+}
+
 /// Helper to transform 5D eltwise Add to 4D
 /// Returns the 4D Add result, caller handles optional Relu and final reshape
 Value transformAdd5Dto4D(
     ONNXAddOp addOp, PatternRewriter &rewriter, Location loc) {
   auto outputType = cast<RankedTensorType>(addOp.getResult().getType());
-  Shape5D shape(outputType.getShape());
+  auto resShape = outputType.getShape();
+  Shape5D shape(resShape);
   auto new4dShape = shape.to4D();
 
   auto shapeConst = createShapeConstant(rewriter, loc, new4dShape);
   auto elemType = outputType.getElementType();
   auto new4dType = RankedTensorType::get(new4dShape, elemType);
 
-  // Reshape both inputs to 4D and create Add
-  auto reshape1 =
-      rewriter.create<ONNXReshapeOp>(loc, new4dType, addOp.getA(), shapeConst);
-  auto reshape2 =
-      rewriter.create<ONNXReshapeOp>(loc, new4dType, addOp.getB(), shapeConst);
+  // A broadcast operand (e.g. a [1,1,H,W,C] grid vs [1,3,H,W,C] activation)
+  // cannot be reshaped to the flattened [N,C*D,H,W] shape (count changes).
+  // First broadcast each operand up to the full 5D result shape, then the 4D
+  // reshape is count-preserving.
+  Value a = broadcastOperandTo5D(addOp.getA(), resShape, rewriter, loc);
+  Value b = broadcastOperandTo5D(addOp.getB(), resShape, rewriter, loc);
+
+  auto reshape1 = rewriter.create<ONNXReshapeOp>(loc, new4dType, a, shapeConst);
+  auto reshape2 = rewriter.create<ONNXReshapeOp>(loc, new4dType, b, shapeConst);
   return rewriter.create<ONNXAddOp>(loc, new4dType, reshape1, reshape2);
 }
 
