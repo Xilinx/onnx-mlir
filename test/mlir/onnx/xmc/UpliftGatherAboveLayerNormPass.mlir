@@ -1,22 +1,28 @@
 // RUN: onnx-mlir-opt --split-input-file --uplift-gather-above-layernorm %s | FileCheck %s
 
 // Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
-// Tests for UpliftGatherAboveLayerNormPass (pattern from gather_uplift.onnx.mlir):
-//   dq0 -> LayerNorm -> q0 -> dq1 -> Gather -> q1 -> dq2
-// becomes:
-//   Gather -> dq0 -> LayerNorm -> q0 -> dq1 -> q1 -> dq2
+// UpliftGatherAboveLayerNormPass: dq0/LN/q0/dq1/q1 are updated in place where
+// possible; a new Gather is inserted before dq0 (or before LN for pattern B).
+//
+// Pattern (A): dq0 -> LayerNorm -> q0 -> dq1 -> Gather -> q1
+//   => Gather -> dq0 -> LayerNorm -> q0 -> dq1 -> q1
+// Pattern (B): LayerNorm -> Gather => Gather -> LayerNorm
 
 // CHECK-LABEL: @pooler_qdq_gather_chain
 // CHECK:       "onnx.Gather"({{.*}}) {axis = 1 : si64, onnx_node_name = "/pooler/Gather"
-// CHECK:       "onnx.DequantizeLinear"{{.*}} : (tensor<1x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x768xf32>
-// CHECK:       "onnx.LayerNormalization"({{.*}}) {onnx_node_name = "/model/layer_norm"
-// CHECK:       "onnx.QuantizeLinear"({{.*}}) {onnx_node_name = "/model/layer_norm_output_quant"
+// CHECK-SAME:  : (tensor<1x64x768xui16>, tensor<i64>) -> tensor<1x768xui16>
+// CHECK:       "onnx.DequantizeLinear"{{.*}}onnx_node_name = "/model/input_dequant"
+// CHECK-SAME:  : (tensor<1x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x768xf32>
+// CHECK:       "onnx.LayerNormalization"{{.*}}onnx_node_name = "/model/layer_norm"
+// CHECK-SAME:  : (tensor<1x768xf32>, tensor<768xf32>, tensor<768xf32>) -> (tensor<1x768xf32>, none, none)
+// CHECK:       "onnx.QuantizeLinear"{{.*}}onnx_node_name = "/model/layer_norm_output_quant"
+// CHECK-SAME:  : (tensor<1x768xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x768xui16>
 // CHECK:       "onnx.DequantizeLinear"{{.*}} : (tensor<1x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x768xf32>
 // CHECK:       "onnx.QuantizeLinear"{{.*}} : (tensor<1x768xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x768xui16>
-// CHECK:       "onnx.DequantizeLinear"{{.*}} : (tensor<1x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x768xf32>
+// CHECK-NOT:   tensor<1x64x768xf32>
 // CHECK-NOT:   "onnx.Gather"({{.*}}) : (tensor<1x64x768xf32>
 // CHECK:       return
-func.func @pooler_qdq_gather_chain(%arg0: tensor<1x64x768xf32>) -> tensor<1x768xf32> {
+func.func @pooler_qdq_gather_chain(%arg0: tensor<1x64x768xf32>) -> tensor<1x768xui16> {
   %idx = onnx.Constant dense<0> : tensor<i64>
   %zp_in = onnx.Constant dense<30800> : tensor<ui16>
   %scale_in = onnx.Constant dense<6.42855535E-4> : tensor<f32>
@@ -48,20 +54,18 @@ func.func @pooler_qdq_gather_chain(%arg0: tensor<1x64x768xf32>) -> tensor<1x768x
   %q1 = "onnx.QuantizeLinear"(%gather_out, %scale_ln, %zp_ln) {
     axis = 1 : si64, output_dtype = 0 : si64, saturate = 1 : si64
   } : (tensor<1x768xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x768xui16>
-  %dq2 = "onnx.DequantizeLinear"(%q1, %scale_ln, %zp_ln) {
-    axis = 1 : si64
-  } : (tensor<1x768xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x768xf32>
-  return %dq2 : tensor<1x768xf32>
+  return %q1 : tensor<1x768xui16>
 }
 
 // -----
 
-// Direct LayerNorm -> Gather (no q0/dq1 before Gather).
+// Pattern (B): in-place LayerNorm; old Gather removed (consumer uses LN.Y).
 
 // CHECK-LABEL: @layernorm_to_gather_f32
 // CHECK:       "onnx.Gather"({{.*}}) {axis = 1 : si64} : (tensor<1x64x768xf32>, tensor<i64>) -> tensor<1x768xf32>
 // CHECK-NEXT:  %{{.*}}, %{{.*}}, %{{.*}} = "onnx.LayerNormalization"{{.*}} : (tensor<1x768xf32>, tensor<768xf32>, tensor<768xf32>) -> (tensor<1x768xf32>, none, none)
-// CHECK-NOT:   "onnx.Gather"({{.*}}) : (tensor<1x64x768xf32>, {{.*}}) -> tensor<1x64x768xf32>
+// CHECK-NOT:   "onnx.Gather"
+// CHECK:       return %{{.*}} : tensor<1x768xf32>
 func.func @layernorm_to_gather_f32(%arg0: tensor<1x64x768xf32>) -> tensor<1x768xf32> {
   %idx = onnx.Constant dense<0> : tensor<i64>
   %weight = onnx.Constant dense<1.0> : tensor<768xf32>
@@ -78,7 +82,7 @@ func.func @layernorm_to_gather_f32(%arg0: tensor<1x64x768xf32>) -> tensor<1x768x
 // LN axis (-1 -> 2) is not greater than Gather axis (2): no uplift.
 
 // CHECK-LABEL: @gather_axis_equals_ln_axis_no_change
-// CHECK:       "onnx.LayerNormalization"
+// CHECK:       "onnx.LayerNormalization"{{.*}} : (tensor<1x64x768xf32>
 // CHECK:       "onnx.Gather"({{.*}}) {axis = 2 : si64} : (tensor<1x64x768xf32>, tensor<i64>) -> tensor<1x64x768xf32>
 // CHECK-NOT:   "onnx.Gather"({{.*}}) : (tensor<1x64x768xui16>
 func.func @gather_axis_equals_ln_axis_no_change(%arg0: tensor<1x64x768xf32>) -> tensor<1x64x768xf32> {
