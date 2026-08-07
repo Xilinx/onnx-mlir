@@ -47,7 +47,7 @@ struct OnnxToMlirOptions {
   bool disableSimdOption = false;
 
   bool enableMatmulAddFusion = true;
-  bool enableMatmulToConv = true;
+  bool enableMatmulToConv = false;
   bool enableRemovePairsReshape = false;
 
   int onnxOpTransformThreshold = 3;
