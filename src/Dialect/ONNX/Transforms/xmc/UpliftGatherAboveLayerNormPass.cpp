@@ -3,12 +3,13 @@
 // UpliftGatherAboveLayerNormPass
 //
 // Matches either:
-//   (A) dq0 -> LayerNorm -> [q0 -> [dq1 ->]] Gather [-> q1 [-> dq2]]
+//   (A) dq0 -> LayerNorm -> q0 -> dq1 -> Gather -> q1 ...
 //   (B) LayerNorm -> Gather ...
 //
 // Rewrites to uplift Gather before LayerNorm, e.g. for (A) with full Q/DQ tail:
-//   Gather -> dq0 -> LayerNorm -> q0 -> dq1 -> q1 -> dq2
-//
+//   Gather -> dq0 -> LayerNorm -> q0 -> dq1 -> q1 -> ...
+// or for (B) with no Q/DQ around:
+//   Gather -> LayerNorm -> ...
 // LayerNorm normalized axis must be greater than Gather normalized axis.
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -16,8 +17,6 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-
-#include <type_traits>
 
 #include "llvm/ADT/SmallVector.h"
 
@@ -56,17 +55,11 @@ SmallVector<int64_t> onnxGatherOutputShape(ArrayRef<int64_t> dataShape,
   return out;
 }
 
-template <typename GatherOpTy>
-RankedTensorType computeUpliftedGatherOutputType(
-    GatherOpTy gatherOp, RankedTensorType dataTy, Type outElemType) {
+RankedTensorType computeUpliftedGatherOutputType(ONNXGatherOp gatherOp,
+    RankedTensorType dataTy, Type outElemType) {
   auto indicesTy = cast<RankedTensorType>(gatherOp.getIndices().getType());
-  SmallVector<int64_t> outShape;
-  if constexpr (std::is_same_v<GatherOpTy, ONNXGatherOp>) {
-    outShape = onnxGatherOutputShape(
-        dataTy.getShape(), indicesTy.getShape(), gatherOp.getAxis());
-  } else {
-    outShape = SmallVector<int64_t>(indicesTy.getShape());
-  }
+  SmallVector<int64_t> outShape = onnxGatherOutputShape(
+      dataTy.getShape(), indicesTy.getShape(), gatherOp.getAxis());
   return RankedTensorType::get(outShape, outElemType);
 }
 
@@ -97,8 +90,6 @@ LogicalResult inferShapesForOp(Operation *op) {
   };
   if (auto g = dyn_cast<ONNXGatherOp>(op))
     return infer(g);
-  if (auto g = dyn_cast<ONNXGatherElementsOp>(op))
-    return infer(g);
   if (auto ln = dyn_cast<ONNXLayerNormalizationOp>(op))
     return infer(ln);
   if (auto dq = dyn_cast<ONNXDequantizeLinearOp>(op))
@@ -108,7 +99,6 @@ LogicalResult inferShapesForOp(Operation *op) {
   return success();
 }
 
-// Keep origin-node resolution aligned with pre-uplift ONNX ops.
 void copyOnnxProvenance(Operation *from, Operation *to) {
   if (!from || !to)
     return;
@@ -121,18 +111,14 @@ void copyOnnxProvenance(Operation *from, Operation *to) {
     to->setAttr("node_layout", layout);
 }
 
-struct LayerNormToGatherChain {
+// Backward from Gather's data operand: optional dq1 -> q0 -> LayerNorm.Y.
+struct LayerNormBeforeGather {
   ONNXLayerNormalizationOp layerNorm;
   ONNXQuantizeLinearOp q0;
   ONNXDequantizeLinearOp dq1;
 };
 
-struct GatherTailChain {
-  ONNXQuantizeLinearOp q1;
-  ONNXDequantizeLinearOp dq2;
-};
-
-std::optional<LayerNormToGatherChain> matchLayerNormToGather(Value gatherData) {
+std::optional<LayerNormBeforeGather> matchLayerNormBeforeGather(Value gatherData) {
   Value v = gatherData;
   ONNXDequantizeLinearOp dq1 = v.getDefiningOp<ONNXDequantizeLinearOp>();
   ONNXQuantizeLinearOp q0;
@@ -159,43 +145,68 @@ std::optional<LayerNormToGatherChain> matchLayerNormToGather(Value gatherData) {
   if (q0 && !layerNorm.getY().hasOneUse())
     return std::nullopt;
 
-  return LayerNormToGatherChain{layerNorm, q0, dq1};
+  return LayerNormBeforeGather{layerNorm, q0, dq1};
 }
 
-template <typename GatherOpTy>
-GatherTailChain matchOptionalGatherTail(GatherOpTy gatherOp) {
+ONNXQuantizeLinearOp matchQuantizeAfterGather(ONNXGatherOp gatherOp) {
   if (!gatherOp.getResult().hasOneUse())
-    return {nullptr, nullptr};
-
-  auto q1 = dyn_cast<ONNXQuantizeLinearOp>(*gatherOp.getResult().user_begin());
-  if (!q1)
-    return {nullptr, nullptr};
-
-  ONNXDequantizeLinearOp dq2 = nullptr;
-  if (q1.getResult().hasOneUse())
-    dq2 = dyn_cast<ONNXDequantizeLinearOp>(*q1.getResult().user_begin());
-  return {q1, dq2};
+    return nullptr;
+  return dyn_cast<ONNXQuantizeLinearOp>(*gatherOp.getResult().user_begin());
 }
 
-template <typename GatherOpTy>
-struct UpliftGatherAboveLayerNormPattern : public OpRewritePattern<GatherOpTy> {
-  using OpRewritePattern<GatherOpTy>::OpRewritePattern;
+// (A) dq0 feeds LayerNorm X; (B) no dq0, Gather runs on LN input tensor X.
+ONNXDequantizeLinearOp matchDq0BeforeLayerNorm(
+    ONNXLayerNormalizationOp layerNorm) {
+  return layerNorm.getX().getDefiningOp<ONNXDequantizeLinearOp>();
+}
+
+// Element type for the uplifted Gather: dq0's input (quantized X) when dq0
+// exists, otherwise LayerNormalization's X input type (typically f32).
+Type gatherOutputElementType(ONNXDequantizeLinearOp dq0,
+    ONNXLayerNormalizationOp layerNorm) {
+  Value elemTypeSource = dq0 ? dq0.getX() : layerNorm.getX();
+  return cast<RankedTensorType>(elemTypeSource.getType()).getElementType();
+}
+
+LogicalResult rewireDq0ToGatherOutput(PatternRewriter &rewriter,
+    ONNXDequantizeLinearOp dq0, Value gatherResult,
+    RankedTensorType f32ResultTy) {
+  rewriter.modifyOpInPlace(dq0, [&]() {
+    dq0.getOperation()->setOperand(0, gatherResult);
+    dq0.getResult().setType(f32ResultTy);
+  });
+  return inferShapesForOp(dq0.getOperation());
+}
+
+LogicalResult reshapeLayerNormForGatheredInput(PatternRewriter &rewriter,
+    ONNXLayerNormalizationOp layerNorm, Value lnInput,
+    ArrayRef<Type> resultTypes, bool rewireXOperand) {
+  rewriter.modifyOpInPlace(layerNorm, [&]() {
+    if (rewireXOperand)
+      layerNorm.getOperation()->setOperand(0, lnInput);
+    layerNorm.getY().setType(resultTypes[0]);
+    layerNorm.getMean().setType(resultTypes[1]);
+    layerNorm.getInvStdDev().setType(resultTypes[2]);
+  });
+  return inferShapesForOp(layerNorm.getOperation());
+}
+
+struct UpliftGatherAboveLayerNormPattern
+    : public OpRewritePattern<ONNXGatherOp> {
+  using OpRewritePattern<ONNXGatherOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
-      GatherOpTy gatherOp, PatternRewriter &rewriter) const override {
-    auto chainOpt = matchLayerNormToGather(gatherOp.getData());
-    if (!chainOpt)
+      ONNXGatherOp gatherOp, PatternRewriter &rewriter) const override {
+    auto beforeOpt = matchLayerNormBeforeGather(gatherOp.getData());
+    if (!beforeOpt)
       return failure();
 
-    GatherTailChain tail = matchOptionalGatherTail(gatherOp);
+    ONNXLayerNormalizationOp layerNormOp = beforeOpt->layerNorm;
+    ONNXQuantizeLinearOp q0 = beforeOpt->q0;
+    ONNXDequantizeLinearOp dq1 = beforeOpt->dq1;
+    ONNXQuantizeLinearOp q1 = matchQuantizeAfterGather(gatherOp);
 
-    ONNXLayerNormalizationOp layerNormOp = chainOpt->layerNorm;
-    ONNXQuantizeLinearOp q0 = chainOpt->q0;
-    ONNXDequantizeLinearOp dq1 = chainOpt->dq1;
-    ONNXQuantizeLinearOp q1 = tail.q1;
-    ONNXDequantizeLinearOp dq2 = tail.dq2;
-
-    auto dq0 = layerNormOp.getX().getDefiningOp<ONNXDequantizeLinearOp>();
+    ONNXDequantizeLinearOp dq0 = matchDq0BeforeLayerNorm(layerNormOp);
     if (dq0 && !dq0->hasOneUse())
       return failure();
 
@@ -207,25 +218,14 @@ struct UpliftGatherAboveLayerNormPattern : public OpRewritePattern<GatherOpTy> {
             lnRank))
       return failure();
 
-    Location gatherLoc = gatherOp.getLoc();
-    Type f32Type = rewriter.getF32Type();
-
+    // Gather input: dq0's quantized tensor for (A), LayerNorm X for (B).
     Value preGather = dq0 ? dq0.getX() : layerNormOp.getX();
     auto preGatherTy = dyn_cast<RankedTensorType>(preGather.getType());
     if (!preGatherTy)
       return failure();
 
-    Type gatherOutElemType = f32Type;
-    if (dq0 || q1) {
-      if (q1)
-        gatherOutElemType =
-            cast<RankedTensorType>(q1.getType()).getElementType();
-      else
-        gatherOutElemType = preGatherTy.getElementType();
-    } else {
-      gatherOutElemType = cast<RankedTensorType>(gatherOp.getType()).getElementType();
-    }
-
+    Type f32Type = rewriter.getF32Type();
+    Type gatherOutElemType = gatherOutputElementType(dq0, layerNormOp);
     RankedTensorType newGatherOutTy = computeUpliftedGatherOutputType(
         gatherOp, preGatherTy, gatherOutElemType);
 
@@ -233,102 +233,75 @@ struct UpliftGatherAboveLayerNormPattern : public OpRewritePattern<GatherOpTy> {
         dq0 ? dq0.getOperation() : layerNormOp.getOperation();
     rewriter.setInsertionPoint(insertAnchor);
 
-    auto newGather = rewriter.create<GatherOpTy>(gatherLoc, newGatherOutTy,
-        preGather, gatherOp.getIndices(), gatherOp.getAxisAttr());
+    // Gather -> [dq0] -> LayerNorm -> [q0 -> dq1] -> [q1]
+    auto newGather = rewriter.create<ONNXGatherOp>(gatherOp.getLoc(),
+        newGatherOutTy, preGather, gatherOp.getIndices(), gatherOp.getAxisAttr());
     if (failed(inferShapesForOp(newGather.getOperation())))
       return failure();
     copyOnnxProvenance(gatherOp.getOperation(), newGather.getOperation());
     newGatherOutTy = cast<RankedTensorType>(newGather.getType());
-
-    auto lnInputF32Ty =
+    RankedTensorType gatheredF32Ty =
         RankedTensorType::get(newGatherOutTy.getShape(), f32Type);
+
     Value lnInput;
     if (dq0) {
-      auto newDq0 = rewriter.create<ONNXDequantizeLinearOp>(
-          dq0.getLoc(), lnInputF32Ty, newGather.getResult(), dq0.getXScale(),
-          dq0.getXZeroPoint(), dq0.getAxisAttr(), dq0.getBlockSizeAttr());
-      if (failed(inferShapesForOp(newDq0.getOperation())))
+      if (failed(rewireDq0ToGatherOutput(
+              rewriter, dq0, newGather.getResult(), gatheredF32Ty)))
         return failure();
-      copyOnnxProvenance(dq0.getOperation(), newDq0.getOperation());
-      lnInputF32Ty = cast<RankedTensorType>(newDq0.getType());
-      lnInput = newDq0.getResult();
+      lnInput = dq0.getResult();
     } else {
       lnInput = newGather.getResult();
-      lnInputF32Ty = cast<RankedTensorType>(lnInput.getType());
     }
 
+    auto lnInputF32Ty = cast<RankedTensorType>(lnInput.getType());
     auto lnResultTypes = computeLayerNormResultTypes(lnInputF32Ty,
         layerNormOp.getAxis(), layerNormOp.getMean().getType(),
         layerNormOp.getInvStdDev().getType(),
         cast<RankedTensorType>(layerNormOp.getY().getType()).getElementType());
-    auto newLayerNorm = rewriter.create<ONNXLayerNormalizationOp>(
-        layerNormOp.getLoc(), lnResultTypes, lnInput, layerNormOp.getScale(),
-        layerNormOp.getB(), layerNormOp.getAxisAttr(),
-        layerNormOp.getEpsilonAttr(), layerNormOp.getStashTypeAttr());
-    if (failed(inferShapesForOp(newLayerNorm.getOperation())))
+    if (failed(reshapeLayerNormForGatheredInput(rewriter, layerNormOp, lnInput,
+            lnResultTypes, /*rewireXOperand=*/!dq0)))
       return failure();
-    copyOnnxProvenance(layerNormOp.getOperation(), newLayerNorm.getOperation());
 
-    Value afterLn = newLayerNorm.getY();
+    Value chainHead = layerNormOp.getY();
     auto reducedShape =
-        cast<RankedTensorType>(newLayerNorm.getY().getType()).getShape();
+        cast<RankedTensorType>(layerNormOp.getY().getType()).getShape();
 
     if (q0) {
       auto q0OutTy = RankedTensorType::get(reducedShape,
           cast<RankedTensorType>(q0.getType()).getElementType());
-      auto newQ0 = rewriter.create<ONNXQuantizeLinearOp>(
-          q0.getLoc(), q0OutTy, afterLn, q0.getYScale(), q0.getYZeroPoint(),
-          q0.getAxisAttr(), q0.getBlockSizeAttr(), q0.getOutputDtypeAttr(),
-          q0.getSaturateAttr());
-      if (failed(inferShapesForOp(newQ0.getOperation())))
+      rewriter.modifyOpInPlace(q0, [&]() {
+        q0.getResult().setType(q0OutTy);
+      });
+      if (failed(inferShapesForOp(q0.getOperation())))
         return failure();
-      copyOnnxProvenance(q0.getOperation(), newQ0.getOperation());
-      afterLn = newQ0.getResult();
+      chainHead = q0.getResult();
 
       if (dq1) {
         auto dq1OutTy = RankedTensorType::get(
-            cast<RankedTensorType>(afterLn.getType()).getShape(), f32Type);
+            cast<RankedTensorType>(chainHead.getType()).getShape(), f32Type);
         rewriter.modifyOpInPlace(dq1, [&]() {
-          dq1.getOperation()->setOperand(0, afterLn);
           dq1.getResult().setType(dq1OutTy);
         });
         if (failed(inferShapesForOp(dq1.getOperation())))
           return failure();
-        afterLn = dq1.getResult();
+        chainHead = dq1.getResult();
       }
     }
 
     if (q1) {
       auto q1OutTy = RankedTensorType::get(
-          cast<RankedTensorType>(afterLn.getType()).getShape(),
+          cast<RankedTensorType>(chainHead.getType()).getShape(),
           cast<RankedTensorType>(q1.getType()).getElementType());
       rewriter.modifyOpInPlace(q1, [&]() {
-        q1.getOperation()->setOperand(0, afterLn);
+        q1.getOperation()->setOperand(0, chainHead);
         q1.getResult().setType(q1OutTy);
       });
       if (failed(inferShapesForOp(q1.getOperation())))
         return failure();
-
-      if (dq2) {
-        auto dq2OutTy = RankedTensorType::get(
-            cast<RankedTensorType>(q1.getType()).getShape(), f32Type);
-        rewriter.modifyOpInPlace(dq2, [&]() {
-          dq2.getOperation()->setOperand(0, q1.getResult());
-          dq2.getResult().setType(dq2OutTy);
-        });
-        if (failed(inferShapesForOp(dq2.getOperation())))
-          return failure();
-      }
       rewriter.eraseOp(gatherOp);
     } else {
-      rewriter.replaceOp(gatherOp, afterLn);
+      rewriter.replaceOp(gatherOp, chainHead);
     }
-
-    if (q0)
-      rewriter.eraseOp(q0);
-    rewriter.eraseOp(layerNormOp);
-    if (dq0)
-      rewriter.eraseOp(dq0);
 
     return success();
   }
@@ -351,8 +324,7 @@ struct UpliftGatherAboveLayerNormPass
     return "uplift-gather-above-layernorm";
   }
   StringRef getDescription() const override {
-    return "Uplift Gather/GatherElements above LayerNormalization (Q/DQ "
-           "chains optional).";
+    return "Uplift Gather above LayerNormalization (Q/DQ chains optional).";
   }
 
   Option<bool> enabled{*this, "enabled",
@@ -365,8 +337,7 @@ struct UpliftGatherAboveLayerNormPass
 
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
-    patterns.add<UpliftGatherAboveLayerNormPattern<ONNXGatherOp>,
-        UpliftGatherAboveLayerNormPattern<ONNXGatherElementsOp>>(context);
+    patterns.add<UpliftGatherAboveLayerNormPattern>(context);
 
     GreedyRewriteConfig config;
     config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
