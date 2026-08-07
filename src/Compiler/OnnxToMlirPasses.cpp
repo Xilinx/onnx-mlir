@@ -140,8 +140,7 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
   }
 
-  // Uplift Gather above LayerNorm while Q/DQ chains are still explicit ONNX ops.
-  // DMAC does not run the full XMC pipeline (enableXMCPasses=false).
+  // Uplift Gather above LayerNorm with optional Q/DQ chains.
   if (opts.enableUpliftGatherAboveLayerNorm)
     pm.addNestedPass<func::FuncOp>(
         onnx_mlir::createUpliftGatherAboveLayerNormPass());
