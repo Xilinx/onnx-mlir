@@ -88,6 +88,9 @@ bool isQDQDataMovementCanonicalizationEnabled();
 // enabled.
 void configureExpandCanonicalization(bool enableExpandCanonicalization);
 
+void configureGatherElementsTileCanonicalization(
+    bool enableGatherElementsTileCanonicalization);
+
 void populateQDQDataMovementCanonicalizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
 

@@ -72,6 +72,8 @@ void configurePasses() {
   configurePositiveAxisCanonicalization(enablePositiveAxisCanonicalization);
   configureReduceKeepdimsCanonicalization(enableReduceKeepdimsCanonicalization);
   configureExpandCanonicalization(enableExpandCanonicalization);
+  configureGatherElementsTileCanonicalization(
+      enableGatherElementsTileCanonicalization);
   configureQDQDataMovementCanonicalization(
       enableQDQDataMovementCanonicalization);
 #ifdef ONNX_MLIR_ENABLE_KRNL
@@ -283,6 +285,8 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.enableExpandCanonicalization = enableExpandCanonicalization;
     opts.enableReduceKeepdimsCanonicalization =
         enableReduceKeepdimsCanonicalization;
+    opts.enableGatherElementsTileCanonicalization =
+        enableGatherElementsTileCanonicalization;
     opts.enableXFEONNXOpsetVerifier = enableXFEONNXOpsetVerifier;
     opts.enableMatmulAddFusion = enableMatmulAddFusion;
     opts.enableMatmulToConv = enableMatmulToConv;
