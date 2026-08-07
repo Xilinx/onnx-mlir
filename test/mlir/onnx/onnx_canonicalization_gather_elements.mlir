@@ -1,4 +1,5 @@
 // RUN: onnx-mlir-opt --canonicalize="test-convergence=true" %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --enable-gather-elements-tile-canonicalization=false --canonicalize="test-convergence=true" %s -split-input-file | FileCheck %s --check-prefix=DISABLED
 
 func.func @fuse_gather_elements_tile(
     %data: tensor<2x5x4xf32>, %indices: tensor<1x3x1xi64>)
@@ -16,6 +17,9 @@ func.func @fuse_gather_elements_tile(
 // CHECK-NEXT: [[GATHER:%.+]] = "onnx.Gather"(%arg0, [[RESHAPED]]) {axis = 1 : si64} : (tensor<2x5x4xf32>, tensor<3xi64>) -> tensor<2x3x4xf32>
 // CHECK-NOT: "onnx.GatherElements"
 // CHECK-NEXT: onnx.Return [[GATHER]] : tensor<2x3x4xf32>
+// DISABLED-LABEL: func.func @fuse_gather_elements_tile(
+// DISABLED: "onnx.Tile"
+// DISABLED: "onnx.GatherElements"
 
 // -----
 

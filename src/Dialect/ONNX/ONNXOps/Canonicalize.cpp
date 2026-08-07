@@ -73,6 +73,9 @@ static bool enableQDQDataMovementCanonicalization = false;
 // Populated by configureExpandCanonicalization().
 static bool enableExpandCanonicalization = false;
 
+// Populated by configureGatherElementsTileCanonicalization().
+static bool enableGatherElementsTileCanonicalization = true;
+
 using namespace mlir;
 using namespace onnx_mlir;
 
@@ -4937,7 +4940,8 @@ void ONNXExpandOp::getCanonicalizationPatterns(
 /// on the ONNXGatherElementsOp.
 void ONNXGatherElementsOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  result.insert<FuseGatherElementsTilePattern>(context);
+  if (enableGatherElementsTileCanonicalization)
+    result.insert<FuseGatherElementsTilePattern>(context);
 }
 
 /// on the ONNXGlobalAveragePoolOp.
@@ -5371,4 +5375,8 @@ bool onnx_mlir::isQDQDataMovementCanonicalizationEnabled() {
 
 void onnx_mlir::configureExpandCanonicalization(bool enable) {
   enableExpandCanonicalization = enable;
+}
+
+void onnx_mlir::configureGatherElementsTileCanonicalization(bool enable) {
+  enableGatherElementsTileCanonicalization = enable;
 }
