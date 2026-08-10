@@ -4122,6 +4122,36 @@ struct ONNXPositiveAxisCanonicalizationPattern : public RewritePattern {
   }
 };
 
+// Normalizes the negative axis attributes of a custom op based on a explicit
+// list of attributes
+struct ONNXCustomOpPositiveAxisCanonicalizationPattern
+    : public OpRewritePattern<ONNXCustomOp> {
+  using OpRewritePattern<ONNXCustomOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXCustomOp customOp, PatternRewriter &rewriter) const override {
+    // All axes handled here are scalar attributes normalized against the rank
+    // of the first operand.
+    auto axisSpec = [](StringRef attrName) {
+      return ONNXAxisValueSpec{ONNXAxisOperandKind::Scalar,
+          ONNXAxisValueSource::Attribute, attrName, /*index=*/0,
+          /*canCanonicalize=*/true, ONNXAxisRankKind::FirstOperand,
+          /*includeRank=*/false};
+    };
+
+    const auto domain = customOp->getAttrOfType<StringAttr>("domain_name");
+    SmallVector<ONNXAxisValueSpec> specs;
+    if (domain && domain.getValue().equals_insensitive("com.microsoft") &&
+        customOp.getFunctionName().equals_insensitive("GatherBlockQuantized"))
+      specs = {axisSpec("gather_axis"), axisSpec("quantize_axis")};
+
+    bool changed = false;
+    for (const ONNXAxisValueSpec &spec : specs)
+      changed |= normalizeAxisAttr(customOp, spec, rewriter);
+    return success(changed);
+  }
+};
+
 } // namespace
 
 namespace {
@@ -5333,7 +5363,8 @@ void onnx_mlir::populateQDQDataMovementCanonicalizationPatterns(
 
 void onnx_mlir::populateONNXPositiveAxisCanonicalizationPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<ONNXPositiveAxisCanonicalizationPattern>(
+  patterns.add<ONNXPositiveAxisCanonicalizationPattern,
+      ONNXCustomOpPositiveAxisCanonicalizationPattern>(
       patterns.getContext(), benefit);
 }
 

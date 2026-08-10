@@ -412,3 +412,26 @@ func.func @positive_axes_unsqueeze_operand(%arg0: tensor<2x3xf32>) -> tensor<2x3
 // CHECK: onnx.Constant dense<[2, 3, 1]> : tensor<3xi64>
 // CHECK: "onnx.Reshape"
 }
+
+// -----
+
+func.func @positive_axis_custom_gather_block_quantized(%indices: tensor<2xi64>) -> tensor<2x64xf32> {
+  %data = onnx.Constant dense<2> : tensor<8x32xui8>
+  %scales = onnx.Constant dense<5.000000e-01> : tensor<8x2xf32>
+  %0 = "onnx.Custom"(%data, %indices, %scales) {domain_name = "com.microsoft", function_name = "GatherBlockQuantized", bits = 4 : si64, block_size = 32 : si64, gather_axis = -2 : si64, quantize_axis = -1 : si64} : (tensor<8x32xui8>, tensor<2xi64>, tensor<8x2xf32>) -> tensor<2x64xf32>
+  return %0 : tensor<2x64xf32>
+// CHECK-LABEL: func.func @positive_axis_custom_gather_block_quantized
+// CHECK: "onnx.Custom"
+// CHECK-SAME: gather_axis = 0 : si64
+// CHECK-SAME: quantize_axis = 1 : si64
+}
+
+// -----
+
+// Negative: unknown custom op
+func.func @positive_axis_custom_unknown_op(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  %0 = "onnx.Custom"(%arg0) {domain_name = "com.example", function_name = "SomethingElse", gather_axis = -2 : si64} : (tensor<2x3xf32>) -> tensor<2x3xf32>
+  return %0 : tensor<2x3xf32>
+// CHECK-LABEL: func.func @positive_axis_custom_unknown_op
+// CHECK: gather_axis = -2 : si64
+}

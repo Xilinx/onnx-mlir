@@ -61,6 +61,12 @@ def ONNXDecomposePatternOptions {
            "Enable decomposition of Microsoft MatmulNBits to "
            "DequantizeLinear and Matmul ops.">,
 
+    Option<"enableGatherBlockQuantizedDecompose",
+           "enable-gatherblockquantized-decompose",
+           "bool", /*default=*/"false",
+           "Enable decomposition of Microsoft GatherBlockQuantized to a Gather "
+           "on the still-quantized table plus runtime dequantization.">,
+
     Option<"enableGroupQueryAttentionDecompose",
            "enable-groupqueryattention-decompose",
            "bool", /*default=*/"true",
