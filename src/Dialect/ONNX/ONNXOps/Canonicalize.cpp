@@ -64,8 +64,8 @@ static bool enableReshapeCanonicalization = true;
 // Populated by configurePositiveAxisCanonicalization().
 static bool enablePositiveAxisCanonicalization = true;
 
-// Populated by configureReduceKeepdimsCanonicalization().
-static bool enableReduceKeepdimsCanonicalization = true;
+// Populated by configureKeepdimsCanonicalization().
+static bool enableKeepdimsCanonicalization = true;
 
 // Populated by configureQDQDataMovementCanonicalization().
 static bool enableQDQDataMovementCanonicalization = false;
@@ -614,6 +614,16 @@ bool isConstantOpWithNoZeroElements(Value constVal) {
 
 } // namespace onnx_mlir
 
+namespace {
+
+template <typename ONNXOp>
+void inferShapes(ONNXOp op) {
+  if (failed(op.inferShapes([](Region &region) {})))
+    llvm_unreachable("unexpected inferShapes failure");
+}
+
+} // namespace
+
 // =============================================================================
 /// Include the patterns defined in the Declarative Rewrite framework.
 // =============================================================================
@@ -1092,8 +1102,11 @@ public:
 };
 
 // Rewrite keepdims=0 to keepdims=1 + Reshape to the original result shape.
+// The op's own shape inference computes the keepdims=1 result type, so this
+// applies to both reductions with an `axes` operand and ArgMin/ArgMax with an
+// `axis` attribute.
 template <typename OP_TYPE>
-class ReduceKeepdimsCanonPattern : public OpRewritePattern<OP_TYPE> {
+class KeepdimsCanonicalizationPattern : public OpRewritePattern<OP_TYPE> {
 public:
   using OpRewritePattern<OP_TYPE>::OpRewritePattern;
 
@@ -1106,19 +1119,22 @@ public:
     if (!hasStaticShape(resultType))
       return rewriter.notifyMatchFailure(op, "result must have static shape");
 
-    Type elemType = getElementTypeOrSelf(resultType);
+    auto keepdimsOp = mlir::cast<OP_TYPE>(rewriter.clone(*op.getOperation()));
+    keepdimsOp.setKeepdimsAttr(rewriter.getIntegerAttr(
+        rewriter.getIntegerType(64, /*isSigned=*/true), 1));
+    keepdimsOp.getResult().setType(
+        UnrankedTensorType::get(getElementTypeOrSelf(resultType)));
+    // The clone must not keep ResultNames: the ONNX tensor name belongs to the
+    // Reshape that takes over this op's result. Dropping it here also lets the
+    // ResultNames listener re-derive the intermediate as a reshaped view.
+    keepdimsOp->removeAttr("ResultNames");
+    inferShapes(keepdimsOp);
 
     OnnxBuilder create(rewriter, op.getLoc());
-    auto reduceOp = create.createTypedOpAndInferShapes<OP_TYPE>(
-        UnrankedTensorType::get(elemType), op.getData(), op.getAxes(),
-        int64_t{1}, op.getNoopWithEmptyAxes());
-
-    DenseElementsAttr shapeAttr =
-        createDenseElementsAttrFromShape(rewriter, op.getResult());
-    Value shapeConst = create.constant(shapeAttr);
-    Value reshaped = create.reshape(
-        resultType, reduceOp.getResult(), shapeConst, IntegerAttr());
-    rewriter.replaceOp(op, reshaped);
+    Value shape = create.constant(
+        createDenseElementsAttrFromShape(rewriter, op.getResult()));
+    rewriter.replaceOp(op, create.reshape(resultType, keepdimsOp.getResult(),
+                               shape, IntegerAttr()));
     return success();
   }
 };
@@ -1509,12 +1525,6 @@ private:
 
 namespace {
 // RNNOpRewriteLayoutPattern helper functions and classes.
-
-template <typename ONNXOp>
-void inferShapes(ONNXOp op) {
-  if (failed(op.inferShapes([](Region &region) {})))
-    llvm_unreachable("unexpected inferShapes failure");
-}
 
 // To transpose between [batch_size, seq_length/num_directions, size]
 //                  and [seq_length/num_directions, batch_size, size].
@@ -4793,6 +4803,20 @@ void ONNXAbsOp::getCanonicalizationPatterns(
   results.insert<AbsAbsPattern>(context);
 }
 
+/// on the ONNXArgMaxOp.
+void ONNXArgMaxOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableKeepdimsCanonicalization)
+    result.insert<KeepdimsCanonicalizationPattern<ONNXArgMaxOp>>(context);
+}
+
+/// on the ONNXArgMinOp.
+void ONNXArgMinOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableKeepdimsCanonicalization)
+    result.insert<KeepdimsCanonicalizationPattern<ONNXArgMinOp>>(context);
+}
+
 /// on the ONNXBatchNormalizationInferenceModeOp.
 void ONNXBatchNormalizationInferenceModeOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
@@ -5039,36 +5063,37 @@ void ONNXOrOp::getCanonicalizationPatterns(
 /// on the ONNXReduceL1Op.
 void ONNXReduceL1Op::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  if (enableReduceKeepdimsCanonicalization)
-    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceL1Op>>(context);
+  if (enableKeepdimsCanonicalization)
+    result.insert<KeepdimsCanonicalizationPattern<ONNXReduceL1Op>>(context);
 }
 
 /// on the ONNXReduceL2Op.
 void ONNXReduceL2Op::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  if (enableReduceKeepdimsCanonicalization)
-    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceL2Op>>(context);
+  if (enableKeepdimsCanonicalization)
+    result.insert<KeepdimsCanonicalizationPattern<ONNXReduceL2Op>>(context);
 }
 
 /// on the ONNXReduceLogSumOp.
 void ONNXReduceLogSumOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  if (enableReduceKeepdimsCanonicalization)
-    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceLogSumOp>>(context);
+  if (enableKeepdimsCanonicalization)
+    result.insert<KeepdimsCanonicalizationPattern<ONNXReduceLogSumOp>>(context);
 }
 
 /// on the ONNXReduceLogSumExpOp.
 void ONNXReduceLogSumExpOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  if (enableReduceKeepdimsCanonicalization)
-    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceLogSumExpOp>>(context);
+  if (enableKeepdimsCanonicalization)
+    result.insert<KeepdimsCanonicalizationPattern<ONNXReduceLogSumExpOp>>(
+        context);
 }
 
 /// on the ONNXReduceMaxOp.
 void ONNXReduceMaxOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  if (enableReduceKeepdimsCanonicalization)
-    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceMaxOp>>(context);
+  if (enableKeepdimsCanonicalization)
+    result.insert<KeepdimsCanonicalizationPattern<ONNXReduceMaxOp>>(context);
 }
 
 /// on the ONNXReduceMeanOp.
@@ -5076,8 +5101,8 @@ void ONNXReduceMeanOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<MaterializeAbsentAxesReduceMeanPattern>(context);
   result.insert<DropUnitAxesFromReduceMeanPattern>(context);
-  if (enableReduceKeepdimsCanonicalization)
-    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceMeanOp>>(context);
+  if (enableKeepdimsCanonicalization)
+    result.insert<KeepdimsCanonicalizationPattern<ONNXReduceMeanOp>>(context);
 }
 
 /// on the ONNXReduceMeanV13Op.
@@ -5089,29 +5114,30 @@ void ONNXReduceMeanV13Op::getCanonicalizationPatterns(
 /// on the ONNXReduceMinOp.
 void ONNXReduceMinOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  if (enableReduceKeepdimsCanonicalization)
-    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceMinOp>>(context);
+  if (enableKeepdimsCanonicalization)
+    result.insert<KeepdimsCanonicalizationPattern<ONNXReduceMinOp>>(context);
 }
 
 /// on the ONNXReduceProdOp.
 void ONNXReduceProdOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  if (enableReduceKeepdimsCanonicalization)
-    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceProdOp>>(context);
+  if (enableKeepdimsCanonicalization)
+    result.insert<KeepdimsCanonicalizationPattern<ONNXReduceProdOp>>(context);
 }
 
 /// on the ONNXReduceSumOp.
 void ONNXReduceSumOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  if (enableReduceKeepdimsCanonicalization)
-    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceSumOp>>(context);
+  if (enableKeepdimsCanonicalization)
+    result.insert<KeepdimsCanonicalizationPattern<ONNXReduceSumOp>>(context);
 }
 
 /// on the ONNXReduceSumSquareOp.
 void ONNXReduceSumSquareOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  if (enableReduceKeepdimsCanonicalization)
-    result.insert<ReduceKeepdimsCanonPattern<ONNXReduceSumSquareOp>>(context);
+  if (enableKeepdimsCanonicalization)
+    result.insert<KeepdimsCanonicalizationPattern<ONNXReduceSumSquareOp>>(
+        context);
 }
 
 /// on the ONNXReduceSumV11Op.
@@ -5359,8 +5385,8 @@ bool onnx_mlir::isPositiveAxisCanonicalizationEnabled() {
   return enablePositiveAxisCanonicalization;
 }
 
-void onnx_mlir::configureReduceKeepdimsCanonicalization(bool enable) {
-  enableReduceKeepdimsCanonicalization = enable;
+void onnx_mlir::configureKeepdimsCanonicalization(bool enable) {
+  enableKeepdimsCanonicalization = enable;
 }
 
 void onnx_mlir::configureQDQDataMovementCanonicalization(

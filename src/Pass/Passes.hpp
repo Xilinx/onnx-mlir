@@ -73,10 +73,9 @@ void configurePositiveAxisCanonicalization(
 
 bool isPositiveAxisCanonicalizationEnabled();
 
-// Configure whether reduce keepdims=0 -> keepdims=1 + Reshape canonicalization
-// is enabled.
-void configureReduceKeepdimsCanonicalization(
-    bool enableReduceKeepdimsCanonicalization);
+// Configure whether keepdims=0 -> keepdims=1 + Reshape canonicalization is
+// enabled.
+void configureKeepdimsCanonicalization(bool enableKeepdimsCanonicalization);
 
 // Configure QDQ canonicalizations for data-movement/view ONNX ops.
 void configureQDQDataMovementCanonicalization(
