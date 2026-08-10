@@ -75,6 +75,9 @@ void configureConv1x1IntoConvCanonicalization(
 // enabled.
 void configureReshapeCanonicalization(bool enableReshapeCanonicalization);
 
+void configureGatherElementsTileCanonicalization(
+    bool enableGatherElementsTileCanonicalization);
+
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(
     bool enableQDQ = false, bool enableQuantConstFold = false);
 

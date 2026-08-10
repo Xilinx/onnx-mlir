@@ -48,11 +48,14 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // 2. Easy to compare two approaches.
   // In future, only the dynamic pass, ONNXOpTransformPass, will be used for
   // this function.
+
   configureBatchNormCanonicalization(opts.disableBatchNormDecompose);
   configureUnsafeMathCanonicalization(opts.enableUnsafeMathOptimizations);
   configureConv1x1IntoConvCanonicalization(
       opts.enableConv1x1IntoConvCanonicalization);
   configureReshapeCanonicalization(opts.enableReshapeCanonicalization);
+  configureGatherElementsTileCanonicalization(
+      opts.enableGatherElementsTileCanonicalization);
 
   if (!donotScrubDisposableElementsAttr)
     pm.addInstrumentation(

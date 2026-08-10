@@ -2810,6 +2810,7 @@ def ONNXGatherOp:ONNX_Op<"Gather",
 
 def ONNXGatherElementsOp:ONNX_Op<"GatherElements",
   [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX GatherElements operation";
   let description = [{
   GatherElements takes two inputs `data` and `indices` of the same rank r >= 1
