@@ -1559,3 +1559,58 @@ func.func @transpose_removal_at_graph_exit(%858: tensor<1x1x480x2x!quant.uniform
 // CHECK-LABEL: @transpose_removal_at_graph_exit
 // CHECK: onnx.XFEConv
 // CHECK-SAME: ResultNames = ["output_QuantizeLinear_Output"]
+
+// -----
+// ============================================================================
+// SECTION: Tag Multi-Use Transposes
+// ============================================================================
+
+// Test: Multi-use transpose tags its operand with MultiUseConflict
+// CHECK-LABEL: func @test_tag_multiuse_transpose
+func.func @test_tag_multiuse_transpose(%arg0: tensor<1x3x8x8xf32> {onnx.name = "input"}) -> (tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // The Relu's ResultNames should get the MultiUseConflict tag since its
+  // result feeds a multi-use transpose.
+  // CHECK: "onnx.Relu"(%arg0)
+  // CHECK-SAME: ResultNames = [
+  // CHECK-SAME: ["relu_out", ["MultiUseConflict"]]]
+  // CHECK: "onnx.Sigmoid"
+  // CHECK: "onnx.Transpose"({{.*}}) {perm = [0, 2, 3, 1]}
+  // CHECK: "onnx.Tanh"
+  // CHECK: "onnx.Transpose"({{.*}}) {perm = [0, 2, 3, 1]}
+  %0 = "onnx.Relu"(%arg0) {ResultNames = ["relu_out"]} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Transpose"(%0) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %2 = "onnx.Sigmoid"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %3 = "onnx.Tanh"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %2, %3 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}
+
+// -----
+// Test: Single-use transpose does NOT get tagged
+// CHECK-LABEL: func @test_no_tag_single_use_transpose
+func.func @test_no_tag_single_use_transpose(%arg0: tensor<1x3x8x8xf32> {onnx.name = "input"}) -> tensor<1x8x8x3xf32> {
+  // Single use: no MultiUseConflict should appear
+  // CHECK: "onnx.Relu"(%arg0)
+  // CHECK-SAME: ResultNames = ["relu_out"]}
+  // CHECK-NOT: MultiUseConflict
+  // CHECK: "onnx.Sigmoid"
+  // CHECK: "onnx.Transpose"({{.*}}) {perm = [0, 2, 3, 1]}
+  %0 = "onnx.Relu"(%arg0) {ResultNames = ["relu_out"]} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Transpose"(%0) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %2 = "onnx.Sigmoid"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %2 : tensor<1x8x8x3xf32>
+}
+
+// -----
+// Test: Multi-use transpose with three branches tags operand
+// CHECK-LABEL: func @test_tag_multiuse_transpose_triple
+func.func @test_tag_multiuse_transpose_triple(%arg0: tensor<1x3x8x8xf32> {onnx.name = "input"}) -> (tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // CHECK: "onnx.Relu"(%arg0)
+  // CHECK-SAME: ResultNames = [
+  // CHECK-SAME: ["relu_out", ["MultiUseConflict"]]]
+  %0 = "onnx.Relu"(%arg0) {ResultNames = ["relu_out"]} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Transpose"(%0) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %2 = "onnx.Sigmoid"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %3 = "onnx.Tanh"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %4 = "onnx.Exp"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %2, %3, %4 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}
