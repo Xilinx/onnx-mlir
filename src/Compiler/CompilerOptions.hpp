@@ -94,6 +94,7 @@ extern bool enableReshapeCanonicalization;                    // common for both
 extern bool enablePositiveAxisCanonicalization;               // common for both
 extern bool enableExpandCanonicalization;                     // common for both
 extern bool enableKeepdimsCanonicalization;                   // common for both
+extern bool enableGatherElementsTileCanonicalization;         // common for both
 extern bool enableXFEONNXOpsetVerifier;                       // common for both
 extern uint64_t compilationNumThreads;                        // common for both
 // AMD: Decompose unconditionally
