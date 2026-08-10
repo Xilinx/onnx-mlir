@@ -492,6 +492,9 @@ special_type_constraints = {
     "Gather": {
         "Tind": ["tensor(int16)"],
     },
+    "ReduceSum": {
+        "T": ["tensor(uint16)"],
+    },
 }
 
 # Manual specification of attribute type.
@@ -550,6 +553,7 @@ OpsWithCanonicalizer = [
     "Equal",
     "Expand",
     "Flatten",
+    "GatherElements",
     "GlobalAveragePool",
     "GlobalMaxPool",
     "Greater",
