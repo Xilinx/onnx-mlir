@@ -77,6 +77,12 @@ bool separatePhasedConvsForConvTransposeActive = false;
 // (DCR) as its final interleave instead of Reshape/Transpose/Reshape.
 bool convTransposeDepthToSpaceActive = false;
 
+// Storage for the convert-convtranspose-to-resize pass->pattern flag declared
+// in Decompose.hpp. When true, a nearest-neighbor upsampling ConvTranspose is
+// kept out of the phased-Conv decomposition so it can be rewritten to
+// onnx.Resize.
+bool convTransposeToResizeActive = false;
+
 /// Create an Scalar DenseElementsAttr from FloatAttr or IntegerAttr.
 /// This is used to create an ONNXConstant of rank 0, e.g. tensor<f32>.
 DenseElementsAttr createScalarDenseAttr(
@@ -649,11 +655,58 @@ Value replaceSequenceAt(
       sequenceAtResult.getType(), rawResult, create.constantInt64(axisInt));
 }
 
-bool shouldDecomposeConvTransposeOp(Value convTransposeResult) {
-  ONNXConvTransposeOp op =
-      mlir::cast<ONNXConvTransposeOp>(convTransposeResult.getDefiningOp());
-  return hasShapeAndRank(convTransposeResult) &&
-         hasStaticSpatialDims(op.getX()) && hasStaticSpatialDims(op.getW());
+// Read a scalar (single-element) constant Value into a double. Returns false if
+// `v` is absent/None or not a single-element constant.
+static bool readScalarConstant(Value v, double &out) {
+  if (!v || mlir::isa<NoneType>(v.getType()))
+    return false;
+  ElementsAttr attr = getElementAttributeFromONNXValue(v);
+  if (!attr || attr.getNumElements() != 1)
+    return false;
+  out = getScalarValue<double>(attr, attr.getElementType());
+  return true;
+}
+
+// Peel an optional per-tensor DequantizeLinear off `v`. On success, `raw` is
+// the underlying constant Value and `scale`/`zp` are the
+// dequantization params (1/0 when `v` is not quantized). Returns false only if
+// a DequantizeLinear is present but its scale/zero-point are not usable
+// (non-scalar-constant or zero scale).
+static bool peelDequantize(Value v, Value &raw, double &scale, double &zp) {
+  scale = 1.0;
+  zp = 0.0;
+  raw = v;
+  if (auto dq = v.getDefiningOp<ONNXDequantizeLinearOp>()) {
+    if (!readScalarConstant(dq.getXScale(), scale) || scale == 0.0)
+      return false;
+    // Zero-point is optional; default 0.
+    if (dq.getXZeroPoint() &&
+        !mlir::isa<NoneType>(dq.getXZeroPoint().getType()))
+      if (!readScalarConstant(dq.getXZeroPoint(), zp))
+        return false;
+    raw = dq.getX();
+  }
+  return true;
+}
+
+// True iff `v` (optionally behind a per-tensor DequantizeLinear) is a constant
+// tensor whose dequantized elements all equal `target`.
+static bool isDequantizedConstOf(Value v, double target) {
+  Value raw;
+  double scale;
+  double zp;
+  if (!peelDequantize(v, raw, scale, zp))
+    return false;
+  const double rawTarget = target / scale + zp;
+  // isConstOf compares in the raw storage domain, and asWideNum truncates the
+  // target to the storage element type. For integer storage a value dequantizes
+  // to exactly `target` only if its stored integer equals `rawTarget`, i.e. only
+  // if `rawTarget` is integral; a fractional `rawTarget` cannot be matched, and
+  // the truncation would otherwise fabricate a false match, so bail out early.
+  if (mlir::isa<IntegerType>(getElementTypeOrSelf(raw.getType())) &&
+      rawTarget != std::floor(rawTarget))
+    return false;
+  return isConstOf(raw, rawTarget);
 }
 
 SmallVector<int64_t> getIntVectorFromArrayAttr(ArrayAttr arrayAttr) {
@@ -685,6 +738,220 @@ bool hasDefaultDilation(ArrayAttr dilation) {
     return true;
   SmallVector<int64_t, 3> vDilation = getIntVectorFromArrayAttr(dilation);
   return llvm::all_of(vDilation, [](int64_t d) { return d == 1; });
+}
+
+// Returns true iff `op` is a nearest-neighbor spatial upsample that is exactly
+// expressible as onnx.Resize(mode="nearest"). Requirements:
+//   - 4D (2D spatial) input/result with static spatial dims,
+//   - dilations == 1, pads == 0, no output_padding / output_shape attr,
+//   - kernel_shape == strides, strides not both 1,
+//   - output channels == input channels, bias absent or all-zero,
+//   - (dequantized) weights replicate each channel: either group=1 with a
+//     block-diagonal [C,C,k,k] weight (diagonal blocks all-ones, off-diagonal
+//     all-zero) or a depthwise group=C [C,1,k,k] weight of all-ones.
+bool isNearestUpsampleConvTranspose(ONNXConvTransposeOp op) {
+  Value res = op.getY();
+  if (!hasShapeAndRank(res) || !hasStaticSpatialDims(op.getX()) ||
+      !hasStaticSpatialDims(op.getW()))
+    return false;
+  auto xType = mlir::dyn_cast<RankedTensorType>(op.getX().getType());
+  auto resType = mlir::dyn_cast<RankedTensorType>(res.getType());
+  auto wType = mlir::dyn_cast<RankedTensorType>(op.getW().getType());
+  if (!xType || !resType || !wType)
+    return false;
+  // Only 2D spatial (rank 4) supported.
+  if (xType.getRank() != 4 || resType.getRank() != 4 || wType.getRank() != 4)
+    return false;
+
+  // dilations must be default (1).
+  if (!hasDefaultDilation(op.getDilationsAttr()))
+    return false;
+  // output_shape (auto pad inference) unsupported.
+  if (op.getOutputShapeAttr())
+    return false;
+  // pads and output_padding must be absent or all zero.
+  auto isAbsentOrAllZero = [](ArrayAttr a) {
+    return !a || llvm::all_of(getIntVectorFromArrayAttr(a),
+                     [](int64_t v) { return v == 0; });
+  };
+  if (!isAbsentOrAllZero(op.getPadsAttr()) ||
+      !isAbsentOrAllZero(op.getOutputPaddingAttr()))
+    return false;
+
+  // strides present, 2D, not both 1, and == kernel_shape.
+  ArrayAttr stridesAttr = op.getStridesAttr();
+  if (!stridesAttr)
+    return false;
+  SmallVector<int64_t> strides = getIntVectorFromArrayAttr(stridesAttr);
+  // Reject unless there are exactly two strides that are not both 1 (both-1
+  // would be an identity/pointwise op, not an upsample).
+  if (strides.size() != 2 || (strides[0] == 1 && strides[1] == 1))
+    return false;
+  auto kernelOpt = getConvTransposeKernelShape(op, op.getKernelShapeAttr());
+  if (!kernelOpt)
+    return false;
+  SmallVector<int64_t> kernel = *kernelOpt;
+  if (kernel.size() != 2 || kernel[0] != strides[0] || kernel[1] != strides[1])
+    return false;
+
+  // Weight layout is [C_in, C_out/group, kH, kW].
+  int64_t group = op.getGroup();
+  ArrayRef<int64_t> wShape = wType.getShape();
+  int64_t cIn = wShape[0];
+  int64_t coutPerGroup = wShape[1];
+  int64_t kH = wShape[2];
+  int64_t kW = wShape[3];
+  int64_t cOut = coutPerGroup * group;
+  // Channels must be preserved (a channel-changing ConvTranspose is out of
+  // scope).
+  if (cOut != cIn)
+    return false;
+
+  // Bias must be absent or (dequantized) all-zero. It may be a plain float
+  // constant or, in a quantized model, an int32 tensor behind a
+  // DequantizeLinear; isDequantizedConstOf handles both.
+  Value b = op.getB();
+  if (b && !mlir::isa<NoneType>(b.getType()) && !isDequantizedConstOf(b, 0.0))
+    return false;
+
+  // Only the two channel-preserving encodings of a nearest-neighbor upsample
+  // are supported:
+  //   - depthwise: group == C_in, weight [C_in, 1, kH, kW] all-ones.
+  //   - dense:     group == 1,    weight [C_in, C_in, kH, kW] block-diagonal.
+  // Depthwise is a whole-tensor all-ones check, handled by
+  // isDequantizedConstOf.
+  if (group == cIn)
+    return isDequantizedConstOf(op.getW(), 1.0);
+
+  // A general grouped ConvTranspose (1 < group < C_in) is not a per-channel
+  // replicator this pass recognizes.
+  if (group != 1)
+    return false;
+
+  // Dense (group == 1) weight is block-diagonal in [C_in, C_out, kH, kW] with
+  // C_out == C_in: diagonal channel blocks are all-ones and off-diagonal blocks
+  // all-zero. Walk the raw (pre-dequant) elements and compare against the raw
+  // values that dequantize to 1 and 0 (raw == target / scale + zero_point),
+  // keeping the match exact.
+  Value w;
+  double scale;
+  double zp;
+  if (!peelDequantize(op.getW(), w, scale, zp))
+    return false;
+  ElementsAttr wAttr = getElementAttributeFromONNXValue(w);
+  if (!wAttr)
+    return false;
+  Type et = wAttr.getElementType();
+  SmallVector<double> raw;
+  if (mlir::isa<FloatType>(et))
+    raw = llvm::to_vector(llvm::map_range(wAttr.getValues<APFloat>(),
+        [](const APFloat &f) { return f.convertToDouble(); }));
+  else if (mlir::isa<IntegerType>(et))
+    raw = llvm::to_vector(llvm::map_range(wAttr.getValues<APInt>(),
+        [](const APInt &i) { return static_cast<double>(i.getSExtValue()); }));
+  else
+    return false;
+  const double rawOne = 1.0 / scale + zp;
+  const double rawZero = zp;
+
+  // Weight is [C_in, C_out, kH, kW] with C_out == C_in (group=1), i.e. a grid
+  // of C_in x C_in blocks of kH*kW elements. A per-channel replicator has
+  // all-ones blocks on the channel diagonal (inCh == outCh) and all-zeros
+  // blocks everywhere else, so it upsamples each channel independently.
+  //
+  //   Example: C_in = C_out = 2, kH = kW = 2 (weight shape [2, 2, 2, 2]).
+  //   Rows = inCh, cols = outCh; each cell is one kH*kW kernel (dequantized),
+  //   shown as a 2x2 grid:
+  //
+  //                 outCh=0   outCh=1
+  //                 +-----+   +-----+
+  //         inCh=0  | 1 1 |   | 0 0 |
+  //                 | 1 1 |   | 0 0 |
+  //                 +-----+   +-----+
+  //         inCh=1  | 0 0 |   | 1 1 |
+  //                 | 0 0 |   | 1 1 |
+  //                 +-----+   +-----+
+  //
+  // isBlockAllEqualTo returns whether the block at grid position (row, col) is
+  // entirely `value`.
+  const int64_t blockSize = kH * kW;
+  auto isBlockAllEqualTo = [&](int64_t row, int64_t col, double value) {
+    const int64_t blockStart = (row * cIn + col) * blockSize;
+    ArrayRef<double> block = ArrayRef<double>(raw).slice(blockStart, blockSize);
+    return llvm::all_of(block, [&](double v) { return v == value; });
+  };
+
+  for (int64_t inCh = 0; inCh < cIn; ++inCh)
+    for (int64_t outCh = 0; outCh < cIn; ++outCh) {
+      double expected = (inCh == outCh) ? rawOne : rawZero;
+      if (!isBlockAllEqualTo(inCh, outCh, expected))
+        return false;
+    }
+  return true;
+}
+
+// Build an onnx.Resize(mode="nearest", coordinate_transformation_mode=
+// "asymmetric", nearest_mode="floor") equivalent to the nearest-upsample
+// `convTResult` ConvTranspose. Scales are [1, 1, strideH, strideW].
+//
+// Why this is equivalent:
+//   A ConvTranspose whose kernel is all-ones with kernel_shape == strides and
+//   no padding/overlap writes each input element into a disjoint
+//   strideH x strideW output tile, filling that whole tile with a copy of the
+//   element. That is exactly nearest-neighbor upsampling by (strideH, strideW),
+//   which onnx.Resize(mode="nearest") expresses directly - so the weights fall
+//   away and only the scale factors remain.
+//
+// Example: one channel, input 2x2, all-ones 2x2 kernel, strides [2, 2]
+// (upsample 2x in H and W). Each input pixel is replicated into a 2x2 block:
+//
+//   input            ConvTranspose output == Resize(nearest, scales=[1,1,2,2])
+//   +-----+          +---------+
+//   | a b |          | a a b b |
+//   | c d |   --->   | a a b b |
+//   +-----+          | c c d d |
+//                    | c c d d |
+//                    +---------+
+Value createNearestResizeFromConvTranspose(
+    PatternRewriter &rewriter, Location loc, Value convTResult) {
+  auto op = mlir::cast<ONNXConvTransposeOp>(convTResult.getDefiningOp());
+  auto resType = mlir::cast<RankedTensorType>(convTResult.getType());
+  SmallVector<int64_t> strides =
+      op.getStridesAttr() ? getIntVectorFromArrayAttr(op.getStridesAttr())
+                          : SmallVector<int64_t>({1, 1});
+
+  SmallVector<float> scaleVals = {1.0f, 1.0f, static_cast<float>(strides[0]),
+      static_cast<float>(strides[1])};
+  auto scalesType = RankedTensorType::get({4}, rewriter.getF32Type());
+  Value scales = rewriter.create<ONNXConstantOp>(loc, Attribute(),
+      DenseElementsAttr::get(scalesType, llvm::ArrayRef<float>(scaleVals)));
+  Value none = rewriter.create<ONNXNoneOp>(loc).getResult();
+  Type si64 = rewriter.getIntegerType(64, /*isSigned=*/true);
+
+  auto resize = rewriter.create<ONNXResizeOp>(loc, resType,
+      /*X=*/op.getX(), /*roi=*/none, /*scales=*/scales, /*sizes=*/none,
+      /*antialias=*/IntegerAttr::get(si64, 0),
+      /*axes=*/ArrayAttr(),
+      /*coordinate_transformation_mode=*/rewriter.getStringAttr("asymmetric"),
+      // Unused for mode="nearest"; ONNX spec default (-0.75) as a placeholder.
+      /*cubic_coeff_a=*/rewriter.getF32FloatAttr(-0.75f),
+      /*exclude_outside=*/IntegerAttr::get(si64, 0),
+      /*extrapolation_value=*/rewriter.getF32FloatAttr(0.0f),
+      /*keep_aspect_ratio_policy=*/rewriter.getStringAttr("stretch"),
+      /*mode=*/rewriter.getStringAttr("nearest"),
+      /*nearest_mode=*/rewriter.getStringAttr("floor"));
+  return resize.getResult();
+}
+
+bool shouldDecomposeConvTransposeOp(Value convTransposeResult) {
+  ONNXConvTransposeOp op =
+      mlir::cast<ONNXConvTransposeOp>(convTransposeResult.getDefiningOp());
+  // When convert-convtranspose-to-resize is active, leave nearest-upsample
+  // ConvTransposes for the Resize rewrite instead of decomposing to Conv.
+  if (convTransposeToResizeActive && isNearestUpsampleConvTranspose(op))
+    return false;
+  return hasShapeAndRank(convTransposeResult) &&
+         hasStaticSpatialDims(op.getX()) && hasStaticSpatialDims(op.getW());
 }
 
 // Check if the result of ConvTranspose is not single use, OR if single use
@@ -811,6 +1078,10 @@ bool ShouldDecomposeConvTransposeOpToPhasedConvs(Value convTransposeResult,
 
   ONNXConvTransposeOp op =
       mlir::cast<ONNXConvTransposeOp>(convTransposeResult.getDefiningOp());
+  // When convert-convtranspose-to-resize is active, leave nearest-upsample
+  // ConvTransposes for the Resize rewrite instead of the phased-Conv path.
+  if (convTransposeToResizeActive && isNearestUpsampleConvTranspose(op))
+    return false;
   bool areSpatialDimsStatic = hasShapeAndRank(convTransposeResult) &&
                               hasStaticSpatialDims(op.getX()) &&
                               hasStaticSpatialDims(op.getW());
@@ -2167,6 +2438,9 @@ namespace convtranspose_phased {
 }
 namespace convtranspose_1d_phased {
 #include "src/Dialect/ONNX/Transforms/ONNXDecomposeConvTranspose1dPhased.inc"
+}
+namespace convtranspose_resize {
+#include "src/Dialect/ONNX/Transforms/ONNXDecomposeConvTransposeToResize.inc"
 }
 RankedTensorType createReducedType(
     Type outputType, int64_t axisValue, bool keepDims) {
@@ -5855,6 +6129,8 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       this->enableSeparatePhasedConvsForConvTranspose.getValue();
   onnx_mlir::convTransposeDepthToSpaceActive =
       this->enableConvTransposeDecomposeToDepthToSpace.getValue();
+  onnx_mlir::convTransposeToResizeActive =
+      this->enableConvTransposeToResize.getValue();
   RewritePatternSet patterns(context);
   onnx_mlir::getDecomposeONNXToONNXPatterns(patterns,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
@@ -5864,7 +6140,7 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
       /*disableGenericDecompositions=*/false, enableGatherToSlice,
       enableHardSwishDecompose, enableDepthToSpaceDecompose,
-      enableGQAUint16CacheSlotRewrite);
+      enableGQAUint16CacheSlotRewrite, enableConvTransposeToResize);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
   if (this->target == "stablehlo") {
@@ -5890,7 +6166,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
     bool disableGenericDecompositions, bool enableGatherToSlice,
     bool enableHardSwishDecompose, bool enableDepthToSpaceDecompose,
-    bool enableGQAUint16CacheSlotRewrite) {
+    bool enableGQAUint16CacheSlotRewrite, bool enableConvTransposeToResize) {
   MLIRContext *context = patterns.getContext();
   if (!disableGenericDecompositions)
     populateWithGenerated(patterns);
@@ -5900,6 +6176,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     convtranspose_phased::populateWithGenerated(patterns);
   if (enableConvTranspose1dDecomposeToPhasedConv)
     convtranspose_1d_phased::populateWithGenerated(patterns);
+  if (enableConvTransposeToResize)
+    convtranspose_resize::populateWithGenerated(patterns);
   if (enableReduceL2Decompose)
     patterns.insert<DecomposeReduceL2Pattern>(context);
   if (enableInstanceNormDecompose)
