@@ -18,18 +18,35 @@ func.func @identity_axis0(%data: tensor<1x1x2560xf32>) -> tensor<1x1x2560xf32> {
 
 // -----
 
-// Negative axes and -1 indices select the same singleton element.
-func.func @identity_negative_axis(%data: tensor<2x1x3xf32>) -> tensor<2x1x3xf32> {
+// Negative axes are deliberately left unchanged.
+func.func @negative_axis_not_folded(%data: tensor<2x1x3xf32>) -> tensor<2x1x3xf32> {
   %indices = onnx.Constant dense<-1> : tensor<1xi64>
   %gather = "onnx.Gather"(%data, %indices) {axis = -2 : si64}
       : (tensor<2x1x3xf32>, tensor<1xi64>) -> tensor<2x1x3xf32>
   return %gather : tensor<2x1x3xf32>
 }
 
-// CHECK-LABEL:  func.func @identity_negative_axis
+// CHECK-LABEL:  func.func @negative_axis_not_folded
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x1x3xf32>) -> tensor<2x1x3xf32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<-1> : tensor<1xi64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Gather"([[PARAM_0_]], [[VAR_0_]]) {axis = -2 : si64} : (tensor<2x1x3xf32>, tensor<1xi64>) -> tensor<2x1x3xf32>
+// CHECK:           return [[VAR_1_]] : tensor<2x1x3xf32>
+// CHECK:         }
+
+// -----
+
+// Dynamic non-axis dimensions do not affect the fold.
+func.func @dynamic_non_axis_dims(%data: tensor<?x1x?xf32>) -> tensor<?x1x?xf32> {
+  %indices = onnx.Constant dense<0> : tensor<1xi64>
+  %gather = "onnx.Gather"(%data, %indices) {axis = 1 : si64}
+      : (tensor<?x1x?xf32>, tensor<1xi64>) -> tensor<?x1x?xf32>
+  return %gather : tensor<?x1x?xf32>
+}
+
+// CHECK-LABEL:  func.func @dynamic_non_axis_dims
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x1x?xf32>) -> tensor<?x1x?xf32> {
 // CHECK-NOT:       "onnx.Gather"
-// CHECK:           return [[PARAM_0_]] : tensor<2x1x3xf32>
+// CHECK:           return [[PARAM_0_]] : tensor<?x1x?xf32>
 // CHECK:         }
 
 // -----

@@ -3743,51 +3743,51 @@ public:
 
 // Fold constant gathers that select the sole element of a singleton axis.
 class FoldSingletonGatherPattern : public OpRewritePattern<ONNXGatherOp> {
-  static FailureOr<int64_t> getSingletonGatherAxis(ONNXGatherOp gatherOp) {
-    auto dataType = dyn_cast<RankedTensorType>(gatherOp.getData().getType());
-    auto indicesType =
-        dyn_cast<RankedTensorType>(gatherOp.getIndices().getType());
-    if (!dataType || !dataType.hasStaticShape() || !indicesType ||
-        (indicesType.getRank() != 0 && indicesType.getRank() != 1))
-      return failure();
-    if (indicesType.getRank() == 1 && indicesType.getDimSize(0) != 1)
-      return failure();
-
-    int64_t axis = gatherOp.getAxis();
-    if (axis < 0)
-      axis += dataType.getRank();
-    if (dataType.getDimSize(axis) != 1)
-      return failure();
-
-    ElementsAttr indicesAttr =
-        getElementAttributeFromConstLikeValue(gatherOp.getIndices());
-    if (!indicesAttr)
-      return failure();
-    const int64_t index =
-        (*indicesAttr.getValues<APInt>().begin()).getSExtValue();
-    if (index != 0 && index != -1)
-      return failure();
-    return axis;
-  }
-
 public:
   using OpRewritePattern<ONNXGatherOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
       ONNXGatherOp gatherOp, PatternRewriter &rewriter) const override {
-    FailureOr<int64_t> axis = getSingletonGatherAxis(gatherOp);
+    auto dataType = dyn_cast<RankedTensorType>(gatherOp.getData().getType());
     auto indicesType =
         dyn_cast<RankedTensorType>(gatherOp.getIndices().getType());
-    if (failed(axis))
-      return failure();
+    if (!dataType || !indicesType)
+      return rewriter.notifyMatchFailure(gatherOp, "inputs are not ranked");
+    if (indicesType.getRank() != 0 && indicesType.getRank() != 1)
+      return rewriter.notifyMatchFailure(
+          gatherOp, "indices must be a scalar or a singleton vector");
+    if (indicesType.getRank() == 1 && indicesType.getDimSize(0) != 1)
+      return rewriter.notifyMatchFailure(
+          gatherOp, "indices must be a singleton vector");
+
+    const int64_t axis = gatherOp.getAxis();
+    if (axis < 0)
+      return rewriter.notifyMatchFailure(gatherOp, "axis must be non-negative");
+    if (axis >= dataType.getRank())
+      return rewriter.notifyMatchFailure(gatherOp, "axis is out of bounds");
+    if (dataType.getDimSize(axis) != 1)
+      return rewriter.notifyMatchFailure(gatherOp, "axis is not a singleton");
+
+    ElementsAttr indicesAttr =
+        getElementAttributeFromConstLikeValue(gatherOp.getIndices());
+    if (!indicesAttr)
+      return rewriter.notifyMatchFailure(gatherOp, "indices are not constant");
+    const int64_t index =
+        (*indicesAttr.getValues<APInt>().begin()).getSExtValue();
+    if (index != 0 && index != -1)
+      return rewriter.notifyMatchFailure(
+          gatherOp, "index does not select the singleton element");
 
     if (indicesType.getRank() == 1) {
+      if (gatherOp.getType() != gatherOp.getData().getType())
+        return rewriter.notifyMatchFailure(
+            gatherOp, "result type differs from data type");
       rewriter.replaceOp(gatherOp, gatherOp.getData());
       return success();
     }
 
     OnnxBuilder onnx(rewriter, gatherOp.getLoc());
-    Value axes = onnx.constantInt64({*axis});
+    Value axes = onnx.constantInt64({axis});
     rewriter.replaceOpWithNewOp<ONNXSqueezeOp>(
         gatherOp, gatherOp.getType(), gatherOp.getData(), axes);
     return success();
