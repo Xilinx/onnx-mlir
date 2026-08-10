@@ -700,9 +700,10 @@ static bool isDequantizedConstOf(Value v, double target) {
   const double rawTarget = target / scale + zp;
   // isConstOf compares in the raw storage domain, and asWideNum truncates the
   // target to the storage element type. For integer storage a value dequantizes
-  // to exactly `target` only if its stored integer equals `rawTarget`, i.e. only
-  // if `rawTarget` is integral; a fractional `rawTarget` cannot be matched, and
-  // the truncation would otherwise fabricate a false match, so bail out early.
+  // to exactly `target` only if its stored integer equals `rawTarget`, i.e.
+  // only if `rawTarget` is integral; a fractional `rawTarget` cannot be
+  // matched, and the truncation would otherwise fabricate a false match, so
+  // bail out early.
   if (mlir::isa<IntegerType>(getElementTypeOrSelf(raw.getType())) &&
       rawTarget != std::floor(rawTarget))
     return false;
