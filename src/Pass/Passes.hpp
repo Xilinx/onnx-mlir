@@ -91,6 +91,9 @@ void configureExpandCanonicalization(bool enableExpandCanonicalization);
 // Configure whether Cast data-movement patterns are enabled.
 void configureCastDataMovementPatterns(bool enableCastDataMovementPatterns);
 
+void configureGatherElementsTileCanonicalization(
+    bool enableGatherElementsTileCanonicalization);
+
 void populateQDQDataMovementCanonicalizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
 

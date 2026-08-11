@@ -39,6 +39,7 @@ struct OnnxToMlirOptions {
   bool enableExpandCanonicalization = false;
   bool enableReduceKeepdimsCanonicalization = false;
   bool enableCastDataMovementPatterns = true;
+  bool enableGatherElementsTileCanonicalization = true;
   bool enableXFEONNXOpsetVerifier = true;
   bool enableUnsafeMathOptimizations = true;
   bool enableQDQDataMovementCanonicalization = false;
@@ -48,7 +49,7 @@ struct OnnxToMlirOptions {
   bool disableSimdOption = false;
 
   bool enableMatmulAddFusion = true;
-  bool enableMatmulToConv = true;
+  bool enableMatmulToConv = false;
   bool enableRemovePairsReshape = false;
 
   int onnxOpTransformThreshold = 3;

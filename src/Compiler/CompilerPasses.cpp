@@ -73,6 +73,8 @@ void configurePasses() {
   configureReduceKeepdimsCanonicalization(enableReduceKeepdimsCanonicalization);
   configureExpandCanonicalization(enableExpandCanonicalization);
   configureCastDataMovementPatterns(enableCastDataMovementPatterns);
+  configureGatherElementsTileCanonicalization(
+      enableGatherElementsTileCanonicalization);
   configureQDQDataMovementCanonicalization(
       enableQDQDataMovementCanonicalization);
 #ifdef ONNX_MLIR_ENABLE_KRNL
@@ -285,11 +287,16 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.enableReduceKeepdimsCanonicalization =
         enableReduceKeepdimsCanonicalization;
     opts.enableCastDataMovementPatterns = enableCastDataMovementPatterns;
+    opts.enableGatherElementsTileCanonicalization =
+        enableGatherElementsTileCanonicalization;
     opts.enableXFEONNXOpsetVerifier = enableXFEONNXOpsetVerifier;
+    opts.enableMatmulAddFusion = enableMatmulAddFusion;
+    opts.enableMatmulToConv = enableMatmulToConv;
     if (enableXMCPasses) {
       opts.hybrid.enableInstanceNormDecompose = false;
       opts.hybrid.enableGroupNormDecompose = false;
       opts.hybrid.enableConvTransposeDecomposeToPhasedConv = false;
+      opts.hybrid.enableSplitToSliceDecompose = true;
     }
 
     addONNXToMLIRPasses(pm, /*target CPU*/ false,

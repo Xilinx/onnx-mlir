@@ -95,6 +95,7 @@ extern bool enablePositiveAxisCanonicalization;               // common for both
 extern bool enableExpandCanonicalization;                     // common for both
 extern bool enableReduceKeepdimsCanonicalization;             // common for both
 extern bool enableCastDataMovementPatterns;                   // common for both
+extern bool enableGatherElementsTileCanonicalization;         // common for both
 extern bool enableXFEONNXOpsetVerifier;                       // common for both
 extern uint64_t compilationNumThreads;                        // common for both
 // AMD: Decompose unconditionally
@@ -143,6 +144,8 @@ extern std::vector<std::string> reportHeapAfter;  // onnx-mlir only
 extern std::string modelTag;                      // onnx-mlir only
 extern bool enableConvOptPass;                    // onnx-mlir only
 extern bool enableXMCPasses;                      // onnx-mlir only
+extern bool enableMatmulAddFusion;                // onnx-mlir only
+extern bool enableMatmulToConv;                   // onnx-mlir only
 extern bool disableConstantProp;                  // onnx-mlir only
 extern std::vector<std::string> extraLibPaths;    // onnx-mlir only
 extern std::vector<std::string> extraLibs;        // onnx-mlir only

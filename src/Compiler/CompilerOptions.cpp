@@ -58,6 +58,7 @@ bool enablePositiveAxisCanonicalization;               // common for both
 bool enableExpandCanonicalization;                     // common for both
 bool enableReduceKeepdimsCanonicalization;             // common for both
 bool enableCastDataMovementPatterns;                   // common for both
+bool enableGatherElementsTileCanonicalization;         // common for both
 bool enableXFEONNXOpsetVerifier;                       // common for both
 bool enableSafeCodeGen;                                // common for both
 bool disableMemRefPrefetch;                            // common for both
@@ -108,6 +109,8 @@ std::vector<std::string> reportHeapAfter;  // onnx-mlir only
 std::string modelTag;                      // onnx-mlir only
 bool enableConvOptPass;                    // onnx-mlir only
 bool enableXMCPasses;                      // onnx-mlir only
+bool enableMatmulAddFusion;                // onnx-mlir only
+bool enableMatmulToConv;                   // onnx-mlir only
 bool disableConstantProp;                  // onnx-mlir only
 std::vector<std::string> extraLibPaths;    // onnx-mlir only
 std::vector<std::string> extraLibs;        // onnx-mlir only
@@ -396,6 +399,14 @@ static llvm::cl::opt<bool, true> enableCastDataMovementPatternsOpt(
         "(default=true)."),
     llvm::cl::location(enableCastDataMovementPatterns), llvm::cl::init(true),
     llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableGatherElementsTileCanonicalizationOpt(
+    "enable-gather-elements-tile-canonicalization",
+    llvm::cl::desc(
+        "Enable simplification of GatherElements with tiled indices into "
+        "Gather with reshaped indices (default=true)."),
+    llvm::cl::location(enableGatherElementsTileCanonicalization),
+    llvm::cl::init(true), llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true> enableXFEONNXOpsetVerifierOpt(
     "enable-xfe-onnx-opset-verifier",
@@ -859,6 +870,20 @@ static llvm::cl::opt<bool, true> enableConvOptPassOpt("enable-conv-opt-pass",
 static llvm::cl::opt<bool, true> enableXMCPassesOpt("enable-xmc-passes",
     llvm::cl::desc("Enable XMC xcompiler passes. Default is false."),
     llvm::cl::location(enableXMCPasses), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirOptions));
+
+static llvm::cl::opt<bool, true> enableMatmulAddFusionOpt(
+    "enable-matmul-add-fusion",
+    llvm::cl::desc(
+        "Enable fusing MatMul+Add into XFE MatMul bias (XMC passes only). "
+        "Default is true."),
+    llvm::cl::location(enableMatmulAddFusion), llvm::cl::init(true),
+    llvm::cl::cat(OnnxMlirOptions));
+
+static llvm::cl::opt<bool, true> enableMatmulToConvOpt("enable-matmul-to-conv",
+    llvm::cl::desc("Enable converting MatMul to XFE Conv (XMC passes only). "
+                   "Default is false."),
+    llvm::cl::location(enableMatmulToConv), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirOptions));
 
 static llvm::cl::opt<bool, true> disableConstantPropOpt("disable-constant-prop",
