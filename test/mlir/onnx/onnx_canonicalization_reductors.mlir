@@ -1,6 +1,6 @@
 // Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
-// RUN: onnx-mlir-opt --enable-reduce-keepdims-canonicalization=true --shape-inference --canonicalize="test-convergence=true" --shape-inference --cse %s -split-input-file | FileCheck %s
-// RUN: onnx-mlir-opt --enable-reduce-keepdims-canonicalization=false --shape-inference --canonicalize="test-convergence=true" --shape-inference --cse %s -split-input-file | FileCheck %s --check-prefix=DISABLED-CHECK
+// RUN: onnx-mlir-opt --enable-keepdims-canonicalization=true --shape-inference --canonicalize="test-convergence=true" --shape-inference --cse %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --enable-keepdims-canonicalization=false --shape-inference --canonicalize="test-convergence=true" --shape-inference --cse %s -split-input-file | FileCheck %s --check-prefix=DISABLED-CHECK
 
 
 func.func @test_reducesumv11_axes(%arg0: tensor<1x32x512x640xf32>) -> tensor<1x512x640xf32> {
@@ -261,4 +261,77 @@ func.func @reduce_sum_keepdims_one_unchanged(%arg0: tensor<2x3x4xf32>) -> tensor
   // DISABLED-CHECK: "onnx.ReduceSum"(%arg0, %{{.*}}) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
   // DISABLED-CHECK: onnx.Return %{{.*}}
   // DISABLED-CHECK-NOT: "onnx.Reshape"
+}
+
+// -----
+// CHECK-LABEL: func.func @argmax_keepdims_zero
+func.func @argmax_keepdims_zero(%arg0: tensor<2x3x4xf32>) -> tensor<2x4xi64> {
+  %0 = "onnx.ArgMax"(%arg0) {axis = 1 : si64, keepdims = 0 : si64,
+      select_last_index = 0 : si64} : (tensor<2x3x4xf32>) -> tensor<2x4xi64>
+  onnx.Return %0 : tensor<2x4xi64>
+  // CHECK-DAG: [[SHAPE:%.+]] = onnx.Constant dense<[2, 4]> : tensor<2xi64>
+  // CHECK: [[ARGMAX:%.+]] = "onnx.ArgMax"(%arg0) {axis = 1 : si64, keepdims = 1 : si64, select_last_index = 0 : si64}
+  // CHECK-SAME: (tensor<2x3x4xf32>) -> tensor<2x1x4xi64>
+  // CHECK: [[RES:%.+]] = "onnx.Reshape"([[ARGMAX]], [[SHAPE]]) {allowzero = 0 : si64}
+  // CHECK-SAME: (tensor<2x1x4xi64>, tensor<2xi64>) -> tensor<2x4xi64>
+  // CHECK: onnx.Return [[RES]]
+  // CHECK-NOT: keepdims = 0
+  // DISABLED-CHECK-LABEL: func.func @argmax_keepdims_zero
+  // DISABLED-CHECK: "onnx.ArgMax"(%arg0) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64}
+  // DISABLED-CHECK: onnx.Return %{{.*}}
+  // DISABLED-CHECK-NOT: "onnx.Reshape"
+}
+
+// -----
+// CHECK-LABEL: func.func @argmin_keepdims_zero
+func.func @argmin_keepdims_zero(%arg0: tensor<2x3x4xf32>) -> tensor<2x4xi64> {
+  %0 = "onnx.ArgMin"(%arg0) {axis = 1 : si64, keepdims = 0 : si64,
+      select_last_index = 0 : si64} : (tensor<2x3x4xf32>) -> tensor<2x4xi64>
+  onnx.Return %0 : tensor<2x4xi64>
+  // CHECK-DAG: [[SHAPE:%.+]] = onnx.Constant dense<[2, 4]> : tensor<2xi64>
+  // CHECK: [[ARGMIN:%.+]] = "onnx.ArgMin"(%arg0) {axis = 1 : si64, keepdims = 1 : si64, select_last_index = 0 : si64}
+  // CHECK-SAME: (tensor<2x3x4xf32>) -> tensor<2x1x4xi64>
+  // CHECK: [[RES:%.+]] = "onnx.Reshape"([[ARGMIN]], [[SHAPE]]) {allowzero = 0 : si64}
+  // CHECK-SAME: (tensor<2x1x4xi64>, tensor<2xi64>) -> tensor<2x4xi64>
+  // CHECK: onnx.Return [[RES]]
+  // CHECK-NOT: keepdims = 0
+  // DISABLED-CHECK-LABEL: func.func @argmin_keepdims_zero
+  // DISABLED-CHECK: "onnx.ArgMin"(%arg0) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64}
+  // DISABLED-CHECK: onnx.Return %{{.*}}
+  // DISABLED-CHECK-NOT: "onnx.Reshape"
+}
+
+// -----
+// CHECK-LABEL: func.func @argmax_negative_axis_keepdims_zero
+func.func @argmax_negative_axis_keepdims_zero(%arg0: tensor<2x3x4xf32>) -> tensor<2x3xi64> {
+  %0 = "onnx.ArgMax"(%arg0) {axis = -1 : si64, keepdims = 0 : si64,
+      select_last_index = 0 : si64} : (tensor<2x3x4xf32>) -> tensor<2x3xi64>
+  onnx.Return %0 : tensor<2x3xi64>
+  // CHECK-DAG: [[SHAPE:%.+]] = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  // CHECK: [[ARGMAX:%.+]] = "onnx.ArgMax"(%arg0) {axis = 2 : si64, keepdims = 1 : si64, select_last_index = 0 : si64}
+  // CHECK-SAME: (tensor<2x3x4xf32>) -> tensor<2x3x1xi64>
+  // CHECK: [[RES:%.+]] = "onnx.Reshape"([[ARGMAX]], [[SHAPE]]) {allowzero = 0 : si64}
+  // CHECK-SAME: (tensor<2x3x1xi64>, tensor<2xi64>) -> tensor<2x3xi64>
+  // CHECK: onnx.Return [[RES]]
+  // CHECK-NOT: keepdims = 0
+  // DISABLED-CHECK-LABEL: func.func @argmax_negative_axis_keepdims_zero
+  // DISABLED-CHECK: "onnx.ArgMax"(%arg0) {axis = 2 : si64, keepdims = 0 : si64, select_last_index = 0 : si64}
+  // DISABLED-CHECK: onnx.Return %{{.*}}
+  // DISABLED-CHECK-NOT: "onnx.Reshape"
+}
+
+// -----
+// A dynamic result shape prevents the keepdims canonicalization.
+func.func @argmax_dynamic_result_shape(%arg0: tensor<?x3x4xf32>) -> tensor<?x4xi64> {
+  %0 = "onnx.ArgMax"(%arg0) {axis = 1 : si64, keepdims = 0 : si64,
+      select_last_index = 0 : si64} : (tensor<?x3x4xf32>) -> tensor<?x4xi64>
+  onnx.Return %0 : tensor<?x4xi64>
+  // CHECK-LABEL: func.func @argmax_dynamic_result_shape
+  // CHECK: "onnx.ArgMax"(%arg0) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64}
+  // CHECK-NOT: "onnx.Reshape"
+  // CHECK: onnx.Return %{{.*}} : tensor<?x4xi64>
+  // DISABLED-CHECK-LABEL: func.func @argmax_dynamic_result_shape
+  // DISABLED-CHECK: "onnx.ArgMax"(%arg0) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64}
+  // DISABLED-CHECK-NOT: "onnx.Reshape"
+  // DISABLED-CHECK: onnx.Return %{{.*}} : tensor<?x4xi64>
 }
