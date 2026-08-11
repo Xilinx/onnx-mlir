@@ -27,7 +27,7 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   pm.addNestedPass<func::FuncOp>(createDedupDQsPass());
   if (opts.enableHoistGatherAboveLayerNorm)
     pm.addNestedPass<func::FuncOp>(
-        onnx_mlir::createUpliftGatherAboveLayerNormPass());
+        onnx_mlir::createHoistGatherAboveLayerNormPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createConvertQDQToRequantizePass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createQuantTypesPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createReplaceQDQReduceL2Pass());
