@@ -492,6 +492,9 @@ special_type_constraints = {
     "Gather": {
         "Tind": ["tensor(int16)"],
     },
+    "ReverseSequence": {
+        "T": ["tensor(bfloat16)"],
+    },
 }
 
 # Manual specification of attribute type.
@@ -541,6 +544,8 @@ OpsWithCanonicalizer = [
     "Dropout",
     "Equal",
     "Flatten",
+    "Gather",
+    "GatherElements",
     "GlobalAveragePool",
     "GlobalMaxPool",
     "Greater",
@@ -621,6 +626,7 @@ OpsWithVerifier = [
     "Less",
     "LessOrEqual",
     "LogSoftmax",
+    "LSTM",
     "Max",
     "MatMulInteger",
     "Mean",

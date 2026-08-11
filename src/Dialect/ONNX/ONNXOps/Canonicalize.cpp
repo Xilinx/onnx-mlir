@@ -58,6 +58,9 @@ static bool enableConv1x1IntoConvCanonicalization = false;
 // Populated by configureReshapeCanonicalization().
 static bool enableReshapeCanonicalization = true;
 
+// Populated by configureGatherElementsTileCanonicalization().
+static bool enableGatherElementsTileCanonicalization = true;
+
 using namespace mlir;
 using namespace onnx_mlir;
 
@@ -1789,6 +1792,66 @@ public:
     rewriter.replaceOp(op, {res});
     return success();
   };
+};
+
+// Rewrite GatherElements(data, Tile(indices, repeats)) to
+// Gather(data, Reshape(indices)) when Tile broadcasts a one-dimensional index
+// vector across all non-axis dimensions of data.
+class FuseGatherElementsTilePattern
+    : public OpRewritePattern<ONNXGatherElementsOp> {
+public:
+  using OpRewritePattern<ONNXGatherElementsOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ONNXGatherElementsOp gatherElementsOp,
+      PatternRewriter &rewriter) const override {
+    auto tileOp = gatherElementsOp.getIndices().getDefiningOp<ONNXTileOp>();
+    if (!tileOp || !tileOp->hasOneUse())
+      return failure();
+
+    auto dataType =
+        dyn_cast<RankedTensorType>(gatherElementsOp.getData().getType());
+    auto indicesType = dyn_cast<RankedTensorType>(tileOp.getInput().getType());
+    auto tiledType = dyn_cast<RankedTensorType>(tileOp.getOutput().getType());
+    if (!dataType || !indicesType || !tiledType || !dataType.hasStaticShape() ||
+        !indicesType.hasStaticShape() || !tiledType.hasStaticShape())
+      return failure();
+
+    int64_t rank = dataType.getRank();
+    if (indicesType.getRank() != rank || tiledType.getRank() != rank)
+      return failure();
+
+    int64_t axis = gatherElementsOp.getAxis();
+    if (axis < 0)
+      axis += rank;
+
+    ArrayRef<int64_t> dataShape = dataType.getShape();
+    ArrayRef<int64_t> indicesShape = indicesType.getShape();
+    ArrayRef<int64_t> tiledShape = tiledType.getShape();
+
+    // All non-axis dimensions must be broadcastable.
+    int64_t numIndices = indicesShape[axis];
+    if (numIndices < 1 || tiledShape[axis] != numIndices)
+      return failure();
+    for (int64_t i = 0; i < rank; ++i)
+      if (i != axis && (indicesShape[i] != 1 || tiledShape[i] != dataShape[i]))
+        return failure();
+
+    SmallVector<int64_t> gatherShape(dataShape);
+    gatherShape[axis] = numIndices;
+    auto gatherType =
+        RankedTensorType::get(gatherShape, dataType.getElementType());
+    if (gatherType != gatherElementsOp.getOutput().getType())
+      return failure();
+
+    OnnxBuilder create(rewriter, gatherElementsOp.getLoc());
+    Value flattenedIndices = create.reshape(
+        RankedTensorType::get({numIndices}, indicesType.getElementType()),
+        tileOp.getInput(), create.constantInt64({numIndices}));
+    rewriter.replaceOpWithNewOp<ONNXGatherOp>(gatherElementsOp, gatherType,
+        gatherElementsOp.getData(), flattenedIndices,
+        gatherElementsOp.getAxisAttr());
+    return success();
+  }
 };
 
 /// The pattern is to replace two consecutive ReshapeOp with a single ReshapeOp.
@@ -3741,6 +3804,59 @@ public:
   }
 };
 
+// Fold constant gathers that select the sole element of a singleton axis.
+class FoldSingletonGatherPattern : public OpRewritePattern<ONNXGatherOp> {
+public:
+  using OpRewritePattern<ONNXGatherOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXGatherOp gatherOp, PatternRewriter &rewriter) const override {
+    auto dataType = dyn_cast<RankedTensorType>(gatherOp.getData().getType());
+    auto indicesType =
+        dyn_cast<RankedTensorType>(gatherOp.getIndices().getType());
+    if (!dataType || !indicesType)
+      return rewriter.notifyMatchFailure(gatherOp, "inputs are not ranked");
+    if (indicesType.getRank() != 0 && indicesType.getRank() != 1)
+      return rewriter.notifyMatchFailure(
+          gatherOp, "indices must be a scalar or a singleton vector");
+    if (indicesType.getRank() == 1 && indicesType.getDimSize(0) != 1)
+      return rewriter.notifyMatchFailure(
+          gatherOp, "indices must be a singleton vector");
+
+    const int64_t axis = gatherOp.getAxis();
+    if (axis < 0)
+      return rewriter.notifyMatchFailure(gatherOp, "axis must be non-negative");
+    if (axis >= dataType.getRank())
+      return rewriter.notifyMatchFailure(gatherOp, "axis is out of bounds");
+    if (dataType.getDimSize(axis) != 1)
+      return rewriter.notifyMatchFailure(gatherOp, "axis is not a singleton");
+
+    ElementsAttr indicesAttr =
+        getElementAttributeFromConstLikeValue(gatherOp.getIndices());
+    if (!indicesAttr)
+      return rewriter.notifyMatchFailure(gatherOp, "indices are not constant");
+    const int64_t index =
+        (*indicesAttr.getValues<APInt>().begin()).getSExtValue();
+    if (index != 0 && index != -1)
+      return rewriter.notifyMatchFailure(
+          gatherOp, "index does not select the singleton element");
+
+    if (indicesType.getRank() == 1) {
+      if (gatherOp.getType() != gatherOp.getData().getType())
+        return rewriter.notifyMatchFailure(
+            gatherOp, "result type differs from data type");
+      rewriter.replaceOp(gatherOp, gatherOp.getData());
+      return success();
+    }
+
+    OnnxBuilder onnx(rewriter, gatherOp.getLoc());
+    Value axes = onnx.constantInt64({axis});
+    rewriter.replaceOpWithNewOp<ONNXSqueezeOp>(
+        gatherOp, gatherOp.getType(), gatherOp.getData(), axes);
+    return success();
+  }
+};
+
 /// Simplify Reshape(Cast(Reshape(x, s1)), s2) to Cast(x) when the outer
 /// Reshape's result shape equals the inner Reshape's input shape (i.e., the
 /// two Reshapes together form an identity).
@@ -3915,6 +4031,13 @@ void ONNXEqualOp::getCanonicalizationPatterns(
   result.insert<BinaryOpBroadcastAxisPattern<ONNXEqualOp>>(context);
 }
 
+/// on the ONNXGatherElementsOp.
+void ONNXGatherElementsOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  if (enableGatherElementsTileCanonicalization)
+    result.insert<FuseGatherElementsTilePattern>(context);
+}
+
 /// on the ONNXGlobalAveragePoolOp.
 void ONNXGlobalAveragePoolOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
@@ -3938,6 +4061,12 @@ void ONNXGRUOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<RNNOpRewriteLayoutPattern<ONNXGRUOp>>(context);
   results.insert<RNNOpRewriteSeqLenPattern<ONNXGRUOp>>(context);
+}
+
+/// on the ONNXGatherOp.
+void ONNXGatherOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<FoldSingletonGatherPattern>(context);
 }
 
 /// on the ONNXIdentityOp.
@@ -4662,4 +4791,8 @@ void onnx_mlir::configureConv1x1IntoConvCanonicalization(
 
 void onnx_mlir::configureReshapeCanonicalization(bool enable) {
   enableReshapeCanonicalization = enable;
+}
+
+void onnx_mlir::configureGatherElementsTileCanonicalization(bool enable) {
+  enableGatherElementsTileCanonicalization = enable;
 }
