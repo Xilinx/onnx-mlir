@@ -14,6 +14,8 @@
 
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 
+#include "llvm/ADT/STLExtras.h"
+
 using namespace mlir;
 using namespace mlir::OpTrait::util;
 using namespace onnx_mlir;
@@ -178,12 +180,121 @@ LogicalResult ONNXGRUOp::inferShapes(
 // LSTM
 //===----------------------------------------------------------------------===//
 
+namespace {
+
+bool isSupportedLSTMActivation(StringRef name) {
+  return llvm::is_contained(
+      {"Affine", "Relu", "Tanh", "Sigmoid", "LeakyRelu", "ThresholdedRelu",
+          "ScaledTanh", "HardSigmoid", "Elu", "Selu", "Softsign", "Softplus"},
+      name);
+}
+
+LogicalResult verifyLSTMShape(ONNXLSTMOp op, Value value,
+    ArrayRef<int64_t> expectedShape, StringRef operandName) {
+  if (isNoneValue(value))
+    return success();
+  const auto type = dyn_cast<RankedTensorType>(value.getType());
+  if (!type)
+    return success();
+  if (type.getRank() != static_cast<int64_t>(expectedShape.size()))
+    return op.emitOpError()
+           << operandName << " must have rank " << expectedShape.size();
+  for (auto [index, expected] : llvm::enumerate(expectedShape)) {
+    if (expected != ShapedType::kDynamic && !type.isDynamicDim(index) &&
+        type.getDimSize(index) != expected)
+      return op.emitOpError() << operandName << " dimension " << index
+                              << " must be " << expected;
+  }
+  return success();
+}
+
+} // namespace
+
+LogicalResult ONNXLSTMOp::verify() {
+  const StringRef direction = getDirection();
+  if (direction != "forward" && direction != "reverse" &&
+      direction != "bidirectional")
+    return emitOpError("direction attribute must be one of the strings: "
+                       "forward, reverse, and bidirectional");
+  if (getLayout() != 0 && getLayout() != 1)
+    return emitOpError("layout must be 0 or 1");
+  if (getInputForget() != 0 && getInputForget() != 1)
+    return emitOpError("input_forget must be 0 or 1");
+  if (getClipAttr() && getClipAttr().getValueAsDouble() < 0.0)
+    return emitOpError("clip must be non-negative");
+
+  if (const auto activations = getActivationsAttr())
+    for (Attribute activation : activations)
+      if (!isSupportedLSTMActivation(cast<StringAttr>(activation).getValue()))
+        return emitOpError("unsupported LSTM activation");
+
+  const auto xType = dyn_cast<RankedTensorType>(getX().getType());
+  const auto wType = dyn_cast<RankedTensorType>(getW().getType());
+  const auto rType = dyn_cast<RankedTensorType>(getR().getType());
+  if (xType && xType.getRank() != 3)
+    return emitOpError("The first input tensor must have rank 3");
+  if (wType && wType.getRank() != 3)
+    return emitOpError("The second input tensor must have rank 3");
+  if (rType && rType.getRank() != 3)
+    return emitOpError("The third input tensor must have rank 3");
+  if (!xType || !wType || !rType)
+    return success();
+
+  const int64_t directions = direction == "bidirectional" ? 2 : 1;
+  const int64_t batch = xType.getDimSize(getLayout() == 1 ? 0 : 1);
+  const int64_t input = xType.getDimSize(2);
+  const int64_t hidden = rType.getDimSize(2);
+  if (getHiddenSizeAttr() && hidden != ShapedType::kDynamic &&
+      getHiddenSize() != hidden)
+    return emitOpError("hidden_size must agree with R");
+  if (getHiddenSizeAttr() && getHiddenSize() <= 0)
+    return emitOpError("hidden_size must be positive");
+
+  if (failed(verifyLSTMShape(*this, getW(),
+          {directions,
+              hidden == ShapedType::kDynamic ? ShapedType::kDynamic
+                                             : 4 * hidden,
+              input},
+          "W")) ||
+      failed(verifyLSTMShape(*this, getR(),
+          {directions,
+              hidden == ShapedType::kDynamic ? ShapedType::kDynamic
+                                             : 4 * hidden,
+              hidden},
+          "R")))
+    return failure();
+
+  const SmallVector<int64_t> stateShape =
+      getLayout() == 1 ? SmallVector<int64_t>{batch, directions, hidden}
+                       : SmallVector<int64_t>{directions, batch, hidden};
+  if (failed(verifyLSTMShape(*this, getB(),
+          {directions, hidden == ShapedType::kDynamic ? ShapedType::kDynamic
+                                                      : 8 * hidden},
+          "B")) ||
+      failed(verifyLSTMShape(*this, getP(),
+          {directions, hidden == ShapedType::kDynamic ? ShapedType::kDynamic
+                                                      : 3 * hidden},
+          "P")) ||
+      failed(verifyLSTMShape(*this, getInitialH(), stateShape, "initial_h")) ||
+      failed(verifyLSTMShape(*this, getInitialC(), stateShape, "initial_c")))
+    return failure();
+
+  if (const auto lensType =
+          dyn_cast<RankedTensorType>(getSequenceLens().getType())) {
+    if (lensType.getRank() != 1)
+      return emitOpError("sequence_lens must be rank 1");
+    if (batch != ShapedType::kDynamic && !lensType.isDynamicDim(0) &&
+        lensType.getDimSize(0) != batch)
+      return emitOpError("sequence_lens length must equal the batch size");
+  }
+  return success();
+}
+
 LogicalResult ONNXLSTMOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
   if (!hasShapeAndRank(getX()) || !hasShapeAndRank(getW()) ||
-      !hasShapeAndRank(getR())) {
+      !hasShapeAndRank(getR()))
     return success();
-  }
   Type elementType =
       mlir::cast<RankedTensorType>(getX().getType()).getElementType();
   ONNXLSTMOpShapeHelper shapeHelper(getOperation(), {});

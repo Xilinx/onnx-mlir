@@ -24,6 +24,7 @@
 #define ONNX_MLIR_DECOMPOSE_H
 
 #include "mlir/IR/PatternMatch.h"
+#include "src/Dialect/ONNX/Transforms/DecomposeLSTM.hpp"
 
 namespace onnx_mlir {
 
@@ -51,10 +52,11 @@ void getDecomposeONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
     bool enableMatmulNBitsDecompose, bool enableGroupQueryAttentionDecompose,
     bool enableSplitToSliceDecompose, bool enableConcatFuse,
     bool enableLstmSeqDecompose = false, bool enableReduceL2Decompose = true,
-    bool disableGenericDecompositions = false, bool enableGatherToSlice = true,
-    bool enableHardSwishDecompose = true,
+    bool enableLstmDecompose = false, bool disableGenericDecompositions = false,
+    bool enableGatherToSlice = true, bool enableHardSwishDecompose = true,
     bool enableGroupQueryAttentionCacheSlicing = true,
-    bool enableDepthToSpaceDecompose = false);
+    bool enableDepthToSpaceDecompose = false,
+    LSTMDecompositionPredicate lstmDecompositionPredicate = {});
 
 // Decompose onnx.DepthToSpace (DCR and CRD) into Reshape/Transpose/Reshape
 void populateDecomposeDepthToSpacePattern(mlir::RewritePatternSet &patterns,
