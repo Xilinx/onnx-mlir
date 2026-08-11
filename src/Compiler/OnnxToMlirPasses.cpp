@@ -140,8 +140,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
   }
 
-  // Uplift Gather above LayerNorm with optional Q/DQ chains.
-  if (opts.enableUpliftGatherAboveLayerNorm)
+  // Hoist Gather above LayerNorm with optional Q/DQ chains.
+  if (opts.enableHoistGatherAboveLayerNorm)
     pm.addNestedPass<func::FuncOp>(
         onnx_mlir::createUpliftGatherAboveLayerNormPass());
 
