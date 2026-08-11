@@ -1,4 +1,5 @@
 // RUN: onnx-mlir-opt --shape-inference --constprop-onnx %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --shape-inference --constprop-onnx="max-loop-unroll-count=65" %s -split-input-file | FileCheck %s --check-prefix=MAX65
 
 //===----------------------------------------------------------------------===//
 // LoopUnroll: constant-trip-count loops with NoneType condition are physically
@@ -6,7 +7,7 @@
 //
 // Match conditions (see LoopUnroll in ConstProp.cpp):
 //   • Loop condition operand is NoneType (loop always runs exactly M times)
-//   • Trip count M is a dense scalar constant in (0, 64]
+//   • Trip count M is a dense scalar constant in (0, max-loop-unroll-count]
 //===----------------------------------------------------------------------===//
 
 // -----
@@ -99,8 +100,8 @@ func.func @test_loop_no_unroll_dynamic_trip(%trip: tensor<i64>) -> tensor<i64> {
 
 // -----
 
-// NOT unrolled: M > kMaxUnrollCount (64). The pattern refuses to unroll
-// excessively large trip counts to avoid IR explosion.
+// The default max-loop-unroll-count is 64, so this 65-trip loop is retained.
+// The MAX65 run raises the bound and verifies that the same loop folds.
 
 func.func @test_loop_no_unroll_too_large() -> tensor<i64> {
   %trip = onnx.Constant dense<65> : tensor<i64>
@@ -117,6 +118,11 @@ func.func @test_loop_no_unroll_too_large() -> tensor<i64> {
 }
 // CHECK-LABEL: @test_loop_no_unroll_too_large
 // CHECK:       onnx.Loop
+// MAX65-LABEL:  func.func @test_loop_no_unroll_too_large
+// MAX65-SAME:   () -> tensor<i64> {
+// MAX65-NOT:    onnx.Loop
+// MAX65:        [[RESULT:%.+]] = onnx.Constant dense<65> : tensor<i64>
+// MAX65:        onnx.Return [[RESULT]] : tensor<i64>
 
 // -----
 

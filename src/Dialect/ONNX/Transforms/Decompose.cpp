@@ -6253,9 +6253,11 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool enableMatmulNBitsDecompose, bool enableGroupQueryAttentionDecompose,
     bool enableSplitToSliceDecompose, bool enableConcatFuse,
     bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
-    bool disableGenericDecompositions, bool enableGatherToSlice,
-    bool enableHardSwishDecompose, bool enableDepthToSpaceDecompose,
-    bool enableGQAUint16CacheSlotRewrite, bool enableConvTransposeToResize) {
+    bool enableLstmDecompose, bool disableGenericDecompositions,
+    bool enableGatherToSlice, bool enableHardSwishDecompose,
+    bool enableDepthToSpaceDecompose, bool enableGQAUint16CacheSlotRewrite,
+    bool enableConvTransposeToResize,
+    LSTMDecompositionPredicate lstmDecompositionPredicate) {
   MLIRContext *context = patterns.getContext();
   if (!disableGenericDecompositions)
     populateWithGenerated(patterns);
@@ -6317,6 +6319,9 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     patterns.insert<SplitToSlicePattern>(context);
   if (enableLstmSeqDecompose)
     patterns.insert<DecomposeLSTMSeqUnrollPattern>(context, PatternBenefit(0));
+  if (enableLstmDecompose)
+    populateDecomposeLSTMPatterns(
+        patterns, PatternBenefit(1), std::move(lstmDecompositionPredicate));
 
   //   for (const auto &op : onnx_mlir::decomposeOpsInONNX) {
   //     if (op == "HardSwish") {
