@@ -111,7 +111,7 @@ bool enableConvOptPass;                    // onnx-mlir only
 bool enableXMCPasses;                      // onnx-mlir only
 bool enableMatmulAddFusion;                // onnx-mlir only
 bool enableMatmulToConv;                   // onnx-mlir only
-bool enableUpliftGatherAboveLayerNorm;     // onnx-mlir only
+bool enableHoistGatherAboveLayerNorm;      // onnx-mlir only
 bool disableConstantProp;                  // onnx-mlir only
 std::vector<std::string> extraLibPaths;    // onnx-mlir only
 std::vector<std::string> extraLibs;        // onnx-mlir only
@@ -888,12 +888,12 @@ static llvm::cl::opt<bool, true> enableMatmulToConvOpt("enable-matmul-to-conv",
     llvm::cl::location(enableMatmulToConv), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirOptions));
 
-static llvm::cl::opt<bool, true> enableUpliftGatherAboveLayerNormOpt(
-    "enable-uplift-gather-above-layernorm",
+static llvm::cl::opt<bool, true> enableHoistGatherAboveLayerNormOpt(
+    "enable-hoist-gather-above-layernorm",
     llvm::cl::desc(
-        "Enable uplift-gather-above-layernorm in the XMC pipeline. Default is "
+        "Enable hoist-gather-above-layernorm in the XMC pipeline. Default is "
         "false."),
-    llvm::cl::location(enableUpliftGatherAboveLayerNorm), llvm::cl::init(false),
+    llvm::cl::location(enableHoistGatherAboveLayerNorm), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirOptions));
 
 static llvm::cl::opt<bool, true> disableConstantPropOpt("disable-constant-prop",
