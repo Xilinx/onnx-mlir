@@ -1908,15 +1908,22 @@ struct TagMultiUseTransposes : public OpRewritePattern<ONNXTransposeOp> {
     if (numUses <= 1)
       return rewriter.notifyMatchFailure(op, "not multi-use");
 
-    TensorName operandName(op->getOperand(0));
-    if (!operandName)
-      return rewriter.notifyMatchFailure(op, "no operand name");
-    if (llvm::any_of(operandName.getTransforms(),
+    auto conflictVal = op->getOperand(0);
+    auto conflictName = TensorName(conflictVal);
+    while (!conflictName) {
+      auto *defOp = conflictVal.getDefiningOp();
+      if (!defOp || defOp->getNumResults() != 1 || defOp->getNumOperands() != 1)
+        return rewriter.notifyMatchFailure(op, "no operand name");
+
+      conflictVal = defOp->getOperand(0);
+      conflictName = TensorName(conflictVal);
+    }
+    if (llvm::any_of(conflictName.getTransforms(),
             [](Transform *trans) { return isa<MultiUseConflict>(trans); }))
       return rewriter.notifyMatchFailure(op, "already tagged");
 
-    operandName.push_back(std::make_unique<MultiUseConflict>());
-    return operandName.setTo(op->getOperand(0));
+    conflictName.push_back(std::make_unique<MultiUseConflict>());
+    return conflictName.setTo(conflictVal);
   }
 };
 
