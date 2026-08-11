@@ -73,8 +73,8 @@ bool gatherReducesTensorSize(ONNXGatherOp gatherOp, RankedTensorType dataTy) {
   return outElems < inElems;
 }
 
-int64_t adjustLayerNormAxisAfterGather(int64_t lnAxis, int64_t gatherAxis,
-    int64_t inputRank, int64_t outputRank) {
+int64_t adjustLayerNormAxisAfterGather(
+    int64_t lnAxis, int64_t gatherAxis, int64_t inputRank, int64_t outputRank) {
   int64_t normGAxis = normalizedAxis(gatherAxis, inputRank);
   int64_t normLNAxis = normalizedAxis(lnAxis, inputRank);
   int64_t rankDelta = inputRank - outputRank;
@@ -309,9 +309,9 @@ struct HoistGatherAboveLayerNormPattern
     RankedTensorType gatheredF32Ty =
         RankedTensorType::get(newGatherOutTy.getShape(), f32Type);
 
-    int64_t adjustedLnAxis = adjustLayerNormAxisAfterGather(
-        layerNormOp.getAxis(), gatherOp.getAxis(), lnRank,
-        newGatherOutTy.getRank());
+    int64_t adjustedLnAxis =
+        adjustLayerNormAxisAfterGather(layerNormOp.getAxis(),
+            gatherOp.getAxis(), lnRank, newGatherOutTy.getRank());
 
     Value lnInput;
     if (dq0) {
