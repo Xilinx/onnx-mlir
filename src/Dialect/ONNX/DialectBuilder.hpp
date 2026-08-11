@@ -184,6 +184,12 @@ struct OnnxBuilder : DialectBuilder {
   mlir::Value reverseSequence(mlir::Type outputType, mlir::Value input,
       mlir::Value sequenceLens, int64_t batchAxis, int64_t timeAxis) const;
 
+  // ONNXRotaryEmbeddingOp
+  mlir::Value rotaryEmbedding(mlir::Type outputType, mlir::Value X,
+      mlir::Value cosCache, mlir::Value sinCache, mlir::Value positionIds,
+      int64_t interleaved, mlir::IntegerAttr numHeads,
+      int64_t rotaryEmbeddingDim) const;
+
   // ONNXRoundOp
   mlir::Value round(mlir::Value input, bool scalarType = false) const;
 
