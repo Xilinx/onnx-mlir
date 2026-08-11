@@ -545,6 +545,7 @@ OpsWithCanonicalizer = [
     "Equal",
     "Flatten",
     "Gather",
+    "GatherElements",
     "GlobalAveragePool",
     "GlobalMaxPool",
     "Greater",
