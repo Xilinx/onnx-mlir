@@ -1611,6 +1611,81 @@ func.func @test_tag_multiuse_transpose_triple(%arg0: tensor<1x3x8x8xf32> {onnx.n
   %1 = "onnx.Transpose"(%0) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
   %2 = "onnx.Sigmoid"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
   %3 = "onnx.Tanh"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
-  %4 = "onnx.Exp"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
-  return %2, %3, %4 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+   %4 = "onnx.Exp"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+   return %2, %3, %4 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}
+
+// -----
+// Test: Multi-use transpose operand is Chain of unnamed unary ops (Cast, Sigmoid)
+// whose definer is Identity with ResultNames. The chain should walk back to find
+// the Identity's name and tag it with MultiUseConflict.
+// CHECK-LABEL: func @test_multiuse_transpose_cast_chain
+func.func @test_multiuse_transpose_cast_chain(%arg0: tensor<1x3x8x8xf32> {onnx.name = "input"}) -> (tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // Identity sets ResultNames = ["base"], Cast and Sigmoid don't.
+  // The chain walks back: Transpose operand (Sigmoid result, no name)
+  // → Cast result (no name) → Identity result (has name "base") → tags "base".
+  // CHECK: "onnx.Identity"
+  // CHECK-SAME: ResultNames = [
+  // CHECK-SAME: ["base", ["MultiUseConflict"]]]
+  // CHECK: "onnx.Transpose"
+  %0 = "onnx.Identity"(%arg0) {ResultNames = ["base"]} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Cast"(%0) {to = i64} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xi64>
+  %2 = "onnx.Cast"(%1) {to = f32} : (tensor<1x3x8x8xi64>) -> tensor<1x3x8x8xf32>
+  %3 = "onnx.Transpose"(%2) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %4 = "onnx.Sigmoid"(%3) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %5 = "onnx.Tanh"(%3) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %4, %5 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}
+
+// -----
+// Test: Multi-use transpose operand is 2-hop chain of unnamed unary ops.
+// chain walking finds the Identity's name and tags it.
+// CHECK-LABEL: func @test_multiuse_transpose_double_chain
+func.func @test_multiuse_transpose_double_chain(%arg0: tensor<1x3x8x8xf32> {onnx.name = "input"}) -> (tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // Identity sets ResultNames = ["base"], then two Casts, then Transpose.
+  // The chain walks back: Transpose operand (Cast result, no name)
+  // → Cast result (no name) → Identity result (has name "base") → tags "base".
+  // CHECK: "onnx.Identity"
+  // CHECK-SAME: ResultNames = [
+  // CHECK-SAME: ["base", ["MultiUseConflict"]]]
+  // CHECK: "onnx.Cast"
+  // CHECK: "onnx.Cast"
+  // CHECK: "onnx.Transpose"
+  %0 = "onnx.Identity"(%arg0) {ResultNames = ["base"]} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Cast"(%0) {to = i64} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xi64>
+  %2 = "onnx.Cast"(%1) {to = f32} : (tensor<1x3x8x8xi64>) -> tensor<1x3x8x8xf32>
+  %3 = "onnx.Transpose"(%2) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %4 = "onnx.Sigmoid"(%3) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %5 = "onnx.Tanh"(%3) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %4, %5 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}
+
+// -----
+// Test: Multi-use transpose operand is Add (>1 inputs) → chain walking stops
+// CHECK-LABEL: func @test_multiuse_transpose_add_operand
+func.func @test_multiuse_transpose_add_operand(%arg0: tensor<1x3x8x8xf32> {onnx.name = "in1"}, %arg1: tensor<1x3x8x8xf32> {onnx.name = "in2"}) -> (tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // Add has 2 operands, so getNumOperands() != 1 → chain stops, no tagging.
+  // CHECK-NOT: MultiUseConflict
+  // CHECK: "onnx.Add"
+  // CHECK: "onnx.Transpose"
+  %0 = "onnx.Add"(%arg0, %arg1) : (tensor<1x3x8x8xf32>, tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Transpose"(%0) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %2 = "onnx.Sigmoid"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %3 = "onnx.Tanh"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %2, %3 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}
+
+// -----
+// Test: Multi-use transpose operand is Split result (>1 outputs) → chain walking stops
+// CHECK-LABEL: func @test_multiuse_transpose_split_operand
+func.func @test_multiuse_transpose_split_operand(%arg0: tensor<1x6x8x8xf32> {onnx.name = "input"}, %shape: tensor<1xi64>) -> (tensor<1x3x8x8xf32>, tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // Split has 2 results, so getNumResults() != 1 → chain stops, no tagging.
+  // CHECK-NOT: MultiUseConflict
+  // CHECK: "onnx.Split"
+  // CHECK: "onnx.Transpose"
+  %0:2 = "onnx.Split"(%arg0, %shape) {axis = 1: si64} : (tensor<1x6x8x8xf32>, tensor<1xi64>) -> (tensor<1x3x8x8xf32>, tensor<1x3x8x8xf32>)
+  %1 = "onnx.Transpose"(%0#0) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %2 = "onnx.Sigmoid"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %3 = "onnx.Tanh"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %0#1, %2, %3 : tensor<1x3x8x8xf32>, tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
 }
