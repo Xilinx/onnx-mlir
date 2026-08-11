@@ -264,7 +264,7 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.profileIR = profileIR;
     opts.instrumentStage = instrumentStage;
     opts.enableXMCPasses = enableXMCPasses;
-    opts.enableUpliftGatherAboveLayerNorm = enableUpliftGatherAboveLayerNorm;
+    opts.enableHoistGatherAboveLayerNorm = enableHoistGatherAboveLayerNorm;
     opts.enableReshapeCanonicalization = enableReshapeCanonicalization;
     opts.enableGatherElementsTileCanonicalization =
         enableGatherElementsTileCanonicalization;
