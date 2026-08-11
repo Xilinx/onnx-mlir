@@ -214,8 +214,8 @@ LogicalResult ONNXLSTMOp::verify() {
   const StringRef direction = getDirection();
   if (direction != "forward" && direction != "reverse" &&
       direction != "bidirectional")
-    return emitOpError(
-        "direction attribute must be one of the strings: forward, reverse, and bidirectional");
+    return emitOpError("direction attribute must be one of the strings: "
+                       "forward, reverse, and bidirectional");
   if (getLayout() != 0 && getLayout() != 1)
     return emitOpError("layout must be 0 or 1");
   if (getInputForget() != 0 && getInputForget() != 1)
