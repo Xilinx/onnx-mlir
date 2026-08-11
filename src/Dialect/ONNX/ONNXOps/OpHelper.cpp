@@ -858,6 +858,17 @@ bool isScalarTensor(Value v) {
               (getRank(v.getType()) == 1 && getShape(v.getType())[0] == 1)));
 }
 
+bool isPerTensorQuant(ONNXQuantizeLinearOp q) {
+  return isScalarTensor(q.getYScale()) &&
+         (isNoneValue(q.getYZeroPoint()) || isScalarTensor(q.getYZeroPoint()));
+}
+
+bool isPerTensorDequant(ONNXDequantizeLinearOp dq) {
+  return isScalarTensor(dq.getXScale()) &&
+         (isNoneValue(dq.getXZeroPoint()) ||
+             isScalarTensor(dq.getXZeroPoint()));
+}
+
 IgnoreDiagnostic::IgnoreDiagnostic(DiagnosticEngine &diagEngine)
     : diagEngine(diagEngine) {
   id = diagEngine.registerHandler(

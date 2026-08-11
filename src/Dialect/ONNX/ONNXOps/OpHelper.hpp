@@ -367,6 +367,12 @@ int64_t mlirTypeToOnnxType(mlir::Type elemType);
 /// Check if a value is a scalar tensor.
 bool isScalarTensor(mlir::Value v);
 
+/// Returns true if QuantizeLinear uses per-tensor (scalar) scale and zero-point.
+bool isPerTensorQuant(mlir::ONNXQuantizeLinearOp q);
+
+/// Returns true if DequantizeLinear uses per-tensor (scalar) scale and zero-point.
+bool isPerTensorDequant(mlir::ONNXDequantizeLinearOp dq);
+
 class IgnoreDiagnostic {
 public:
   IgnoreDiagnostic(mlir::DiagnosticEngine &diagEngine);

@@ -121,7 +121,7 @@ void registerOMPasses(int optLevel) {
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createUpliftGatherAboveLayerNormPass();
+    return createHoistGatherAboveLayerNormPass();
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
