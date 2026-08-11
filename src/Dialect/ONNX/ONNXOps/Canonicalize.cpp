@@ -73,6 +73,9 @@ static bool enableQDQDataMovementCanonicalization = false;
 // Populated by configureExpandCanonicalization().
 static bool enableExpandCanonicalization = false;
 
+// Populated by configureCastDataMovementPatterns().
+static bool enableCastDataMovementPatterns = true;
+
 using namespace mlir;
 using namespace onnx_mlir;
 
@@ -4799,8 +4802,10 @@ void ONNXBatchNormalizationV9Op::getCanonicalizationPatterns(
 void ONNXCastOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<CastEliminationPattern>(context);
-  result.insert<SwapCastConcatPattern>(context);
-  result.insert<SwapCastSlicePattern>(context);
+  if (enableCastDataMovementPatterns) {
+    result.insert<SwapCastConcatPattern>(context);
+    result.insert<SwapCastSlicePattern>(context);
+  }
   result.insert<FoldConsecutiveCastPattern>(context);
 }
 
@@ -5305,4 +5310,8 @@ bool onnx_mlir::isQDQDataMovementCanonicalizationEnabled() {
 
 void onnx_mlir::configureExpandCanonicalization(bool enable) {
   enableExpandCanonicalization = enable;
+}
+
+void onnx_mlir::configureCastDataMovementPatterns(bool enable) {
+  enableCastDataMovementPatterns = enable;
 }

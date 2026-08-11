@@ -57,6 +57,7 @@ bool enableReshapeCanonicalization;                    // common for both
 bool enablePositiveAxisCanonicalization;               // common for both
 bool enableExpandCanonicalization;                     // common for both
 bool enableReduceKeepdimsCanonicalization;             // common for both
+bool enableCastDataMovementPatterns;                   // common for both
 bool enableXFEONNXOpsetVerifier;                       // common for both
 bool enableSafeCodeGen;                                // common for both
 bool disableMemRefPrefetch;                            // common for both
@@ -387,6 +388,14 @@ static llvm::cl::opt<bool, true> enableReduceKeepdimsCanonicalizationOpt(
         "keepdims=1 + Reshape (default=false, i.e. the rewrite is disabled)."),
     llvm::cl::location(enableReduceKeepdimsCanonicalization),
     llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableCastDataMovementPatternsOpt(
+    "enable-cast-data-movement-patterns",
+    llvm::cl::desc(
+        "Enable canonicalization that moves Cast through Concat and Slice "
+        "(default=true)."),
+    llvm::cl::location(enableCastDataMovementPatterns), llvm::cl::init(true),
+    llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true> enableXFEONNXOpsetVerifierOpt(
     "enable-xfe-onnx-opset-verifier",
