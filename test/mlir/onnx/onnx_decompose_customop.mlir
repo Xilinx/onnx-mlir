@@ -1152,30 +1152,31 @@ func.func @gqa_local_window_size_minus_one_decomposes(
 
 // -----
 
+// attention span is 257 here, so 256 is rejected
 func.func @gqa_local_window_size_rejected(
   %q: tensor<1x1x3072xf32>,
   %k: tensor<1x1x1536xf32>,
   %v: tensor<1x1x1536xf32>,
   %past_k: tensor<1x16x256x96xf32>,
-  %past_v: tensor<1x16x256x96xf32>
+  %past_v: tensor<1x16x256x96xf32>,
+  %seqlens: tensor<1x1xi32>,
+  %total_seqlen: tensor<i32>
 ) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>) {
-  %total_seqlen = "onnx.Constant"() {value = dense<257> : tensor<i32>} : () -> tensor<i32>
-  %seqlens = "onnx.Constant"() {value = dense<256> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
   %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
     domain_name = "com.microsoft",
     function_name = "GroupQueryAttention",
     kv_num_heads = 16 : si64,
-    local_window_size = 128 : si64,
+    local_window_size = 256 : si64,
     num_heads = 32 : si64
   } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
   return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
 }
 
 // CHECK-LABEL: func.func @gqa_local_window_size_rejected
-// CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+// CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>, %[[SEQLENS:.*]]: tensor<1x1xi32>, %[[TOTAL_SEQLEN:.*]]: tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
 // CHECK-NOT:   "onnx.Attention"
 // CHECK:       %[[GQA:.*]]:3 = "onnx.Custom"
-// CHECK-SAME:      local_window_size = 128 : si64
+// CHECK-SAME:      local_window_size = 256 : si64
 // CHECK:       return %[[GQA]]#0, %[[GQA]]#1, %[[GQA]]#2 : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
 
 // -----
@@ -1264,31 +1265,36 @@ func.func @gqa_local_window_size_zero_rejected(
 
 // -----
 
-// In preallocated-cache mode the attention span is the cache capacity (512),
-// not past + current, so a window of exactly 512 must still be accepted.
+// preallocated mode has attention span of only 256, so this is accepted
+// compare with gqa_local_window_size_rejected
+// test also with runtime seqlens + total_seqlen
 func.func @gqa_local_window_size_unreachable_preallocated_decode(
   %q: tensor<1x1x3072xf32>,
   %k: tensor<1x1x1536xf32>,
   %v: tensor<1x1x1536xf32>,
-  %past_k: tensor<1x16x512x96xf32>,
-  %past_v: tensor<1x16x512x96xf32>
-) -> (tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>) {
-  %total_seqlen = "onnx.Constant"() {value = dense<512> : tensor<i32>} : () -> tensor<i32>
-  %seqlens = "onnx.Constant"() {value = dense<255> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>,
+  %seqlens: tensor<1x1xi32>,
+  %total_seqlen: tensor<i32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>) {
   %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
     domain_name = "com.microsoft",
     function_name = "GroupQueryAttention",
     kv_num_heads = 16 : si64,
-    local_window_size = 512 : si64,
+    local_window_size = 256 : si64,
     num_heads = 32 : si64
-  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>)
-  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>
 }
 
 // CHECK-LABEL: func.func @gqa_local_window_size_unreachable_preallocated_decode
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x512xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x512xf32>
+// CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>, %[[SEQLENS:.*]]: tensor<1x1xi32>, %[[TOTAL_SEQLEN:.*]]: tensor<i32>)
+// CHECK:       "onnx.Cast"(%[[SEQLENS]]) {saturate = 1 : si64, to = i64} : (tensor<1x1xi32>) -> tensor<1x1xi64>
+// CHECK:       %[[VALID_LEN:.*]] = "onnx.Add"({{.*}}) : (tensor<1x1x1x1xi64>, tensor<1xi64>) -> tensor<1x1x1x1xi64>
+// CHECK:       %[[KEY_VALID:.*]] = "onnx.Less"({{.*}}, %[[VALID_LEN]]) : (tensor<1x1x1x256xi64>, tensor<1x1x1x1xi64>) -> tensor<1x1x1x256xi1>
+// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x256xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x256xf32>
 // CHECK:       %[[Y:.*]], %[[PK_NONE:.*]], %[[PV_NONE:.*]], %[[QK:.*]] = "onnx.Attention"({{.*}}, %[[MASK]], {{.*}})
-// CHECK:       return %[[Y]], {{.*}} : tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>
+// CHECK:       return %[[Y]], {{.*}} : tensor<1x1x3072xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>
 
 // -----
 

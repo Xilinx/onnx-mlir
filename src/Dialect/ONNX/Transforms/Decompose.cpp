@@ -4408,8 +4408,6 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return failure();
     const int64_t pastSeqLen = *pastSeqLenOr;
 
-    // Determine the attention span before creating any op: the greedy rewriter
-    // does not roll back ops created by a pattern that then fails to match.
     const bool packedQKV = isNoneValue(key) && isNoneValue(value);
     // Packed QKV is split below into q/k/v of the query's sequence length.
     const auto kvSeqLenOr =
