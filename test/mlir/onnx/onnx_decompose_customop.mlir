@@ -775,6 +775,44 @@ func.func @gqa_rotary_embedding_with_position_ids(
 
 // -----
 
+// GroupQueryAttention has no rotary_embedding_dim attribute, so a partial
+// rotation is only visible in the narrower cos/sin caches: 36 instead of the
+// 48 a fully rotated head_size of 96 would need. The emitted RotaryEmbedding
+// must carry the recovered dimension, otherwise it claims to rotate the whole
+// head.
+func.func @gqa_rotary_embedding_partial_rotation(
+  %q: tensor<1x128x3072xf32>,
+  %k: tensor<1x128x1536xf32>,
+  %v: tensor<1x128x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>,
+  %cos_cache: tensor<4096x36xf32>,
+  %sin_cache: tensor<4096x36xf32>,
+  %pos_ids: tensor<1x128xi64>
+) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>)
+ {
+  %total_seqlen = "onnx.Constant"() {value = dense<256> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<255> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen, %cos_cache, %sin_cache, %pos_ids) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    num_heads = 32 : si64,
+    do_rotary = 1 : si64
+  } : (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>, tensor<4096x36xf32>, tensor<4096x36xf32>, tensor<1x128xi64>)
+    -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>
+}
+
+// CHECK-LABEL: func.func @gqa_rotary_embedding_partial_rotation
+// CHECK-SAME:  (%[[Q:.*]]: tensor<1x128x3072xf32>, %[[K:.*]]: tensor<1x128x1536xf32>, %[[V:.*]]: tensor<1x128x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>, %[[COS:.*]]: tensor<4096x36xf32>, %[[SIN:.*]]: tensor<4096x36xf32>, %[[POS:.*]]: tensor<1x128xi64>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>)
+// CHECK:       %[[RQ:.*]] = "onnx.RotaryEmbedding"(%[[Q]], %[[COS]], %[[SIN]], %[[POS]]) {interleaved = 0 : si64, num_heads = 32 : si64, rotary_embedding_dim = 72 : si64} : (tensor<1x128x3072xf32>, tensor<4096x36xf32>, tensor<4096x36xf32>, tensor<1x128xi64>) -> tensor<1x128x3072xf32>
+// CHECK:       %[[RK:.*]] = "onnx.RotaryEmbedding"(%[[K]], %[[COS]], %[[SIN]], %[[POS]]) {interleaved = 0 : si64, num_heads = 16 : si64, rotary_embedding_dim = 72 : si64} : (tensor<1x128x1536xf32>, tensor<4096x36xf32>, tensor<4096x36xf32>, tensor<1x128xi64>) -> tensor<1x128x1536xf32>
+// CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[RQ]], %[[RK]], %[[V]], {{.*}}, %[[PAST_K]], %[[PAST_V]])
+// CHECK:       return %[[Y]], %[[PK]], %[[PV]] : tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>
+
+// -----
+
 func.func @gqa_with_attention_bias_and_qk_output(
   %q: tensor<1x128x3072xf32>,
   %k: tensor<1x128x1536xf32>,

@@ -4472,8 +4472,6 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
 
     // If do_rotary = 1, query and key need to be passed through a rotary
     // embedding op
-    ONNXRotaryEmbeddingOp ropeQuery;
-    ONNXRotaryEmbeddingOp ropeKey;
     if (doRotary && doRotary.getSInt() > 0) {
       assert(numIn >= 9 && !isNoneValue(cosCache) && !isNoneValue(sinCache));
       if (numIn < 10 || isNoneValue(positionIds)) {
@@ -4494,10 +4492,27 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
         rotaryInterleaved = rotaryInterleavedAttr.getSInt();
       }
 
-      ropeQuery = rewriter.create<ONNXRotaryEmbeddingOp>(loc, query.getType(),
-          query, cosCache, sinCache, positionIds, rotaryInterleaved, qNumHeads);
-      ropeKey = rewriter.create<ONNXRotaryEmbeddingOp>(loc, key.getType(), key,
-          cosCache, sinCache, positionIds, rotaryInterleaved, kvNumHeads);
+      // derive rotary_embedding_dim from the cos cache width
+      const auto cosCacheType = dyn_cast<RankedTensorType>(cosCache.getType());
+      if (!cosCacheType || cosCacheType.getRank() == 0 ||
+          cosCacheType.isDynamicDim(cosCacheType.getRank() - 1))
+        return rewriter.notifyMatchFailure(customOp,
+            "the rotary dimension is unknown because the cos cache has no "
+            "static width");
+      const int64_t rotaryDim = 2 * cosCacheType.getShape().back();
+      if (rotaryDim > headSize)
+        return rewriter.notifyMatchFailure(
+            customOp, "the cos cache is too wide to rotate a single head");
+      // encode head_size as 0
+      const int64_t rotaryEmbeddingDim = rotaryDim == headSize ? 0 : rotaryDim;
+
+      OnnxBuilder create(rewriter, loc);
+      Value ropeQuery =
+          create.rotaryEmbedding(query.getType(), query, cosCache, sinCache,
+              positionIds, rotaryInterleaved, qNumHeads, rotaryEmbeddingDim);
+      Value ropeKey =
+          create.rotaryEmbedding(key.getType(), key, cosCache, sinCache,
+              positionIds, rotaryInterleaved, kvNumHeads, rotaryEmbeddingDim);
 
       toCheck.push_back(ropeQuery);
       toCheck.push_back(ropeKey);
