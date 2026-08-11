@@ -18,7 +18,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
 
@@ -175,7 +174,7 @@ private:
       return;
     [[maybe_unused]] const auto type = cast<RankedTensorType>(value.getType());
     assert(type.getShape() == expectedShape &&
-           "LSTM optional operand does not have its specification shape");
+           "LSTM operand must have its specification shape");
   }
 
   static double activationParameter(
@@ -232,30 +231,13 @@ private:
       return onnx.add(onnx.mul(type, input, a), b);
     }
     if (activation.name == "ScaledTanh") {
-      Value b =
-          scalarFloat(onnx, rewriter, type.getElementType(), activation.beta);
       Value a =
           scalarFloat(onnx, rewriter, type.getElementType(), activation.alpha);
+      Value b =
+          scalarFloat(onnx, rewriter, type.getElementType(), activation.beta);
       Value scaled = onnx.mul(type, input, b);
       Value tanh = rewriter.create<ONNXTanhOp>(loc, type, scaled);
       return onnx.mul(type, tanh, a);
-    }
-    SmallVector<NamedAttribute> attrs;
-    if (activation.name == "LeakyRelu" ||
-        activation.name == "ThresholdedRelu" || activation.name == "Elu")
-      attrs.push_back(rewriter.getNamedAttr(
-          "alpha", rewriter.getF32FloatAttr(activation.alpha)));
-    if (activation.name == "HardSigmoid") {
-      attrs.push_back(rewriter.getNamedAttr(
-          "alpha", rewriter.getF32FloatAttr(activation.alpha)));
-      attrs.push_back(rewriter.getNamedAttr(
-          "beta", rewriter.getF32FloatAttr(activation.beta)));
-    }
-    if (activation.name == "Selu") {
-      attrs.push_back(rewriter.getNamedAttr(
-          "alpha", rewriter.getF32FloatAttr(activation.alpha)));
-      attrs.push_back(rewriter.getNamedAttr(
-          "gamma", rewriter.getF32FloatAttr(activation.beta)));
     }
     if (activation.name == "Relu")
       return rewriter.create<ONNXReluOp>(loc, type, input);
@@ -263,21 +245,42 @@ private:
       return rewriter.create<ONNXTanhOp>(loc, type, input);
     if (activation.name == "Sigmoid")
       return rewriter.create<ONNXSigmoidOp>(loc, type, input);
-    if (activation.name == "LeakyRelu")
+    if (activation.name == "LeakyRelu") {
+      SmallVector<NamedAttribute> attrs{rewriter.getNamedAttr(
+          "alpha", rewriter.getF32FloatAttr(activation.alpha))};
       return rewriter.create<ONNXLeakyReluOp>(loc, type, input, attrs);
-    if (activation.name == "ThresholdedRelu")
+    }
+    if (activation.name == "ThresholdedRelu") {
+      SmallVector<NamedAttribute> attrs{rewriter.getNamedAttr(
+          "alpha", rewriter.getF32FloatAttr(activation.alpha))};
       return rewriter.create<ONNXThresholdedReluOp>(loc, type, input, attrs);
-    if (activation.name == "HardSigmoid")
+    }
+    if (activation.name == "HardSigmoid") {
+      SmallVector<NamedAttribute> attrs{
+          rewriter.getNamedAttr(
+              "alpha", rewriter.getF32FloatAttr(activation.alpha)),
+          rewriter.getNamedAttr(
+              "beta", rewriter.getF32FloatAttr(activation.beta))};
       return rewriter.create<ONNXHardSigmoidOp>(loc, type, input, attrs);
-    if (activation.name == "Elu")
+    }
+    if (activation.name == "Elu") {
+      SmallVector<NamedAttribute> attrs{rewriter.getNamedAttr(
+          "alpha", rewriter.getF32FloatAttr(activation.alpha))};
       return rewriter.create<ONNXEluOp>(loc, type, input, attrs);
-    if (activation.name == "Selu")
+    }
+    if (activation.name == "Selu") {
+      SmallVector<NamedAttribute> attrs{
+          rewriter.getNamedAttr(
+              "alpha", rewriter.getF32FloatAttr(activation.alpha)),
+          rewriter.getNamedAttr(
+              "gamma", rewriter.getF32FloatAttr(activation.beta))};
       return rewriter.create<ONNXSeluOp>(loc, type, input, attrs);
+    }
     if (activation.name == "Softsign")
       return rewriter.create<ONNXSoftsignOp>(loc, type, input);
     if (activation.name == "Softplus")
       return rewriter.create<ONNXSoftplusOp>(loc, type, input);
-    llvm_unreachable("unsupported LSTM activation");
+    return input;
   }
 
   static ClipBounds getClipBounds(OnnxBuilder &onnx, PatternRewriter &rewriter,
@@ -580,20 +583,23 @@ private:
       return rewriter.notifyMatchFailure(
           op, "static ranked X, W and R required");
     assert(xType.getRank() == 3 && wType.getRank() == 3 &&
-           rType.getRank() == 3 &&
-           "ONNX LSTM X, W, and R must be rank-3 tensors");
+           rType.getRank() == 3 && "LSTM X, W and R must be rank-3 tensors");
 
     const StringRef direction = op.getDirection();
     assert((direction == "forward" || direction == "reverse" ||
                direction == "bidirectional") &&
-           "ONNX LSTM direction must be forward, reverse, or bidirectional");
+           "LSTM direction must be valid");
+    assert((op.getLayout() == 0 || op.getLayout() == 1) &&
+           "LSTM layout must be valid");
+    assert((op.getInputForget() == 0 || op.getInputForget() == 1) &&
+           "LSTM input_forget must be valid");
     const bool layoutOne = op.getLayout() == 1;
     const int64_t sequence = xType.getDimSize(layoutOne ? 1 : 0);
     const int64_t batch = xType.getDimSize(layoutOne ? 0 : 1);
     const int64_t input = xType.getDimSize(2);
     const int64_t hidden = rType.getDimSize(2);
     assert((!op.getHiddenSizeAttr() || op.getHiddenSize() == hidden) &&
-           "ONNX LSTM hidden_size must agree with R");
+           "LSTM hidden_size must agree with R");
     const int64_t directions = direction == "bidirectional" ? 2 : 1;
     if (sequence < 1)
       return rewriter.notifyMatchFailure(op, "unsupported static LSTM shape");
@@ -601,20 +607,30 @@ private:
            wType.getDimSize(1) == 4 * hidden && wType.getDimSize(2) == input &&
            rType.getDimSize(0) == directions &&
            rType.getDimSize(1) == 4 * hidden && rType.getDimSize(2) == hidden &&
-           "ONNX LSTM W and R do not have their specification shapes");
+           "LSTM W and R must have their specification shapes");
 
     const SmallVector<int64_t> stateShape =
         layoutOne ? SmallVector<int64_t>{batch, directions, hidden}
                   : SmallVector<int64_t>{directions, batch, hidden};
     if (!hasStaticShape(op.getB()) || !hasStaticShape(op.getP()) ||
-        !hasStaticShape(op.getInitialH()) || !hasStaticShape(op.getInitialC()))
+        !hasStaticShape(op.getInitialH()) ||
+        !hasStaticShape(op.getInitialC()) ||
+        !hasStaticShape(op.getSequenceLens()))
       return rewriter.notifyMatchFailure(
           op, "optional LSTM operands must have static standard shapes");
     assertStandardShape(op.getB(), {directions, 8 * hidden});
     assertStandardShape(op.getP(), {directions, 3 * hidden});
     assertStandardShape(op.getInitialH(), stateShape);
     assertStandardShape(op.getInitialC(), stateShape);
-
+    if (!isNoneValue(op.getSequenceLens())) {
+      [[maybe_unused]] const auto lensType =
+          cast<RankedTensorType>(op.getSequenceLens().getType());
+      assert(lensType.getRank() == 1 && lensType.getDimSize(0) == batch &&
+             lensType.getElementType().isInteger(32) &&
+             "LSTM sequence_lens must be tensor<batchxi32>");
+    }
+    assert((!op.getClipAttr() || op.getClipAttr().getValueAsDouble() >= 0.0) &&
+           "LSTM clip must be non-negative");
     const Type elementType = xType.getElementType();
     const auto xCanonicalType =
         RankedTensorType::get({sequence, batch, input}, elementType);

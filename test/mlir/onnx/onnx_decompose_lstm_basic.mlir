@@ -2,7 +2,7 @@
 // Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
 
 // RUN: onnx-mlir-opt --decompose-onnx %s -split-input-file | FileCheck %s --check-prefix=OFF
-// RUN: onnx-mlir-opt --decompose-onnx="enable-lstm-decomposition" %s -split-input-file | FileCheck %s --check-prefixes=ON,DIRECT,LOOP,REVERSE,BIDIR,ACT
+// RUN: onnx-mlir-opt --decompose-onnx="enable-lstm-decomposition" %s -split-input-file | FileCheck %s --check-prefixes=ON,DIRECT,LOOP,REVERSE,BIDIR,ACT,DEFAULTS,REVERSE-LENS
 
 // Direct single-step expansion. Missing B, initial states, and P exercise typed
 // zero synthesis; omitted Y_h/Y_c exercise optional output preservation.
@@ -533,3 +533,63 @@ func.func @dynamic_unchanged(%x: tensor<?x1x2xf32>,
 }
 // ON-LABEL: @dynamic_unchanged
 // ON: "onnx.LSTM"
+
+// -----
+
+func.func @default_direction_with_clip(%x: tensor<1x1x2xf32>,
+    %w: tensor<1x12x2xf32>, %r: tensor<1x12x3xf32>)
+    -> tensor<1x1x1x3xf32> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %y, %yh, %yc = "onnx.LSTM"(%x, %w, %r, %none, %none, %none, %none, %none)
+      {clip = 2.0 : f32, hidden_size = 3 : si64}
+      : (tensor<1x1x2xf32>, tensor<1x12x2xf32>, tensor<1x12x3xf32>,
+         none, none, none, none, none) -> (tensor<1x1x1x3xf32>, none, none)
+  return %y : tensor<1x1x1x3xf32>
+}
+// DEFAULTS-LABEL: @default_direction_with_clip
+// DEFAULTS-NOT: "onnx.LSTM"
+// DEFAULTS-DAG: [[CLIP_MAX:%.+]] = onnx.Constant dense<2.000000e+00> : tensor<f32>
+// DEFAULTS-DAG: [[CLIP_MIN:%.+]] = onnx.Constant dense<-2.000000e+00> : tensor<f32>
+// DEFAULTS-DAG: [[WT:%.+]] = "onnx.Transpose"({{.*}}) {perm = [1, 0]} : (tensor<12x2xf32>) -> tensor<2x12xf32>
+// DEFAULTS-DAG: [[RT:%.+]] = "onnx.Transpose"({{.*}}) {perm = [1, 0]} : (tensor<12x3xf32>) -> tensor<3x12xf32>
+// DEFAULTS: [[INPUT_PROJECTION:%.+]] = "onnx.MatMul"({{.*}}, [[WT]]) : (tensor<1x2xf32>, tensor<2x12xf32>) -> tensor<1x12xf32>
+// DEFAULTS: [[RECURRENT_PROJECTION:%.+]] = "onnx.MatMul"({{.*}}, [[RT]]) : (tensor<1x3xf32>, tensor<3x12xf32>) -> tensor<1x12xf32>
+// DEFAULTS: [[PACKED:%.+]] = "onnx.Add"({{.*}}, [[RECURRENT_PROJECTION]]) : (tensor<1x12xf32>, tensor<1x12xf32>) -> tensor<1x12xf32>
+// DEFAULTS: "onnx.Slice"([[PACKED]]{{.*}}) : (tensor<1x12xf32>{{.*}}) -> tensor<1x3xf32>
+// DEFAULTS: [[INPUT_CLIP:%.+]] = "onnx.Clip"({{.*}}, [[CLIP_MIN]], [[CLIP_MAX]]) : (tensor<1x3xf32>, tensor<f32>, tensor<f32>) -> tensor<1x3xf32>
+// DEFAULTS: "onnx.Sigmoid"([[INPUT_CLIP]]) : (tensor<1x3xf32>) -> tensor<1x3xf32>
+// DEFAULTS: "onnx.Clip"({{.*}}, [[CLIP_MIN]], [[CLIP_MAX]]) : (tensor<1x3xf32>, tensor<f32>, tensor<f32>) -> tensor<1x3xf32>
+// DEFAULTS: "onnx.Tanh"({{.*}}) : (tensor<1x3xf32>) -> tensor<1x3xf32>
+// DEFAULTS: return {{.*}} : tensor<1x1x1x3xf32>
+
+// -----
+
+func.func @reverse_sequence_lens(%x: tensor<4x2x2xf32>,
+    %w: tensor<1x12x2xf32>, %r: tensor<1x12x3xf32>, %lens: tensor<2xi32>)
+    -> tensor<4x1x2x3xf32> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %y, %yh, %yc = "onnx.LSTM"(%x, %w, %r, %none, %lens, %none, %none, %none)
+      {direction = "reverse", hidden_size = 3 : si64, layout = 0 : si64}
+      : (tensor<4x2x2xf32>, tensor<1x12x2xf32>, tensor<1x12x3xf32>,
+         none, tensor<2xi32>, none, none, none)
+      -> (tensor<4x1x2x3xf32>, none, none)
+  return %y : tensor<4x1x2x3xf32>
+}
+// REVERSE-LENS-LABEL: @reverse_sequence_lens
+// REVERSE-LENS-NOT: "onnx.LSTM"
+// REVERSE-LENS-DAG: [[PROJECTED:%.+]] = "onnx.Reshape"({{.*}} : (tensor<8x12xf32>, tensor<3xi64>) -> tensor<4x2x12xf32>
+// REVERSE-LENS-DAG: [[BATCH_MAJOR:%.+]] = "onnx.Transpose"([[PROJECTED]]) {perm = [1, 0, 2]} : (tensor<4x2x12xf32>) -> tensor<2x4x12xf32>
+// REVERSE-LENS-DAG: [[INITIAL_MASK:%.+]] = "onnx.Less"({{.*}}, {{.*}}) : (tensor<i32>, tensor<2xi32>) -> tensor<2xi1>
+// REVERSE-LENS: [[LOOP:%.+]]:3 = "onnx.Loop"({{.*}}) ({
+// REVERSE-LENS: ^bb0([[ITER:%.+]]: tensor<i64>, {{.*}}):
+// REVERSE-LENS: [[ITER_I32:%.+]] = "onnx.Cast"([[ITER]]) {{.*}} -> tensor<i32>
+// REVERSE-LENS: [[BATCH_INDEX:%.+]] = "onnx.Max"({{.*}}) : (tensor<2xi32>, tensor<i32>) -> tensor<2xi32>
+// REVERSE-LENS: [[EXPANDED_INDEX:%.+]] = "onnx.Expand"({{.*}}) : (tensor<2x1x1xi32>, tensor<3xi64>) -> tensor<2x1x12xi32>
+// REVERSE-LENS: [[SELECTED:%.+]] = "onnx.GatherElements"([[BATCH_MAJOR]], [[EXPANDED_INDEX]]) {axis = 1 : si64} : (tensor<2x4x12xf32>, tensor<2x1x12xi32>) -> tensor<2x1x12xf32>
+// REVERSE-LENS: "onnx.Squeeze"([[SELECTED]]{{.*}}) : (tensor<2x1x12xf32>, tensor<1xi64>) -> tensor<2x12xf32>
+// REVERSE-LENS: onnx.Yield {{.*}}
+// REVERSE-LENS: }) {{.*}} -> (tensor<2x3xf32>, tensor<2x3xf32>, tensor<4x2x3xf32>)
+// REVERSE-LENS: [[LENS_I64:%.+]] = "onnx.Cast"({{.*}}) {{.*}} -> tensor<2xi64>
+// REVERSE-LENS: [[RESTORED:%.+]] = "onnx.ReverseSequence"([[LOOP]]#2, [[LENS_I64]]) {batch_axis = 1 : si64, time_axis = 0 : si64} : (tensor<4x2x3xf32>, tensor<2xi64>) -> tensor<4x2x3xf32>
+// REVERSE-LENS: "onnx.Unsqueeze"([[RESTORED]]{{.*}}) : (tensor<4x2x3xf32>, tensor<1xi64>) -> tensor<4x1x2x3xf32>
+

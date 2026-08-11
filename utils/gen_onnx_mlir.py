@@ -625,6 +625,7 @@ OpsWithVerifier = [
     "Less",
     "LessOrEqual",
     "LogSoftmax",
+    "LSTM",
     "Max",
     "MatMulInteger",
     "Mean",

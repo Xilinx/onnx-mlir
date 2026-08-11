@@ -3985,6 +3985,7 @@ def ONNXLRNOp:ONNX_Op<"LRN",
 def ONNXLSTMOp:ONNX_Op<"LSTM",
   [Pure, OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
   let hasCanonicalizer = 1;
+  let hasVerifier = 1;
   let summary = "ONNX LSTM operation";
   let description = [{
   Computes an one-layer LSTM. This operator is usually supported via some
@@ -12057,4 +12058,3 @@ def ONNXMomentumOp:ONNX_Op<"Momentum",
     }
   }];
 }
-
