@@ -59,6 +59,7 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
       opts.enablePositiveAxisCanonicalization);
   configureExpandCanonicalization(opts.enableExpandCanonicalization);
   configureKeepdimsCanonicalization(opts.enableKeepdimsCanonicalization);
+  configureCastDataMovementPatterns(opts.enableCastDataMovementPatterns);
   configureGatherElementsTileCanonicalization(
       opts.enableGatherElementsTileCanonicalization);
   configureQDQDataMovementCanonicalization(

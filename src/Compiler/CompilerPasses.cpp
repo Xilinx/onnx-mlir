@@ -72,6 +72,7 @@ void configurePasses() {
   configurePositiveAxisCanonicalization(enablePositiveAxisCanonicalization);
   configureKeepdimsCanonicalization(enableKeepdimsCanonicalization);
   configureExpandCanonicalization(enableExpandCanonicalization);
+  configureCastDataMovementPatterns(enableCastDataMovementPatterns);
   configureGatherElementsTileCanonicalization(
       enableGatherElementsTileCanonicalization);
   configureQDQDataMovementCanonicalization(
@@ -284,6 +285,7 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
         enablePositiveAxisCanonicalization;
     opts.enableExpandCanonicalization = enableExpandCanonicalization;
     opts.enableKeepdimsCanonicalization = enableKeepdimsCanonicalization;
+    opts.enableCastDataMovementPatterns = enableCastDataMovementPatterns;
     opts.enableGatherElementsTileCanonicalization =
         enableGatherElementsTileCanonicalization;
     opts.enableXFEONNXOpsetVerifier = enableXFEONNXOpsetVerifier;
