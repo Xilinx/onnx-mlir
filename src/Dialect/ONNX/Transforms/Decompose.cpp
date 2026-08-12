@@ -504,15 +504,19 @@ ArrayAttr getPadsConvTranspose(
   return rewriter.getI64ArrayAttr(newPads);
 }
 
+// True if `attr` is absent (i.e. the op's default applies) or every integer
+// element equals `value`. Shared by the stride/dilation/pad-style attribute
+// checks, which only differ in the value they test against.
+bool allArrayElementsEqual(ArrayAttr attr, int64_t value) {
+  if (attr == nullptr)
+    return true;
+  return llvm::all_of(attr.getAsRange<IntegerAttr>(),
+      [value](IntegerAttr elt) { return elt.getInt() == value; });
+}
+
 // Check if strides is unit strides.
 bool hasUnitStrides(ArrayAttr strides) {
-  // Default is unit strides
-  if (strides == nullptr)
-    return true;
-  SmallVector<int64_t, 3> vStrides;
-  for (unsigned int i = 0; i < ArrayAttrSize(strides); ++i)
-    vStrides.emplace_back(ArrayAttrIntVal(strides, i));
-  return llvm::all_of(vStrides, [](int64_t s) { return s == 1; });
+  return allArrayElementsEqual(strides, 1);
 }
 
 // Check if v's shape N x C x D1 x D2 ... x Dn has static dims D1 ... Dn.
@@ -655,59 +659,56 @@ Value replaceSequenceAt(
       sequenceAtResult.getType(), rawResult, create.constantInt64(axisInt));
 }
 
-// Read a scalar (single-element) constant Value into a double. Returns false if
-// `v` is absent/None or not a single-element constant.
-static bool readScalarConstant(Value v, double &out) {
-  if (!v || mlir::isa<NoneType>(v.getType()))
-    return false;
-  ElementsAttr attr = getElementAttributeFromONNXValue(v);
-  if (!attr || attr.getNumElements() != 1)
-    return false;
-  out = getScalarValue<double>(attr, attr.getElementType());
-  return true;
-}
+// The underlying constant and per-tensor dequantization params obtained by
+// peeling an optional DequantizeLinear (scale=1, zeroPoint=0 when not
+// quantized).
+struct DequantInfo {
+  Value raw;
+  double scale;
+  double zeroPoint;
+};
 
-// Peel an optional per-tensor DequantizeLinear off `v`. On success, `raw` is
-// the underlying constant Value and `scale`/`zp` are the
-// dequantization params (1/0 when `v` is not quantized). Returns false only if
-// a DequantizeLinear is present but its scale/zero-point are not usable
+// Peel an optional per-tensor DequantizeLinear off `v`. Fails only if a
+// DequantizeLinear is present but its scale/zero-point are not usable
 // (non-scalar-constant or zero scale).
-static bool peelDequantize(Value v, Value &raw, double &scale, double &zp) {
-  scale = 1.0;
-  zp = 0.0;
-  raw = v;
-  if (auto dq = v.getDefiningOp<ONNXDequantizeLinearOp>()) {
-    if (!readScalarConstant(dq.getXScale(), scale) || scale == 0.0)
-      return false;
-    // Zero-point is optional; default 0.
-    if (dq.getXZeroPoint() &&
-        !mlir::isa<NoneType>(dq.getXZeroPoint().getType()))
-      if (!readScalarConstant(dq.getXZeroPoint(), zp))
-        return false;
-    raw = dq.getX();
+static FailureOr<DequantInfo> peelDequantize(Value v) {
+  DequantInfo info{v, /*scale=*/1.0, /*zeroPoint=*/0.0};
+  auto dq = v.getDefiningOp<ONNXDequantizeLinearOp>();
+  if (!dq)
+    return info;
+  FailureOr<double> scale = readScalarConstant(dq.getXScale());
+  if (failed(scale) || *scale == 0.0)
+    return failure();
+  info.scale = *scale;
+  // Zero-point is optional; default 0.
+  if (dq.getXZeroPoint() &&
+      !mlir::isa<NoneType>(dq.getXZeroPoint().getType())) {
+    FailureOr<double> zp = readScalarConstant(dq.getXZeroPoint());
+    if (failed(zp))
+      return failure();
+    info.zeroPoint = *zp;
   }
-  return true;
+  info.raw = dq.getX();
+  return info;
 }
 
 // True iff `v` (optionally behind a per-tensor DequantizeLinear) is a constant
 // tensor whose dequantized elements all equal `target`.
 static bool isDequantizedConstOf(Value v, double target) {
-  Value raw;
-  double scale;
-  double zp;
-  if (!peelDequantize(v, raw, scale, zp))
+  FailureOr<DequantInfo> dq = peelDequantize(v);
+  if (failed(dq))
     return false;
-  const double rawTarget = target / scale + zp;
+  const double rawTarget = target / dq->scale + dq->zeroPoint;
   // isConstOf compares in the raw storage domain, and asWideNum truncates the
   // target to the storage element type. For integer storage a value dequantizes
   // to exactly `target` only if its stored integer equals `rawTarget`, i.e.
   // only if `rawTarget` is integral; a fractional `rawTarget` cannot be
   // matched, and the truncation would otherwise fabricate a false match, so
   // bail out early.
-  if (mlir::isa<IntegerType>(getElementTypeOrSelf(raw.getType())) &&
+  if (mlir::isa<IntegerType>(getElementTypeOrSelf(dq->raw.getType())) &&
       rawTarget != std::floor(rawTarget))
     return false;
-  return isConstOf(raw, rawTarget);
+  return isConstOf(dq->raw, rawTarget);
 }
 
 SmallVector<int64_t> getIntVectorFromArrayAttr(ArrayAttr arrayAttr) {
@@ -735,10 +736,7 @@ std::optional<SmallVector<int64_t>> getConvTransposeKernelShape(
 }
 
 bool hasDefaultDilation(ArrayAttr dilation) {
-  if (dilation == nullptr)
-    return true;
-  SmallVector<int64_t, 3> vDilation = getIntVectorFromArrayAttr(dilation);
-  return llvm::all_of(vDilation, [](int64_t d) { return d == 1; });
+  return allArrayElementsEqual(dilation, 1);
 }
 
 // Returns true iff `op` is a nearest-neighbor spatial upsample that is exactly
@@ -771,22 +769,17 @@ bool isNearestUpsampleConvTranspose(ONNXConvTransposeOp op) {
   if (op.getOutputShapeAttr())
     return false;
   // pads and output_padding must be absent or all zero.
-  auto isAbsentOrAllZero = [](ArrayAttr a) {
-    return !a || llvm::all_of(getIntVectorFromArrayAttr(a),
-                     [](int64_t v) { return v == 0; });
-  };
-  if (!isAbsentOrAllZero(op.getPadsAttr()) ||
-      !isAbsentOrAllZero(op.getOutputPaddingAttr()))
+  if (!allArrayElementsEqual(op.getPadsAttr(), 0) ||
+      !allArrayElementsEqual(op.getOutputPaddingAttr(), 0))
     return false;
 
-  // strides present, 2D, not both 1, and == kernel_shape.
+  // strides present, 2D, not all 1, and == kernel_shape. All-unit strides would
+  // be an identity/pointwise op, not an upsample.
   ArrayAttr stridesAttr = op.getStridesAttr();
   if (!stridesAttr)
     return false;
   SmallVector<int64_t> strides = getIntVectorFromArrayAttr(stridesAttr);
-  // Reject unless there are exactly two strides that are not both 1 (both-1
-  // would be an identity/pointwise op, not an upsample).
-  if (strides.size() != 2 || (strides[0] == 1 && strides[1] == 1))
+  if (strides.size() != 2 || hasUnitStrides(stridesAttr))
     return false;
   auto kernelOpt = getConvTransposeKernelShape(op, op.getKernelShapeAttr());
   if (!kernelOpt)
@@ -834,12 +827,10 @@ bool isNearestUpsampleConvTranspose(ONNXConvTransposeOp op) {
   // all-zero. Walk the raw (pre-dequant) elements and compare against the raw
   // values that dequantize to 1 and 0 (raw == target / scale + zero_point),
   // keeping the match exact.
-  Value w;
-  double scale;
-  double zp;
-  if (!peelDequantize(op.getW(), w, scale, zp))
+  FailureOr<DequantInfo> wInfo = peelDequantize(op.getW());
+  if (failed(wInfo))
     return false;
-  ElementsAttr wAttr = getElementAttributeFromONNXValue(w);
+  ElementsAttr wAttr = getElementAttributeFromONNXValue(wInfo->raw);
   if (!wAttr)
     return false;
   Type et = wAttr.getElementType();
@@ -852,8 +843,8 @@ bool isNearestUpsampleConvTranspose(ONNXConvTransposeOp op) {
         [](const APInt &i) { return static_cast<double>(i.getSExtValue()); }));
   else
     return false;
-  const double rawOne = 1.0 / scale + zp;
-  const double rawZero = zp;
+  const double rawOne = 1.0 / wInfo->scale + wInfo->zeroPoint;
+  const double rawZero = wInfo->zeroPoint;
 
   // Weight is [C_in, C_out, kH, kW] with C_out == C_in (group=1), i.e. a grid
   // of C_in x C_in blocks of kH*kW elements. A per-channel replicator has
