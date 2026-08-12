@@ -123,3 +123,26 @@ func.func @convtranspose_nearest_depthwise_qdq_bias_nonzero(%arg0: tensor<1x2x3x
 // CHECK-NOT:       onnx.Resize
 // CHECK:           "onnx.ConvTranspose"
 }
+
+// -----
+
+// Negative (representability guard): int8 QDQ depthwise weight that is all-zero
+// with scale = 1/256 and zero-point 0. The raw value that would dequantize to
+// the all-ones target is 1 / (1/256) = 256, which is NOT representable in i8
+// (range [-128, 127]). Narrowing 256 into i8 wraps to 0, which would spuriously
+// match the all-zero stored weights - so without a range check this all-zero
+// (all-zero-dequantized) weight would be misclassified as all-ones and wrongly
+// rewritten to onnx.Resize. It must stay a ConvTranspose.
+func.func @convtranspose_depthwise_qdq_weight_unrepresentable(%arg0: tensor<1x2x3x3xf32>) -> tensor<1x2x6x6xf32> {
+  %w_i8 = onnx.Constant dense<0> : tensor<2x1x2x2xi8>
+  %w_scale = onnx.Constant dense<3.906250e-03> : tensor<f32>
+  %w_zp = onnx.Constant dense<0> : tensor<i8>
+  %w = "onnx.DequantizeLinear"(%w_i8, %w_scale, %w_zp) {axis = 1 : si64} : (tensor<2x1x2x2xi8>, tensor<f32>, tensor<i8>) -> tensor<2x1x2x2xf32>
+  %b = "onnx.NoValue"() {value} : () -> none
+  %0 = "onnx.ConvTranspose"(%arg0, %w, %b) {auto_pad = "NOTSET", dilations = [1, 1], group = 2 : si64, kernel_shape = [2, 2], pads = [0, 0, 0, 0], strides = [2, 2]} : (tensor<1x2x3x3xf32>, tensor<2x1x2x2xf32>, none) -> tensor<1x2x6x6xf32>
+  onnx.Return %0 : tensor<1x2x6x6xf32>
+
+// CHECK-LABEL:  func.func @convtranspose_depthwise_qdq_weight_unrepresentable
+// CHECK-NOT:       onnx.Resize
+// CHECK:           "onnx.ConvTranspose"
+}

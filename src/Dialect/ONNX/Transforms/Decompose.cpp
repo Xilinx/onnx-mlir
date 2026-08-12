@@ -699,15 +699,27 @@ static bool isDequantizedConstOf(Value v, double target) {
   if (failed(dq))
     return false;
   const double rawTarget = target / dq->scale + dq->zeroPoint;
-  // isConstOf compares in the raw storage domain, and asWideNum truncates the
-  // target to the storage element type. For integer storage a value dequantizes
-  // to exactly `target` only if its stored integer equals `rawTarget`, i.e.
-  // only if `rawTarget` is integral; a fractional `rawTarget` cannot be
-  // matched, and the truncation would otherwise fabricate a false match, so
-  // bail out early.
-  if (mlir::isa<IntegerType>(getElementTypeOrSelf(dq->raw.getType())) &&
-      rawTarget != std::floor(rawTarget))
-    return false;
+  // isConstOf compares in the raw storage domain, and asWideNum narrows the
+  // target to the storage element type. For integer storage a value
+  // dequantizes to exactly `target` only if its stored integer equals
+  // `rawTarget`. That requires `rawTarget` to be an integer that is actually
+  // representable in the storage type; otherwise the narrowing wraps/truncates
+  // and can fabricate a false match (e.g. rawTarget=256 wrapping to 0 in i8
+  // would classify all-zero weights as all-ones). Reject such targets up front.
+  if (auto intTy = mlir::dyn_cast<IntegerType>(
+          getElementTypeOrSelf(dq->raw.getType()))) {
+    if (rawTarget != std::floor(rawTarget))
+      return false;
+    const unsigned bw = intTy.getWidth();
+    double lo = 0.0;                        // unsigned lower bound
+    double hi = std::ldexp(1.0, bw) - 1.0;  // unsigned upper bound: 2^bw - 1
+    if (!intTy.isUnsigned()) {
+      lo = -std::ldexp(1.0, bw - 1);        // -2^(bw-1)
+      hi = std::ldexp(1.0, bw - 1) - 1.0;   // 2^(bw-1) - 1
+    }
+    if (rawTarget < lo || rawTarget > hi)
+      return false;
+  }
   return isConstOf(dq->raw, rawTarget);
 }
 
@@ -760,6 +772,11 @@ bool isNearestUpsampleConvTranspose(ONNXConvTransposeOp op) {
     return false;
   // Only 2D spatial (rank 4) supported.
   if (xType.getRank() != 4 || resType.getRank() != 4 || wType.getRank() != 4)
+    return false;
+  // The channel dims (C_in, C_out/group) are read below to validate the
+  // block-diagonal / depthwise weight layout, so the weight must be fully
+  // static, not just in its spatial dims.
+  if (!wType.hasStaticShape())
     return false;
 
   // dilations must be default (1).
@@ -838,9 +855,14 @@ bool isNearestUpsampleConvTranspose(ONNXConvTransposeOp op) {
   if (mlir::isa<FloatType>(et))
     raw = llvm::to_vector(llvm::map_range(wAttr.getValues<APFloat>(),
         [](const APFloat &f) { return f.convertToDouble(); }));
-  else if (mlir::isa<IntegerType>(et))
-    raw = llvm::to_vector(llvm::map_range(wAttr.getValues<APInt>(),
-        [](const APInt &i) { return static_cast<double>(i.getSExtValue()); }));
+  else if (auto intTy = mlir::dyn_cast<IntegerType>(et))
+    raw = llvm::to_vector(llvm::map_range(
+        wAttr.getValues<APInt>(), [&](const APInt &i) {
+          // Unsigned storage (e.g. ui8) must be zero-extended; signed/signless
+          // storage (ONNX int8/int32) is sign-extended.
+          return intTy.isUnsigned() ? static_cast<double>(i.getZExtValue())
+                                    : static_cast<double>(i.getSExtValue());
+        }));
   else
     return false;
   const double rawOne = 1.0 / wInfo->scale + wInfo->zeroPoint;
