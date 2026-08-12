@@ -1,4 +1,4 @@
-// (c) Copyright 2022 - 2025 Advanced Micro Devices, Inc. All Rights Reserved.
+// (c) Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
 
 // =============================================================================
 //
@@ -62,7 +62,7 @@ LogicalResult ONNXRotaryEmbeddingOp::verify() {
   }
 
   Value cosCache = adaptor.getCosCache();
-  Value sinCache = adaptor.getCosCache();
+  Value sinCache = adaptor.getSinCache();
   if (!hasShapeAndRank(cosCache) || !hasShapeAndRank(sinCache))
     return success(); // Won't be able to do any more checking at this stage.
 
@@ -87,8 +87,17 @@ LogicalResult ONNXRotaryEmbeddingOp::verify() {
   auto cosCacheShape = cosCacheType.getShape();
   auto sinCacheShape = sinCacheType.getShape();
 
-  // Last dim of cos/sin caches must be equal to rotary_embedding_dim / 2
-  auto rotaryEmbeddingDim = adaptor.getRotaryEmbeddingDim();
+  // Last dim of cos/sin caches must be equal to rotary_embedding_dim / 2.
+  // In case of being zero (default) validate against the head size.
+  int64_t rotaryEmbeddingDim = adaptor.getRotaryEmbeddingDim();
+  if (rotaryEmbeddingDim == 0) {
+    auto inputShape = inputType.getShape();
+    if (inputRank == 4 && !inputType.isDynamicDim(3))
+      rotaryEmbeddingDim = inputShape[3];
+    else if (inputRank == 3 && numHeads && *numHeads > 0 &&
+             !inputType.isDynamicDim(2))
+      rotaryEmbeddingDim = inputShape[2] / *numHeads;
+  }
   if (rotaryEmbeddingDim) {
     size_t lastIndex = cosCacheShape.size() - 1;
     if (cosCacheShape[lastIndex] != rotaryEmbeddingDim / 2)

@@ -365,6 +365,14 @@ Value OnnxBuilder::reverseSequence(Type outputType, Value input,
       batchAxisAttr, timeAxisAttr);
 }
 
+Value OnnxBuilder::rotaryEmbedding(Type outputType, Value X, Value cosCache,
+    Value sinCache, Value positionIds, int64_t interleaved,
+    IntegerAttr numHeads, int64_t rotaryEmbeddingDim) const {
+  return createTypedOpAndInferShapes<ONNXRotaryEmbeddingOp>(
+      toTensor(outputType), toTensor(X), toTensor(cosCache), toTensor(sinCache),
+      toTensor(positionIds), interleaved, numHeads, rotaryEmbeddingDim);
+}
+
 Value OnnxBuilder::round(Value input, bool scalarType) const {
   if (scalarType)
     return b().create<ONNXRoundOp>(loc(), input.getType(), input);

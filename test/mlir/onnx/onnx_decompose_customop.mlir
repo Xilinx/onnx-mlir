@@ -775,6 +775,44 @@ func.func @gqa_rotary_embedding_with_position_ids(
 
 // -----
 
+// GroupQueryAttention has no rotary_embedding_dim attribute, so a partial
+// rotation is only visible in the narrower cos/sin caches: 36 instead of the
+// 48 a fully rotated head_size of 96 would need. The emitted RotaryEmbedding
+// must carry the recovered dimension, otherwise it claims to rotate the whole
+// head.
+func.func @gqa_rotary_embedding_partial_rotation(
+  %q: tensor<1x128x3072xf32>,
+  %k: tensor<1x128x1536xf32>,
+  %v: tensor<1x128x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>,
+  %cos_cache: tensor<4096x36xf32>,
+  %sin_cache: tensor<4096x36xf32>,
+  %pos_ids: tensor<1x128xi64>
+) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>)
+ {
+  %total_seqlen = "onnx.Constant"() {value = dense<256> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<255> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen, %cos_cache, %sin_cache, %pos_ids) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    num_heads = 32 : si64,
+    do_rotary = 1 : si64
+  } : (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>, tensor<4096x36xf32>, tensor<4096x36xf32>, tensor<1x128xi64>)
+    -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>
+}
+
+// CHECK-LABEL: func.func @gqa_rotary_embedding_partial_rotation
+// CHECK-SAME:  (%[[Q:.*]]: tensor<1x128x3072xf32>, %[[K:.*]]: tensor<1x128x1536xf32>, %[[V:.*]]: tensor<1x128x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>, %[[COS:.*]]: tensor<4096x36xf32>, %[[SIN:.*]]: tensor<4096x36xf32>, %[[POS:.*]]: tensor<1x128xi64>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>)
+// CHECK:       %[[RQ:.*]] = "onnx.RotaryEmbedding"(%[[Q]], %[[COS]], %[[SIN]], %[[POS]]) {interleaved = 0 : si64, num_heads = 32 : si64, rotary_embedding_dim = 72 : si64} : (tensor<1x128x3072xf32>, tensor<4096x36xf32>, tensor<4096x36xf32>, tensor<1x128xi64>) -> tensor<1x128x3072xf32>
+// CHECK:       %[[RK:.*]] = "onnx.RotaryEmbedding"(%[[K]], %[[COS]], %[[SIN]], %[[POS]]) {interleaved = 0 : si64, num_heads = 16 : si64, rotary_embedding_dim = 72 : si64} : (tensor<1x128x1536xf32>, tensor<4096x36xf32>, tensor<4096x36xf32>, tensor<1x128xi64>) -> tensor<1x128x1536xf32>
+// CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[RQ]], %[[RK]], %[[V]], {{.*}}, %[[PAST_K]], %[[PAST_V]])
+// CHECK:       return %[[Y]], %[[PK]], %[[PV]] : tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>
+
+// -----
+
 func.func @gqa_with_attention_bias_and_qk_output(
   %q: tensor<1x128x3072xf32>,
   %k: tensor<1x128x1536xf32>,
@@ -1152,7 +1190,38 @@ func.func @gqa_local_window_size_minus_one_decomposes(
 
 // -----
 
+// attention span is 257 here, so 256 is rejected
 func.func @gqa_local_window_size_rejected(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>,
+  %seqlens: tensor<1x1xi32>,
+  %total_seqlen: tensor<i32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>) {
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    local_window_size = 256 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+}
+
+// CHECK-LABEL: func.func @gqa_local_window_size_rejected
+// CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>, %[[SEQLENS:.*]]: tensor<1x1xi32>, %[[TOTAL_SEQLEN:.*]]: tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+// CHECK-NOT:   "onnx.Attention"
+// CHECK:       %[[GQA:.*]]:3 = "onnx.Custom"
+// CHECK-SAME:      local_window_size = 256 : si64
+// CHECK:       return %[[GQA]]#0, %[[GQA]]#1, %[[GQA]]#2 : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+
+// -----
+
+// A window wider than the 257-key attention span can never hide a key, so this
+// must decompose exactly like local_window_size = -1 above.
+func.func @gqa_local_window_size_unreachable_decomposes(
   %q: tensor<1x1x3072xf32>,
   %k: tensor<1x1x1536xf32>,
   %v: tensor<1x1x1536xf32>,
@@ -1165,18 +1234,105 @@ func.func @gqa_local_window_size_rejected(
     domain_name = "com.microsoft",
     function_name = "GroupQueryAttention",
     kv_num_heads = 16 : si64,
-    local_window_size = 128 : si64,
+    local_window_size = 262144 : si64,
     num_heads = 32 : si64
   } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
   return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
 }
 
-// CHECK-LABEL: func.func @gqa_local_window_size_rejected
+// CHECK-LABEL: func.func @gqa_local_window_size_unreachable_decomposes
 // CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+// CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[K]], %[[V]], {{.*}}, %[[PAST_K]], %[[PAST_V]])
+// CHECK:       return %[[Y]], %[[PK]], %[[PV]] : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+
+// -----
+
+// A window of exactly the attention span still hides nothing: the furthest
+// query is at position 256 and the earliest key is 0, so 0 > 256 - 257.
+func.func @gqa_local_window_size_equal_to_span_decomposes(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>) {
+  %total_seqlen = "onnx.Constant"() {value = dense<257> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<256> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    local_window_size = 257 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+}
+
+// CHECK-LABEL: func.func @gqa_local_window_size_equal_to_span_decomposes
+// CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"
+// CHECK:       return %[[Y]], %[[PK]], %[[PV]] : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+
+// -----
+
+// A zero-length window would hide even the current key, leaving an all -inf
+// softmax row, so it is rejected regardless of the attention span.
+func.func @gqa_local_window_size_zero_rejected(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>) {
+  %total_seqlen = "onnx.Constant"() {value = dense<257> : tensor<i32>} : () -> tensor<i32>
+  %seqlens = "onnx.Constant"() {value = dense<256> : tensor<1x1xi32>} : () -> tensor<1x1xi32>
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    local_window_size = 0 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+}
+
+// CHECK-LABEL: func.func @gqa_local_window_size_zero_rejected
 // CHECK-NOT:   "onnx.Attention"
 // CHECK:       %[[GQA:.*]]:3 = "onnx.Custom"
-// CHECK-SAME:      local_window_size = 128 : si64
+// CHECK-SAME:      local_window_size = 0 : si64
 // CHECK:       return %[[GQA]]#0, %[[GQA]]#1, %[[GQA]]#2 : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
+
+// -----
+
+// preallocated mode has attention span of only 256, so this is accepted
+// compare with gqa_local_window_size_rejected
+// test also with runtime seqlens + total_seqlen
+func.func @gqa_local_window_size_unreachable_preallocated_decode(
+  %q: tensor<1x1x3072xf32>,
+  %k: tensor<1x1x1536xf32>,
+  %v: tensor<1x1x1536xf32>,
+  %past_k: tensor<1x16x256x96xf32>,
+  %past_v: tensor<1x16x256x96xf32>,
+  %seqlens: tensor<1x1xi32>,
+  %total_seqlen: tensor<i32>
+) -> (tensor<1x1x3072xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>) {
+  %out, %present_k, %present_v = "onnx.Custom"(%q, %k, %v, %past_k, %past_v, %seqlens, %total_seqlen) {
+    domain_name = "com.microsoft",
+    function_name = "GroupQueryAttention",
+    kv_num_heads = 16 : si64,
+    local_window_size = 256 : si64,
+    num_heads = 32 : si64
+  } : (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>, tensor<1x1xi32>, tensor<i32>) -> (tensor<1x1x3072xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>)
+  return %out, %present_k, %present_v : tensor<1x1x3072xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>
+}
+
+// CHECK-LABEL: func.func @gqa_local_window_size_unreachable_preallocated_decode
+// CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>, %[[SEQLENS:.*]]: tensor<1x1xi32>, %[[TOTAL_SEQLEN:.*]]: tensor<i32>)
+// CHECK:       "onnx.Cast"(%[[SEQLENS]]) {saturate = 1 : si64, to = i64} : (tensor<1x1xi32>) -> tensor<1x1xi64>
+// CHECK:       %[[VALID_LEN:.*]] = "onnx.Add"({{.*}}) : (tensor<1x1x1x1xi64>, tensor<1xi64>) -> tensor<1x1x1x1xi64>
+// CHECK:       %[[KEY_VALID:.*]] = "onnx.Less"({{.*}}, %[[VALID_LEN]]) : (tensor<1x1x1x256xi64>, tensor<1x1x1x1xi64>) -> tensor<1x1x1x256xi1>
+// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x256xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x256xf32>
+// CHECK:       %[[Y:.*]], %[[PK_NONE:.*]], %[[PV_NONE:.*]], %[[QK:.*]] = "onnx.Attention"({{.*}}, %[[MASK]], {{.*}})
+// CHECK:       return %[[Y]], {{.*}} : tensor<1x1x3072xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>
 
 // -----
 

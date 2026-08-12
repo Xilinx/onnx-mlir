@@ -432,6 +432,17 @@ func.func @test_neg_2(%arg0: tensor<3x2xi32>) -> tensor<3x2xi32> {
 
 // -----
 
+// CHECK-LABEL: @test_neg_unsigned(%arg0: tensor<3x2xui16>) -> tensor<3x2xui16>
+func.func @test_neg_unsigned(%arg0: tensor<3x2xui16>) -> tensor<3x2xui16> {
+  %0 = onnx.Constant dense<2> : tensor<3x2xui16>
+  %1 = "onnx.Sub"(%arg0, %0) : (tensor<3x2xui16> , tensor<3x2xui16>) -> tensor<3x2xui16>
+  "onnx.Return"(%1) : (tensor<3x2xui16>) -> ()
+  // CHECK-NEXT: [[CONST1:%.+]] = onnx.Constant dense<2> : tensor<3x2xui16>
+  // CHECK-NEXT: [[SUB1:%.+]] = "onnx.Sub"(%arg0, [[CONST1]]) : (tensor<3x2xui16>, tensor<3x2xui16>) -> tensor<3x2xui16>
+}
+
+// -----
+
 // CHECK-LABEL: @test_neg_3(%arg0: tensor<3x2xi32>) -> tensor<3x2xi32>
 func.func @test_neg_3(%arg0: tensor<3x2xi32>) -> tensor<3x2xi32> {
   %0 = onnx.Constant dense<[[2, 3], [4, 5], [6, 7]]> : tensor<3x2xi32>
