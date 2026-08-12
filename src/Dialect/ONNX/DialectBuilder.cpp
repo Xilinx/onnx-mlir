@@ -88,6 +88,14 @@ Value OnnxBuilder::cast(Value input, Type to) const {
   return cast(input, TypeAttr::get(to));
 }
 
+Value OnnxBuilder::castToNewTensorElementType(
+    Value input, Type newElemTy) const {
+  auto tensorTy = mlir::cast<TensorType>(input.getType());
+  if (tensorTy.getElementType() == newElemTy)
+    return input;
+  return cast(input, newElemTy);
+}
+
 Value OnnxBuilder::ceil(Value input) const {
   return createOpAndInferShapes<ONNXCeilOp>(toTensor(input.getType()), input);
 }
@@ -355,6 +363,14 @@ Value OnnxBuilder::reverseSequence(Type outputType, Value input,
   return createTypedOpAndInferShapes<ONNXReverseSequenceOp>(
       toTensor(outputType), toTensor(input), toTensor(sequenceLens),
       batchAxisAttr, timeAxisAttr);
+}
+
+Value OnnxBuilder::rotaryEmbedding(Type outputType, Value X, Value cosCache,
+    Value sinCache, Value positionIds, int64_t interleaved,
+    IntegerAttr numHeads, int64_t rotaryEmbeddingDim) const {
+  return createTypedOpAndInferShapes<ONNXRotaryEmbeddingOp>(
+      toTensor(outputType), toTensor(X), toTensor(cosCache), toTensor(sinCache),
+      toTensor(positionIds), interleaved, numHeads, rotaryEmbeddingDim);
 }
 
 Value OnnxBuilder::round(Value input, bool scalarType) const {

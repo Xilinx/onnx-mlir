@@ -50,6 +50,8 @@ def IsNoneType : Constraint<CPred<"isa<NoneType>(($_self).getType())">>;
 
 def IsIntOrFloatType : Constraint<CPred<"isa<IntegerType, FloatType>(mlir::cast<ShapedType>(($_self).getType()).getElementType())">>;
 
+def IsNotUnsignedIntType : Constraint<CPred<"!mlir::cast<ShapedType>(($_self).getType()).getElementType().isUnsignedInteger()">>;
+
 def IsNotAConstant :
   Constraint<CPred<"! static_cast<bool>(getDenseOrDisposableConstLikeElements($_self))">,
   "operation is not a constant">;
@@ -627,7 +629,7 @@ def SubConstToNeg : NamedPat<"SubConstToNeg",
     // To x + (-c).
     (ONNXAddOp $x, (CreateNegOfConst $input, $input)),
     [(IsNotAConstant:$x), (IsFromDenseConstLike:$input),
-     (IsIntOrFloatType:$input)]>;
+     (IsIntOrFloatType:$input), (IsNotUnsignedIntType:$input)]>;
 
 // Constant Propagation for Sqrt
 def SqrtofConst : NamedPat<"SqrtofConst",

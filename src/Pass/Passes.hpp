@@ -87,6 +87,9 @@ bool isQDQDataMovementCanonicalizationEnabled();
 // enabled.
 void configureExpandCanonicalization(bool enableExpandCanonicalization);
 
+// Configure whether Cast data-movement patterns are enabled.
+void configureCastDataMovementPatterns(bool enableCastDataMovementPatterns);
+
 void configureGatherElementsTileCanonicalization(
     bool enableGatherElementsTileCanonicalization);
 

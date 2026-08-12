@@ -4016,15 +4016,42 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   using AttributeValidator = LogicalResult (*)(
       ONNXCustomOp, PatternRewriter &, Attribute);
 
-  // ORT uses -1 as the default/no-op local attention window. Any other value
-  // needs local-window semantics that onnx.Attention does not represent here.
+  // We support two cases:
+  // - -1: no window
+  // - a number so big that it is provable to never hide a key, so it is
+  // equivalent as if no window would be there
+  // The latter needs extra context so it is checked in
+  // validateWindowNeverBinds.
   static LogicalResult validateLocalWindowSize(
       ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
     auto localWindowSize = dyn_cast<IntegerAttr>(attr);
-    if (!localWindowSize || localWindowSize.getSInt() != -1)
-      return rewriter.notifyMatchFailure(
-          customOp, "attribute 'local_window_size' is only supported when -1");
+    if (!localWindowSize ||
+        (localWindowSize.getSInt() != -1 && localWindowSize.getSInt() <= 0))
+      return rewriter.notifyMatchFailure(customOp,
+          "attribute 'local_window_size' is only supported when -1 or "
+          "positive");
     return success();
+  }
+
+  // A key j is hidden by the sliding window when j <= t - W, for a query at
+  // absolute position t. Causality already bounds t by maskSeqLen - 1 and keys
+  // start at 0, so a window spanning at least maskSeqLen keys can never hide
+  // one and the decomposition is the same as for local_window_size = -1. The
+  // bound holds under both readings of local_window_size (j > t - W and
+  // j >= t - W) and in preallocated-cache mode, where maskSeqLen is the cache
+  // capacity and the true position stays below it.
+  static LogicalResult validateWindowNeverBinds(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, int64_t maskSeqLen) {
+    auto localWindowSize =
+        customOp->getAttrOfType<IntegerAttr>("local_window_size");
+    if (!localWindowSize || localWindowSize.getSInt() == -1 ||
+        localWindowSize.getSInt() >= maskSeqLen)
+      return success();
+    return rewriter.notifyMatchFailure(customOp,
+        "attribute 'local_window_size' = " +
+            std::to_string(localWindowSize.getSInt()) +
+            " restricts attention over " + std::to_string(maskSeqLen) +
+            " keys; sliding-window attention is not supported");
   }
 
   // smooth_softmax changes the softmax denominator. Only disabled/default
@@ -4676,6 +4703,23 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return failure();
     const int64_t pastSeqLen = *pastSeqLenOr;
 
+    const bool packedQKV = isNoneValue(key) && isNoneValue(value);
+    // Packed QKV is split below into q/k/v of the query's sequence length.
+    const auto kvSeqLenOr =
+        packedQKV ? FailureOr<int64_t>(queryType.getShape()[1])
+                  : getStaticKVSequenceLength(customOp, rewriter, key);
+    if (failed(kvSeqLenOr))
+      return failure();
+    const int64_t kvSeqLen = *kvSeqLenOr;
+    const FailureOr<bool> preallocated = hasPreallocatedCacheMode(
+        customOp, rewriter, pastKey, pastSeqLen, kvSeqLen);
+    if (failed(preallocated))
+      return failure();
+    const bool preallocatedCacheMode = *preallocated;
+    if (failed(validateWindowNeverBinds(customOp, rewriter,
+            preallocatedCacheMode ? pastSeqLen : pastSeqLen + kvSeqLen)))
+      return failure();
+
     auto none = rewriter.create<ONNXNoneOp>(loc);
     auto si64Type = rewriter.getIntegerType(64, true);
 
@@ -4687,7 +4731,7 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     ONNXConstantOp splitLens;
     ONNXSplitOp split;
     int64_t headSize;
-    if (isNoneValue(key) && isNoneValue(value)) {
+    if (packedQKV) {
       int64_t totalNumHeads = qNumHeads.getSInt() + 2 * kvNumHeads.getSInt();
       // microsoft.GroupQueryAttention assumes the head_size is the same for q,
       // k and v
@@ -4721,20 +4765,8 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       headSize = queryType.getShape()[2] / qNumHeads.getSInt();
     }
 
-    const auto kvSeqLenOr = getStaticKVSequenceLength(customOp, rewriter, key);
-    if (failed(kvSeqLenOr))
-      return failure();
-    const int64_t kvSeqLen = *kvSeqLenOr;
-    const FailureOr<bool> preallocated = hasPreallocatedCacheMode(
-        customOp, rewriter, pastKey, pastSeqLen, kvSeqLen);
-    if (failed(preallocated))
-      return failure();
-    const bool preallocatedCacheMode = *preallocated;
-
     // If do_rotary = 1, query and key need to be passed through a rotary
     // embedding op
-    ONNXRotaryEmbeddingOp ropeQuery;
-    ONNXRotaryEmbeddingOp ropeKey;
     if (doRotary && doRotary.getSInt() > 0) {
       assert(numIn >= 9 && !isNoneValue(cosCache) && !isNoneValue(sinCache));
       if (numIn < 10 || isNoneValue(positionIds)) {
@@ -4755,10 +4787,27 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
         rotaryInterleaved = rotaryInterleavedAttr.getSInt();
       }
 
-      ropeQuery = rewriter.create<ONNXRotaryEmbeddingOp>(loc, query.getType(),
-          query, cosCache, sinCache, positionIds, rotaryInterleaved, qNumHeads);
-      ropeKey = rewriter.create<ONNXRotaryEmbeddingOp>(loc, key.getType(), key,
-          cosCache, sinCache, positionIds, rotaryInterleaved, kvNumHeads);
+      // derive rotary_embedding_dim from the cos cache width
+      const auto cosCacheType = dyn_cast<RankedTensorType>(cosCache.getType());
+      if (!cosCacheType || cosCacheType.getRank() == 0 ||
+          cosCacheType.isDynamicDim(cosCacheType.getRank() - 1))
+        return rewriter.notifyMatchFailure(customOp,
+            "the rotary dimension is unknown because the cos cache has no "
+            "static width");
+      const int64_t rotaryDim = 2 * cosCacheType.getShape().back();
+      if (rotaryDim > headSize)
+        return rewriter.notifyMatchFailure(
+            customOp, "the cos cache is too wide to rotate a single head");
+      // encode head_size as 0
+      const int64_t rotaryEmbeddingDim = rotaryDim == headSize ? 0 : rotaryDim;
+
+      OnnxBuilder create(rewriter, loc);
+      Value ropeQuery =
+          create.rotaryEmbedding(query.getType(), query, cosCache, sinCache,
+              positionIds, rotaryInterleaved, qNumHeads, rotaryEmbeddingDim);
+      Value ropeKey =
+          create.rotaryEmbedding(key.getType(), key, cosCache, sinCache,
+              positionIds, rotaryInterleaved, kvNumHeads, rotaryEmbeddingDim);
 
       toCheck.push_back(ropeQuery);
       toCheck.push_back(ropeKey);

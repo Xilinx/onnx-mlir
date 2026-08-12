@@ -37,6 +37,7 @@ struct OnnxToMlirOptions {
   // Negative axis/axes canonicalization when rank is known.
   bool enablePositiveAxisCanonicalization = true;
   bool enableExpandCanonicalization = false;
+  bool enableCastDataMovementPatterns = true;
   bool enableKeepdimsCanonicalization = false;
   bool enableGatherElementsTileCanonicalization = true;
   bool enableXFEONNXOpsetVerifier = true;

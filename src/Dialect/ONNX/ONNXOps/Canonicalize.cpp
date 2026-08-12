@@ -73,6 +73,9 @@ static bool enableQDQDataMovementCanonicalization = false;
 // Populated by configureExpandCanonicalization().
 static bool enableExpandCanonicalization = false;
 
+// Populated by configureCastDataMovementPatterns().
+static bool enableCastDataMovementPatterns = true;
+
 // Populated by configureGatherElementsTileCanonicalization().
 static bool enableGatherElementsTileCanonicalization = true;
 
@@ -4714,7 +4717,7 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
 
 /// `src <= mid`: casting `src` to `mid` is lossless.
 ///
-///   int   -> int    same signedness, no truncation
+///   int   -> int    no truncation or unsigned-to-signed range loss
 ///   int   -> float  significand covers the integer range
 ///   float -> float  `mid`'s format represents all of `src`
 ///   anything else   never (float -> int, quant types)
@@ -4724,9 +4727,14 @@ bool castPreservesAllValues(Type src, Type mid) {
   auto srcFloatTy = dyn_cast<FloatType>(src);
   auto midFloatTy = dyn_cast<FloatType>(mid);
 
-  if (srcIntTy && midIntTy)
-    return srcIntTy.getSignedness() == midIntTy.getSignedness() &&
-           srcIntTy.getWidth() <= midIntTy.getWidth();
+  if (srcIntTy && midIntTy) {
+    if (srcIntTy.isUnsigned() == midIntTy.isUnsigned())
+      return srcIntTy.getWidth() <= midIntTy.getWidth();
+
+    // An unsigned integer can be represented by a wider signed integer.
+    return srcIntTy.isUnsigned() && !midIntTy.isUnsigned() &&
+           srcIntTy.getWidth() < midIntTy.getWidth();
+  }
 
   // Signless counts as signed; the mantissa width includes the integer bit.
   if (srcIntTy && midFloatTy) {
@@ -4886,8 +4894,10 @@ void ONNXBatchNormalizationV9Op::getCanonicalizationPatterns(
 void ONNXCastOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<CastEliminationPattern>(context);
-  result.insert<SwapCastConcatPattern>(context);
-  result.insert<SwapCastSlicePattern>(context);
+  if (enableCastDataMovementPatterns) {
+    result.insert<SwapCastConcatPattern>(context);
+    result.insert<SwapCastSlicePattern>(context);
+  }
   result.insert<FoldConsecutiveCastPattern>(context);
 }
 
@@ -5401,6 +5411,10 @@ bool onnx_mlir::isQDQDataMovementCanonicalizationEnabled() {
 
 void onnx_mlir::configureExpandCanonicalization(bool enable) {
   enableExpandCanonicalization = enable;
+}
+
+void onnx_mlir::configureCastDataMovementPatterns(bool enable) {
+  enableCastDataMovementPatterns = enable;
 }
 
 void onnx_mlir::configureGatherElementsTileCanonicalization(bool enable) {
