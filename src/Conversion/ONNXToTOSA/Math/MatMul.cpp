@@ -375,7 +375,7 @@ public:
         rewriter, op->getLoc(), mmOutputTy, matmulLhs, matmulRhs)
                           ->getResult(0);
     auto castToOrigOp =
-        builder.castToNewTensorElementType(mmOpResult, lhsElemTy);
+        create.onnx.castToNewTensorElementType(mmOpResult, lhsElemTy);
 
     // Perform the reshape to output shape. This is always required unless max
     // input rank=3 and there was no broadcasting, in which case the tosa.matmul

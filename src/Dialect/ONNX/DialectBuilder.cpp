@@ -88,6 +88,14 @@ Value OnnxBuilder::cast(Value input, Type to) const {
   return cast(input, TypeAttr::get(to));
 }
 
+Value OnnxBuilder::castToNewTensorElementType(
+    Value input, Type newElemTy) const {
+  auto tensorTy = mlir::cast<TensorType>(input.getType());
+  if (tensorTy.getElementType() == newElemTy)
+    return input;
+  return cast(input, newElemTy);
+}
+
 Value OnnxBuilder::ceil(Value input) const {
   return createOpAndInferShapes<ONNXCeilOp>(toTensor(input.getType()), input);
 }
