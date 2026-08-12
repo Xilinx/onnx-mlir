@@ -10,7 +10,6 @@ add_onnx_mlir_rewriter(Decompose)
 add_onnx_mlir_rewriter(DecomposeConvTranspose)
 add_onnx_mlir_rewriter(DecomposeConvTransposePhased)
 add_onnx_mlir_rewriter(DecomposeConvTranspose1dPhased)
-add_onnx_mlir_rewriter(DecomposeConvTransposeToResize)
 
 add_onnx_mlir_rewriter(ConstProp)
 add_onnx_mlir_rewriter(ConvOpt)
@@ -144,7 +143,6 @@ add_onnx_mlir_library(OMONNXRewrite
   OMPublicPassIncGen
   OMONNXDecomposeConvTransposePhasedIncGen
   OMONNXDecomposeConvTranspose1dPhasedIncGen
-  OMONNXDecomposeConvTransposeToResizeIncGen
   OMONNXConstPropIncGen
   OMONNXConvOptIncGen
 

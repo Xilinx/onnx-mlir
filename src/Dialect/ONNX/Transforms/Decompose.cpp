@@ -887,12 +887,22 @@ bool isNearestUpsampleConvTranspose(ONNXConvTransposeOp op) {
 // `convTResult` ConvTranspose. Scales are [1, 1, strideH, strideW].
 //
 // Why this is equivalent:
-//   A ConvTranspose whose kernel is all-ones with kernel_shape == strides and
-//   no padding/overlap writes each input element into a disjoint
-//   strideH x strideW output tile, filling that whole tile with a copy of the
-//   element. That is exactly nearest-neighbor upsampling by (strideH, strideW),
-//   which onnx.Resize(mode="nearest") expresses directly - so the weights fall
-//   away and only the scale factors remain.
+//   When kernel_shape == strides and there is no padding/overlap, each input
+//   element is written into a disjoint strideH x strideW output tile. If the
+//   kernel that maps a channel to itself is all-ones (and nothing bleeds across
+//   channels), that whole tile is filled with a copy of the element - which is
+//   exactly nearest-neighbor upsampling by (strideH, strideW). onnx.Resize(
+//   mode="nearest") expresses this directly, so the weights fall away and only
+//   the scale factors remain.
+//
+// This holds for both ConvTranspose groupings the matcher accepts:
+//   1. group == 1  (dense): weight shape [C, C, kH, kW], block-diagonal - the
+//      C diagonal [kH, kW] blocks are all-ones and every off-diagonal block is
+//      zero, so channel i is upsampled purely from channel i.
+//   2. group == C  (depthwise): weight shape [C, 1, kH, kW], all-ones - each
+//      channel already has its own all-ones kernel and cannot mix channels.
+// In either case the per-channel kernel is all-ones with no cross-channel
+// contribution, so both collapse to the same nearest-neighbor Resize.
 //
 // Example: one channel, input 2x2, all-ones 2x2 kernel, strides [2, 2]
 // (upsample 2x in H and W). Each input pixel is replicated into a 2x2 block:
@@ -2430,9 +2440,6 @@ namespace convtranspose_phased {
 }
 namespace convtranspose_1d_phased {
 #include "src/Dialect/ONNX/Transforms/ONNXDecomposeConvTranspose1dPhased.inc"
-}
-namespace convtranspose_resize {
-#include "src/Dialect/ONNX/Transforms/ONNXDecomposeConvTransposeToResize.inc"
 }
 RankedTensorType createReducedType(
     Type outputType, int64_t axisValue, bool keepDims) {
@@ -5633,6 +5640,25 @@ struct DecomposeReduceL2Pattern : public OpRewritePattern<ONNXReduceL2Op> {
 };
 
 // =============================================================================
+// Rewrite a nearest-neighbor upsampling ConvTranspose into onnx.Resize
+// (mode="nearest").
+// =============================================================================
+struct ConvTransposeToResizePattern
+    : public OpRewritePattern<ONNXConvTransposeOp> {
+  using OpRewritePattern<ONNXConvTransposeOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXConvTransposeOp op, PatternRewriter &rewriter) const final {
+    if (!onnx_mlir::isNearestUpsampleConvTranspose(op))
+      return rewriter.notifyMatchFailure(
+          op, "not a nearest-neighbor upsample ConvTranspose");
+    rewriter.replaceOp(op, onnx_mlir::createNearestResizeFromConvTranspose(
+                               rewriter, op.getLoc(), op.getResult()));
+    return success();
+  }
+};
+
+// =============================================================================
 // Decompose DepthToSpace into Reshape -> Transpose -> Reshape
 // =============================================================================
 // onnx.DepthToSpace rearranges [N, C*bs*bs, H, W] into [N, C, H*bs, W*bs].
@@ -6169,7 +6195,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   if (enableConvTranspose1dDecomposeToPhasedConv)
     convtranspose_1d_phased::populateWithGenerated(patterns);
   if (enableConvTransposeToResize)
-    convtranspose_resize::populateWithGenerated(patterns);
+    patterns.insert<ConvTransposeToResizePattern>(context, /*benefit=*/10);
   if (enableReduceL2Decompose)
     patterns.insert<DecomposeReduceL2Pattern>(context);
   if (enableInstanceNormDecompose)
