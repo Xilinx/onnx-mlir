@@ -711,11 +711,11 @@ static bool isDequantizedConstOf(Value v, double target) {
     if (rawTarget != std::floor(rawTarget))
       return false;
     const unsigned bw = intTy.getWidth();
-    double lo = 0.0;                        // unsigned lower bound
-    double hi = std::ldexp(1.0, bw) - 1.0;  // unsigned upper bound: 2^bw - 1
+    double lo = 0.0;                       // unsigned lower bound
+    double hi = std::ldexp(1.0, bw) - 1.0; // unsigned upper bound: 2^bw - 1
     if (!intTy.isUnsigned()) {
-      lo = -std::ldexp(1.0, bw - 1);        // -2^(bw-1)
-      hi = std::ldexp(1.0, bw - 1) - 1.0;   // 2^(bw-1) - 1
+      lo = -std::ldexp(1.0, bw - 1);      // -2^(bw-1)
+      hi = std::ldexp(1.0, bw - 1) - 1.0; // 2^(bw-1) - 1
     }
     if (rawTarget < lo || rawTarget > hi)
       return false;
@@ -856,8 +856,8 @@ bool isNearestUpsampleConvTranspose(ONNXConvTransposeOp op) {
     raw = llvm::to_vector(llvm::map_range(wAttr.getValues<APFloat>(),
         [](const APFloat &f) { return f.convertToDouble(); }));
   else if (auto intTy = mlir::dyn_cast<IntegerType>(et))
-    raw = llvm::to_vector(llvm::map_range(
-        wAttr.getValues<APInt>(), [&](const APInt &i) {
+    raw = llvm::to_vector(
+        llvm::map_range(wAttr.getValues<APInt>(), [&](const APInt &i) {
           // Unsigned storage (e.g. ui8) must be zero-extended; signed/signless
           // storage (ONNX int8/int32) is sign-extended.
           return intTy.isUnsigned() ? static_cast<double>(i.getZExtValue())
