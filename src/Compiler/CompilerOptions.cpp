@@ -56,7 +56,7 @@ bool disableBatchNormDecompose;                        // common for both
 bool enableReshapeCanonicalization;                    // common for both
 bool enablePositiveAxisCanonicalization;               // common for both
 bool enableExpandCanonicalization;                     // common for both
-bool enableReduceKeepdimsCanonicalization;             // common for both
+bool enableKeepdimsCanonicalization;                   // common for both
 bool enableGatherElementsTileCanonicalization;         // common for both
 bool enableXFEONNXOpsetVerifier;                       // common for both
 bool enableSafeCodeGen;                                // common for both
@@ -383,13 +383,14 @@ static llvm::cl::opt<bool, true> enableExpandCanonicalizationOpt(
     llvm::cl::location(enableExpandCanonicalization), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirCommonOptions));
 
-static llvm::cl::opt<bool, true> enableReduceKeepdimsCanonicalizationOpt(
-    "enable-reduce-keepdims-canonicalization",
+static llvm::cl::opt<bool, true> enableKeepdimsCanonicalizationOpt(
+    "enable-keepdims-canonicalization",
     llvm::cl::desc(
-        "Enable canonicalization of reduce ops with keepdims=0 into "
-        "keepdims=1 + Reshape (default=false, i.e. the rewrite is disabled)."),
-    llvm::cl::location(enableReduceKeepdimsCanonicalization),
-    llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
+        "Enable canonicalization of reduce, ArgMin, and ArgMax ops with "
+        "keepdims=0 into keepdims=1 + Reshape (default=false, i.e. the "
+        "rewrite is disabled)."),
+    llvm::cl::location(enableKeepdimsCanonicalization), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true> enableGatherElementsTileCanonicalizationOpt(
     "enable-gather-elements-tile-canonicalization",

@@ -538,6 +538,8 @@ OpsWithCanonicalizer = [
     "Abs",
     "Add",
     "And",
+    "ArgMax",
+    "ArgMin",
     "AveragePool",
     "BatchNormalization",
     "BatchNormalizationV9",
