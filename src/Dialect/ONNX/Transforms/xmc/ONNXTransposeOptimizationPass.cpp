@@ -1961,6 +1961,7 @@ struct ONNXTransposeOptimizationPass
     // Pre-pass to tag multi-use transposes
     RewritePatternSet tagPatterns(context);
     tagPatterns.add<TagMultiUseTransposes>(context);
+    tagPatterns.add<PushTransposeThroughSCast>(context);
     if (failed(applyPatternsGreedily(function, std::move(tagPatterns)))) {
       signalPassFailure();
       return;
@@ -2008,7 +2009,6 @@ struct ONNXTransposeOptimizationPass
 
     patterns.add<PushTransposeThroughQDQ<ONNXQuantizeLinearOp>>(context);
     patterns.add<PushTransposeThroughQDQ<ONNXDequantizeLinearOp>>(context);
-    patterns.add<PushTransposeThroughSCast>(context);
     patterns.add<PushTransposeThroughUnaryOp<XCOMPILERRequantizeOp>>(context);
     patterns.add<FoldConstDQTranspose>(context);
 
