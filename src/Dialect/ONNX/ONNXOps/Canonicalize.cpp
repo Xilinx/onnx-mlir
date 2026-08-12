@@ -4717,7 +4717,7 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
 
 /// `src <= mid`: casting `src` to `mid` is lossless.
 ///
-///   int   -> int    same signedness, no truncation
+///   int   -> int    no truncation or unsigned-to-signed range loss
 ///   int   -> float  significand covers the integer range
 ///   float -> float  `mid`'s format represents all of `src`
 ///   anything else   never (float -> int, quant types)
@@ -4727,9 +4727,14 @@ bool castPreservesAllValues(Type src, Type mid) {
   auto srcFloatTy = dyn_cast<FloatType>(src);
   auto midFloatTy = dyn_cast<FloatType>(mid);
 
-  if (srcIntTy && midIntTy)
-    return srcIntTy.getSignedness() == midIntTy.getSignedness() &&
-           srcIntTy.getWidth() <= midIntTy.getWidth();
+  if (srcIntTy && midIntTy) {
+    if (srcIntTy.isUnsigned() == midIntTy.isUnsigned())
+      return srcIntTy.getWidth() <= midIntTy.getWidth();
+
+    // An unsigned integer can be represented by a wider signed integer.
+    return srcIntTy.isUnsigned() && !midIntTy.isUnsigned() &&
+           srcIntTy.getWidth() < midIntTy.getWidth();
+  }
 
   // Signless counts as signed; the mantissa width includes the integer bit.
   if (srcIntTy && midFloatTy) {
