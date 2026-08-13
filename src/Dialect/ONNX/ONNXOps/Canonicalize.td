@@ -1251,7 +1251,7 @@ def AlwaysFalseWherePattern : Pat<
 >;
 
 //===----------------------------------------------------------------------===//
-// Canonicalization for ONNXReduceMaxV13Op
+// Canonicalization for ONNXReduceMaxV13Op and ONNXReduceMaxV18Op
 //===----------------------------------------------------------------------===//
 
 def ReduceMaxV13ToLatestPattern1
@@ -1267,8 +1267,12 @@ def ReduceMaxV13ToLatestPattern2
               $keepdims, (noop_with_empty_axes)),
           [(AttributeIsNotNull:$axes)]>;
 
+def ReduceMaxV18ToLatestPattern
+    : Pat<(ONNXReduceMaxV18Op $oprd, $axes, $keepdims, $noop_with_empty_axes),
+          (ONNXReduceMaxOp $oprd, $axes, $keepdims, $noop_with_empty_axes)>;
+
 //===----------------------------------------------------------------------===//
-// Canonicalization for ONNXReduceMinV13Op
+// Canonicalization for ONNXReduceMinV13Op and ONNXReduceMinV18Op
 //===----------------------------------------------------------------------===//
 
 def ReduceMinV13ToLatestPattern1
@@ -1283,6 +1287,10 @@ def ReduceMinV13ToLatestPattern2
               (ONNXConstantOpFromDenseAttr(createDenseArrayAttr $axes)),
               $keepdims, (noop_with_empty_axes)),
           [(AttributeIsNotNull:$axes)]>;
+
+def ReduceMinV18ToLatestPattern
+    : Pat<(ONNXReduceMinV18Op $oprd, $axes, $keepdims, $noop_with_empty_axes),
+          (ONNXReduceMinOp $oprd, $axes, $keepdims, $noop_with_empty_axes)>;
 
 //===----------------------------------------------------------------------===//
 // Canonicalization for ONNXReduceSumV11Op

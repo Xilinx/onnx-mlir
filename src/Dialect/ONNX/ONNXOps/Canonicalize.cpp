@@ -5113,6 +5113,12 @@ void ONNXReduceMaxV13Op::getCanonicalizationPatterns(
   result.insert<ReduceMaxV13ToLatestPattern2>(context);
 }
 
+/// on the ONNXReduceMaxV18Op.
+void ONNXReduceMaxV18Op::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  result.insert<ReduceMaxV18ToLatestPattern>(context);
+}
+
 /// on the ONNXReduceMeanOp.
 void ONNXReduceMeanOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
@@ -5140,6 +5146,12 @@ void ONNXReduceMinV13Op::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<ReduceMinV13ToLatestPattern1>(context);
   result.insert<ReduceMinV13ToLatestPattern2>(context);
+}
+
+/// on the ONNXReduceMinV18Op.
+void ONNXReduceMinV18Op::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  result.insert<ReduceMinV18ToLatestPattern>(context);
 }
 
 /// on the ONNXReduceProdOp.
