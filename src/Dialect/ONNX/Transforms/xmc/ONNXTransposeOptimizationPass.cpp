@@ -2009,6 +2009,7 @@ struct ONNXTransposeOptimizationPass
 
     patterns.add<PushTransposeThroughQDQ<ONNXQuantizeLinearOp>>(context);
     patterns.add<PushTransposeThroughQDQ<ONNXDequantizeLinearOp>>(context);
+    patterns.add<PushTransposeThroughSCast>(context);
     patterns.add<PushTransposeThroughUnaryOp<XCOMPILERRequantizeOp>>(context);
     patterns.add<FoldConstDQTranspose>(context);
 
