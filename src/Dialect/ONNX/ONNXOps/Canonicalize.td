@@ -1242,6 +1242,40 @@ def AlwaysFalseWherePattern : Pat<
 >;
 
 //===----------------------------------------------------------------------===//
+// Canonicalization for ONNXReduceMaxV13Op
+//===----------------------------------------------------------------------===//
+
+def ReduceMaxV13ToLatestPattern1
+    : Pat<(ONNXReduceMaxV13Op $oprd, $axes, $keepdims),
+          (ONNXReduceMaxOp $oprd,
+              (CreateNoneValue), $keepdims, (noop_with_empty_axes)),
+          [(AttributeIsNull:$axes)]>;
+
+def ReduceMaxV13ToLatestPattern2
+    : Pat<(ONNXReduceMaxV13Op $oprd, $axes, $keepdims),
+          (ONNXReduceMaxOp $oprd,
+              (ONNXConstantOpFromDenseAttr(createDenseArrayAttr $axes)),
+              $keepdims, (noop_with_empty_axes)),
+          [(AttributeIsNotNull:$axes)]>;
+
+//===----------------------------------------------------------------------===//
+// Canonicalization for ONNXReduceMinV13Op
+//===----------------------------------------------------------------------===//
+
+def ReduceMinV13ToLatestPattern1
+    : Pat<(ONNXReduceMinV13Op $oprd, $axes, $keepdims),
+          (ONNXReduceMinOp $oprd,
+              (CreateNoneValue), $keepdims, (noop_with_empty_axes)),
+          [(AttributeIsNull:$axes)]>;
+
+def ReduceMinV13ToLatestPattern2
+    : Pat<(ONNXReduceMinV13Op $oprd, $axes, $keepdims),
+          (ONNXReduceMinOp $oprd,
+              (ONNXConstantOpFromDenseAttr(createDenseArrayAttr $axes)),
+              $keepdims, (noop_with_empty_axes)),
+          [(AttributeIsNotNull:$axes)]>;
+
+//===----------------------------------------------------------------------===//
 // Canonicalization for ONNXReduceSumV11Op
 //===----------------------------------------------------------------------===//
 

@@ -7186,6 +7186,7 @@ def ONNXReduceMaxV18Op:ONNX_Op<"ReduceMaxV18",
 
 def ONNXReduceMaxV13Op:ONNX_Op<"ReduceMaxV13",
   [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceMax operation";
   let description = [{
   Computes the max of the input tensor's elements along the provided axes. The resulting
@@ -7395,6 +7396,7 @@ def ONNXReduceMinV18Op:ONNX_Op<"ReduceMinV18",
 
 def ONNXReduceMinV13Op:ONNX_Op<"ReduceMinV13",
   [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ReduceMin operation";
   let description = [{
   Computes the min of the input tensor's elements along the provided axes. The resulting
