@@ -56,6 +56,11 @@ def createConstantOpWithOneToRankOf : NativeCodeCall<
                                 // Create an ArrayAttr of IntergerAttr(s) of values in [1, N-1].
                                 onnx_mlir::createArrayAttrOfNToM($_builder, 1, mlir::cast<ShapedType>($0.getType()).getRank() - 1))}]>;
 
+def createConstantOpWithTwoToRankOf : NativeCodeCall<
+  [{onnx_mlir::createConstantOp($_builder, $0.getLoc(),
+                                // Create an ArrayAttr of IntegerAttr(s) of values in [2, N-1].
+                                onnx_mlir::createArrayAttrOfNToM($_builder, 2, mlir::cast<ShapedType>($0.getType()).getRank() - 1))}]>;
+
 // Create a DenseElementsAttr from the shape of the type of a value.
 def createDenseElementsAttrFromShape : NativeCodeCall<
   "onnx_mlir::createDenseElementsAttrFromShape($_builder, $0)">;
@@ -1113,14 +1118,18 @@ def SizeToConstantPattern: Pat<
 // Rewrite GlobalAveragePool using ReduceMean.
 def GlobalAveragePoolPattern: Pat<
   (ONNXGlobalAveragePoolOp $x),
-  (ONNXReduceMeanV13Op $x, (createArrayAttrOfTwoToRankOf $x), (GetNullAttr)),
+  (ONNXReduceMeanOp $x,
+      (createConstantOpWithTwoToRankOf $x),
+      (GetNullAttr), (noop_with_empty_axes)),
   [(HasRank:$x)]
 >;
 
 // Rewrite GlobalMaxPool using ReduceMax.
 def GlobalMaxPoolPattern: Pat<
   (ONNXGlobalMaxPoolOp $x),
-  (ONNXReduceMaxV13Op $x, (createArrayAttrOfTwoToRankOf $x), (GetNullAttr))
+  (ONNXReduceMaxOp $x,
+      (createConstantOpWithTwoToRankOf $x),
+      (GetNullAttr), (noop_with_empty_axes))
 >;
 
 //===----------------------------------------------------------------------===//
