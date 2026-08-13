@@ -35,6 +35,8 @@ std::unique_ptr<Transform> fromAttr(ArrayAttr arrayAttr) {
         return std::make_unique<DequantizeTransform>(arrayAttr);
       else if (transType == "Quantize")
         return std::make_unique<QuantizeTransform>(arrayAttr);
+      else if (transType == "MultiUseConflict")
+        return std::make_unique<MultiUseConflict>();
     }
   }
   return {};
@@ -312,6 +314,20 @@ std::unique_ptr<Transform> ListTransform::invert() const {
   for (const auto &transform : llvm::reverse(transforms))
     trans.push_back(transform->invert());
   return std::make_unique<ListTransform>(std::move(trans));
+}
+
+// == MultiUseConflict == //
+
+MultiUseConflict::MultiUseConflict()
+    : Transform(Kind::MultiUseConflict, {}, {}) {}
+
+Attribute MultiUseConflict::toAttr(MLIRContext *context) const {
+  return ArrayAttr::get(
+      context, {StringAttr::get(context, "MultiUseConflict")});
+}
+
+std::unique_ptr<Transform> MultiUseConflict::invert() const {
+  return std::make_unique<MultiUseConflict>();
 }
 
 // == TensorName == //
