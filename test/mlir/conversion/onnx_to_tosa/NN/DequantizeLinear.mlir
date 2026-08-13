@@ -1,5 +1,6 @@
-// Copyright (c) 2025 Advanced Micro Devices, Inc.
+// Copyright (c) 2025-2026 Advanced Micro Devices, Inc.
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa -cse %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="excluded-ops=Cast" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDE-CAST
 
 func.func @test_dequantizeLinear(%arg0 : tensor<32x3x224x224xi8>) -> tensor<32x3x224x224xf32> {
   %0 = onnx.Constant dense<3.125000e-02> : tensor<f32>                       
@@ -16,6 +17,10 @@ func.func @test_dequantizeLinear(%arg0 : tensor<32x3x224x224xi8>) -> tensor<32x3
 // CHECK-DAG:    %[[SUB:.*]] = tosa.sub %[[CAST_0]], %[[CASTZP]] : (tensor<32x3x224x224xf32>, tensor<1x1x1x1xf32>) -> tensor<32x3x224x224xf32>
 // CHECK-DAG:    %[[MUL:.*]] = tosa.mul %[[SUB]], %[[SCALE]], {{.*}}: (tensor<32x3x224x224xf32>, tensor<1x1x1x1xf32>, tensor<1xi8>) -> tensor<32x3x224x224xf32>
 // CHECK-DAG:    return %[[MUL]] : tensor<32x3x224x224xf32>
+// EXCLUDE-CAST-LABEL: @test_dequantizeLinear
+// EXCLUDE-CAST: onnx.Cast
+// EXCLUDE-CAST-NOT: tosa.cast
+// EXCLUDE-CAST: return
 
 // -----
 

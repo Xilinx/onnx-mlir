@@ -70,8 +70,9 @@ void configurePasses() {
   configureConstPropMaxTileFoldSize(onnxConstPropMaxTileFoldSize);
   configureUnsafeMathCanonicalization(enableUnsafeMathOptimizations);
   configurePositiveAxisCanonicalization(enablePositiveAxisCanonicalization);
-  configureReduceKeepdimsCanonicalization(enableReduceKeepdimsCanonicalization);
+  configureKeepdimsCanonicalization(enableKeepdimsCanonicalization);
   configureExpandCanonicalization(enableExpandCanonicalization);
+  configureCastDataMovementPatterns(enableCastDataMovementPatterns);
   configureGatherElementsTileCanonicalization(
       enableGatherElementsTileCanonicalization);
   configureQDQDataMovementCanonicalization(
@@ -283,8 +284,8 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.enablePositiveAxisCanonicalization =
         enablePositiveAxisCanonicalization;
     opts.enableExpandCanonicalization = enableExpandCanonicalization;
-    opts.enableReduceKeepdimsCanonicalization =
-        enableReduceKeepdimsCanonicalization;
+    opts.enableKeepdimsCanonicalization = enableKeepdimsCanonicalization;
+    opts.enableCastDataMovementPatterns = enableCastDataMovementPatterns;
     opts.enableGatherElementsTileCanonicalization =
         enableGatherElementsTileCanonicalization;
     opts.enableXFEONNXOpsetVerifier = enableXFEONNXOpsetVerifier;

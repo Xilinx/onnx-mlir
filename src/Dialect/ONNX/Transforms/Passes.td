@@ -114,6 +114,14 @@ def ONNXDecomposePatternOptions {
            "(DCR) as the final interleave instead of "
            "Reshape/Transpose/Reshape.">,
 
+    Option<"enableConvTransposeToResize",
+           "convert-convtranspose-to-resize",
+           "bool", /*default=*/"false",
+           "Rewrite a nearest-neighbor upsampling ConvTranspose (kernel==stride, "
+           "pads=0, per-channel all-ones weights, group=1 block-diagonal or "
+           "depthwise group=C) into onnx.Resize (nearest mode) and keep it out "
+           "of the phased-Conv ConvTranspose decomposition.">,
+
   ];
 }
 

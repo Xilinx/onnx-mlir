@@ -73,10 +73,9 @@ void configurePositiveAxisCanonicalization(
 
 bool isPositiveAxisCanonicalizationEnabled();
 
-// Configure whether reduce keepdims=0 -> keepdims=1 + Reshape canonicalization
-// is enabled.
-void configureReduceKeepdimsCanonicalization(
-    bool enableReduceKeepdimsCanonicalization);
+// Configure whether keepdims=0 -> keepdims=1 + Reshape canonicalization is
+// enabled.
+void configureKeepdimsCanonicalization(bool enableKeepdimsCanonicalization);
 
 // Configure QDQ canonicalizations for data-movement/view ONNX ops.
 void configureQDQDataMovementCanonicalization(
@@ -87,6 +86,9 @@ bool isQDQDataMovementCanonicalizationEnabled();
 // Configure whether Expand-to-Tile / Expand-to-Reshape+Tile canonicalization is
 // enabled.
 void configureExpandCanonicalization(bool enableExpandCanonicalization);
+
+// Configure whether Cast data-movement patterns are enabled.
+void configureCastDataMovementPatterns(bool enableCastDataMovementPatterns);
 
 void configureGatherElementsTileCanonicalization(
     bool enableGatherElementsTileCanonicalization);

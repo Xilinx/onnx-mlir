@@ -364,6 +364,38 @@ Value TosaBuilder::sqrt(mlir::Value &input) {
   return this->binaryOp<mlir::tosa::PowOp>(input, oneHalf);
 }
 
+Value TosaBuilder::roundEven(mlir::Value input) {
+  // TOSA has no round operator, so round half-to-even as:
+  // ```
+  // y = floor(x);
+  // r = x - y;
+  // if (r == 0.5)
+  //   return 2.0 * floor(0.5 * x + 0.5);
+  // return (r > 0.5) ? y + 1.0 : y;
+  // ```
+  auto inputType = cast<ShapedType>(input.getType());
+  Type elementType = inputType.getElementType();
+  int64_t rank = inputType.getRank();
+  Value one = this->getSplattedConst(1.0, elementType, rank);
+  Value two = this->getSplattedConst(2.0, elementType, rank);
+  Value half = this->getSplattedConst(0.5, elementType, rank);
+
+  Value y = this->unaryOp<mlir::tosa::FloorOp>(input);
+  Value r = this->binaryOp<mlir::tosa::SubOp>(input, y);
+
+  Value yPlusOne = this->binaryOp<mlir::tosa::AddOp>(y, one);
+  Value roundUp = this->greater(r, half);
+  Value nearest = this->select(roundUp, yPlusOne, y);
+
+  Value halfX = this->mul(input, half);
+  Value shifted = this->binaryOp<mlir::tosa::AddOp>(halfX, half);
+  Value floored = this->unaryOp<mlir::tosa::FloorOp>(shifted);
+  Value evenNeighbour = this->mul(floored, two);
+
+  Value isTie = this->equal(r, half);
+  return this->select(isTie, evenNeighbour, nearest);
+}
+
 static bool containsNonZero(llvm::SmallVectorImpl<int64_t> &values) {
   return llvm::any_of(values, [](int64_t value) { return value != 0; });
 }

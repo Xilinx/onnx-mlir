@@ -119,6 +119,18 @@ func.func @integer_to_float_cast_chain(%arg0: tensor<3xi8>) -> tensor<3xi32> {
 
 // -----
 
+// CHECK-LABEL: @unsigned_integer_to_float_cast_chain
+func.func @unsigned_integer_to_float_cast_chain(%arg0: tensor<3xui16>) -> tensor<3xbf16> {
+  %0 = "onnx.Cast"(%arg0) {to = i64} : (tensor<3xui16>) -> tensor<3xi64>
+  %1 = "onnx.Cast"(%0) {to = bf16} : (tensor<3xi64>) -> tensor<3xbf16>
+  return %1 : tensor<3xbf16>
+  // CHECK: %[[FINAL:.*]] = "onnx.Cast"(%arg0) {saturate = 1 : si64, to = bf16}
+  // CHECK-NOT: {to = i64}
+  // CHECK: return %[[FINAL]]
+}
+
+// -----
+
 //===----------------------------------------------------------------------===//
 /// Lossless f16/bf16 round-trip elimination.
 //===----------------------------------------------------------------------===//

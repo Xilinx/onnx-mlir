@@ -1132,6 +1132,18 @@ RESULT_TYPE getScalarValue(ONNXConstantOp constantOp) {
 template double getScalarValue<double>(ONNXConstantOp constantOp);
 template int64_t getScalarValue<int64_t>(ONNXConstantOp constantOp);
 
+// Read a scalar (single-element) constant Value into a double. getScalarValue
+// handles float (incl. f16/bf16) and integer storage. Fails if `v` is
+// absent/None or not a single-element constant.
+FailureOr<double> readScalarConstant(Value v) {
+  if (!v || mlir::isa<NoneType>(v.getType()))
+    return failure();
+  ElementsAttr attr = getElementAttributeFromONNXValue(v);
+  if (!attr || attr.getNumElements() != 1)
+    return failure();
+  return getScalarValue<double>(attr, attr.getElementType());
+}
+
 /// Return the wide type of a value.
 WideNum asWideNum(double n, Type elemType) {
   return wideZeroDispatch(elemType, [n](auto wideZero) {
@@ -1321,26 +1333,18 @@ bool hasIntegerPowerExponent(ONNXPowOp *op, int64_t &exponentValue) {
   // we want to check the dequantized value of the exponent
   if (auto dequantizeOp = mlir::dyn_cast_or_null<ONNXDequantizeLinearOp>(
           exponent.getDefiningOp())) {
-    ElementsAttr xAttr = getElementAttributeFromONNXValue(dequantizeOp.getX());
-    ElementsAttr scaleAttr =
-        getElementAttributeFromONNXValue(dequantizeOp.getXScale());
-    ElementsAttr zeroPointAttr =
-        getElementAttributeFromONNXValue(dequantizeOp.getXZeroPoint());
-
-    if (!(isScalarConstantTensor(dequantizeOp.getXScale()) &&
-            isScalarConstantTensor(dequantizeOp.getXZeroPoint())))
+    FailureOr<double> x = readScalarConstant(dequantizeOp.getX());
+    FailureOr<double> scale = readScalarConstant(dequantizeOp.getXScale());
+    FailureOr<double> zeroPoint =
+        readScalarConstant(dequantizeOp.getXZeroPoint());
+    if (failed(x) || failed(scale) || failed(zeroPoint))
       return false;
-
-    auto x = getScalarValue<double>(xAttr, xAttr.getElementType());
-    auto scale = getScalarValue<double>(scaleAttr, scaleAttr.getElementType());
-    auto zeroPoint =
-        getScalarValue<double>(zeroPointAttr, zeroPointAttr.getElementType());
 
     // Calculate dequantized value for exponent (This is an approximation and
     // isn't expected to match the actual calculation done by the
     // DequantizeLinear op. However, it should be good enough for checking that
     // the exponent is an integer)
-    double dequantizedExponent = (x - zeroPoint) * scale;
+    double dequantizedExponent = (*x - *zeroPoint) * (*scale);
     double nearest = std::round(dequantizedExponent);
     if (std::fabs(dequantizedExponent - nearest) > kPowExponentNearIntegerTol)
       return false;

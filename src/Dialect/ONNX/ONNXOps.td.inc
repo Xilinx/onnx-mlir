@@ -274,6 +274,7 @@ def ONNXAndOp:ONNX_Op<"And",
 
 def ONNXArgMaxOp:ONNX_Op<"ArgMax",
   [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ArgMax operation";
   let description = [{
   Computes the indices of the max elements of the input tensor's element along the
@@ -313,6 +314,7 @@ def ONNXArgMaxOp:ONNX_Op<"ArgMax",
 
 def ONNXArgMinOp:ONNX_Op<"ArgMin",
   [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX ArgMin operation";
   let description = [{
   Computes the indices of the min elements of the input tensor's element along the
