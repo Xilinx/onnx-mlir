@@ -133,7 +133,7 @@ struct ONNXHybridTransformPass
           enableReduceL2Decompose,
           /*disableGenericDecompositions=*/false, enableGatherToSlice,
           enableHardSwishDecompose, enableDepthToSpaceDecompose,
-          enableGQAUint16CacheSlotRewrite);
+          enableGQAUint16CacheSlotRewrite, enableConvTransposeToResize);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
       if (target == "stablehlo") {
@@ -160,6 +160,8 @@ struct ONNXHybridTransformPass
         this->enableSeparatePhasedConvsForConvTranspose.getValue();
     onnx_mlir::convTransposeDepthToSpaceActive =
         this->enableConvTransposeDecomposeToDepthToSpace.getValue();
+    onnx_mlir::convTransposeToResizeActive =
+        this->enableConvTransposeToResize.getValue();
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;

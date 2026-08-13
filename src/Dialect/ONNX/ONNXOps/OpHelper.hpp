@@ -389,6 +389,11 @@ RESULT_TYPE getScalarValue(mlir::ElementsAttr denseAttr, mlir::Type type);
 template <typename RESULT_TYPE>
 RESULT_TYPE getScalarValue(mlir::ONNXConstantOp constantOp);
 
+// Read a scalar (single-element) constant Value into a double. getScalarValue
+// handles float (incl. f16/bf16) and integer storage. Fails if \p v is
+// absent/None or not a single-element constant.
+mlir::FailureOr<double> readScalarConstant(mlir::Value v);
+
 /// Return the wide type of a value.
 WideNum asWideNum(double n, mlir::Type elemType);
 
