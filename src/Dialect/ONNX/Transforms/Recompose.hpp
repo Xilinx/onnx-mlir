@@ -35,10 +35,10 @@ namespace onnx_mlir {
 // `enableRotaryEmbeddingRecompose` enables a recomposition of a decomposed
 // RotaryEmbedding into an onnx.RotaryEmbedding op. The targeted decomposition
 // matches the RoPE in HuggingFaces LlamaRotaryEmbedding
-// `enableReduceL2Recompositions` enables a recomposition of a decomposed
-// ReduceL2 from Sqrt(ReduceSumSquare(x)) into an onnx.ReduceL2 op and
-// Pow(ReduceSumSquare(x), 0.5) into an onnx.ReduceL2 op, and ReduceSumSquare
-// from ReduceSum(Mul(x, x)) or ReduceSum(Pow(x, 2)).
+// `enableReduceL2Recompositions` enables direct recomposition of complete
+// Sqrt/Pow-based L2 reduction chains into an onnx.ReduceL2 op. Callers that
+// also run the ReduceL2 decomposition in the same rewrite driver must clear
+// this flag, otherwise the two patterns invert each other and never converge.
 // `enableDepthToSpaceDecompose` mirrors the decompose flag: when the
 // DepthToSpace decomposition is enabled, the DepthToSpace recompose patterns
 // must be disabled so they do not immediately fold the decomposed
