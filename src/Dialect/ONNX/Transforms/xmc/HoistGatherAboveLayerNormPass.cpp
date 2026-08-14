@@ -244,6 +244,20 @@ LogicalResult reshapeLayerNormForGatheredInput(PatternRewriter &rewriter,
   return inferShapesForOp(layerNorm.getOperation());
 }
 
+bool allInSameBlock(Block *block, Operation *op) {
+  return !op || op->getBlock() == block;
+}
+
+bool chainInSameBlockAsGather(ONNXGatherOp gatherOp,
+    ONNXLayerNormalizationOp layerNormOp, ONNXDequantizeLinearOp dq0,
+    ONNXQuantizeLinearOp q0, ONNXDequantizeLinearOp dq1,
+    ONNXQuantizeLinearOp q1) {
+  Block *block = gatherOp->getBlock();
+  return allInSameBlock(block, layerNormOp) &&
+         allInSameBlock(block, dq0) && allInSameBlock(block, q0) &&
+         allInSameBlock(block, dq1) && allInSameBlock(block, q1);
+}
+
 struct HoistGatherAboveLayerNormPattern
     : public OpRewritePattern<ONNXGatherOp> {
   using OpRewritePattern<ONNXGatherOp>::OpRewritePattern;
@@ -269,6 +283,10 @@ struct HoistGatherAboveLayerNormPattern
       if (!isPerTensorDequant(dq0))
         return failure();
     }
+
+    if (!chainInSameBlockAsGather(
+            gatherOp, layerNormOp, dq0, q0, dq1, q1))
+      return failure();
 
     auto lnInputType = dyn_cast<RankedTensorType>(layerNormOp.getX().getType());
     if (!lnInputType || !lnInputType.hasRank())
@@ -359,16 +377,15 @@ struct HoistGatherAboveLayerNormPattern
       auto q1OutTy = RankedTensorType::get(
           cast<RankedTensorType>(chainHead.getType()).getShape(),
           cast<RankedTensorType>(q1.getType()).getElementType());
-      rewriter.modifyOpInPlace(q1, [&]() {
-        q1.getOperation()->setOperand(0, chainHead);
-        q1.getResult().setType(q1OutTy);
-      });
+      rewriter.modifyOpInPlace(q1, [&]() { q1.getResult().setType(q1OutTy); });
       if (failed(inferShapesForOp(q1.getOperation())))
         return failure();
-      rewriter.eraseOp(gatherOp);
-    } else {
-      rewriter.replaceOp(gatherOp, chainHead);
     }
+
+    // Replace the old Gather with the hoisted chain head. Do not erase Gather
+    // directly when q1 is present: replaceOp keeps the rewriter and listener
+    // state consistent and updates q1's operand automatically.
+    rewriter.replaceOp(gatherOp, chainHead);
 
     return success();
   }
