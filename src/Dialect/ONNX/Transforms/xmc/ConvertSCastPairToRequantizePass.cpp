@@ -6,7 +6,8 @@
 // Converts back-to-back quant.scast pairs into XCOMPILERRequantize ops.
 // Also converts:
 //   1. Q node -> Scast node (with diff scale/zp) -> Requantize
-//   2. Scast node -> Dequantize node (with diff scale/zp) -> Requantize + DQ
+//   2. Scast node -> Dequantize node (with diff scale/zp) -> Requantize +
+//      scast(storage) + DQ
 //
 // Pattern 1:
 //   %a = quant.scast %x : tensor<...x!quant.uniform<T1>> to tensor<...xT>
@@ -291,7 +292,7 @@ struct ConvertQAndScastToRequantizePattern
 
 /// Pattern 3: Scast node -> Dequantize node with diff scale and zp
 /// quant.scast(quant_type_1) -> ONNXDequantizeLinear(scale_dq, zp_dq)
-/// Replace with XCOMPILERRequantize(...) ->
+/// Replace with XCOMPILERRequantize(...) -> quant.scast(storage) ->
 /// ONNXDequantizeLinear(scale_dq,zp_dq).
 struct ConvertScastAndDQToRequantizePattern
     : public OpRewritePattern<ONNXDequantizeLinearOp> {
@@ -368,10 +369,17 @@ struct ConvertScastAndDQToRequantizePattern
     auto requantizeOp = rewriter.create<XCOMPILERRequantizeOp>(dqOp.getLoc(),
         resultType, scastInput, aScaleAttr, aZpAttr, yScaleAttr, yZpAttr);
 
-    // Keep DQ to produce f32: DQ(requantize_result, scale_dq, zp_dq)
+    // DQ consumes storage type; strip the quant wrapper after requantize.
+    auto outQuantTy = cast<quant::QuantizedType>(resultType.getElementType());
+    auto storageTy = RankedTensorType::get(
+        resultType.getShape(), outQuantTy.getStorageType());
+    auto storageScast = rewriter.create<quant::StorageCastOp>(
+        dqOp.getLoc(), storageTy, requantizeOp.getResult());
+
+    // Keep DQ to produce f32: DQ(storage, scale_dq, zp_dq)
     auto dqResultType = cast<RankedTensorType>(dqOp.getResult().getType());
     auto newDQOp = rewriter.create<ONNXDequantizeLinearOp>(dqOp.getLoc(),
-        dqResultType, requantizeOp.getResult(), dqOp.getXScale(),
+        dqResultType, storageScast.getResult(), dqOp.getXScale(),
         dqOp.getXZeroPoint(), dqOp.getAxisAttr(), dqOp.getBlockSizeAttr());
 
     rewriter.replaceOp(dqOp, newDQOp.getResult());
