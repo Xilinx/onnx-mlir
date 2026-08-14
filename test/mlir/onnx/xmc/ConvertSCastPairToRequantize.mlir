@@ -135,10 +135,12 @@ func.func @scast_then_dq_different_params(%arg0: tensor<1x4x4x!quant.uniform<u8:
   %1 = "onnx.DequantizeLinear"(%0, %scale_dq, %zp_dq) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x4x4xui8>, tensor<f32>, tensor<ui8>) -> tensor<1x4x4xf32>
   return %1 : tensor<1x4x4xf32>
 }
-// CHECK-NOT: quant.scast
 // CHECK: "onnx.XCOMPILERRequantize"
 // CHECK-SAME: a_scale = [1.000000e-01
 // CHECK-SAME: a_zero_point = [0]
 // CHECK-SAME: y_scale = [2.000000e-01
 // CHECK-SAME: y_zero_point = [5]
+// CHECK: quant.scast
+// CHECK-SAME: tensor<1x4x4xui8>
 // CHECK: "onnx.DequantizeLinear"
+// CHECK-SAME: tensor<1x4x4xui8>
