@@ -112,8 +112,9 @@ func.func @q_then_scast_different_params(%arg0: tensor<2x4xf32>) -> tensor<2x4x!
   %1 = quant.scast %0 : tensor<2x4xui8> to tensor<2x4x!quant.uniform<u8:f32, 0.2:5>>
   return %1 : tensor<2x4x!quant.uniform<u8:f32, 0.2:5>>
 }
-// CHECK-NOT: quant.scast
 // CHECK: "onnx.QuantizeLinear"
+// CHECK: quant.scast
+// CHECK-SAME: tensor<2x4x!quant.uniform<u8:f32, 1.000000e-01:0>>
 // CHECK: "onnx.XCOMPILERRequantize"
 // CHECK-SAME: a_scale = [1.000000e-01
 // CHECK-SAME: a_zero_point = [0]

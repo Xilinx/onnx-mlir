@@ -5,7 +5,8 @@
 //
 // Converts back-to-back quant.scast pairs into XCOMPILERRequantize ops.
 // Also converts:
-//   1. Q node -> Scast node (with diff scale/zp) -> Requantize
+//   1. Q node -> Scast node (with diff scale/zp) -> scast(Q params) +
+//   Requantize
 //   2. Scast node -> Dequantize node (with diff scale/zp) -> Requantize +
 //      scast(storage) + DQ
 //
@@ -221,7 +222,8 @@ struct ConvertSCastPairToRequantizePattern
 
 /// Pattern 2: Q node -> Scast node with diff scale and zp -> Requantize
 /// ONNXQuantizeLinear(x, scale_q, zp_q) -> quant.scast -> tensor<...x!quant.T2>
-/// Replace with XCOMPILERRequantize(Q.result, scale_q, zp_q, scale_s, zp_s).
+/// Replace with QuantizeLinear -> quant.scast(Q params) ->
+/// XCOMPILERRequantize(scale_q, zp_q -> scale_s, zp_s).
 struct ConvertQAndScastToRequantizePattern
     : public OpRewritePattern<quant::StorageCastOp> {
   using OpRewritePattern<quant::StorageCastOp>::OpRewritePattern;
@@ -239,8 +241,14 @@ struct ConvertQAndScastToRequantizePattern
     if (!outputQType && !outputQPerAxis)
       return failure();
 
-    // Input to Scast must be produced by ONNX QuantizeLinear
+    // Input to Scast must be produced by ONNX QuantizeLinear (storage type).
     Value scastInput = scast.getOperand();
+    auto storageType = dyn_cast<RankedTensorType>(scastInput.getType());
+    if (!storageType)
+      return failure();
+    if (isa<quant::QuantizedType>(storageType.getElementType()))
+      return failure();
+
     auto qOp = scastInput.getDefiningOp<ONNXQuantizeLinearOp>();
     if (!qOp)
       return failure();
@@ -283,8 +291,35 @@ struct ConvertQAndScastToRequantizePattern
       yZpAttr = buildZeroPointAttr(rewriter, outputQPerAxis);
     }
 
-    auto requantizeOp = rewriter.create<XCOMPILERRequantizeOp>(scast.getLoc(),
-        resultType, qOp.getResult(), aScaleAttr, aZpAttr, yScaleAttr, yZpAttr);
+    // Attach Q's quant wrapper via scast; requantize handles scale/zp change
+    // only.
+    RankedTensorType inputQuantTensorTy;
+    if (outputQType) {
+      auto inputQType = quant::UniformQuantizedType::get(outputQType.getFlags(),
+          outputQType.getStorageType(), outputQType.getExpressedType(),
+          qParams->first[0], qParams->second[0],
+          outputQType.getStorageTypeMin(), outputQType.getStorageTypeMax());
+      inputQuantTensorTy =
+          RankedTensorType::get(storageType.getShape(), inputQType);
+    } else {
+      SmallVector<double> scalesDouble(
+          qParams->first.begin(), qParams->first.end());
+      auto inputQPerAxis = quant::UniformQuantizedPerAxisType::get(
+          outputQPerAxis.getFlags(), outputQPerAxis.getStorageType(),
+          outputQPerAxis.getExpressedType(), scalesDouble, qParams->second,
+          outputQPerAxis.getQuantizedDimension(),
+          outputQPerAxis.getStorageTypeMin(),
+          outputQPerAxis.getStorageTypeMax());
+      inputQuantTensorTy =
+          RankedTensorType::get(storageType.getShape(), inputQPerAxis);
+    }
+
+    auto qScast = rewriter.create<quant::StorageCastOp>(
+        qOp.getLoc(), inputQuantTensorTy, qOp.getResult());
+
+    auto requantizeOp =
+        rewriter.create<XCOMPILERRequantizeOp>(scast.getLoc(), resultType,
+            qScast.getResult(), aScaleAttr, aZpAttr, yScaleAttr, yZpAttr);
     rewriter.replaceOp(scast, requantizeOp.getResult());
     return success();
   }
