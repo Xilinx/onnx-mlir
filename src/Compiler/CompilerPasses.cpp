@@ -272,7 +272,6 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
       opts.hybrid.enableInstanceNormDecompose = false;
       opts.hybrid.enableGroupNormDecompose = false;
       opts.hybrid.enableConvTransposeDecomposeToPhasedConv = false;
-      opts.enableGatherElementsTileCanonicalization = false;
     }
 
     addONNXToMLIRPasses(pm, /*target CPU*/ false,
