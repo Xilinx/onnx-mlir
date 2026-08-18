@@ -297,10 +297,10 @@ ElementsAttr createElmAttr(RankedTensorType tensorType,
     // from the tensor shape and element type so we add support for this "as
     // an extension".
     if (loc.length == 0) {
-      const uint64_t bits =
-          static_cast<uint64_t>(tensorType.getNumElements()) *
-          tensorType.getElementTypeBitWidth();
-      loc.length = (bits + 7) / 8; // round up for sub-byte types (e.g. I4)
+      const auto numElements =
+          static_cast<uint64_t>(tensorType.getNumElements());
+      loc.length = isAnyInt4Type<T> ? llvm::divideCeil(numElements, 2)
+                                    : numElements * CppTypeTrait<T>::bytewidth;
     }
     return createElementsAttrFromMemoryBuffer_LE<T>(
         tensorType, readExternalData_LE(externalDataDir, loc));
