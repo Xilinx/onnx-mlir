@@ -146,7 +146,9 @@ struct ONNXHybridTransformPass
 
     if (recomposition) {
       getRecomposeONNXToONNXPatterns(cumulativePatterns,
-          enableRotaryEmbeddingRecompose, enableReduceL2Recompositions,
+          enableRotaryEmbeddingRecompose,
+          enableReduceL2Recompositions &&
+              !(decomposition && enableReduceL2Decompose),
           enableDepthToSpaceDecompose);
     }
 
