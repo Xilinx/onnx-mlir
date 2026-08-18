@@ -1900,6 +1900,33 @@ struct PushTransposeThroughVariadicWithConst
   }
 };
 
+struct TagMultiUseTransposes : public OpRewritePattern<ONNXTransposeOp> {
+  using OpRewritePattern<ONNXTransposeOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(
+      ONNXTransposeOp op, PatternRewriter &rewriter) const override {
+    auto numUses = std::distance(op->use_begin(), op->use_end());
+    if (numUses <= 1)
+      return rewriter.notifyMatchFailure(op, "not multi-use");
+
+    auto conflictVal = op->getOperand(0);
+    auto conflictName = TensorName(conflictVal);
+    while (!conflictName) {
+      auto *defOp = conflictVal.getDefiningOp();
+      if (!defOp || defOp->getNumResults() != 1 || defOp->getNumOperands() != 1)
+        return rewriter.notifyMatchFailure(op, "no operand name");
+
+      conflictVal = defOp->getOperand(0);
+      conflictName = TensorName(conflictVal);
+    }
+    if (llvm::any_of(conflictName.getTransforms(),
+            [](Transform *trans) { return isa<MultiUseConflict>(trans); }))
+      return rewriter.notifyMatchFailure(op, "already tagged");
+
+    conflictName.push_back(std::make_unique<MultiUseConflict>());
+    return conflictName.setTo(conflictVal);
+  }
+};
+
 } // anonymous namespace
 
 //===----------------------------------------------------------------------===//
@@ -1930,6 +1957,15 @@ struct ONNXTransposeOptimizationPass
   void runOnOperation() override {
     auto function = getOperation();
     MLIRContext *context = &getContext();
+
+    // Pre-pass to tag multi-use transposes
+    RewritePatternSet tagPatterns(context);
+    tagPatterns.add<TagMultiUseTransposes>(context);
+    tagPatterns.add<PushTransposeThroughSCast>(context);
+    if (failed(applyPatternsGreedily(function, std::move(tagPatterns)))) {
+      signalPassFailure();
+      return;
+    }
 
     LLVM_DEBUG(llvm::dbgs() << "=== Running ONNX Transpose Fusion Pass ===\n");
     LLVM_DEBUG(llvm::dbgs() << "Function: " << function.getName() << "\n");

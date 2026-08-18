@@ -104,6 +104,8 @@ std::vector<std::string> reportHeapAfter;  // onnx-mlir only
 std::string modelTag;                      // onnx-mlir only
 bool enableConvOptPass;                    // onnx-mlir only
 bool enableXMCPasses;                      // onnx-mlir only
+bool enableMatmulAddFusion;                // onnx-mlir only
+bool enableMatmulToConv;                   // onnx-mlir only
 bool disableConstantProp;                  // onnx-mlir only
 std::vector<std::string> extraLibPaths;    // onnx-mlir only
 std::vector<std::string> extraLibs;        // onnx-mlir only
@@ -819,6 +821,20 @@ static llvm::cl::opt<bool, true> enableConvOptPassOpt("enable-conv-opt-pass",
 static llvm::cl::opt<bool, true> enableXMCPassesOpt("enable-xmc-passes",
     llvm::cl::desc("Enable XMC xcompiler passes. Default is false."),
     llvm::cl::location(enableXMCPasses), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirOptions));
+
+static llvm::cl::opt<bool, true> enableMatmulAddFusionOpt(
+    "enable-matmul-add-fusion",
+    llvm::cl::desc(
+        "Enable fusing MatMul+Add into XFE MatMul bias (XMC passes only). "
+        "Default is true."),
+    llvm::cl::location(enableMatmulAddFusion), llvm::cl::init(true),
+    llvm::cl::cat(OnnxMlirOptions));
+
+static llvm::cl::opt<bool, true> enableMatmulToConvOpt("enable-matmul-to-conv",
+    llvm::cl::desc("Enable converting MatMul to XFE Conv (XMC passes only). "
+                   "Default is false."),
+    llvm::cl::location(enableMatmulToConv), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirOptions));
 
 static llvm::cl::opt<bool, true> disableConstantPropOpt("disable-constant-prop",
