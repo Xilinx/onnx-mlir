@@ -23,6 +23,7 @@ public:
     Dequantize,
     Quantize,
     List,
+    MultiUseConflict,
   };
 
   Transform(
