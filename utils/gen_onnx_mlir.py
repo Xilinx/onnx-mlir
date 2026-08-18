@@ -495,6 +495,9 @@ special_type_constraints = {
     "ReduceSum": {
         "T": ["tensor(uint16)"],
     },
+    "ReverseSequence": {
+        "T": ["tensor(bfloat16)"],
+    },
 }
 
 # Manual specification of attribute type.
@@ -555,6 +558,7 @@ OpsWithCanonicalizer = [
     "Equal",
     "Expand",
     "Flatten",
+    "Gather",
     "GatherElements",
     "GlobalAveragePool",
     "GlobalMaxPool",
@@ -652,6 +656,7 @@ OpsWithVerifier = [
     "Less",
     "LessOrEqual",
     "LogSoftmax",
+    "LSTM",
     "Max",
     "MatMulInteger",
     "Mean",

@@ -100,7 +100,8 @@ void populateONNXPositiveAxisCanonicalizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
 
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(
-    bool enableQDQ = false, bool enableQuantConstFold = false);
+    bool enableQDQ = false, bool enableQuantConstFold = false,
+    int64_t maxLoopUnrollCount = 64);
 
 std::unique_ptr<mlir::Pass> createQDQCanonicalizePass(bool removeBinary = false,
     bool removeQDQAroundOps = false, int64_t maxRoundTripDiff = 0);
