@@ -54,6 +54,7 @@ add_onnx_mlir_library(OMONNXRewrite
   FoldQuantizedBinary.cpp
   ConvOpt.cpp
   Decompose.cpp
+  DecomposeLSTM.cpp
   DecomposeEinsum.cpp
   ScrubDisposablePass.cpp
   SetONNXNodeName.cpp

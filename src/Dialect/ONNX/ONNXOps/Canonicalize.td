@@ -56,6 +56,11 @@ def createConstantOpWithOneToRankOf : NativeCodeCall<
                                 // Create an ArrayAttr of IntergerAttr(s) of values in [1, N-1].
                                 onnx_mlir::createArrayAttrOfNToM($_builder, 1, mlir::cast<ShapedType>($0.getType()).getRank() - 1))}]>;
 
+def createConstantOpWithTwoToRankOf : NativeCodeCall<
+  [{onnx_mlir::createConstantOp($_builder, $0.getLoc(),
+                                // Create an ArrayAttr of IntegerAttr(s) of values in [2, N-1].
+                                onnx_mlir::createArrayAttrOfNToM($_builder, 2, mlir::cast<ShapedType>($0.getType()).getRank() - 1))}]>;
+
 // Create a DenseElementsAttr from the shape of the type of a value.
 def createDenseElementsAttrFromShape : NativeCodeCall<
   "onnx_mlir::createDenseElementsAttrFromShape($_builder, $0)">;
@@ -1113,14 +1118,18 @@ def SizeToConstantPattern: Pat<
 // Rewrite GlobalAveragePool using ReduceMean.
 def GlobalAveragePoolPattern: Pat<
   (ONNXGlobalAveragePoolOp $x),
-  (ONNXReduceMeanV13Op $x, (createArrayAttrOfTwoToRankOf $x), (GetNullAttr)),
+  (ONNXReduceMeanOp $x,
+      (createConstantOpWithTwoToRankOf $x),
+      (GetNullAttr), (noop_with_empty_axes)),
   [(HasRank:$x)]
 >;
 
 // Rewrite GlobalMaxPool using ReduceMax.
 def GlobalMaxPoolPattern: Pat<
   (ONNXGlobalMaxPoolOp $x),
-  (ONNXReduceMaxV13Op $x, (createArrayAttrOfTwoToRankOf $x), (GetNullAttr))
+  (ONNXReduceMaxOp $x,
+      (createConstantOpWithTwoToRankOf $x),
+      (GetNullAttr), (noop_with_empty_axes))
 >;
 
 //===----------------------------------------------------------------------===//
@@ -1240,6 +1249,48 @@ def AlwaysFalseWherePattern : Pat<
  (replaceWithValue $false_val),
  [(IsNegativeSplatConstant:$negative_constant), (AreAllDimSizes:$dims)]
 >;
+
+//===----------------------------------------------------------------------===//
+// Canonicalization for ONNXReduceMaxV13Op and ONNXReduceMaxV18Op
+//===----------------------------------------------------------------------===//
+
+def ReduceMaxV13ToLatestPattern1
+    : Pat<(ONNXReduceMaxV13Op $oprd, $axes, $keepdims),
+          (ONNXReduceMaxOp $oprd,
+              (CreateNoneValue), $keepdims, (noop_with_empty_axes)),
+          [(AttributeIsNull:$axes)]>;
+
+def ReduceMaxV13ToLatestPattern2
+    : Pat<(ONNXReduceMaxV13Op $oprd, $axes, $keepdims),
+          (ONNXReduceMaxOp $oprd,
+              (ONNXConstantOpFromDenseAttr(createDenseArrayAttr $axes)),
+              $keepdims, (noop_with_empty_axes)),
+          [(AttributeIsNotNull:$axes)]>;
+
+def ReduceMaxV18ToLatestPattern
+    : Pat<(ONNXReduceMaxV18Op $oprd, $axes, $keepdims, $noop_with_empty_axes),
+          (ONNXReduceMaxOp $oprd, $axes, $keepdims, $noop_with_empty_axes)>;
+
+//===----------------------------------------------------------------------===//
+// Canonicalization for ONNXReduceMinV13Op and ONNXReduceMinV18Op
+//===----------------------------------------------------------------------===//
+
+def ReduceMinV13ToLatestPattern1
+    : Pat<(ONNXReduceMinV13Op $oprd, $axes, $keepdims),
+          (ONNXReduceMinOp $oprd,
+              (CreateNoneValue), $keepdims, (noop_with_empty_axes)),
+          [(AttributeIsNull:$axes)]>;
+
+def ReduceMinV13ToLatestPattern2
+    : Pat<(ONNXReduceMinV13Op $oprd, $axes, $keepdims),
+          (ONNXReduceMinOp $oprd,
+              (ONNXConstantOpFromDenseAttr(createDenseArrayAttr $axes)),
+              $keepdims, (noop_with_empty_axes)),
+          [(AttributeIsNotNull:$axes)]>;
+
+def ReduceMinV18ToLatestPattern
+    : Pat<(ONNXReduceMinV18Op $oprd, $axes, $keepdims, $noop_with_empty_axes),
+          (ONNXReduceMinOp $oprd, $axes, $keepdims, $noop_with_empty_axes)>;
 
 //===----------------------------------------------------------------------===//
 // Canonicalization for ONNXReduceSumV11Op
