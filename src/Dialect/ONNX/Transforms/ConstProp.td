@@ -140,6 +140,10 @@ def SatisfiesExpansionBound: Constraint<
 def SatisfiesMaxTileFoldSize: Constraint<
   CPred<"satisfiesMaxTileFoldSize($_self)">>;
 
+def IsResizeConstPropagatable: Constraint<
+  CPred<"isResizeConstPropagatable($_self.getDefiningOp())">,
+  "onnx.Resize configuration is supported by constant propagation">;
+
 class IsNotDisabled<string name>: Constraint<
   CPred<"isNotDisabled(\"" # name # "\")">>;
 
@@ -346,6 +350,9 @@ def CreateRangeOfThreeConst :
 
 def CreateNonZeroOfConst :
    NativeCodeCall<"ConstPropNonZero($_builder, $0, $1)">;
+
+def CreateResizeOfConst :
+   NativeCodeCall<"ConstPropResize($_builder, $0, $1)">;
 
 def CreateScatterNDOfConst :
     NativeCodeCall<"ConstPropScatterND($_builder, $0, $1, $2, $3)">;
@@ -1448,5 +1455,21 @@ def PowConstProp : NamedPat<"PowConstProp",
      (IsIntOrFloatType:$lhs), (IsIntOrFloatType:$rhs),
      (SatisfiesExpansionBound:$powOp), (ValuesHaveSameDType $lhs, $rhs),
      (HasStaticShape:$powOp)]>;
+
+//===----------------------------------------------------------------------===//
+// Patterns for Resize.
+//===----------------------------------------------------------------------===//
+
+def ResizeofConst : NamedPat<"ResizeofConst",
+    // From Resize(x, roi, scales, sizes) with the op's 9 attributes.
+    (ONNXResizeOp:$resOp $X, $roi, $scales, $sizes,
+      $_, $_, $_, $_, $_, $_, $_, $_, $_),
+    // To c where c is the resampled constant.
+    (CreateResizeOfConst $resOp, $X),
+    [(IsFromDenseConstLike:$X),
+     (IsFromDenseConstLikeOrNone:$scales),
+     (IsFromDenseConstLikeOrNone:$sizes),
+     (IsResizeConstPropagatable:$resOp),
+     (SatisfiesExpansionBound:$resOp), (HasStaticShape:$resOp)]>;
 
 #endif // ONNX_CONSTPROP
