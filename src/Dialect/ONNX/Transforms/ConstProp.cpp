@@ -1805,14 +1805,16 @@ public:
 //
 // Match conditions:
 //   • NoneType condition input (always run for exactly M trips)
-//   • Constant dense trip-count M in (0, kMaxUnrollCount]
+//   • Constant dense trip-count M in (0, maxLoopUnrollCount]
 //===----------------------------------------------------------------------===//
 
 class LoopUnroll : public OpRewritePattern<ONNXLoopOp> {
-  static constexpr int64_t kMaxUnrollCount = 64;
+  int64_t maxLoopUnrollCount;
 
 public:
-  using OpRewritePattern<ONNXLoopOp>::OpRewritePattern;
+  LoopUnroll(MLIRContext *context, int64_t maxLoopUnrollCount)
+      : OpRewritePattern<ONNXLoopOp>(context),
+        maxLoopUnrollCount(maxLoopUnrollCount) {}
 
   LogicalResult matchAndRewrite(
       ONNXLoopOp loopOp, PatternRewriter &rewriter) const override {
@@ -1824,9 +1826,9 @@ public:
           loopOp, "trip count must be a constant i64 scalar");
     int64_t M = mVals[0];
 
-    if (M < 0 || M > kMaxUnrollCount)
+    if (M < 0 || M > maxLoopUnrollCount)
       return rewriter.notifyMatchFailure(
-          loopOp, "M is out of the unrollable range (0, kMaxUnrollCount]");
+          loopOp, "M is out of the configured unrollable range");
 
     MLIRContext *ctx = rewriter.getContext();
     Location loc = loopOp.getLoc();
@@ -2292,9 +2294,15 @@ struct ConstPropONNXToONNXPass
   Option<bool> enableQuantConstFold{
       *this, "enable-quant-const-fold", llvm::cl::init(false)};
 
-  ConstPropONNXToONNXPass(bool enableQDQ, bool enableQuantConstFold) {
+  Option<int64_t> maxLoopUnrollCount{*this, "max-loop-unroll-count",
+      llvm::cl::desc("Maximum constant onnx.Loop trip count to unroll."),
+      llvm::cl::init(64)};
+
+  ConstPropONNXToONNXPass(
+      bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount) {
     this->enableQDQ = enableQDQ;
     this->enableQuantConstFold = enableQuantConstFold;
+    this->maxLoopUnrollCount = maxLoopUnrollCount;
   }
 
   ConstPropONNXToONNXPass(const ConstPropONNXToONNXPass &other) {
@@ -2315,7 +2323,8 @@ void ConstPropONNXToONNXPass::runOnOperation() {
   MLIRContext *context = &getContext();
 
   RewritePatternSet patterns(context);
-  getConstPropONNXToONNXPatterns(patterns, enableQDQ, enableQuantConstFold);
+  getConstPropONNXToONNXPatterns(
+      patterns, enableQDQ, enableQuantConstFold, maxLoopUnrollCount);
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
           GreedyRewriteConfig().setListener(&rnUpdater))))
@@ -2324,15 +2333,15 @@ void ConstPropONNXToONNXPass::runOnOperation() {
 
 } // end anonymous namespace.
 
-void onnx_mlir::getConstPropONNXToONNXPatterns(
-    RewritePatternSet &patterns, bool enableQDQ, bool enableQuantConstFold) {
+void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
+    bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount) {
   if (isConstantPropagationDisabled())
     return;
   populateWithGenerated(patterns);
   if (isNotDisabled("SplitOfConst"))
     patterns.insert<SplitOfConst>(patterns.getContext());
   patterns.insert<IfOfConst>(patterns.getContext());
-  patterns.insert<LoopUnroll>(patterns.getContext());
+  patterns.insert<LoopUnroll>(patterns.getContext(), maxLoopUnrollCount);
   patterns.insert<ConstPropConcatFromSequence>(patterns.getContext());
   if (enableQDQ)
     patterns.add<RemoveQDQForConst<ONNXSliceOp>,
@@ -2362,7 +2371,7 @@ void onnx_mlir::configureConstPropMaxTileFoldSize(int64_t maxTileFoldSize) {
  * Create a ConstPropONNX pass.
  */
 std::unique_ptr<mlir::Pass> onnx_mlir::createConstPropONNXToONNXPass(
-    bool enableQDQ, bool enableQuantConstFold) {
+    bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount) {
   return std::make_unique<ConstPropONNXToONNXPass>(
-      enableQDQ, enableQuantConstFold);
+      enableQDQ, enableQuantConstFold, maxLoopUnrollCount);
 }

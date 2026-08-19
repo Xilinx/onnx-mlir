@@ -1166,6 +1166,28 @@ bool isConstOf(Value constValue, double n) {
   return ElementsAttrBuilder::allEqual(constElements, w);
 }
 
+bool isShapePreservingBroadcast(Value source, Value target) {
+  auto sourceType = mlir::dyn_cast<RankedTensorType>(source.getType());
+  if (!sourceType)
+    return false;
+  if (sourceType.getRank() == 0)
+    return true;
+
+  auto targetType = mlir::dyn_cast<RankedTensorType>(target.getType());
+  if (!targetType || sourceType.getRank() > targetType.getRank())
+    return false;
+
+  const int64_t rankOffset = targetType.getRank() - sourceType.getRank();
+  for (int64_t i = 0; i < sourceType.getRank(); ++i) {
+    const int64_t sourceDim = sourceType.getDimSize(i);
+    const int64_t targetDim = targetType.getDimSize(rankOffset + i);
+    if (sourceDim != 1 &&
+        (ShapedType::isDynamic(targetDim) || sourceDim != targetDim))
+      return false;
+  }
+  return true;
+}
+
 bool isFloatAttrApprox(mlir::FloatAttr attr, double expected, double epsilon) {
   if (!attr)
     return false;
