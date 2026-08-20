@@ -210,6 +210,9 @@ std::unique_ptr<mlir::Pass> createTransferReduceHdimToReduceCdimPass();
 /// Reshape Reduce(Sum/Mean/Max/Min) so its input is rank-4 + keep_dims=true.
 std::unique_ptr<mlir::Pass> createReplaceQDQReductionPass();
 
+/// Hoist Gather above LayerNormalization (optional Q/DQ).
+std::unique_ptr<mlir::Pass> createHoistGatherAboveLayerNormPass();
+
 /// Fuse quantized Pow(2)->ReduceSum->[eps-Add]->Sqrt (L2-norm) into
 /// onnx.ReduceL2 (AIESW-40266).
 std::unique_ptr<mlir::Pass> createReplaceQDQReduceL2Pass();
