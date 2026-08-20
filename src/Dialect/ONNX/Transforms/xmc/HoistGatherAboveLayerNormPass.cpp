@@ -253,9 +253,9 @@ bool chainInSameBlockAsGather(ONNXGatherOp gatherOp,
     ONNXQuantizeLinearOp q0, ONNXDequantizeLinearOp dq1,
     ONNXQuantizeLinearOp q1) {
   Block *block = gatherOp->getBlock();
-  return allInSameBlock(block, layerNormOp) &&
-         allInSameBlock(block, dq0) && allInSameBlock(block, q0) &&
-         allInSameBlock(block, dq1) && allInSameBlock(block, q1);
+  return allInSameBlock(block, layerNormOp) && allInSameBlock(block, dq0) &&
+         allInSameBlock(block, q0) && allInSameBlock(block, dq1) &&
+         allInSameBlock(block, q1);
 }
 
 struct HoistGatherAboveLayerNormPattern
@@ -284,8 +284,7 @@ struct HoistGatherAboveLayerNormPattern
         return failure();
     }
 
-    if (!chainInSameBlockAsGather(
-            gatherOp, layerNormOp, dq0, q0, dq1, q1))
+    if (!chainInSameBlockAsGather(gatherOp, layerNormOp, dq0, q0, dq1, q1))
       return failure();
 
     auto lnInputType = dyn_cast<RankedTensorType>(layerNormOp.getX().getType());

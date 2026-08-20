@@ -44,7 +44,6 @@ struct OnnxToMlirOptions {
   bool disableSimdOption = false;
 
   bool enableMatmulAddFusion = true;
-  bool enableMatmulToConv = true;
   bool enableHoistGatherAboveLayerNorm = false;
   bool enableMatmulToConv = false;
   bool enableRemovePairsReshape = false;
