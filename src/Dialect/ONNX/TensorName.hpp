@@ -209,6 +209,21 @@ private:
   mlir::SmallVector<std::unique_ptr<Transform>> transforms;
 };
 
+/// A marker transform that says a multi-use op was optimized
+class MultiUseConflict : public Transform {
+public:
+  MultiUseConflict();
+
+  [[nodiscard]] mlir::Attribute toAttr(
+      mlir::MLIRContext *context) const override;
+
+  [[nodiscard]] std::unique_ptr<Transform> invert() const override;
+
+  static bool classof(const Transform *transform) {
+    return transform->getKind() == Kind::MultiUseConflict;
+  }
+};
+
 /// A TensorName represents the name of a tensor along with the sequence of
 /// transformations that have been applied to it.
 class TensorName {

@@ -4853,10 +4853,9 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       enableGroupNormDecompose, enableMatmulNBitsDecompose,
       enableGroupQueryAttentionDecompose, enableSplitToSliceDecompose,
       enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
-      enableLstmDecompose,
       /*disableGenericDecompositions=*/false, enableGatherToSlice,
       enableHardSwishDecompose, enableGroupQueryAttentionCacheSlicing,
-      enableDepthToSpaceDecompose);
+      enableDepthToSpaceDecompose, enableLstmDecompose);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
   if (this->target == "stablehlo") {
@@ -4880,10 +4879,9 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool enableMatmulNBitsDecompose, bool enableGroupQueryAttentionDecompose,
     bool enableSplitToSliceDecompose, bool enableConcatFuse,
     bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
-    bool enableLstmDecompose, bool disableGenericDecompositions,
-    bool enableGatherToSlice, bool enableHardSwishDecompose,
-    bool enableGroupQueryAttentionCacheSlicing,
-    bool enableDepthToSpaceDecompose,
+    bool disableGenericDecompositions, bool enableGatherToSlice,
+    bool enableHardSwishDecompose, bool enableGroupQueryAttentionCacheSlicing,
+    bool enableDepthToSpaceDecompose, bool enableLstmDecompose,
     LSTMDecompositionPredicate lstmDecompositionPredicate) {
   MLIRContext *context = patterns.getContext();
   if (!disableGenericDecompositions)
