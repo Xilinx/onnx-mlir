@@ -79,7 +79,7 @@ LogicalResult ONNXGatherElementsOp::verify() {
                           // elided attributes
       }
       for (IntegerAttr value : valueAttribute.getValues<IntegerAttr>()) {
-        int64_t index = value.getInt();
+        int64_t index = value.getValue().getSExtValue();
         if (index >= -dataDimAtAxis && index < dataDimAtAxis)
           continue;
 

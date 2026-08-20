@@ -232,11 +232,6 @@ def IsSingleElementONNXConstant : Constraint<
 
 def HasShapeAndRank : Constraint<CPred<"onnx_mlir::hasShapeAndRank($_self)">>;
 
-def HasSameElementType : Constraint<
-    CPred<"(mlir::dyn_cast<ShapedType>($0.getType()).getElementType() == "
-          "mlir::cast<::mlir::TypeAttr>($1).getValue())">,
-    "has same element type">;
-
 def HaveSameElementType : Constraint<
     CPred<"(mlir::dyn_cast<ShapedType>($0.getType()).getElementType() == "
           "mlir::dyn_cast<ShapedType>($1.getType()).getElementType())">,
@@ -585,11 +580,10 @@ def DropoutEliminationPattern : Pattern<(ONNXDropoutOp $data, $ratio, $training_
 // Canonicalization for ONNXCastOp
 //===----------------------------------------------------------------------===//
 
-// ONNX_Op (onnx.Cast (%X, $type)) = ONNX_Op (%X)
 def CastEliminationPattern : Pat<
-	(ONNXCastOp $arg, $saturate, $type),
+	(ONNXCastOp:$result $arg, $saturate, $type),
 	(replaceWithValue $arg),
-  [(HasSameElementType $arg, $type)]>;
+  [(HaveSameShapedType $arg, $result)]>;
 
 // Do cast on concat's inputs instead of output in order to propagate
 // cast operations together, which brings concat close to reshape

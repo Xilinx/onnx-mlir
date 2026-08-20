@@ -14,6 +14,20 @@ func.func @cast_identity_elimination(%arg0: tensor<2xf32>) -> tensor<2xf32> {
 // -----
 
 //===----------------------------------------------------------------------===//
+/// Identity casts that refine shape information must not be eliminated.
+//===----------------------------------------------------------------------===//
+
+// CHECK-LABEL: @cast_shape_refinement_preserved
+func.func @cast_shape_refinement_preserved(%arg0: tensor<*xi64>) -> tensor<64x32xi64> {
+  %0 = "onnx.Cast"(%arg0) {to = i64} : (tensor<*xi64>) -> tensor<64x32xi64>
+  onnx.Return %0 : tensor<64x32xi64>
+  // CHECK: %[[CAST:.*]] = "onnx.Cast"(%arg0) {saturate = 1 : si64, to = i64} : (tensor<*xi64>) -> tensor<64x32xi64>
+  // CHECK: onnx.Return %[[CAST]] : tensor<64x32xi64>
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
 /// Integer cast-chain folding.
 //===----------------------------------------------------------------------===//
 
