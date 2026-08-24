@@ -1702,7 +1702,7 @@ Value ConstPropResize(
   // in/out length); the data flows through the axes sequentially. `curShape`
   // tracks the running shape so each pass strides over the intermediate buffer.
   SmallVector<int64_t> curShape(inShape.begin(), inShape.end());
-  for (int64_t axis = 0; axis < rank; ++axis) {    
+  for (int64_t axis = 0; axis < rank; ++axis) {
     if (scales[axis] == 1.0)
       continue;
     SmallVector<SmallVector<ResizeTap>> taps =
