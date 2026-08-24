@@ -291,9 +291,28 @@ static void maybeWidenNarrowConstOperand(PatternRewriter &rewriter,
   bool isSigned = narrowQ.isSigned();
   auto wideStorTy = rewriter.getIntegerType(16);
 
+  // Mixed-precision eltwise: an 8-bit constant widened to 16-bit storage must be
+  // *requantized* into the wider range, not merely sign/zero-extended. Keeping
+  // the 8-bit scale after switching storage to i16 leaves the payload in the low
+  // 8 bits, and the downstream DIV coeff RTP = floor(const_scale /
+  // (other_scale * out_scale) * 2^15) becomes K = 2^(M-N)x too large and
+  // overflows INT32. Requantizing the whole (value, scale, zero_point) tuple by K
+  // keeps (q - zp) * scale invariant while bringing the RTP back in range:
+  //   q_wide = (q_narrow + delta) * K,  zp_wide = (zp_narrow + delta) * K,
+  //   scale_wide = scale_narrow / K. Activation/output params are left unchanged.
+  unsigned narrowW =
+      mlir::cast<IntegerType>(narrowQ.getStorageType()).getWidth();
+  int64_t kShift = static_cast<int64_t>(16 - narrowW);
+  int64_t K = int64_t(1) << kShift;
+  // Widened type keeps the narrow signedness, so no signedness offset is needed.
+  // If a future path flips signedness, set delta = +2^(N-1) (signed->unsigned)
+  // or -2^(N-1) (unsigned->signed) and add it to q and zp before scaling by K.
+  int64_t delta = 0;
+  double wideScale = narrowQ.getScale() / static_cast<double>(K);
+  int64_t wideZp = (narrowQ.getZeroPoint() + delta) * K;
+
   auto wideQ = mlir::quant::UniformQuantizedType::get(narrowQ.getFlags(),
-      wideStorTy, narrowQ.getExpressedType(), narrowQ.getScale(),
-      narrowQ.getZeroPoint(),
+      wideStorTy, narrowQ.getExpressedType(), wideScale, wideZp,
       mlir::quant::UniformQuantizedType::getDefaultMinimumForInteger(
           isSigned, 16),
       mlir::quant::UniformQuantizedType::getDefaultMaximumForInteger(
@@ -319,6 +338,9 @@ static void maybeWidenNarrowConstOperand(PatternRewriter &rewriter,
       auto candIt = candidateVal.getValues<llvm::APInt>().begin();
       for (llvm::APInt v : valueAttr.getValues<llvm::APInt>()) {
         llvm::APInt expected = isSigned ? v.sext(16) : v.zext(16);
+        if (delta)
+          expected += llvm::APInt(16, delta, /*isSigned=*/true);
+        expected = expected.shl(static_cast<unsigned>(kShift));
         if (*candIt != expected) {
           valuesMatch = false;
           break;
@@ -337,8 +359,12 @@ static void maybeWidenNarrowConstOperand(PatternRewriter &rewriter,
         RankedTensorType::get(narrowTy.getShape(), wideStorTy);
     llvm::SmallVector<llvm::APInt, 16> widened;
     widened.reserve(valueAttr.getNumElements());
-    for (llvm::APInt v : valueAttr.getValues<llvm::APInt>())
-      widened.push_back(isSigned ? v.sext(16) : v.zext(16));
+    for (llvm::APInt v : valueAttr.getValues<llvm::APInt>()) {
+      llvm::APInt w = isSigned ? v.sext(16) : v.zext(16);
+      if (delta)
+        w += llvm::APInt(16, delta, /*isSigned=*/true);
+      widened.push_back(w.shl(static_cast<unsigned>(kShift)));
+    }
     auto wideDense = DenseElementsAttr::get(
         wideStorageTensorTy, llvm::ArrayRef<llvm::APInt>(widened));
     auto wideValueAttr = rewriter.getNamedAttr("value", wideDense);
