@@ -1702,10 +1702,8 @@ Value ConstPropResize(
   // in/out length); the data flows through the axes sequentially. `curShape`
   // tracks the running shape so each pass strides over the intermediate buffer.
   SmallVector<int64_t> curShape(inShape.begin(), inShape.end());
-  for (int64_t axis = 0; axis < rank; ++axis) {
-    // Nothing to resample when the axis length is unchanged: a copy pass would
-    // produce the same values (the scale is irrelevant once in==out length).
-    if (curShape[axis] == outShape[axis])
+  for (int64_t axis = 0; axis < rank; ++axis) {    
+    if (scales[axis] == 1.0)
       continue;
     SmallVector<SmallVector<ResizeTap>> taps =
         resizeBuildAxisTaps(curShape[axis], outShape[axis], scales[axis], mode,

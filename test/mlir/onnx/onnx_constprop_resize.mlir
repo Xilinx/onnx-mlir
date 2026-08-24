@@ -28,7 +28,7 @@ func.func @resize_cubic_half_pixel_sizes() -> tensor<1x1x2x2xf32> {
   %r = "onnx.Resize"(%data, %none, %none, %sizes) {antialias = 0 : si64, coordinate_transformation_mode = "half_pixel", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "cubic", nearest_mode = "floor"} : (tensor<1x1x4x4xf32>, none, none, tensor<4xi64>) -> tensor<1x1x2x2xf32>
   onnx.Return %r : tensor<1x1x2x2xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}3.031250e+00, 5.218750e+00{{.*}}11.78125, 13.96875{{.*}}> : tensor<1x1x2x2xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}3.031250e+00, 5.218750e+00], [11.78125, 13.96875]]]]> : tensor<1x1x2x2xf32>
 }
 
 // -----
@@ -49,7 +49,7 @@ func.func @resize_linear_half_pixel_sizes() -> tensor<1x1x2x2xf32> {
   %r = "onnx.Resize"(%data, %none, %none, %sizes) {antialias = 0 : si64, coordinate_transformation_mode = "half_pixel", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "linear", nearest_mode = "floor"} : (tensor<1x1x4x4xf32>, none, none, tensor<4xi64>) -> tensor<1x1x2x2xf32>
   onnx.Return %r : tensor<1x1x2x2xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}3.500000e+00, 5.500000e+00{{.*}}1.150000e+01, 1.350000e+01{{.*}}> : tensor<1x1x2x2xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}3.500000e+00, 5.500000e+00], [1.150000e+01, 1.350000e+01]]]]> : tensor<1x1x2x2xf32>
 }
 
 // -----
@@ -70,7 +70,7 @@ func.func @resize_linear_align_corners_scales() -> tensor<1x1x4x4xf32> {
   %r = "onnx.Resize"(%data, %none, %scales, %none) {antialias = 0 : si64, coordinate_transformation_mode = "align_corners", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "linear", nearest_mode = "floor"} : (tensor<1x1x2x2xf32>, none, tensor<4xf32>, none) -> tensor<1x1x4x4xf32>
   onnx.Return %r : tensor<1x1x4x4xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}1.000000e+00, 1.33333337, 1.66666663, 2.000000e+00{{.*}}1.66666663, 2.000000e+00, 2.33333325, 2.66666675{{.*}}2.33333325, 2.66666675, 3.000000e+00, 3.33333325{{.*}}3.000000e+00, 3.33333325, 3.66666675, 4.000000e+00{{.*}}> : tensor<1x1x4x4xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}1.000000e+00, 1.33333337, 1.66666663, 2.000000e+00], [1.66666663, 2.000000e+00, 2.33333325, 2.66666675], [2.33333325, 2.66666675, 3.000000e+00, 3.33333325], [3.000000e+00, 3.33333325, 3.66666675, 4.000000e+00]]]]> : tensor<1x1x4x4xf32>
 }
 
 // -----
@@ -91,7 +91,7 @@ func.func @resize_linear_asymmetric_sizes() -> tensor<1x1x2x2xf32> {
   %r = "onnx.Resize"(%data, %none, %none, %sizes) {antialias = 0 : si64, coordinate_transformation_mode = "asymmetric", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "linear", nearest_mode = "floor"} : (tensor<1x1x4x4xf32>, none, none, tensor<4xi64>) -> tensor<1x1x2x2xf32>
   onnx.Return %r : tensor<1x1x2x2xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}1.000000e+00, 3.000000e+00{{.*}}9.000000e+00, 1.100000e+01{{.*}}> : tensor<1x1x2x2xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}1.000000e+00, 3.000000e+00], [9.000000e+00, 1.100000e+01]]]]> : tensor<1x1x2x2xf32>
 }
 
 // -----
@@ -112,7 +112,7 @@ func.func @resize_nearest_asymmetric_floor_sizes() -> tensor<1x1x2x2xf32> {
   %r = "onnx.Resize"(%data, %none, %none, %sizes) {antialias = 0 : si64, coordinate_transformation_mode = "asymmetric", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "nearest", nearest_mode = "floor"} : (tensor<1x1x4x4xf32>, none, none, tensor<4xi64>) -> tensor<1x1x2x2xf32>
   onnx.Return %r : tensor<1x1x2x2xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}1.000000e+00, 3.000000e+00{{.*}}9.000000e+00, 1.100000e+01{{.*}}> : tensor<1x1x2x2xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}1.000000e+00, 3.000000e+00], [9.000000e+00, 1.100000e+01]]]]> : tensor<1x1x2x2xf32>
 }
 
 // -----
@@ -133,7 +133,7 @@ func.func @resize_nearest_half_pixel_round_prefer_ceil_scales() -> tensor<1x1x4x
   %r = "onnx.Resize"(%data, %none, %scales, %none) {antialias = 0 : si64, coordinate_transformation_mode = "half_pixel", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "nearest", nearest_mode = "round_prefer_ceil"} : (tensor<1x1x2x2xf32>, none, tensor<4xf32>, none) -> tensor<1x1x4x4xf32>
   onnx.Return %r : tensor<1x1x4x4xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}1.000000e+00, 1.000000e+00, 2.000000e+00, 2.000000e+00{{.*}}1.000000e+00, 1.000000e+00, 2.000000e+00, 2.000000e+00{{.*}}3.000000e+00, 3.000000e+00, 4.000000e+00, 4.000000e+00{{.*}}3.000000e+00, 3.000000e+00, 4.000000e+00, 4.000000e+00{{.*}}> : tensor<1x1x4x4xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}1.000000e+00, 1.000000e+00, 2.000000e+00, 2.000000e+00], [1.000000e+00, 1.000000e+00, 2.000000e+00, 2.000000e+00], [3.000000e+00, 3.000000e+00, 4.000000e+00, 4.000000e+00], [3.000000e+00, 3.000000e+00, 4.000000e+00, 4.000000e+00]]]]> : tensor<1x1x4x4xf32>
 }
 
 // -----
@@ -156,7 +156,7 @@ func.func @resize_cubic_half_pixel_exclude_outside_sizes() -> tensor<1x1x2x2xf32
   %r = "onnx.Resize"(%data, %none, %none, %sizes) {antialias = 0 : si64, coordinate_transformation_mode = "half_pixel", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 1 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "cubic", nearest_mode = "floor"} : (tensor<1x1x4x4xf32>, none, none, tensor<4xi64>) -> tensor<1x1x2x2xf32>
   onnx.Return %r : tensor<1x1x2x2xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}2.85714293, 5.11428595{{.*}}11.8857145, 14.1428576{{.*}}> : tensor<1x1x2x2xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}2.85714293, 5.11428595], [11.8857145, 14.1428576]]]]> : tensor<1x1x2x2xf32>
 }
 
 // -----
@@ -179,7 +179,7 @@ func.func @resize_cubic_half_pixel_cubic_coeff_a_sizes() -> tensor<1x1x2x2xf32> 
   %r = "onnx.Resize"(%data, %none, %none, %sizes) {antialias = 0 : si64, coordinate_transformation_mode = "half_pixel", cubic_coeff_a = -5.000000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "cubic", nearest_mode = "floor"} : (tensor<1x1x4x4xf32>, none, none, tensor<4xi64>) -> tensor<1x1x2x2xf32>
   onnx.Return %r : tensor<1x1x2x2xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}3.187500e+00, 5.312500e+00{{.*}}1.168750e+01, 1.381250e+01{{.*}}> : tensor<1x1x2x2xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}3.187500e+00, 5.312500e+00], [1.168750e+01, 1.381250e+01]]]]> : tensor<1x1x2x2xf32>
 }
 
 // -----
@@ -200,7 +200,7 @@ func.func @resize_linear_pytorch_half_pixel_sizes() -> tensor<1x1x2x2xf32> {
   %r = "onnx.Resize"(%data, %none, %none, %sizes) {antialias = 0 : si64, coordinate_transformation_mode = "pytorch_half_pixel", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "linear", nearest_mode = "floor"} : (tensor<1x1x4x4xf32>, none, none, tensor<4xi64>) -> tensor<1x1x2x2xf32>
   onnx.Return %r : tensor<1x1x2x2xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}3.500000e+00, 5.500000e+00{{.*}}1.150000e+01, 1.350000e+01{{.*}}> : tensor<1x1x2x2xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}3.500000e+00, 5.500000e+00], [1.150000e+01, 1.350000e+01]]]]> : tensor<1x1x2x2xf32>
 }
 
 // -----
@@ -221,7 +221,7 @@ func.func @resize_linear_half_pixel_symmetric_sizes() -> tensor<1x1x2x2xf32> {
   %r = "onnx.Resize"(%data, %none, %none, %sizes) {antialias = 0 : si64, coordinate_transformation_mode = "half_pixel_symmetric", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "linear", nearest_mode = "floor"} : (tensor<1x1x4x4xf32>, none, none, tensor<4xi64>) -> tensor<1x1x2x2xf32>
   onnx.Return %r : tensor<1x1x2x2xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}3.500000e+00, 5.500000e+00{{.*}}1.150000e+01, 1.350000e+01{{.*}}> : tensor<1x1x2x2xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}3.500000e+00, 5.500000e+00], [1.150000e+01, 1.350000e+01]]]]> : tensor<1x1x2x2xf32>
 }
 
 // -----
@@ -242,7 +242,7 @@ func.func @resize_nearest_asymmetric_ceil_scales() -> tensor<1x1x4x4xf32> {
   %r = "onnx.Resize"(%data, %none, %scales, %none) {antialias = 0 : si64, coordinate_transformation_mode = "asymmetric", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "nearest", nearest_mode = "ceil"} : (tensor<1x1x2x2xf32>, none, tensor<4xf32>, none) -> tensor<1x1x4x4xf32>
   onnx.Return %r : tensor<1x1x4x4xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}1.000000e+00, 2.000000e+00, 2.000000e+00, 2.000000e+00{{.*}}3.000000e+00, 4.000000e+00, 4.000000e+00, 4.000000e+00{{.*}}> : tensor<1x1x4x4xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}1.000000e+00, 2.000000e+00, 2.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00, 4.000000e+00, 4.000000e+00], [3.000000e+00, 4.000000e+00, 4.000000e+00, 4.000000e+00], [3.000000e+00, 4.000000e+00, 4.000000e+00, 4.000000e+00]]]]> : tensor<1x1x4x4xf32>
 }
 
 // -----
@@ -263,7 +263,7 @@ func.func @resize_nearest_half_pixel_round_prefer_floor_scales() -> tensor<1x1x4
   %r = "onnx.Resize"(%data, %none, %scales, %none) {antialias = 0 : si64, coordinate_transformation_mode = "half_pixel", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "nearest", nearest_mode = "round_prefer_floor"} : (tensor<1x1x2x2xf32>, none, tensor<4xf32>, none) -> tensor<1x1x4x4xf32>
   onnx.Return %r : tensor<1x1x4x4xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}1.000000e+00, 1.000000e+00, 2.000000e+00, 2.000000e+00{{.*}}3.000000e+00, 3.000000e+00, 4.000000e+00, 4.000000e+00{{.*}}> : tensor<1x1x4x4xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}1.000000e+00, 1.000000e+00, 2.000000e+00, 2.000000e+00], [1.000000e+00, 1.000000e+00, 2.000000e+00, 2.000000e+00], [3.000000e+00, 3.000000e+00, 4.000000e+00, 4.000000e+00], [3.000000e+00, 3.000000e+00, 4.000000e+00, 4.000000e+00]]]]> : tensor<1x1x4x4xf32>
 }
 
 // -----
@@ -284,7 +284,7 @@ func.func @resize_linear_half_pixel_single_axis_width() -> tensor<1x1x2x2xf32> {
   %r = "onnx.Resize"(%data, %none, %none, %sizes) {antialias = 0 : si64, coordinate_transformation_mode = "half_pixel", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "linear", nearest_mode = "floor"} : (tensor<1x1x2x4xf32>, none, none, tensor<4xi64>) -> tensor<1x1x2x2xf32>
   onnx.Return %r : tensor<1x1x2x2xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}1.500000e+00, 3.500000e+00{{.*}}5.500000e+00, 7.500000e+00{{.*}}> : tensor<1x1x2x2xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}1.500000e+00, 3.500000e+00], [5.500000e+00, 7.500000e+00]]]]> : tensor<1x1x2x2xf32>
 }
 
 // -----
@@ -309,7 +309,30 @@ func.func @resize_cubic_half_pixel_upscale_step() -> tensor<1x1x1x8xf32> {
   %r = "onnx.Resize"(%data, %none, %none, %sizes) {antialias = 0 : si64, coordinate_transformation_mode = "half_pixel", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "cubic", nearest_mode = "floor"} : (tensor<1x1x1x4xf32>, none, none, tensor<4xi64>) -> tensor<1x1x1x8xf32>
   onnx.Return %r : tensor<1x1x1x8xf32>
   // CHECK-NOT: onnx.Resize
-  // CHECK: onnx.Constant dense<{{.*}}0.000000e+00, -0.3515625, -1.0546875, 2.265625, 7.734375, 11.0546875, 10.3515625, 1.000000e+01{{.*}}> : tensor<1x1x1x8xf32>
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}0.000000e+00, -0.3515625, -1.0546875, 2.265625, 7.734375, 11.0546875, 10.3515625, 1.000000e+01]]]]> : tensor<1x1x1x8xf32>
+}
+
+// -----
+
+// Non-integer scale (1.1) via `scales` where the output length equals the input
+// length: outLen = floor(inLen * scale) = floor(4 * 1.1) = 4. The lengths match
+// but the axis must STILL be resampled, because half_pixel maps the output
+// coordinates to fractional input positions (-0.05, 0.86, 1.77, 2.68), not to
+// the identity 0, 1, 2, 3. Guards against skipping an axis on length-equality
+// alone (the skip must require scale == 1.0).
+//
+//    Input (1x4):  10  20  30  40
+//    Output (1x4): 10  18.64  27.73  36.82     (linear / half_pixel, scale 1.1)
+//
+// CHECK-LABEL: @resize_linear_half_pixel_scale_gt1_equal_len() -> tensor<1x1x1x4xf32>
+func.func @resize_linear_half_pixel_scale_gt1_equal_len() -> tensor<1x1x1x4xf32> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %data = "onnx.Constant"() {value = dense<[[[[10.0, 20.0, 30.0, 40.0]]]]> : tensor<1x1x1x4xf32>} : () -> tensor<1x1x1x4xf32>
+  %scales = "onnx.Constant"() {value = dense<[1.0, 1.0, 1.0, 1.1]> : tensor<4xf32>} : () -> tensor<4xf32>
+  %r = "onnx.Resize"(%data, %none, %scales, %none) {antialias = 0 : si64, coordinate_transformation_mode = "half_pixel", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "linear", nearest_mode = "floor"} : (tensor<1x1x1x4xf32>, none, tensor<4xf32>, none) -> tensor<1x1x1x4xf32>
+  onnx.Return %r : tensor<1x1x1x4xf32>
+  // CHECK-NOT: onnx.Resize
+  // CHECK: onnx.Constant dense<{{\[\[}}{{\[\[}}1.000000e+01, 18.636364, 27.727272, 36.8181801]]]]> : tensor<1x1x1x4xf32>
 }
 
 // -----
