@@ -1157,6 +1157,19 @@ tblgen_types = (
 MAX_NUM_TYPES = 30
 
 
+def get_schema_default_output_type_map(schema, output):
+    """Import fallback type index from the ONNX schema before ODS widening.
+
+    When an output is widened in ODS (e.g. ui16/ui32 index types), getTypeMap
+    still needs a single default for import. Use the element type declared in
+    the ONNX schema (e.g. tensor(int64) for TopK Indices).
+    """
+    structure, allowed_elem_types = get_allowed_elem_types(schema, output)
+    if allowed_elem_types is not None and len(allowed_elem_types) == 1:
+        return str(get_tblgen_type_index(allowed_elem_types[0]))
+    return str(-1)
+
+
 # Attribute names are ordered alphabetically except for the
 # manually specified special orderings in special_attr_order.
 def order_attr_names(attrNames):
@@ -1532,18 +1545,16 @@ def get_output_type_mapping(schema):
     constraint_patch = special_type_constraints.get(schema.name, {})
     mapping = []
     for output in schema.outputs:
-        # A direct-typed output that has been widened (multiple allowed types)
-        # can no longer be encoded as a single fixed type index; mark it as -1
-        # so the result type is taken from the op's actual result type.
+        # A direct-typed output widened in ODS still defaults to the ONNX-specified
+        # type at import when model types are unavailable.
         if output.name in direct_output_patch:
-            mapping.append(str(-1))
+            mapping.append(get_schema_default_output_type_map(schema, output))
             continue
 
         # An output whose type-constraint param was widened via
         # special_type_constraints (e.g. TopK's Indices param "I") is now
-        # multi-typed even though the raw ONNX schema still lists a single type.
-        # get_allowed_elem_types reads the *unpatched* schema, so guard here and
-        # emit -1 so the result type comes from the op's actual result type.
+        # multi-typed in ODS even though the ONNX schema still lists a single type.
+        # get_allowed_elem_types reads the unpatched schema for the default.
         # When the output shares a type param with an input (e.g. Concat's "T"),
         # keep the input mapping so the frontend can still derive the result type
         # from the operand; ops without ResultTypeInferenceOpInterface rely on this.
@@ -1558,7 +1569,7 @@ def get_output_type_mapping(schema):
                     break
             if mapped_to_input:
                 continue
-            mapping.append(str(-1))
+            mapping.append(get_schema_default_output_type_map(schema, output))
             continue
 
         # If only one type is allowed, just set that.

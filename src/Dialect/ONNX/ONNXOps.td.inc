@@ -298,7 +298,7 @@ def ONNXArgMaxOp:ONNX_Op<"ArgMax",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {-1};
+      return {7};
     }
   }];
   let extraClassDefinition = [{
@@ -338,7 +338,7 @@ def ONNXArgMinOp:ONNX_Op<"ArgMin",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {-1};
+      return {7};
     }
   }];
   let extraClassDefinition = [{
@@ -5402,7 +5402,7 @@ def ONNXNonMaxSuppressionOp:ONNX_Op<"NonMaxSuppression",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {-1};
+      return {7};
     }
   }];
   let extraClassDefinition = [{
@@ -5436,7 +5436,7 @@ def ONNXNonZeroOp:ONNX_Op<"NonZero",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {-1};
+      return {7};
     }
   }];
   let extraClassDefinition = [{
@@ -10376,7 +10376,7 @@ def ONNXTopKOp:ONNX_Op<"TopK",
       return 2;
     }
     static std::vector<int> getTypeMap() {
-      return {30,-1};
+      return {30,7};
     }
   }];
   let extraClassDefinition = [{
