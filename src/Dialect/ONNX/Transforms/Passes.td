@@ -86,6 +86,11 @@ def ONNXDecomposePatternOptions {
            "Enable sequence-length decomposition of LSTM (unroll a "
            "seq_len>1 LSTM into a chain of seq_len=1 LSTMs).">,
 
+    Option<"enableLstmDecompose", "enable-lstm-decomposition",
+           "bool", /*default=*/"false",
+           "Enable decomposition of static LSTM operations into basic ONNX "
+           "operations and bounded onnx.Loop operations.">,
+
     Option<"enableReduceL2Decompose", "enable-reducel2-decompose",
            "bool", /*default=*/"true",
            "Enable decomposition of ReduceL2 to Sqrt(ReduceSumSquare(x)).">,
@@ -154,9 +159,8 @@ def ONNXRecomposePatternOptions {
     Option<"enableReduceL2Recompositions",
            "enable-reducel2-recompositions",
            "bool", /*default=*/"false",
-           "Recompose ReduceL2 from Sqrt(ReduceSumSquare(x)) and "
-           "Pow(ReduceSumSquare(x), 0.5), and ReduceSumSquare from "
-           "ReduceSum(Mul(x, x)) or ReduceSum(Pow(x, 2))">
+           "Recompose ReduceL2 from Sqrt/Pow(0.5) square-reduction "
+           "chains into ReduceL2. Off by default.">
   ];
 }
 

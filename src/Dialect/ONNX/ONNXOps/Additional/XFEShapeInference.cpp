@@ -185,7 +185,10 @@ LogicalResult XFEConvTransposeOpShapeInference(
   int64_t rank = xShape.size();
   int64_t numSpatialDims = rank - 2; // exclude batch and channel
   int64_t N = xShape[0];             // batch
-  int64_t C_out = wShape[0]; // output channels (first dimension in OHWI)
+  // For a (grouped) ConvTranspose the OHWI weight's first dim is
+  // C_out/group, so the total output channels are (C_out/group) * group.
+  int64_t group = convTransposeOp.getGroup();
+  int64_t C_out = wShape[0] * group; // total output channels
 
   // Get attributes
   auto stridesAttr = convTransposeOp.getStrides();

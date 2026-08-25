@@ -91,7 +91,7 @@ LogicalResult ONNXGatherElementsOp::verify() {
               *this->getOperation(), "indices", (int64_t)index,
               onnx_mlir::Diagnostic::Range<int64_t>(0, dataDimAtAxis - 1));
         }
-        int64_t index = value.getInt();
+        int64_t index = value.getValue().getSExtValue();
         if (index >= -dataDimAtAxis && index < dataDimAtAxis)
           continue;
 
