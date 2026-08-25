@@ -68,6 +68,62 @@ LogicalResult ONNXArgMinMaxOpShapeHelper<OP_TYPE>::computeShape() {
 
 } // namespace onnx_mlir
 
+namespace {
+
+// ArgMin/ArgMax output indices are in [0, s-1] where s is the input size along
+// axis. For unsigned (and other narrow) result types, verify s-1 is
+// representable — same [0, max] logic as GatherElements unsigned index checks.
+LogicalResult verifyArgMinMaxReducedIndexFitsAxisDimension(
+    Operation *op, Value data, Value reduced, int64_t axisIndex) {
+  auto dataType = mlir::cast<ShapedType>(data.getType());
+  auto reducedType = mlir::dyn_cast<ShapedType>(reduced.getType());
+  if (!reducedType)
+    return success();
+
+  auto indexElementType =
+      mlir::dyn_cast<IntegerType>(reducedType.getElementType());
+  if (!indexElementType)
+    return success();
+
+  int64_t dataRank = dataType.getRank();
+  int64_t axis = axisIndex < 0 ? axisIndex + dataRank : axisIndex;
+  if (axis < 0 || axis >= dataRank)
+    return success();
+
+  int64_t dataDimAtAxis = dataType.getShape()[axis];
+  if (dataDimAtAxis == ShapedType::kDynamic || dataDimAtAxis <= 0)
+    return success();
+
+  int64_t maxIndex = dataDimAtAxis - 1;
+  int64_t maxRepresentableIndex;
+  if (indexElementType.isUnsignedInteger()) {
+    unsigned width = indexElementType.getWidth();
+    if (width >= 64)
+      return success();
+    maxRepresentableIndex = static_cast<int64_t>((1ULL << width) - 1);
+  } else {
+    unsigned width = indexElementType.getWidth();
+    if (width >= 64)
+      return success();
+    maxRepresentableIndex = static_cast<int64_t>((1ULL << (width - 1)) - 1);
+  }
+
+  if (maxIndex <= maxRepresentableIndex)
+    return success();
+
+  if (indexElementType.isUnsignedInteger())
+    return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
+        *op, "reduced", maxIndex,
+        onnx_mlir::Diagnostic::Range<int64_t>(0, maxRepresentableIndex));
+
+  return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
+      *op, "reduced", maxIndex,
+      onnx_mlir::Diagnostic::Range<int64_t>(
+          -maxRepresentableIndex, maxRepresentableIndex));
+}
+
+} // namespace
+
 //===----------------------------------------------------------------------===//
 // ONNXArgMaxOp
 //===----------------------------------------------------------------------===//
@@ -86,7 +142,8 @@ LogicalResult ONNXArgMaxOp::verify() {
         *this->getOperation(), "axis", axisIndex,
         onnx_mlir::Diagnostic::Range<int64_t>(-rank, rank - 1));
 
-  return success();
+  return verifyArgMinMaxReducedIndexFitsAxisDimension(
+      getOperation(), getData(), getReduced(), axisIndex);
 }
 
 LogicalResult ONNXArgMaxOp::inferShapes(
@@ -94,8 +151,15 @@ LogicalResult ONNXArgMaxOp::inferShapes(
   if (!hasShapeAndRank(getData()))
     return success();
 
-  // ONNX spec specifies the reduced type as an int64
-  Type elementType = IntegerType::get(getContext(), 64);
+  // Default to i64 per ONNX spec, but preserve a pre-existing integer element
+  // type on the result so frontend specializations to ui16/ui32 are kept.
+  Builder b(getContext());
+  Type elementType = b.getI64Type();
+  if (auto resultType = mlir::dyn_cast<ShapedType>(getReduced().getType())) {
+    Type existing = resultType.getElementType();
+    if (existing && mlir::isa<IntegerType>(existing))
+      elementType = existing;
+  }
   ONNXArgMaxOpShapeHelper shapeHelper(getOperation(), {});
   return shapeHelper.computeShapeAndUpdateType(elementType);
 }
@@ -118,7 +182,8 @@ LogicalResult ONNXArgMinOp::verify() {
         *this->getOperation(), "axis", axisIndex,
         onnx_mlir::Diagnostic::Range<int64_t>(-rank, rank - 1));
 
-  return success();
+  return verifyArgMinMaxReducedIndexFitsAxisDimension(
+      getOperation(), getData(), getReduced(), axisIndex);
 }
 
 LogicalResult ONNXArgMinOp::inferShapes(
@@ -126,8 +191,15 @@ LogicalResult ONNXArgMinOp::inferShapes(
   if (!hasShapeAndRank(getData()))
     return success();
 
-  // ONNX spec specifies the reduced type as an int64
-  Type elementType = IntegerType::get(getContext(), 64);
+  // Default to i64 per ONNX spec, but preserve a pre-existing integer element
+  // type on the result so frontend specializations to ui16/ui32 are kept.
+  Builder b(getContext());
+  Type elementType = b.getI64Type();
+  if (auto resultType = mlir::dyn_cast<ShapedType>(getReduced().getType())) {
+    Type existing = resultType.getElementType();
+    if (existing && mlir::isa<IntegerType>(existing))
+      elementType = existing;
+  }
   ONNXArgMinOpShapeHelper shapeHelper(getOperation(), {});
   return shapeHelper.computeShapeAndUpdateType(elementType);
 }

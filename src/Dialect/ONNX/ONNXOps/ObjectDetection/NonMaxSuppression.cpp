@@ -86,7 +86,15 @@ LogicalResult ONNXNonMaxSuppressionOp::verify() {
 LogicalResult ONNXNonMaxSuppressionOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
   Builder b = Builder(getContext());
+  // Default to i64 per ONNX spec, but preserve a pre-existing integer element
+  // type on the result so frontend specializations to ui16/ui32 are kept.
   Type elementType = b.getI64Type();
+  if (auto resultType =
+          mlir::dyn_cast<ShapedType>(getSelectedIndices().getType())) {
+    Type existing = resultType.getElementType();
+    if (existing && mlir::isa<IntegerType>(existing))
+      elementType = existing;
+  }
   ONNXNonMaxSuppressionOpShapeHelper shapeHelper(getOperation(), {});
   return shapeHelper.computeShapeAndUpdateType(elementType);
 }

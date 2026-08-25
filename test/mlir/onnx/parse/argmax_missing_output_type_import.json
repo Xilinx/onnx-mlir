@@ -1,0 +1,91 @@
+// Without model types getTypeMap() defaults reduced output to i64 from ONNX spec.
+// RUN: onnx-mlir --EmitONNXIR --useOnnxModelTypes=false --allowMissingOutputTypes=true --printIR %s | FileCheck --check-prefix=INFERRED-DEFAULT %s
+// INFERRED-DEFAULT-LABEL: func.func @main_graph
+// INFERRED-DEFAULT: "onnx.ArgMax"({{.*}}) {{.*}} : (tensor<2x3xf32>) -> tensor<2xi64>
+// RUN: onnx-mlir --EmitONNXIR --useOnnxModelTypes=true --allowMissingOutputTypes=true --printIR %s | FileCheck --check-prefix=MODEL-TYPE %s
+// MODEL-TYPE-LABEL: func.func @main_graph
+// MODEL-TYPE: "onnx.ArgMax"({{.*}}) {{.*}} : (tensor<2x3xf32>) -> tensor<2xui16>
+{
+  "irVersion": "13",
+  "producerName": "onnx-mlir-test",
+  "graph": {
+    "node": [
+      {
+        "input": [
+          "X"
+        ],
+        "output": [
+          "Y"
+        ],
+        "name": "argmax_node",
+        "opType": "ArgMax",
+        "attribute": [
+          {
+            "name": "axis",
+            "i": "1",
+            "type": "INT"
+          },
+          {
+            "name": "keepdims",
+            "i": "0",
+            "type": "INT"
+          },
+          {
+            "name": "select_last_index",
+            "i": "0",
+            "type": "INT"
+          }
+        ]
+      }
+    ],
+    "name": "argmax_graph",
+    "input": [
+      {
+        "name": "X",
+        "type": {
+          "tensorType": {
+            "elemType": 1,
+            "shape": {
+              "dim": [
+                {
+                  "dimValue": "2"
+                },
+                {
+                  "dimValue": "3"
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "output": [
+      {
+        "name": "Y"
+      }
+    ],
+    "valueInfo": [
+      {
+        "name": "Y",
+        "type": {
+          "tensorType": {
+            "elemType": 4,
+            "shape": {
+              "dim": [
+                {
+                  "dimValue": "2"
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  "opsetImport": [
+    {
+      "domain": "",
+      "version": "13"
+    }
+  ]
+}
