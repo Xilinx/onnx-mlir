@@ -715,42 +715,48 @@ public:
 /// `BinaryOp(DepthToSpace(x), DepthToSpace(y))` as
 /// `DepthToSpace(BinaryOp(x, y))` when both DepthToSpace operations have the
 /// same configuration and the binary operation does not broadcast.
-template <typename BinaryOp>
-class BinaryDepthToSpacePattern : public OpRewritePattern<BinaryOp> {
+/// Anchored on the ONNXDepthToSpaceOp.
+class BinaryDepthToSpacePattern
+    : public OpRewritePattern<ONNXDepthToSpaceOp> {
 public:
-  using OpRewritePattern<BinaryOp>::OpRewritePattern;
+  using OpRewritePattern<ONNXDepthToSpaceOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
-      BinaryOp binaryOp, PatternRewriter &rewriter) const override {
-    auto lhs =
-        binaryOp.getOperand(0).template getDefiningOp<ONNXDepthToSpaceOp>();
-    auto rhs =
-        binaryOp.getOperand(1).template getDefiningOp<ONNXDepthToSpaceOp>();
-    if (!lhs || !rhs)
-      return rewriter.notifyMatchFailure(
-          binaryOp, "both operands must be produced by DepthToSpace");
+      ONNXDepthToSpaceOp d2sOp, PatternRewriter &rewriter) const override {
+    for (Operation *user : d2sOp.getResult().getUsers()) {
+      if (user->getNumOperands() != 2 || user->getNumResults() != 1)
+        continue;
+      if (!user->hasTrait<OpTrait::Elementwise>())
+        continue;
 
-    if (lhs.getBlocksize() != rhs.getBlocksize() ||
-        lhs.getMode() != rhs.getMode())
-      return rewriter.notifyMatchFailure(
-          binaryOp, "DepthToSpace operations have different configurations");
+      auto lhs =
+          user->getOperand(0).getDefiningOp<ONNXDepthToSpaceOp>();
+      auto rhs =
+          user->getOperand(1).getDefiningOp<ONNXDepthToSpaceOp>();
+      if (!lhs || !rhs)
+        continue;
 
-    const Type lhsInputType = lhs.getInput().getType();
-    const Type rhsInputType = rhs.getInput().getType();
-    const Type outputType = binaryOp.getResult().getType();
-    if (lhsInputType != rhsInputType ||
-        lhs.getResult().getType() != outputType ||
-        rhs.getResult().getType() != outputType)
-      return rewriter.notifyMatchFailure(
-          binaryOp, "DepthToSpace operands do not have matching shapes");
+      if (lhs.getBlocksize() != rhs.getBlocksize() ||
+          lhs.getMode() != rhs.getMode())
+        continue;
 
-    auto newBinary = rewriter.create<BinaryOp>(
-        binaryOp.getLoc(), lhsInputType, lhs.getInput(), rhs.getInput());
-    newBinary->setAttrs(binaryOp->getAttrs());
-    rewriter.replaceOpWithNewOp<ONNXDepthToSpaceOp>(binaryOp,
-        {lhs.getLoc(), rhs.getLoc()}, outputType, newBinary.getResult(),
-        lhs.getBlocksizeAttr(), lhs.getModeAttr());
-    return success();
+      const Type lhsInputType = lhs.getInput().getType();
+      const Type rhsInputType = rhs.getInput().getType();
+      const Type outputType = user->getResult(0).getType();
+      if (lhsInputType != rhsInputType ||
+          lhs.getResult().getType() != outputType ||
+          rhs.getResult().getType() != outputType)
+        continue;
+
+      Operation *newBinary = rewriter.clone(*user);
+      newBinary->setOperands({lhs.getInput(), rhs.getInput()});
+      newBinary->getResult(0).setType(lhsInputType);
+      rewriter.replaceOpWithNewOp<ONNXDepthToSpaceOp>(user,
+          {lhs.getLoc(), rhs.getLoc()}, outputType, newBinary->getResult(0),
+          lhs.getBlocksizeAttr(), lhs.getModeAttr());
+      return success();
+    }
+    return failure();
   }
 };
 
@@ -3970,7 +3976,6 @@ void ONNXAddOp::getCanonicalizationPatterns(
     results.insert<FuseAddConvQDQBiasPattern>(context);
   }
   results.insert<BinaryOpBroadcastAxisPattern<ONNXAddOp>>(context);
-  results.insert<BinaryDepthToSpacePattern<ONNXAddOp>>(context);
   results.insert<PropagateScalarConstantExpandPattern<ONNXAddOp>>(context);
   results.insert<PropagateScaleIntoLayerNormPattern<ONNXLayerNormalizationOp>>(
       context);
@@ -4045,13 +4050,13 @@ void ONNXConstantOp::getCanonicalizationPatterns(
 void ONNXDepthToSpaceOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<RemoveDepthToSpaceSpaceToDepthPattern>(context);
+  results.insert<BinaryDepthToSpacePattern>(context);
 }
 
 /// on the ONNXDivOp.
 void ONNXDivOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<BinaryOpBroadcastAxisPattern<ONNXDivOp>>(context);
-  result.insert<BinaryDepthToSpacePattern<ONNXDivOp>>(context);
   result.insert<PropagateScalarConstantExpandPattern<ONNXDivOp>>(context);
   result.insert<PropagateReshapeThroughBinaryOpPattern<ONNXDivOp>>(context);
   result.insert<PropagateConstantScalingInAttentionLayerPattern<ONNXDivOp>>(
@@ -4163,7 +4168,6 @@ void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
 /// on the ONNXModOp.
 void ONNXModOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
-  results.insert<BinaryDepthToSpacePattern<ONNXModOp>>(context);
 }
 
 /// on the ONNXMulOp.
@@ -4172,7 +4176,6 @@ void ONNXMulOp::getCanonicalizationPatterns(
   results.insert<NormalizeMulPattern>(context);
   results.insert<FuseMulConvNullBiasPattern>(context);
   results.insert<BinaryOpBroadcastAxisPattern<ONNXMulOp>>(context);
-  results.insert<BinaryDepthToSpacePattern<ONNXMulOp>>(context);
   results.insert<PropagateScalarConstantExpandPattern<ONNXMulOp>>(context);
   results.insert<PropagateReshapeThroughBinaryOpPattern<ONNXMulOp>>(context);
   results.insert<PropagateConstantScalingInAttentionLayerPattern<ONNXMulOp>>(
@@ -4236,7 +4239,6 @@ void ONNXShapeOp::getCanonicalizationPatterns(
 void ONNXSubOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<BinaryOpBroadcastAxisPattern<ONNXSubOp>>(context);
-  result.insert<BinaryDepthToSpacePattern<ONNXSubOp>>(context);
   result.insert<PropagateScalarConstantExpandPattern<ONNXSubOp>>(context);
   result.insert<PropagateReshapeThroughBinaryOpPattern<ONNXSubOp>>(context);
 }
@@ -4371,7 +4373,6 @@ void ONNXPowOp::getCanonicalizationPatterns(
   // Changed from upstream 64 to 2 because it can break quantization patterns
   result.insert<PowToMulRewritePattern>(context, 2);
   result.insert<BinaryOpBroadcastAxisPattern<ONNXPowOp>>(context);
-  result.insert<BinaryDepthToSpacePattern<ONNXPowOp>>(context);
 }
 
 /// on the ONNXXorOp.
