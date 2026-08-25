@@ -476,6 +476,11 @@ def load_custom_ops_from_yaml(yaml_paths: List[str]) -> List[CustomOpSchema]:
 # Keyed by op name. Value is a dict of type_param -> extra allowed type strings:
 #   "*" applies to all type params, named keys (e.g. "T4") target one param.
 special_type_constraints = {
+    # FIXME(FXML-4138): Celu opset 12 is float-only; widen with bf16 here until
+    # opset 28 lands with bfloat16 support.
+    "Celu": {
+        "T": ["tensor(bfloat16)", "tensor(float16)"],
+    },
     "QLinearConv": {
         "*": ["tensor(uint16)"],
         "T4": ["tensor(int16)", "tensor(int8)"],
@@ -490,7 +495,32 @@ special_type_constraints = {
         "T": ["tensor(uint4)", "tensor(int4)"],
     },
     "Gather": {
-        "Tind": ["tensor(int16)"],
+        "Tind": ["tensor(int16)", "tensor(uint16)", "tensor(uint32)"],
+    },
+    "GatherElements": {
+        "Tind": ["tensor(uint16)", "tensor(uint32)"],
+    },
+    "ScatterElements": {
+        "Tind": ["tensor(uint16)", "tensor(uint32)"],
+    },
+    # Index consumers whose indices operand is a named type-constraint param.
+    # Widen so they accept the smaller unsigned index widths (ui16/ui32) that
+    # our index producers can emit.
+    "Scatter": {
+        "Tind": ["tensor(uint16)", "tensor(uint32)"],
+    },
+    "OneHot": {
+        # T1 is the `indices` operand's type param.
+        "T1": ["tensor(uint16)", "tensor(uint32)"],
+    },
+    "MaxUnpool": {
+        # T2 is shared by the `I` (indices) and `output_shape` operands.
+        "T2": ["tensor(uint16)", "tensor(uint32)"],
+    },
+    "TopK": {
+        # Widen the Indices output type so the frontend can specialize the
+        # TopK indices to a smaller unsigned width (bounded by X.shape[axis]).
+        "I": ["tensor(uint16)", "tensor(uint32)"],
     },
     "ReduceSum": {
         "T": ["tensor(uint16)"],
@@ -498,6 +528,31 @@ special_type_constraints = {
     "ReverseSequence": {
         "T": ["tensor(bfloat16)"],
     },
+}
+
+# Extra tensor types patched into ops' *inputs* that are declared with a
+# *direct* type string (e.g. tensor(int64)) rather than a named type-constraint
+# param. This is the input-side analog of special_direct_output_types: it lets
+# index consumers whose indices operand is hard-coded to tensor(int64) also
+# accept the smaller unsigned index widths (ui16/ui32) our producers emit.
+# Keyed by op name -> {input_name: [extra allowed type strings]}.
+special_direct_input_types = {
+    "GatherND": {"indices": ["tensor(uint16)", "tensor(uint32)"]},
+    "ScatterND": {"indices": ["tensor(uint16)", "tensor(uint32)"]},
+}
+
+# Extra tensor types patched into ops' outputs that are declared with a *direct*
+# type string (e.g. tensor(int64)) rather than a named type-constraint param.
+# The special_type_constraints mechanism above cannot reach those, so index
+# producers whose result is hard-coded to tensor(int64) are widened here.
+# Keyed by op name -> {output_name: [extra allowed type strings]}.
+# These let the frontend specialize the index output to a smaller unsigned
+# width (ui16/ui32) instead of always int64.
+special_direct_output_types = {
+    "ArgMax": {"reduced": ["tensor(uint16)", "tensor(uint32)"]},
+    "ArgMin": {"reduced": ["tensor(uint16)", "tensor(uint32)"]},
+    "NonZero": {"Y": ["tensor(uint16)", "tensor(uint32)"]},
+    "NonMaxSuppression": {"selected_indices": ["tensor(uint16)", "tensor(uint32)"]},
 }
 
 # Manual specification of attribute type.
@@ -1102,6 +1157,19 @@ tblgen_types = (
 MAX_NUM_TYPES = 30
 
 
+def get_schema_default_output_type_map(schema, output):
+    """Import fallback type index from the ONNX schema before ODS widening.
+
+    When an output is widened in ODS (e.g. ui16/ui32 index types), getTypeMap
+    still needs a single default for import. Use the element type declared in
+    the ONNX schema (e.g. tensor(int64) for TopK Indices).
+    """
+    structure, allowed_elem_types = get_allowed_elem_types(schema, output)
+    if allowed_elem_types is not None and len(allowed_elem_types) == 1:
+        return str(get_tblgen_type_index(allowed_elem_types[0]))
+    return str(-1)
+
+
 # Attribute names are ordered alphabetically except for the
 # manually specified special orderings in special_attr_order.
 def order_attr_names(attrNames):
@@ -1291,12 +1359,28 @@ def get_operands_or_results(schema, type_str_dict, op_name, is_input):
         else:
             return "AnyTypeOf<[{}]>".format(", ".join(types))
 
+    # Extra widened types for operands/results declared with a direct type
+    # string (see special_direct_input_types / special_direct_output_types).
+    if is_input:
+        direct_patch = special_direct_input_types.get(schema.name, {})
+    else:
+        direct_patch = special_direct_output_types.get(schema.name, {})
+
     name_to_types = OrderedDict()
     for i, value in enumerate(value_list):
         str_types = get_onnx_mlir_types(schema, type_str_dict, value)
 
         # In case the type string is used more than once.
         types = str_types.copy()
+
+        # Widen direct-typed operands/results (e.g. tensor(int64) index
+        # consumers/producers) with any extra allowed types requested for this
+        # op's operand/result.
+        if value.name in direct_patch:
+            for extra in direct_patch[value.name]:
+                mlir_extra = parse_type_str(extra)
+                if mlir_extra not in types:
+                    types.append(mlir_extra)
 
         # No need to add AnyMemRef type. Keep the code in case.
         # types.append("AnyMemRef")
@@ -1457,8 +1541,37 @@ def get_numberof_list(my_list):
 
 
 def get_output_type_mapping(schema):
+    direct_output_patch = special_direct_output_types.get(schema.name, {})
+    constraint_patch = special_type_constraints.get(schema.name, {})
     mapping = []
     for output in schema.outputs:
+        # A direct-typed output widened in ODS still defaults to the ONNX-specified
+        # type at import when model types are unavailable.
+        if output.name in direct_output_patch:
+            mapping.append(get_schema_default_output_type_map(schema, output))
+            continue
+
+        # An output whose type-constraint param was widened via
+        # special_type_constraints (e.g. TopK's Indices param "I") is now
+        # multi-typed in ODS even though the ONNX schema still lists a single type.
+        # get_allowed_elem_types reads the unpatched schema for the default.
+        # When the output shares a type param with an input (e.g. Concat's "T"),
+        # keep the input mapping so the frontend can still derive the result type
+        # from the operand; ops without ResultTypeInferenceOpInterface rely on this.
+        if output.type_str and (
+            output.type_str in constraint_patch or "*" in constraint_patch
+        ):
+            mapped_to_input = False
+            for i, inp in enumerate(schema.inputs):
+                if inp.type_str and inp.type_str == output.type_str:
+                    mapping.append(str(i + MAX_NUM_TYPES))
+                    mapped_to_input = True
+                    break
+            if mapped_to_input:
+                continue
+            mapping.append(get_schema_default_output_type_map(schema, output))
+            continue
+
         # If only one type is allowed, just set that.
         structure, allowed_elem_types = get_allowed_elem_types(schema, output)
         if allowed_elem_types != None and len(allowed_elem_types) == 1:
