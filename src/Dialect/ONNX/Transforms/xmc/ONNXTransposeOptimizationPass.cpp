@@ -379,8 +379,8 @@ struct FuseConsecutiveTransposes : public OpRewritePattern<ONNXTransposeOp> {
       if (graphOutput)
         tname.setTo(prevTranspose.getOperand());
     } else {
-      auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(
-          op, op.getType(), prevTranspose.getOperand(),
+      auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(op,
+          op.getType(), prevTranspose.getOperand(),
           rewriter.getI64ArrayAttr(composedPerm));
       (void)maintainTransposeTag(newTranspose, rewriter);
     }

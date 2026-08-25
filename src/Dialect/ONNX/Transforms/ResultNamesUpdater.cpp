@@ -78,7 +78,7 @@ bool hasNameAndManyUses(Value value) {
 bool hasConflictMarker(Value value) {
   TensorName tn(value);
   return tn && llvm::any_of(tn.getTransforms(),
-                    [](Transform *t) { return isa<MultiUseConflict>(t); });
+                   [](Transform *t) { return isa<MultiUseConflict>(t); });
 }
 
 } // namespace

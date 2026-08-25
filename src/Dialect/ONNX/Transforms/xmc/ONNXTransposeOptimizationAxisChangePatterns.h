@@ -72,9 +72,10 @@ static LogicalResult maintainTransposeTag(
     conflictVal = defOp->getOperand(0);
     conflictName = onnx_mlir::TensorName(conflictVal);
   }
-  if (llvm::any_of(conflictName.getTransforms(), [](onnx_mlir::Transform *trans) {
-        return isa<onnx_mlir::MultiUseConflict>(trans);
-      }))
+  if (llvm::any_of(
+          conflictName.getTransforms(), [](onnx_mlir::Transform *trans) {
+            return isa<onnx_mlir::MultiUseConflict>(trans);
+          }))
     return failure();
 
   conflictName.push_back(std::make_unique<onnx_mlir::MultiUseConflict>());
