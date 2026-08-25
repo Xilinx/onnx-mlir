@@ -5057,7 +5057,6 @@ def ONNXMishOp:ONNX_Op<"Mish",
 
 def ONNXModOp:ONNX_Op<"Mod",
   [Pure, OpVersionTrait<13>, ONNXElementwiseTrait, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
-  let hasCanonicalizer = 1;
   let summary = "ONNX Mod operation";
   let description = [{
   Performs an element-wise binary modulo operation.

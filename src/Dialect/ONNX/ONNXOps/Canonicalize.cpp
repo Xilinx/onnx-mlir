@@ -711,12 +711,13 @@ public:
   }
 };
 
-/// Rewrite a binary elementwise operation
-/// `BinaryOp(DepthToSpace(x), DepthToSpace(y))` as
-/// `DepthToSpace(BinaryOp(x, y))` when both DepthToSpace operations have the
-/// same configuration and the binary operation does not broadcast.
-/// Anchored on the ONNXDepthToSpaceOp.
-class BinaryDepthToSpacePattern
+/// Sink DepthToSpace ops beneath elementwise ops
+/// Unary:  `UnaryOp(DepthToSpace(x))` -> `DepthToSpace(UnaryOp(x))`
+/// Binary: `BinaryOp(DepthToSpace(x), DepthToSpace(y))` ->
+///         `DepthToSpace(BinaryOp(x, y))` (no broadcast)
+/// Sinking requires the DepthToSpace ops to have the same configuration and the
+/// binary operation does not broadcast.
+class DepthToSpaceElementwisePattern
     : public OpRewritePattern<ONNXDepthToSpaceOp> {
 public:
   using OpRewritePattern<ONNXDepthToSpaceOp>::OpRewritePattern;
@@ -724,37 +725,56 @@ public:
   LogicalResult matchAndRewrite(
       ONNXDepthToSpaceOp d2sOp, PatternRewriter &rewriter) const override {
     for (Operation *user : d2sOp.getResult().getUsers()) {
-      if (user->getNumOperands() != 2 || user->getNumResults() != 1)
-        continue;
-      if (!user->hasTrait<OpTrait::Elementwise>())
+      if (!user->hasTrait<OpTrait::ONNXElementwise>())
         continue;
 
-      auto lhs =
-          user->getOperand(0).getDefiningOp<ONNXDepthToSpaceOp>();
-      auto rhs =
-          user->getOperand(1).getDefiningOp<ONNXDepthToSpaceOp>();
-      if (!lhs || !rhs)
-        continue;
+      const unsigned numOperands = user->getNumOperands();
+      if (numOperands == 1) {
+        // Unary: DepthToSpace(UnaryOp(x)) -> UnaryOp(DepthToSpace(x))
+        // rewritten as UnaryOp(DepthToSpace(x)) -> DepthToSpace(UnaryOp(x))
+        const Type inputType = d2sOp.getInput().getType();
+        const Type outputType = user->getResult(0).getType();
 
-      if (lhs.getBlocksize() != rhs.getBlocksize() ||
-          lhs.getMode() != rhs.getMode())
-        continue;
+        Operation *newUnary = rewriter.clone(*user);
+        newUnary->setOperands({d2sOp.getInput()});
+        newUnary->getResult(0).setType(inputType);
+        rewriter.replaceOpWithNewOp<ONNXDepthToSpaceOp>(user, {d2sOp.getLoc()},
+            outputType, newUnary->getResult(0), d2sOp.getBlocksizeAttr(),
+            d2sOp.getModeAttr());
+        return success();
+      }
 
-      const Type lhsInputType = lhs.getInput().getType();
-      const Type rhsInputType = rhs.getInput().getType();
-      const Type outputType = user->getResult(0).getType();
-      if (lhsInputType != rhsInputType ||
-          lhs.getResult().getType() != outputType ||
-          rhs.getResult().getType() != outputType)
-        continue;
+      if (numOperands == 2) {
+        // Binary: BinaryOp(DepthToSpace(x), DepthToSpace(y)) ->
+        //         DepthToSpace(BinaryOp(x, y))
+        auto lhs = user->getOperand(0).getDefiningOp<ONNXDepthToSpaceOp>();
+        auto rhs = user->getOperand(1).getDefiningOp<ONNXDepthToSpaceOp>();
+        if (!lhs || !rhs)
+          continue;
 
-      Operation *newBinary = rewriter.clone(*user);
-      newBinary->setOperands({lhs.getInput(), rhs.getInput()});
-      newBinary->getResult(0).setType(lhsInputType);
-      rewriter.replaceOpWithNewOp<ONNXDepthToSpaceOp>(user,
-          {lhs.getLoc(), rhs.getLoc()}, outputType, newBinary->getResult(0),
-          lhs.getBlocksizeAttr(), lhs.getModeAttr());
-      return success();
+        // Different DepthToSpace configurations
+        if (lhs.getBlocksize() != rhs.getBlocksize() ||
+            lhs.getMode() != rhs.getMode())
+          continue;
+
+        // Different input types implies they are broadcast. We should not sink
+        // in this case.
+        const Type lhsInputType = lhs.getInput().getType();
+        const Type rhsInputType = rhs.getInput().getType();
+        const Type outputType = user->getResult(0).getType();
+        if (lhsInputType != rhsInputType ||
+            lhs.getResult().getType() != outputType ||
+            rhs.getResult().getType() != outputType)
+          continue;
+
+        Operation *newBinary = rewriter.clone(*user);
+        newBinary->setOperands({lhs.getInput(), rhs.getInput()});
+        newBinary->getResult(0).setType(lhsInputType);
+        rewriter.replaceOpWithNewOp<ONNXDepthToSpaceOp>(user,
+            {lhs.getLoc(), rhs.getLoc()}, outputType, newBinary->getResult(0),
+            lhs.getBlocksizeAttr(), lhs.getModeAttr());
+        return success();
+      }
     }
     return failure();
   }
@@ -4050,7 +4070,7 @@ void ONNXConstantOp::getCanonicalizationPatterns(
 void ONNXDepthToSpaceOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<RemoveDepthToSpaceSpaceToDepthPattern>(context);
-  results.insert<BinaryDepthToSpacePattern>(context);
+  results.insert<DepthToSpaceElementwisePattern>(context);
 }
 
 /// on the ONNXDivOp.
@@ -4163,11 +4183,6 @@ void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<ReorderReluMaxPoolPattern>(context);
   results.insert<FuseBackToBackMaxpools>(context);
-}
-
-/// on the ONNXModOp.
-void ONNXModOp::getCanonicalizationPatterns(
-    RewritePatternSet &results, MLIRContext *context) {
 }
 
 /// on the ONNXMulOp.
