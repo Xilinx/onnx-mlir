@@ -717,6 +717,112 @@ OpsWithSameOperandsAndResultShape = [
     "Tanh",
 ]
 
+# ONNX elementwise ops (explicit allowlists; callers check arity themselves).
+OpsWithONNXElementwiseUnary = [
+    "Abs",
+    "Acos",
+    "Acosh",
+    "Asin",
+    "Asinh",
+    "Atan",
+    "Atanh",
+    "BitwiseNot",
+    "Ceil",
+    "Celu",
+    "Cos",
+    "Cosh",
+    "Elu",
+    "Erf",
+    "Exp",
+    "Floor",
+    "Gelu",
+    "HardSigmoid",
+    "HardSwish",
+    "Identity",
+    "IsInf",
+    "IsNaN",
+    "LeakyRelu",
+    "Log",
+    "Mish",
+    "Neg",
+    "Not",
+    "Reciprocal",
+    "Relu",
+    "Round",
+    "Selu",
+    "Shrink",
+    "Sigmoid",
+    "Sign",
+    "Sin",
+    "Sinh",
+    "Softplus",
+    "Softsign",
+    "Sqrt",
+    "Tan",
+    "Tanh",
+    "ThresholdedRelu",
+]
+
+OpsWithONNXElementwiseBinary = [
+    "Add",
+    "And",
+    "BitShift",
+    "BitwiseAnd",
+    "BitwiseOr",
+    "BitwiseXor",
+    "CastLike",
+    "Div",
+    "Equal",
+    "Greater",
+    "GreaterOrEqual",
+    "Less",
+    "LessOrEqual",
+    "Mod",
+    "Mul",
+    "Or",
+    "Pow",
+    "PRelu",
+    "StringConcat",
+    "Sub",
+    "Xor",
+]
+
+OpsWithONNXElementwiseVariadic = [
+    "Max",
+    "Mean",
+    "Min",
+    "Sum",
+]
+
+OpsWithONNXElementwiseTernary = [
+    "Where",
+]
+
+OpsWithONNXElementwise = sorted(
+    set(
+        OpsWithONNXElementwiseUnary
+        + OpsWithONNXElementwiseBinary
+        + OpsWithONNXElementwiseVariadic
+        + OpsWithONNXElementwiseTernary
+    )
+)
+
+OpsWithCommutative = [
+    "Add",
+    "Mul",
+    "Max",
+    "Mean",
+    "Min",
+    "Sum",
+    "And",
+    "Or",
+    "Xor",
+    "BitwiseAnd",
+    "BitwiseOr",
+    "BitwiseXor",
+    "Equal",
+]
+
 # Op with Helper functions
 OpsWithHelpers = {
     "EyeLike": """
@@ -1559,6 +1665,12 @@ def gen_op_def(schema, with_version=False):
     # Generate SameOperandsAndResultShape traits.
     if mlir_op_name in OpsWithSameOperandsAndResultShape:
         traits.append("SameOperandsAndResultShape")
+
+    # Generate ONNXElementwise trait
+    if mlir_op_name in OpsWithONNXElementwise:
+        traits.append("ONNXElementwiseTrait")
+    if mlir_op_name in OpsWithCommutative:
+        traits.append("Commutative")
 
     # Generate ConstantLike traits.
     if mlir_op_name in OpsWithConstantLike:
