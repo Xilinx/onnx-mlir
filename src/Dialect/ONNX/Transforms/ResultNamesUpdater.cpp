@@ -74,6 +74,13 @@ bool hasNameAndManyUses(Value value) {
   return liveUses > 1;
 }
 
+// True if `value` currently carries a MultiUseConflict transform in its name.
+bool hasConflictMarker(Value value) {
+  TensorName tn(value);
+  return tn && llvm::any_of(tn.getTransforms(),
+                    [](Transform *t) { return isa<MultiUseConflict>(t); });
+}
+
 } // namespace
 
 void ResultNamesUpdater::notifyOperationReplaced(
@@ -81,8 +88,14 @@ void ResultNamesUpdater::notifyOperationReplaced(
   if (!op->hasAttrOfType<ArrayAttr>("ResultNames"))
     return;
 
-  // If replacements have existing name and many uses, don't update ResultNames
-  if (llvm::any_of(replacement->getResults(), hasNameAndManyUses))
+  // Don't overwrite the replacement's ResultNames if it already has a name with
+  // many uses, or if it is a flagged conflict producer. A MultiUseConflict
+  // marker means "this producer's name must be preserved"; it can be
+  // momentarily single-use during greedy rewriting (e.g. right before a
+  // transpose is folded onto it), so guard on the marker directly rather than
+  // only on the live-use count.
+  if (llvm::any_of(replacement->getResults(), hasNameAndManyUses) ||
+      llvm::any_of(replacement->getResults(), hasConflictMarker))
     return;
 
   // First, copy the ResultNames attribute for the last value
@@ -103,8 +116,10 @@ void ResultNamesUpdater::notifyOperationReplaced(
       replSingleOp && replSingleOp->getResults() == replacement)
     return notifyOperationReplaced(op, replSingleOp);
 
-  // If replacements have existing name and many uses, don't update ResultNames
-  if (llvm::any_of(replacement, hasNameAndManyUses))
+  // If replacements have existing name and many uses, or carry a conflict
+  // marker, don't update ResultNames (see the single-op overload above).
+  if (llvm::any_of(replacement, hasNameAndManyUses) ||
+      llvm::any_of(replacement, hasConflictMarker))
     return;
 
   // First, copy the ResultNames attribute for the last value
