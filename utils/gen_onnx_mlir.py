@@ -549,9 +549,7 @@ special_direct_output_types = {
     "ArgMax": {"reduced": ["tensor(uint16)", "tensor(uint32)"]},
     "ArgMin": {"reduced": ["tensor(uint16)", "tensor(uint32)"]},
     "NonZero": {"Y": ["tensor(uint16)", "tensor(uint32)"]},
-    "NonMaxSuppression": {
-        "selected_indices": ["tensor(uint16)", "tensor(uint32)"]
-    },
+    "NonMaxSuppression": {"selected_indices": ["tensor(uint16)", "tensor(uint32)"]},
 }
 
 # Manual specification of attribute type.
