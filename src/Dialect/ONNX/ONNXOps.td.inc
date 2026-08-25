@@ -1183,7 +1183,7 @@ def ONNXCeluOp:ONNX_Op<"Celu",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {-1};
+      return {30};
     }
   }];
   let extraClassDefinition = [{
@@ -1472,7 +1472,7 @@ def ONNXConcatOp:ONNX_Op<"Concat",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {-1};
+      return {30};
     }
   }];
   let extraClassDefinition = [{
@@ -6312,7 +6312,7 @@ def ONNXQLinearConvOp:ONNX_Op<"QLinearConv",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {-1};
+      return {37};
     }
   }];
   let extraClassDefinition = [{
@@ -6358,7 +6358,7 @@ def ONNXQLinearMatMulOp:ONNX_Op<"QLinearMatMul",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {-1};
+      return {37};
     }
   }];
   let extraClassDefinition = [{
@@ -7548,7 +7548,7 @@ def ONNXReduceSumOp:ONNX_Op<"ReduceSum",
         return 1;
       }
       static std::vector<int> getTypeMap() {
-        return {-1};
+        return {30};
       }
     }];
     let extraClassDefinition = [{
@@ -7595,7 +7595,7 @@ def ONNXReduceSumV11Op:ONNX_Op<"ReduceSumV11",
         return 1;
       }
       static std::vector<int> getTypeMap() {
-        return {-1};
+        return {30};
       }
     }];
     let extraClassDefinition = [{
@@ -9386,7 +9386,7 @@ def ONNXSliceOp:ONNX_Op<"Slice",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {-1};
+      return {30};
     }
   }];
   let extraClassDefinition = [{

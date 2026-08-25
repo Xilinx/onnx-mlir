@@ -1541,9 +1541,20 @@ def get_output_type_mapping(schema):
         # multi-typed even though the raw ONNX schema still lists a single type.
         # get_allowed_elem_types reads the *unpatched* schema, so guard here and
         # emit -1 so the result type comes from the op's actual result type.
+        # When the output shares a type param with an input (e.g. Concat's "T"),
+        # keep the input mapping so the frontend can still derive the result type
+        # from the operand; ops without ResultTypeInferenceOpInterface rely on this.
         if output.type_str and (
             output.type_str in constraint_patch or "*" in constraint_patch
         ):
+            mapped_to_input = False
+            for i, inp in enumerate(schema.inputs):
+                if inp.type_str and inp.type_str == output.type_str:
+                    mapping.append(str(i + MAX_NUM_TYPES))
+                    mapped_to_input = True
+                    break
+            if mapped_to_input:
+                continue
             mapping.append(str(-1))
             continue
 
