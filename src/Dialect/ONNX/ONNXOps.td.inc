@@ -289,7 +289,7 @@ def ONNXArgMaxOp:ONNX_Op<"ArgMax",
     DefaultValuedAttr<SI64Attr, "0">:$axis,
     DefaultValuedAttr<SI64Attr, "1">:$keepdims,
     DefaultValuedAttr<SI64Attr, "0">:$select_last_index);
-  let results = (outs TensorOf<[I64]>:$reduced);
+  let results = (outs AnyTypeOf<[TensorOf<[I64]>, TensorOf<[UI16]>, TensorOf<[UI32]>]>:$reduced);
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
       return 1;
@@ -298,7 +298,7 @@ def ONNXArgMaxOp:ONNX_Op<"ArgMax",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {7};
+      return {-1};
     }
   }];
   let extraClassDefinition = [{
@@ -329,7 +329,7 @@ def ONNXArgMinOp:ONNX_Op<"ArgMin",
     DefaultValuedAttr<SI64Attr, "0">:$axis,
     DefaultValuedAttr<SI64Attr, "1">:$keepdims,
     DefaultValuedAttr<SI64Attr, "0">:$select_last_index);
-  let results = (outs TensorOf<[I64]>:$reduced);
+  let results = (outs AnyTypeOf<[TensorOf<[I64]>, TensorOf<[UI16]>, TensorOf<[UI32]>]>:$reduced);
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
       return 1;
@@ -338,7 +338,7 @@ def ONNXArgMinOp:ONNX_Op<"ArgMin",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {7};
+      return {-1};
     }
   }];
   let extraClassDefinition = [{
@@ -1172,10 +1172,9 @@ def ONNXCeluOp:ONNX_Op<"Celu",
   max(0,x) + min(0,alpha*(exp(x/alpha)-1))
   ```
   }];
-  // FIXME(FXML-4138): Remove manual modification of BF16 support when the operation definition is updated upstream
-  let arguments = (ins AnyTypeOf<[TensorOf<[F32]>, TensorOf<[BF16]>, TensorOf<[quant_QuantizedType]>]>:$X,
+  let arguments = (ins AnyTypeOf<[TensorOf<[F32]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[quant_QuantizedType]>]>:$X,
     DefaultValuedAttr<F32Attr, "1.0">:$alpha);
-  let results = (outs AnyTypeOf<[TensorOf<[F32]>, TensorOf<[BF16]>, TensorOf<[quant_QuantizedType]>]>:$Y);
+  let results = (outs AnyTypeOf<[TensorOf<[F32]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[quant_QuantizedType]>]>:$Y);
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
       return 1;
@@ -1184,7 +1183,7 @@ def ONNXCeluOp:ONNX_Op<"Celu",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {1};
+      return {-1};
     }
   }];
   let extraClassDefinition = [{
@@ -1473,7 +1472,7 @@ def ONNXConcatOp:ONNX_Op<"Concat",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {30};
+      return {-1};
     }
   }];
   let extraClassDefinition = [{
@@ -2793,7 +2792,7 @@ def ONNXGatherOp:ONNX_Op<"Gather",
   ```
   }];
   let arguments = (ins AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$data,
-    AnyTypeOf<[TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[I16]>]>:$indices,
+    AnyTypeOf<[TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[I16]>, TensorOf<[UI16]>, TensorOf<[UI32]>]>:$indices,
     DefaultValuedAttr<SI64Attr, "0">:$axis);
   let results = (outs AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$output);
   let extraClassDeclaration = [{
@@ -2875,9 +2874,8 @@ def ONNXGatherElementsOp:ONNX_Op<"GatherElements",
   ]
   ```
   }];
-  // DTYPE: uint16 to GatherElements indices
   let arguments = (ins AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$data,
-    AnyTypeOf<[TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[UI16]>]>:$indices,
+    AnyTypeOf<[TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[UI16]>, TensorOf<[UI32]>]>:$indices,
     DefaultValuedAttr<SI64Attr, "0">:$axis);
   let results = (outs AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$output);
   let extraClassDeclaration = [{
@@ -2992,7 +2990,7 @@ def ONNXGatherNDOp:ONNX_Op<"GatherND",
   ```
   }];
   let arguments = (ins AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$data,
-    TensorOf<[I64]>:$indices,
+    AnyTypeOf<[TensorOf<[I64]>, TensorOf<[UI16]>, TensorOf<[UI32]>]>:$indices,
     DefaultValuedAttr<SI64Attr, "0">:$batch_dims);
   let results = (outs AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$output);
   let extraClassDeclaration = [{
@@ -4865,8 +4863,8 @@ def ONNXMaxUnpoolOp:ONNX_Op<"MaxUnpool",
    pooling op that the unpooling op is trying to invert.
   }];
   let arguments = (ins AnyTypeOf<[TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[quant_QuantizedType]>]>:$X,
-    TensorOf<[I64]>:$I,
-    AnyTypeOf<[TensorOf<[I64]>, NoneType]>:$output_shape,
+    AnyTypeOf<[TensorOf<[I64]>, TensorOf<[UI16]>, TensorOf<[UI32]>]>:$I,
+    AnyTypeOf<[TensorOf<[I64]>, TensorOf<[UI16]>, TensorOf<[UI32]>, NoneType]>:$output_shape,
     I64ArrayAttr:$kernel_shape,
     OptionalAttr<I64ArrayAttr>:$pads,
     OptionalAttr<I64ArrayAttr>:$strides);
@@ -5393,7 +5391,7 @@ def ONNXNonMaxSuppressionOp:ONNX_Op<"NonMaxSuppression",
     AnyTypeOf<[TensorOf<[F32]>, TensorOf<[quant_QuantizedType]>, NoneType]>:$iou_threshold,
     AnyTypeOf<[TensorOf<[F32]>, TensorOf<[quant_QuantizedType]>, NoneType]>:$score_threshold,
     DefaultValuedAttr<SI64Attr, "0">:$center_point_box);
-  let results = (outs TensorOf<[I64]>:$selected_indices);
+  let results = (outs AnyTypeOf<[TensorOf<[I64]>, TensorOf<[UI16]>, TensorOf<[UI32]>]>:$selected_indices);
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
       return 5;
@@ -5402,7 +5400,7 @@ def ONNXNonMaxSuppressionOp:ONNX_Op<"NonMaxSuppression",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {7};
+      return {-1};
     }
   }];
   let extraClassDefinition = [{
@@ -5427,7 +5425,7 @@ def ONNXNonZeroOp:ONNX_Op<"NonZero",
       but for scalar input, NonZero produces output shape (0, N) instead of (1, N), which is different from Numpy's behavior.
   }];
   let arguments = (ins AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$X);
-  let results = (outs TensorOf<[I64]>:$Y);
+  let results = (outs AnyTypeOf<[TensorOf<[I64]>, TensorOf<[UI16]>, TensorOf<[UI32]>]>:$Y);
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
       return 1;
@@ -5436,7 +5434,7 @@ def ONNXNonZeroOp:ONNX_Op<"NonZero",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {7};
+      return {-1};
     }
   }];
   let extraClassDefinition = [{
@@ -6314,7 +6312,7 @@ def ONNXQLinearConvOp:ONNX_Op<"QLinearConv",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {37};
+      return {-1};
     }
   }];
   let extraClassDefinition = [{
@@ -6360,7 +6358,7 @@ def ONNXQLinearMatMulOp:ONNX_Op<"QLinearMatMul",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {37};
+      return {-1};
     }
   }];
   let extraClassDefinition = [{
@@ -7550,7 +7548,7 @@ def ONNXReduceSumOp:ONNX_Op<"ReduceSum",
         return 1;
       }
       static std::vector<int> getTypeMap() {
-        return {30};
+        return {-1};
       }
     }];
     let extraClassDefinition = [{
@@ -7597,7 +7595,7 @@ def ONNXReduceSumV11Op:ONNX_Op<"ReduceSumV11",
         return 1;
       }
       static std::vector<int> getTypeMap() {
-        return {30};
+        return {-1};
       }
     }];
     let extraClassDefinition = [{
@@ -8555,7 +8553,7 @@ def ONNXScatterOp:ONNX_Op<"Scatter",
   ```
   }];
   let arguments = (ins AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$data,
-    AnyTypeOf<[TensorOf<[I32]>, TensorOf<[I64]>]>:$indices,
+    AnyTypeOf<[TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[UI16]>, TensorOf<[UI32]>]>:$indices,
     AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$updates,
     DefaultValuedAttr<SI64Attr, "0">:$axis);
   let results = (outs AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$output);
@@ -8648,7 +8646,7 @@ def ONNXScatterElementsOp:ONNX_Op<"ScatterElements",
   ```
   }];
   let arguments = (ins AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$data,
-    AnyTypeOf<[TensorOf<[I32]>, TensorOf<[I64]>]>:$indices,
+    AnyTypeOf<[TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[UI16]>, TensorOf<[UI32]>]>:$indices,
     AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$updates,
     DefaultValuedAttr<SI64Attr, "0">:$axis,
     DefaultValuedStrAttr<StrAttr, "none">:$reduction);
@@ -8756,7 +8754,7 @@ def ONNXScatterNDOp:ONNX_Op<"ScatterND",
   ```
   }];
   let arguments = (ins AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$data,
-    TensorOf<[I64]>:$indices,
+    AnyTypeOf<[TensorOf<[I64]>, TensorOf<[UI16]>, TensorOf<[UI32]>]>:$indices,
     AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$updates,
     DefaultValuedStrAttr<StrAttr, "none">:$reduction);
   let results = (outs AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[Complex<F32>]>, TensorOf<[Complex<F64>]>, TensorOf<[quant_QuantizedType]>]>:$output);
@@ -9388,7 +9386,7 @@ def ONNXSliceOp:ONNX_Op<"Slice",
       return 1;
     }
     static std::vector<int> getTypeMap() {
-      return {30};
+      return {-1};
     }
   }];
   let extraClassDefinition = [{
@@ -10367,7 +10365,7 @@ def ONNXTopKOp:ONNX_Op<"TopK",
     DefaultValuedAttr<SI64Attr, "1">:$largest,
     DefaultValuedAttr<SI64Attr, "1">:$sorted);
   let results = (outs AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[BF16]>, TensorOf<[quant_QuantizedType]>]>:$Values,
-    TensorOf<[I64]>:$Indices);
+    AnyTypeOf<[TensorOf<[I64]>, TensorOf<[UI16]>, TensorOf<[UI32]>]>:$Indices);
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
       return 2;
@@ -10376,7 +10374,7 @@ def ONNXTopKOp:ONNX_Op<"TopK",
       return 2;
     }
     static std::vector<int> getTypeMap() {
-      return {30,7};
+      return {30,-1};
     }
   }];
   let extraClassDefinition = [{
