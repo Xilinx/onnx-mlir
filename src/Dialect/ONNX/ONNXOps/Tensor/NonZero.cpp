@@ -52,17 +52,19 @@ LogicalResult ONNXNonZeroOp::inferShapes(
   if (!hasShapeAndRank(getX()))
     return success();
 
-  // Default to i64 per ONNX spec, but preserve a pre-existing integer element
-  // type on the result so frontend specializations to ui16/ui32 are kept.
   Builder b(getContext());
-  Type elementType = b.getI64Type();
-  if (auto resultType = mlir::dyn_cast<ShapedType>(getY().getType())) {
-    Type existing = resultType.getElementType();
-    if (existing && mlir::isa<IntegerType>(existing))
-      elementType = existing;
+  // Preserve any pre-existing integer element type on the Y result so any
+  // widening to ui16/ui32 is not lost. Default to i64 element type.
+  Type yElementType = b.getI64Type();
+  if (auto yType = mlir::dyn_cast<ShapedType>(getY().getType())) {
+    if (yType.getElementType()) {
+      Type existing = yType.getElementType();
+      if (existing && mlir::isa<IntegerType>(existing))
+        yElementType = existing;
+    }
   }
   ONNXNonZeroOpShapeHelper shapeHelper(getOperation(), {});
-  return shapeHelper.computeShapeAndUpdateType(elementType);
+  return shapeHelper.computeShapeAndUpdateType(yElementType);
 }
 
 //===----------------------------------------------------------------------===//

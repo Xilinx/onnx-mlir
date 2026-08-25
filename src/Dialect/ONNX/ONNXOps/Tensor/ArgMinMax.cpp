@@ -112,12 +112,12 @@ LogicalResult verifyArgMinMaxReducedIndexFitsAxisDimension(
     return success();
 
   if (indexElementType.isUnsignedInteger())
-    return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
-        *op, "reduced", maxIndex,
+    return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(*op, "reduced",
+        maxIndex,
         onnx_mlir::Diagnostic::Range<int64_t>(0, maxRepresentableIndex));
 
-  return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
-      *op, "reduced", maxIndex,
+  return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(*op, "reduced",
+      maxIndex,
       onnx_mlir::Diagnostic::Range<int64_t>(
           -maxRepresentableIndex, maxRepresentableIndex));
 }
@@ -151,17 +151,19 @@ LogicalResult ONNXArgMaxOp::inferShapes(
   if (!hasShapeAndRank(getData()))
     return success();
 
-  // Default to i64 per ONNX spec, but preserve a pre-existing integer element
-  // type on the result so frontend specializations to ui16/ui32 are kept.
   Builder b(getContext());
-  Type elementType = b.getI64Type();
-  if (auto resultType = mlir::dyn_cast<ShapedType>(getReduced().getType())) {
-    Type existing = resultType.getElementType();
-    if (existing && mlir::isa<IntegerType>(existing))
-      elementType = existing;
+  // Preserve any pre-existing integer element type on the reduced result so any
+  // widening to ui16/ui32 is not lost. Default to i64 element type.
+  Type reducedElementType = b.getI64Type();
+  if (auto reducedType = mlir::dyn_cast<ShapedType>(getReduced().getType())) {
+    if (reducedType.getElementType()) {
+      Type existing = reducedType.getElementType();
+      if (existing && mlir::isa<IntegerType>(existing))
+        reducedElementType = existing;
+    }
   }
   ONNXArgMaxOpShapeHelper shapeHelper(getOperation(), {});
-  return shapeHelper.computeShapeAndUpdateType(elementType);
+  return shapeHelper.computeShapeAndUpdateType(reducedElementType);
 }
 
 //===----------------------------------------------------------------------===//
@@ -191,17 +193,19 @@ LogicalResult ONNXArgMinOp::inferShapes(
   if (!hasShapeAndRank(getData()))
     return success();
 
-  // Default to i64 per ONNX spec, but preserve a pre-existing integer element
-  // type on the result so frontend specializations to ui16/ui32 are kept.
   Builder b(getContext());
-  Type elementType = b.getI64Type();
-  if (auto resultType = mlir::dyn_cast<ShapedType>(getReduced().getType())) {
-    Type existing = resultType.getElementType();
-    if (existing && mlir::isa<IntegerType>(existing))
-      elementType = existing;
+  // Preserve any pre-existing integer element type on the reduced result so any
+  // widening to ui16/ui32 is not lost. Default to i64 element type.
+  Type reducedElementType = b.getI64Type();
+  if (auto reducedType = mlir::dyn_cast<ShapedType>(getReduced().getType())) {
+    if (reducedType.getElementType()) {
+      Type existing = reducedType.getElementType();
+      if (existing && mlir::isa<IntegerType>(existing))
+        reducedElementType = existing;
+    }
   }
   ONNXArgMinOpShapeHelper shapeHelper(getOperation(), {});
-  return shapeHelper.computeShapeAndUpdateType(elementType);
+  return shapeHelper.computeShapeAndUpdateType(reducedElementType);
 }
 
 //===----------------------------------------------------------------------===//

@@ -358,9 +358,6 @@ public:
     // == Rewrite section == //
     // -> TopK -> Cast -> [Reshape] -dq-> Tile -q->
 
-    // TopK's Indices result type is now a widened AnyTypeOf (I64/UI16/UI32), so
-    // its accessor returns a plain mlir::Type; cast to ShapedType before
-    // clone()/getShape() (the indices are always a ranked tensor here).
     auto castOutputType =
         mlir::cast<ShapedType>(topK.getIndices().getType()).clone(storageType);
     Value value = rewriter.create<ONNXCastOp>(

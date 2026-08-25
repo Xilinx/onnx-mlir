@@ -72,6 +72,37 @@ func.func @test_default_argmax(%arg0 : tensor<2x3x4xf32>) -> tensor<*xi64> {
 // -----
 
 //===----------------------------------------------------------------------===//
+// Test ArgMax unsigned index result types (ui16/ui32).
+//===----------------------------------------------------------------------===//
+
+func.func @argmax_ui16_output(%arg0: tensor<2x3xf32>) -> tensor<2xui16> {
+  %0 = "onnx.ArgMax"(%arg0) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<2x3xf32>) -> tensor<2xui16>
+  "onnx.Return"(%0) : (tensor<2xui16>) -> ()
+// CHECK-LABEL: func.func @argmax_ui16_output
+// CHECK: "onnx.ArgMax"({{.*}}) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<2x3xf32>) -> tensor<2xui16>
+}
+
+// -----
+
+func.func @argmax_ui16_unranked(%arg0: tensor<2x3xf32>) -> tensor<*xui16> {
+  %0 = "onnx.ArgMax"(%arg0) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<2x3xf32>) -> tensor<*xui16>
+  "onnx.Return"(%0) : (tensor<*xui16>) -> ()
+// CHECK-LABEL: func.func @argmax_ui16_unranked
+// CHECK: "onnx.ArgMax"({{.*}}) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<2x3xf32>) -> tensor<2xui16>
+}
+
+// -----
+
+func.func @argmax_default_i64(%arg0: tensor<2x3xf32>) -> tensor<*xi64> {
+  %0 = "onnx.ArgMax"(%arg0) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<2x3xf32>) -> tensor<*xi64>
+  "onnx.Return"(%0) : (tensor<*xi64>) -> ()
+// CHECK-LABEL: func.func @argmax_default_i64
+// CHECK: "onnx.ArgMax"({{.*}}) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<2x3xf32>) -> tensor<2xi64>
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
 /// Test the default behavior of argmin when no information for the
 /// permutation of the axes is provided and when a permutation is provided.
 //===----------------------------------------------------------------------===//
@@ -83,6 +114,59 @@ func.func @test_default_argmin(%arg0 : tensor<2x3x4xf32>) -> tensor<*xi64> {
   // CHECK-LABEL: test_default_argmin
   // CHECK: [[RES:%.+]] = "onnx.ArgMin"(%arg0) {axis = 0 : si64, keepdims = 1 : si64, select_last_index = 0 : si64} : (tensor<2x3x4xf32>) -> tensor<1x3x4xi64>
   // CHECK: onnx.Return [[RES]] : tensor<1x3x4xi64>
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Test ArgMin unsigned index result types (ui16/ui32).
+//===----------------------------------------------------------------------===//
+
+func.func @argmin_ui16_output(%arg0: tensor<2x3xf32>) -> tensor<2xui16> {
+  %0 = "onnx.ArgMin"(%arg0) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<2x3xf32>) -> tensor<2xui16>
+  "onnx.Return"(%0) : (tensor<2xui16>) -> ()
+// CHECK-LABEL: func.func @argmin_ui16_output
+// CHECK: "onnx.ArgMin"({{.*}}) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<2x3xf32>) -> tensor<2xui16>
+}
+
+// -----
+
+func.func @argmin_ui16_unranked(%arg0: tensor<2x3xf32>) -> tensor<*xui16> {
+  %0 = "onnx.ArgMin"(%arg0) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<2x3xf32>) -> tensor<*xui16>
+  "onnx.Return"(%0) : (tensor<*xui16>) -> ()
+// CHECK-LABEL: func.func @argmin_ui16_unranked
+// CHECK: "onnx.ArgMin"({{.*}}) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<2x3xf32>) -> tensor<2xui16>
+}
+
+// -----
+
+func.func @argmin_default_i64(%arg0: tensor<2x3xf32>) -> tensor<*xi64> {
+  %0 = "onnx.ArgMin"(%arg0) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<2x3xf32>) -> tensor<*xi64>
+  "onnx.Return"(%0) : (tensor<*xi64>) -> ()
+// CHECK-LABEL: func.func @argmin_default_i64
+// CHECK: "onnx.ArgMin"({{.*}}) {axis = 1 : si64, keepdims = 0 : si64, select_last_index = 0 : si64} : (tensor<2x3xf32>) -> tensor<2xi64>
+}
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// Test NonZero unsigned index result types (ui16/ui32).
+//===----------------------------------------------------------------------===//
+
+func.func @nonzero_ui16_output(%arg0: tensor<2x3xf32>) -> tensor<*xui16> {
+  %0 = "onnx.NonZero"(%arg0) : (tensor<2x3xf32>) -> tensor<*xui16>
+  "onnx.Return"(%0) : (tensor<*xui16>) -> ()
+// CHECK-LABEL: func.func @nonzero_ui16_output
+// CHECK: "onnx.NonZero"({{.*}}) : (tensor<2x3xf32>) -> tensor<2x?xui16>
+}
+
+// -----
+
+func.func @nonzero_default_i64(%arg0: tensor<2x3xf32>) -> tensor<*xi64> {
+  %0 = "onnx.NonZero"(%arg0) : (tensor<2x3xf32>) -> tensor<*xi64>
+  "onnx.Return"(%0) : (tensor<*xi64>) -> ()
+// CHECK-LABEL: func.func @nonzero_default_i64
+// CHECK: "onnx.NonZero"({{.*}}) : (tensor<2x3xf32>) -> tensor<2x?xi64>
 }
 
 // -----
@@ -3512,6 +3596,24 @@ func.func @test_nonmaxsuppression(%arg0: tensor<1x6x4xf32>, %arg1: tensor<1x1x6x
 
 // -----
 
+func.func @nms_ui16_output(%arg0: tensor<1x6x4xf32>, %arg1: tensor<1x1x6xf32>, %arg2: tensor<1xi64>, %arg3: tensor<1xf32>, %arg4: tensor<1xf32>) -> tensor<*xui16> {
+  %0 = "onnx.NonMaxSuppression"(%arg0, %arg1, %arg2, %arg3, %arg4) {center_point_box = 1 : si64} : (tensor<1x6x4xf32>, tensor<1x1x6xf32>, tensor<1xi64>, tensor<1xf32>, tensor<1xf32>) -> tensor<*xui16>
+  "onnx.Return"(%0) : (tensor<*xui16>) -> ()
+// CHECK-LABEL: func.func @nms_ui16_output
+// CHECK: "onnx.NonMaxSuppression"({{.*}}) {center_point_box = 1 : si64} : (tensor<1x6x4xf32>, tensor<1x1x6xf32>, tensor<1xi64>, tensor<1xf32>, tensor<1xf32>) -> tensor<?x3xui16>
+}
+
+// -----
+
+func.func @nms_default_i64(%arg0: tensor<1x6x4xf32>, %arg1: tensor<1x1x6xf32>, %arg2: tensor<1xi64>, %arg3: tensor<1xf32>, %arg4: tensor<1xf32>) -> tensor<*xi64> {
+  %0 = "onnx.NonMaxSuppression"(%arg0, %arg1, %arg2, %arg3, %arg4) {center_point_box = 1 : si64} : (tensor<1x6x4xf32>, tensor<1x1x6xf32>, tensor<1xi64>, tensor<1xf32>, tensor<1xf32>) -> tensor<*xi64>
+  "onnx.Return"(%0) : (tensor<*xi64>) -> ()
+// CHECK-LABEL: func.func @nms_default_i64
+// CHECK: "onnx.NonMaxSuppression"({{.*}}) {center_point_box = 1 : si64} : (tensor<1x6x4xf32>, tensor<1x1x6xf32>, tensor<1xi64>, tensor<1xf32>, tensor<1xf32>) -> tensor<?x3xi64>
+}
+
+// -----
+
 //===----------------------------------------------------------------------===//
 // Test compress
 
@@ -3599,6 +3701,46 @@ func.func @topk_bf16(%X: tensor<3x4x5xbf16>, %K: tensor<i64>) -> tensor<*xbf16> 
   onnx.Return %value : tensor<*xbf16>
   // CHECK-LABEL: topk_bf16
   // CHECK: {{.*}} = "onnx.TopK"({{.*}}, {{.*}}) {axis = 1 : si64, largest = 1 : si64, sorted = 1 : si64} : (tensor<3x4x5xbf16>, tensor<i64>) -> (tensor<3x?x5xbf16>, tensor<3x?x5xi64>)
+}
+
+// -----
+
+func.func @topk_preserve_ui16_indices(%arg0: tensor<4x8xf32>) -> (tensor<4x2xf32>, tensor<4x2xui16>) {
+  %k = "onnx.Constant"() {value = dense<2> : tensor<1xi64>} : () -> tensor<1xi64>
+  %values, %indices = "onnx.TopK"(%arg0, %k) {axis = 1 : si64, largest = 1 : si64, sorted = 1 : si64} : (tensor<4x8xf32>, tensor<1xi64>) -> (tensor<4x2xf32>, tensor<4x2xui16>)
+  "onnx.Return"(%values, %indices) : (tensor<4x2xf32>, tensor<4x2xui16>) -> ()
+// CHECK-LABEL: func.func @topk_preserve_ui16_indices
+// CHECK: "onnx.TopK"({{.*}}) {axis = 1 : si64, largest = 1 : si64, sorted = 1 : si64} : (tensor<4x8xf32>, tensor<1xi64>) -> (tensor<4x2xf32>, tensor<4x2xui16>)
+}
+
+// -----
+
+func.func @topk_default_i64_indices(%arg0: tensor<4x8xf32>) -> (tensor<*xf32>, tensor<*xi64>) {
+  %k = "onnx.Constant"() {value = dense<2> : tensor<1xi64>} : () -> tensor<1xi64>
+  %values, %indices = "onnx.TopK"(%arg0, %k) {axis = 1 : si64, largest = 1 : si64, sorted = 1 : si64} : (tensor<4x8xf32>, tensor<1xi64>) -> (tensor<*xf32>, tensor<*xi64>)
+  "onnx.Return"(%values, %indices) : (tensor<*xf32>, tensor<*xi64>) -> ()
+// CHECK-LABEL: func.func @topk_default_i64_indices
+// CHECK: "onnx.TopK"({{.*}}) {axis = 1 : si64, largest = 1 : si64, sorted = 1 : si64} : (tensor<4x8xf32>, tensor<1xi64>) -> (tensor<4x2xf32>, tensor<4x2xi64>)
+}
+
+// -----
+
+func.func @topk_preserve_ui16_unranked(%arg0: tensor<4x8xf32>) -> (tensor<*xf32>, tensor<*xui16>) {
+  %k = "onnx.Constant"() {value = dense<2> : tensor<1xi64>} : () -> tensor<1xi64>
+  %values, %indices = "onnx.TopK"(%arg0, %k) {axis = 1 : si64, largest = 1 : si64, sorted = 1 : si64} : (tensor<4x8xf32>, tensor<1xi64>) -> (tensor<*xf32>, tensor<*xui16>)
+  "onnx.Return"(%values, %indices) : (tensor<*xf32>, tensor<*xui16>) -> ()
+// CHECK-LABEL: func.func @topk_preserve_ui16_unranked
+// CHECK: "onnx.TopK"({{.*}}) {axis = 1 : si64, largest = 1 : si64, sorted = 1 : si64} : (tensor<4x8xf32>, tensor<1xi64>) -> (tensor<4x2xf32>, tensor<4x2xui16>)
+}
+
+// -----
+
+func.func @topk_preserve_ui32_indices(%arg0: tensor<4x8xf32>) -> (tensor<4x2xf32>, tensor<4x2xui32>) {
+  %k = "onnx.Constant"() {value = dense<2> : tensor<1xi64>} : () -> tensor<1xi64>
+  %values, %indices = "onnx.TopK"(%arg0, %k) {axis = 1 : si64, largest = 1 : si64, sorted = 1 : si64} : (tensor<4x8xf32>, tensor<1xi64>) -> (tensor<4x2xf32>, tensor<4x2xui32>)
+  "onnx.Return"(%values, %indices) : (tensor<4x2xf32>, tensor<4x2xui32>) -> ()
+// CHECK-LABEL: func.func @topk_preserve_ui32_indices
+// CHECK: "onnx.TopK"({{.*}}) {axis = 1 : si64, largest = 1 : si64, sorted = 1 : si64} : (tensor<4x8xf32>, tensor<1xi64>) -> (tensor<4x2xf32>, tensor<4x2xui32>)
 }
 
 // -----
