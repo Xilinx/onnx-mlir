@@ -853,16 +853,19 @@ func.func @test_expand_to_eltwise_u16_large_zp(
 // -----
 //===----------------------------------------------------------------------===//
 // maybeWidenNarrowConstOperand: i8/u8 constant operand widened to match the
-// i16/u16 activation in an arithmetic ADD/MUL/SUB/DIV fusion. Scale and
-// zero_point are preserved on the widened type; the original narrow constant
-// becomes dead and is removed.
+// i16/u16 activation in an arithmetic ADD/MUL/SUB/DIV fusion. The narrow
+// constant is *requantized* by K = 2^(16 - narrowWidth) so the payload fills
+// the wider range: value and zero_point are scaled by K while scale is divided
+// by K, keeping (q - zp) * scale invariant and the downstream DIV coeff RTP in
+// INT32 range. The original narrow constant becomes dead and is removed.
 //===----------------------------------------------------------------------===//
 
 // -----
 // Signed i16 activation x signed i8 single-use constant in MUL fusion.
-// Helper sign-extends the constant to i16, emits a new wider onnx.Constant,
-// and the XCOMPILERFusedEltwise consumes the i16 operand. No i8 storage
-// quant type remains in the fused op's operand list.
+// Helper requantizes the constant to i16 by K = 2^(16-8) = 256: the payload
+// 5 becomes 5*256 = 1280 and the scale 0.25 becomes 0.25/256 = 9.765625E-4.
+// The XCOMPILERFusedEltwise consumes the i16 operand. No i8 storage quant
+// type remains in the fused op's operand list.
 // CHECK-LABEL: func.func @widen_signed_i8_const_to_i16_in_mul
 func.func @widen_signed_i8_const_to_i16_in_mul(
     %arg0: tensor<1x16x32x32x!quant.uniform<i16:f32, 0.05:0>>)
@@ -875,7 +878,7 @@ func.func @widen_signed_i8_const_to_i16_in_mul(
       -> tensor<1x16x32x32x!quant.uniform<i16:f32, 0.05:0>>
   return %m : tensor<1x16x32x32x!quant.uniform<i16:f32, 0.05:0>>
 
-  // CHECK: onnx.Constant {{.*}} : tensor<1x16x1x1x!quant.uniform<i16:f32, 2.500000e-01>>
+  // CHECK: onnx.Constant {value = dense<1280> : tensor<1x16x1x1xi16>} : tensor<1x16x1x1x!quant.uniform<i16:f32, 9.765625E-4>>
   // CHECK: "onnx.XCOMPILERFusedEltwise"
   // CHECK-SAME: type = "MUL"
   // CHECK-NOT: !quant.uniform<i8
@@ -883,7 +886,9 @@ func.func @widen_signed_i8_const_to_i16_in_mul(
 
 // -----
 // Unsigned u16 activation + unsigned u8 single-use constant in ADD fusion.
-// Helper zero-extends the constant to u16 and rewires the fused op.
+// Helper requantizes the constant to u16 by K = 256: payload 200 -> 200*256 =
+// 51200 (bit pattern -14336 as signless i16), zero_point 128 -> 128*256 =
+// 32768, scale 0.04 -> 0.04/256 = 1.562500e-04. The fused op consumes u16.
 // CHECK-LABEL: func.func @widen_unsigned_u8_const_to_u16_in_add
 func.func @widen_unsigned_u8_const_to_u16_in_add(
     %arg0: tensor<1x8x4x4x!quant.uniform<u16:f32, 0.04:32768>>)
@@ -896,7 +901,7 @@ func.func @widen_unsigned_u8_const_to_u16_in_add(
       -> tensor<1x8x4x4x!quant.uniform<u16:f32, 0.04:32768>>
   return %a : tensor<1x8x4x4x!quant.uniform<u16:f32, 0.04:32768>>
 
-  // CHECK: onnx.Constant {{.*}} : tensor<1x8x1x1x!quant.uniform<u16:f32, 4.000000e-02:128>>
+  // CHECK: onnx.Constant {value = dense<-14336> : tensor<1x8x1x1xi16>} : tensor<1x8x1x1x!quant.uniform<u16:f32, 1.562500e-04:32768>>
   // CHECK: "onnx.XCOMPILERFusedEltwise"
   // CHECK-SAME: type = "ADD"
   // CHECK-NOT: !quant.uniform<u8
@@ -905,9 +910,9 @@ func.func @widen_unsigned_u8_const_to_u16_in_add(
 // -----
 // Same width, mixed signedness: unsigned u8 activation + signed i8 single-use
 // constant in a SUB fusion. The golden ReplaceQDQEltwisePass treats this as
-// "mixed accumulation" and promotes the i8 const to i16 (sign-extended). The
-// widened const has i16 storage and the same scale/zero_point; no i8 storage
-// quant type remains in the fused op.
+// "mixed accumulation" and promotes the i8 const to i16, requantizing by
+// K = 256 (payload 5 -> 1280, scale 0.25 -> 9.765625E-4). No i8 storage quant
+// type remains in the fused op.
 // CHECK-LABEL: func.func @widen_signed_i8_const_to_i16_in_sub_mixed_signedness
 func.func @widen_signed_i8_const_to_i16_in_sub_mixed_signedness(
     %arg0: tensor<1x8x4x4x!quant.uniform<u8:f32, 0.04:128>>)
@@ -920,7 +925,7 @@ func.func @widen_signed_i8_const_to_i16_in_sub_mixed_signedness(
       -> tensor<1x8x4x4x!quant.uniform<u8:f32, 0.04:128>>
   return %s : tensor<1x8x4x4x!quant.uniform<u8:f32, 0.04:128>>
 
-  // CHECK: onnx.Constant {{.*}} : tensor<1x8x1x1x!quant.uniform<i16:f32, 2.500000e-01>>
+  // CHECK: onnx.Constant {value = dense<1280> : tensor<1x8x1x1xi16>} : tensor<1x8x1x1x!quant.uniform<i16:f32, 9.765625E-4>>
   // CHECK: "onnx.XCOMPILERFusedEltwise"
   // CHECK-SAME: type = "SUB"
   // CHECK-NOT: !quant.uniform<i8
@@ -991,9 +996,9 @@ func.func @widen_multi_use_const(
 
   // No i8 constant should remain (original erased).
   // CHECK-NOT: !quant.uniform<i8
-  // Exactly one i16 constant created and reused by both fused ops.
-  // CHECK: onnx.Constant {{.*}} : tensor<1x16x1x1x!quant.uniform<i16:f32, 2.500000e-01>>
-  // CHECK-NOT: onnx.Constant {{.*}} : tensor<1x16x1x1x!quant.uniform<i16:f32, 2.500000e-01>>
+  // Exactly one requantized i16 constant created and reused by both fused ops.
+  // CHECK: onnx.Constant {value = dense<1280> : tensor<1x16x1x1xi16>} : tensor<1x16x1x1x!quant.uniform<i16:f32, 9.765625E-4>>
+  // CHECK-NOT: onnx.Constant {{.*}} : tensor<1x16x1x1x!quant.uniform<i16:f32, 9.765625E-4>>
   // CHECK: "onnx.XCOMPILERFusedEltwise"
   // CHECK: "onnx.XCOMPILERFusedEltwise"
   // CHECK-NOT: !quant.uniform<i8
@@ -1031,9 +1036,10 @@ func.func @widen_reuse_three_users(
 
   // No i8 remaining.
   // CHECK-NOT: !quant.uniform<i8
-  // One i16 constant, reused by all three fused ops.
-  // CHECK: onnx.Constant {{.*}} : tensor<1x16x1x1x!quant.uniform<i16:f32, 1.000000e-01>>
-  // CHECK-NOT: onnx.Constant {{.*}} : tensor<1x16x1x1x!quant.uniform<i16:f32, 1.000000e-01>>
+  // One requantized i16 constant (42*256 = 10752, 0.1/256 = 3.906250e-04),
+  // reused by all three fused ops.
+  // CHECK: onnx.Constant {value = dense<10752> : tensor<1x16x1x1xi16>} : tensor<1x16x1x1x!quant.uniform<i16:f32, 3.906250e-04>>
+  // CHECK-NOT: onnx.Constant {{.*}} : tensor<1x16x1x1x!quant.uniform<i16:f32, 3.906250e-04>>
   // CHECK: "onnx.XCOMPILERFusedEltwise"
   // CHECK: "onnx.XCOMPILERFusedEltwise"
   // CHECK: "onnx.XCOMPILERFusedEltwise"
@@ -1063,9 +1069,35 @@ func.func @widen_per_user_mixed_width(
   return %m0, %m1 : tensor<1x16x8x8x!quant.uniform<i16:f32, 0.05:0>>,
                     tensor<1x16x8x8x!quant.uniform<i8:f32, 0.03:0>>
 
-  // i16 user gets widened constant, i8 user keeps original
-  // CHECK-DAG: onnx.Constant {{.*}} : tensor<1x16x1x1x!quant.uniform<i16:f32, 2.500000e-01>>
-  // CHECK-DAG: onnx.Constant {{.*}} : tensor<1x16x1x1x!quant.uniform<i8:f32, 2.500000e-01>>
+  // i16 user gets requantized constant (1280, 9.765625E-4); i8 user keeps
+  // the original (5, 2.500000e-01).
+  // CHECK-DAG: onnx.Constant {value = dense<1280> : tensor<1x16x1x1xi16>} : tensor<1x16x1x1x!quant.uniform<i16:f32, 9.765625E-4>>
+  // CHECK-DAG: onnx.Constant {value = dense<5> : tensor<1x16x1x1xi8>} : tensor<1x16x1x1x!quant.uniform<i8:f32, 2.500000e-01>>
   // CHECK: "onnx.XCOMPILERFusedEltwise"
   // CHECK: "onnx.XCOMPILERFusedEltwise"
+}
+
+// -----
+// Motivating case: i16 activation DIV i8 constant. Without requantization the
+// widened i16 const would keep the 8-bit scale (0.5), leaving the payload in
+// the low 8 bits and making the downstream DIV coeff RTP a factor of K=256 too
+// large (INT32 overflow). Requantizing by K=256 moves the payload into the
+// full i16 range (3 -> 768) and shrinks the scale (0.5 -> 0.001953125), so the
+// dequantized value 3*0.5 == 768*0.001953125 == 1.5 is preserved.
+// CHECK-LABEL: func.func @widen_signed_i8_const_to_i16_in_div
+func.func @widen_signed_i8_const_to_i16_in_div(
+    %arg0: tensor<1x16x8x8x!quant.uniform<i16:f32, 0.05:0>>)
+    -> tensor<1x16x8x8x!quant.uniform<i16:f32, 0.05:0>> {
+  %c = "onnx.Constant"() {value = dense<3> : tensor<1x16x1x1xi8>} :
+      () -> tensor<1x16x1x1x!quant.uniform<i8:f32, 0.5:0>>
+  %d = "onnx.Div"(%arg0, %c) :
+      (tensor<1x16x8x8x!quant.uniform<i16:f32, 0.05:0>>,
+       tensor<1x16x1x1x!quant.uniform<i8:f32, 0.5:0>>)
+      -> tensor<1x16x8x8x!quant.uniform<i16:f32, 0.05:0>>
+  return %d : tensor<1x16x8x8x!quant.uniform<i16:f32, 0.05:0>>
+
+  // CHECK: onnx.Constant {value = dense<768> : tensor<1x16x1x1xi16>} : tensor<1x16x1x1x!quant.uniform<i16:f32, 0.001953125>>
+  // CHECK: "onnx.XCOMPILERFusedEltwise"
+  // CHECK-SAME: type = "DIV"
+  // CHECK-NOT: !quant.uniform<i8
 }
