@@ -4357,9 +4357,13 @@ public:
         getElementAttributeFromConstLikeValue(gatherOp.getIndices());
     if (!indicesAttr)
       return rewriter.notifyMatchFailure(gatherOp, "indices are not constant");
-    const int64_t index =
-        (*indicesAttr.getValues<APInt>().begin()).getSExtValue();
-    if (index != 0 && index != -1)
+    APInt indexAPInt = *indicesAttr.getValues<APInt>().begin();
+    const bool indicesAreUnsigned =
+        indicesType.getElementType().isUnsignedInteger();
+    const int64_t index = indicesAreUnsigned
+                              ? static_cast<int64_t>(indexAPInt.getZExtValue())
+                              : indexAPInt.getSExtValue();
+    if (indicesAreUnsigned ? index != 0 : (index != 0 && index != -1))
       return rewriter.notifyMatchFailure(
           gatherOp, "index does not select the singleton element");
 

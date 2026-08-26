@@ -2460,6 +2460,84 @@ func.func @test_gather_rank0_int32_indices() -> tensor<*xf32>{
 
 // -----
 
+func.func @test_gather_ui16_indices() -> tensor<*xf32> {
+  %0 = onnx.Constant dense<[[1.0, 1.2], [2.3, 3.4], [4.5, 5.7]]> : tensor<3x2xf32>
+  %1 = onnx.Constant dense<[[0, 1], [1, 2]]> : tensor<2x2xui16>
+  %2 = "onnx.Gather"(%0, %1) {axis = 0 : si64} : (tensor<3x2xf32>, tensor<2x2xui16>) -> tensor<*xf32>
+  "onnx.Return"(%2) : (tensor<*xf32>) -> ()
+
+  // CHECK-LABEL:  func @test_gather_ui16_indices
+  // CHECK-SAME:   () -> tensor<2x2x2xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}{{.}}[1.000000e+00, 1.200000e+00], [2.300000e+00, 3.400000e+00]{{.}}, {{.}}[2.300000e+00, 3.400000e+00], [4.500000e+00, 5.700000e+00]{{.}}{{.}}> : tensor<2x2x2xf32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<2x2x2xf32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_gather_ui32_indices() -> tensor<*xf32> {
+  %0 = onnx.Constant dense<[[1.0, 1.2, 1.9], [2.3, 3.4, 3.9], [4.5, 5.7, 5.9]]> : tensor<3x3xf32>
+  %1 = onnx.Constant dense<[[0, 2]]> : tensor<1x2xui32>
+  %2 = "onnx.Gather"(%0, %1) {axis = 1 : si64} : (tensor<3x3xf32>, tensor<1x2xui32>) -> tensor<*xf32>
+  "onnx.Return"(%2) : (tensor<*xf32>) -> ()
+
+  // CHECK-LABEL:  func @test_gather_ui32_indices
+  // CHECK-SAME:   () -> tensor<3x1x2xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}{{.}}[1.000000e+00, 1.900000e+00]{{.}}, {{.}}[2.300000e+00, 3.900000e+00]{{.}}, {{.}}[4.500000e+00, 5.900000e+00]{{.}}{{.}}> : tensor<3x1x2xf32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<3x1x2xf32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_scatternd_ui16_indices() -> tensor<4x4xf32> {
+  %0 = onnx.Constant dense<0.0> : tensor<4x4xf32>
+  %1 = onnx.Constant dense<[[0, 0], [1, 1]]> : tensor<2x2xui16>
+  %2 = onnx.Constant dense<[1.0, 2.0]> : tensor<2xf32>
+  %3 = "onnx.ScatterND"(%0, %1, %2) {reduction = "none"} : (tensor<4x4xf32>, tensor<2x2xui16>, tensor<2xf32>) -> tensor<4x4xf32>
+  "onnx.Return"(%3) : (tensor<4x4xf32>) -> ()
+
+  // CHECK-LABEL:  func @test_scatternd_ui16_indices
+  // CHECK-SAME:   () -> tensor<4x4xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}{{.}}1.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00], [0.000000e+00, 2.000000e+00, 0.000000e+00, 0.000000e+00], [0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00], [0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00]{{.}}> : tensor<4x4xf32>
+  // CHECK-NOT:       onnx.ScatterND
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<4x4xf32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_scatternd_ui32_indices() -> tensor<2x3xf32> {
+  %0 = onnx.Constant dense<0.0> : tensor<2x3xf32>
+  %1 = onnx.Constant dense<[[0, 1], [1, 2]]> : tensor<2x2xui32>
+  %2 = onnx.Constant dense<[1.0, 2.0]> : tensor<2xf32>
+  %3 = "onnx.ScatterND"(%0, %1, %2) {reduction = "none"} : (tensor<2x3xf32>, tensor<2x2xui32>, tensor<2xf32>) -> tensor<2x3xf32>
+  "onnx.Return"(%3) : (tensor<2x3xf32>) -> ()
+
+  // CHECK-LABEL:  func @test_scatternd_ui32_indices
+  // CHECK-SAME:   () -> tensor<2x3xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}{{.}}0.000000e+00, 1.000000e+00, 0.000000e+00], [0.000000e+00, 0.000000e+00, 2.000000e+00]{{.}}> : tensor<2x3xf32>
+  // CHECK-NOT:       onnx.ScatterND
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<2x3xf32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_nonzero_ui16_indices() -> tensor<2x2xui16> {
+  %0 = onnx.Constant dense<[[1, 0], [0, 1]]> : tensor<2x2xi32>
+  %1 = "onnx.NonZero"(%0) : (tensor<2x2xi32>) -> tensor<2x2xui16>
+  "onnx.Return"(%1) : (tensor<2x2xui16>) -> ()
+
+  // CHECK-LABEL:  func @test_nonzero_ui16_indices
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}{{.}}0, 1], [0, 1]{{.}}> : tensor<2x2xui16>
+  // CHECK-NOT:       onnx.NonZero
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<2x2xui16>
+  // CHECK:         }
+}
+
+// -----
+
 func.func @test_reshape() -> tensor<*xf32> {
   %0 = onnx.Constant dense<[[1.0, 1.2, 1.9], [2.3, 3.4, 3.9], [4.5, 5.7, 5.9]]> : tensor<3x3xf32>
   %1 = onnx.Constant dense<[1, -1]> : tensor<2xi64>

@@ -1308,6 +1308,12 @@ Value ConstPropNonZero(
   ElementsAttr constElements = getConstValueElements(constValue);
   OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
   ElementsAttr nonZeroElements = elementsBuilder.nonZero(constElements);
+  Type resultElementType = getElementType(replacingValue.getType());
+  if (auto resultIntTy = dyn_cast<IntegerType>(resultElementType)) {
+    if (nonZeroElements.getElementType() != resultElementType)
+      nonZeroElements = elementsBuilder.castToIntElementType(
+          nonZeroElements, resultIntTy, /*round=*/false);
+  }
   return createReplacingConstantOp(rewriter, replacingValue, nonZeroElements);
 }
 
