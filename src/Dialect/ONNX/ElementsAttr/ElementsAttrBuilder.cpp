@@ -1050,8 +1050,10 @@ ElementsAttr ElementsAttrBuilder::gather(
   assert(axis < inputShape.size() && "gather axis out of range");
   auto postAxisShape = inputShape.drop_front(axis + 1);
   ShapedType indicesType = indices.getShapedType();
-  assert(indicesType.getElementType().isSignlessInteger() &&
-         "gather indices must be i32 or i64");
+  // Respect the base onnx and special type additions in utils/gen_onnx_mlir.py.
+  assert((indicesType.getElementType().isSignlessInteger() ||
+          indicesType.getElementType().isUnsignedInteger()) &&
+         "gather indices must be a signless or unsigned integer (i32/i64/uiN)");
   ArrayRef<int64_t> indicesShape = indicesType.getShape();
   SmallVector<int64_t> outShape(inputShape.take_front(axis));
   outShape.append(indicesShape.begin(), indicesShape.end());
