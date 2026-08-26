@@ -52,9 +52,19 @@ LogicalResult ONNXNonZeroOp::inferShapes(
   if (!hasShapeAndRank(getX()))
     return success();
 
-  Type elementType = IntegerType::get(getContext(), 64);
+  Builder b(getContext());
+  // Preserve any pre-existing integer element type on the Y result so any
+  // widening to ui16/ui32 is not lost. Default to i64 element type.
+  Type yElementType = b.getI64Type();
+  if (auto yType = mlir::dyn_cast<ShapedType>(getY().getType())) {
+    if (yType.getElementType()) {
+      Type existing = yType.getElementType();
+      if (existing && mlir::isa<IntegerType>(existing))
+        yElementType = existing;
+    }
+  }
   ONNXNonZeroOpShapeHelper shapeHelper(getOperation(), {});
-  return shapeHelper.computeShapeAndUpdateType(elementType);
+  return shapeHelper.computeShapeAndUpdateType(yElementType);
 }
 
 //===----------------------------------------------------------------------===//

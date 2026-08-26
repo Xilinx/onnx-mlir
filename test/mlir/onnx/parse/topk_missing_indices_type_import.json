@@ -1,0 +1,144 @@
+// Without model types getTypeMap() defaults Indices to i64 (7).
+// RUN: onnx-mlir --EmitONNXIR --useOnnxModelTypes=false --allowMissingOutputTypes=true --printIR %s | FileCheck --check-prefix=INFERRED-DEFAULT %s
+// INFERRED-DEFAULT-LABEL: func.func @main_graph
+// INFERRED-DEFAULT: "onnx.TopK"({{.*}}) {{.*}} : (tensor<4x8xf32>, tensor<1xi64>) -> (tensor<4x2xf32>, tensor<4x2xi64>)
+// RUN: onnx-mlir --EmitONNXIR --useOnnxModelTypes=true --allowMissingOutputTypes=true --printIR %s | FileCheck --check-prefix=MODEL-TYPE %s
+// MODEL-TYPE-LABEL: func.func @main_graph
+// MODEL-TYPE: "onnx.TopK"({{.*}}) {{.*}} : (tensor<4x8xf32>, tensor<1xi64>) -> (tensor<4x2xf32>, tensor<4x2xui16>)
+{
+  "irVersion": "13",
+  "producerName": "onnx-mlir-test",
+  "graph": {
+    "node": [
+      {
+        "input": [
+          "X",
+          "K"
+        ],
+        "output": [
+          "TopK_Values",
+          "TopK_Indices"
+        ],
+        "name": "topk_node",
+        "opType": "TopK",
+        "attribute": [
+          {
+            "name": "axis",
+            "i": "1",
+            "type": "INT"
+          },
+          {
+            "name": "largest",
+            "i": "1",
+            "type": "INT"
+          },
+          {
+            "name": "sorted",
+            "i": "1",
+            "type": "INT"
+          }
+        ]
+      }
+    ],
+    "name": "topk_graph",
+    "initializer": [
+      {
+        "dims": [
+          "1"
+        ],
+        "dataType": 7,
+        "int64Data": [
+          "2"
+        ],
+        "name": "K"
+      }
+    ],
+    "input": [
+      {
+        "name": "X",
+        "type": {
+          "tensorType": {
+            "elemType": 1,
+            "shape": {
+              "dim": [
+                {
+                  "dimValue": "4"
+                },
+                {
+                  "dimValue": "8"
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "output": [
+      {
+        "name": "TopK_Values",
+        "type": {
+          "tensorType": {
+            "elemType": 1,
+            "shape": {
+              "dim": [
+                {
+                  "dimValue": "4"
+                },
+                {
+                  "dimValue": "2"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "name": "TopK_Indices"
+      }
+    ],
+    "valueInfo": [
+      {
+        "name": "TopK_Values",
+        "type": {
+          "tensorType": {
+            "elemType": 1,
+            "shape": {
+              "dim": [
+                {
+                  "dimValue": "4"
+                },
+                {
+                  "dimValue": "2"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "name": "TopK_Indices",
+        "type": {
+          "tensorType": {
+            "elemType": 4,
+            "shape": {
+              "dim": [
+                {
+                  "dimValue": "4"
+                },
+                {
+                  "dimValue": "2"
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  "opsetImport": [
+    {
+      "domain": "",
+      "version": "13"
+    }
+  ]
+}

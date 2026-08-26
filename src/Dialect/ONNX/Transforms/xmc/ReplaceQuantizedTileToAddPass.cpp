@@ -358,7 +358,8 @@ public:
     // == Rewrite section == //
     // -> TopK -> Cast -> [Reshape] -dq-> Tile -q->
 
-    auto castOutputType = topK.getIndices().getType().clone(storageType);
+    auto castOutputType =
+        mlir::cast<ShapedType>(topK.getIndices().getType()).clone(storageType);
     Value value = rewriter.create<ONNXCastOp>(
         tileOp.getLoc(), castOutputType, topK.getIndices(), 1, storageType);
     if (inputType.getShape() != castOutputType.getShape()) {

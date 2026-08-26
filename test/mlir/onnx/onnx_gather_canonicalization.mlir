@@ -17,6 +17,22 @@ func.func @identity_axis0(%data: tensor<1x1x2560xf32>) -> tensor<1x1x2560xf32> {
 
 // -----
 
+// Unsigned ui16 indices on a singleton axis fold the same as signless i64.
+func.func @identity_axis0_ui16(%data: tensor<1x1x2560xf32>) -> tensor<1x1x2560xf32> {
+  %indices = onnx.Constant dense<0> : tensor<1xui16>
+  %gather = "onnx.Gather"(%data, %indices) {axis = 0 : si64}
+      : (tensor<1x1x2560xf32>, tensor<1xui16>) -> tensor<1x1x2560xf32>
+  return %gather : tensor<1x1x2560xf32>
+}
+
+// CHECK-LABEL:  func.func @identity_axis0_ui16
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x1x2560xf32>) -> tensor<1x1x2560xf32> {
+// CHECK-NOT:       "onnx.Gather"
+// CHECK:           return [[PARAM_0_]] : tensor<1x1x2560xf32>
+// CHECK:         }
+
+// -----
+
 // Negative axes are deliberately left unchanged.
 func.func @negative_axis_not_folded(%data: tensor<2x1x3xf32>) -> tensor<2x1x3xf32> {
   %indices = onnx.Constant dense<-1> : tensor<1xi64>
