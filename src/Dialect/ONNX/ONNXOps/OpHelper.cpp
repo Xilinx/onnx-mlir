@@ -472,10 +472,23 @@ bool getI64ValuesFromONNXConstantOp(
   ElementsAttr elemsAttr = getElementAttributeFromONNXValue(val);
   if (!elemsAttr)
     return false;
-  if (!getElementType(elemsAttr.getType()).isInteger(64))
+  Type elemType = getElementType(elemsAttr.getType());
+  auto intType = dyn_cast<IntegerType>(elemType);
+  if (!intType)
     return false;
-  SmallVector<int64_t, 4> iVals(elemsAttr.getValues<int64_t>());
-  iRes.append(iVals);
+  // Directly copy i64
+  if (intType.isSignlessInteger(64)) {
+    SmallVector<int64_t, 4> iVals(elemsAttr.getValues<int64_t>());
+    iRes.append(iVals);
+    return true;
+  }
+  // Convert other integer types to i64 before copying
+  for (APInt v : elemsAttr.getValues<APInt>()) {
+    if (intType.isUnsigned())
+      iRes.push_back(static_cast<int64_t>(v.getZExtValue()));
+    else
+      iRes.push_back(v.getSExtValue());
+  }
   return true;
 }
 

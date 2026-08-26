@@ -739,6 +739,21 @@ func.func @test_scatter_nd_single_split_begin(%data : tensor<1x6x10x12xf32>, %up
 // CHECK:         }
 
 // -----
+
+func.func @test_scatter_nd_single_split_begin_ui16(%data : tensor<1x6x10x12xf32>, %updates : tensor<1x1x10x12xf32> ) -> tensor<1x6x10x12xf32> {
+  %indices = onnx.Constant dense<[[[[0, 0, 0], [0, 0, 1], [0, 0, 2], [0, 0, 3], [0, 0, 4], [0, 0, 5], [0, 0, 6], [0, 0, 7], [0, 0, 8], [0, 0, 9]]]]> : tensor<1x1x10x3xui16>
+  %0 = "onnx.ScatterND"(%data, %indices, %updates) {reduction = "none"} : (tensor<1x6x10x12xf32>, tensor<1x1x10x3xui16>, tensor<1x1x10x12xf32>) -> tensor<1x6x10x12xf32>
+  onnx.Return %0 : tensor<1x6x10x12xf32>
+}
+// CHECK-LABEL:  func.func @test_scatter_nd_single_split_begin_ui16
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x6x10x12xf32>, [[PARAM_1_:%.+]]: tensor<1x1x10x12xf32>) -> tensor<1x6x10x12xf32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[0, 1, 5]> : tensor<3xi64>
+// CHECK:           [[VAR_1_:%.+]]:3 = "onnx.Split"([[PARAM_0_]], [[VAR_0_]]) {axis = 1 : si64} : (tensor<1x6x10x12xf32>, tensor<3xi64>) -> (tensor<1x0x10x12xf32>, tensor<1x1x10x12xf32>, tensor<1x5x10x12xf32>)
+// CHECK:           [[VAR_2_:%.+]] = "onnx.Concat"([[VAR_1_]]#0, [[PARAM_1_]], [[VAR_1_]]#2) {axis = 1 : si64} : (tensor<1x0x10x12xf32>, tensor<1x1x10x12xf32>, tensor<1x5x10x12xf32>) -> tensor<1x6x10x12xf32>
+// CHECK:           onnx.Return [[VAR_2_]] : tensor<1x6x10x12xf32>
+// CHECK:         }
+
+// -----
 func.func @test_scatter_nd_single_split_end(%data : tensor<1x6x10x12xf32>, %updates : tensor<1x1x10x12xf32> ) -> tensor<1x6x10x12xf32> {
   %indices = onnx.Constant dense<[[[[0, 5, 0], [0, 5, 1], [0, 5, 2], [0, 5, 3], [0, 5, 4], [0, 5, 5], [0, 5, 6], [0, 5, 7], [0, 5, 8], [0, 5, 9]]]]> : tensor<1x1x10x3xi64>
   %0 = "onnx.ScatterND"(%data, %indices, %updates) {reduction = "none"} : (tensor<1x6x10x12xf32>, tensor<1x1x10x3xi64>, tensor<1x1x10x12xf32>) -> tensor<1x6x10x12xf32>
