@@ -4309,42 +4309,87 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     return rewriter.create<ONNXConstantOp>(loc, Attribute(), attr);
   }
 
-  static Value createI64Range(PatternRewriter &rewriter, Location loc,
-      SmallVector<Value> &toCheck, int64_t start, int64_t limit) {
-    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
-        rewriter, loc);
-    auto rangeType = RankedTensorType::get(
-        {std::max<int64_t>(limit - start, 0)}, rewriter.getIntegerType(64));
-    Value startConst = create.onnx.constantInt64({start});
-    Value limitConst = create.onnx.constantInt64({limit});
-    Value deltaConst = create.onnx.constantInt64({1});
+  // Pick the smallest signed integer width (from {16, 32}) whose value range
+  // covers [0, maxInclusive]. GQA index/seqlens arithmetic is bounded by the
+  // sequence lengths, so for short contexts an i16 chain is representable and
+  // even cheaper on AIE than i32; anything larger falls back to i32. (i64 is
+  // never needed here — see createRuntimePositionIds / createAdditiveAttentionMask.)
+  static unsigned chooseIndexWidth(int64_t maxInclusive) {
+    // Signed i16 spans [-32768, 32767]; use it only when the largest value we
+    // will materialize (a Range limit, seqlens_k + 1, or past+q+1) fits.
+    constexpr int64_t kMaxSignedI16 = 32767;
+    return (maxInclusive >= 0 && maxInclusive <= kMaxSignedI16) ? 16u : 32u;
+  }
+
+  // Build a scalar (1-element) integer constant of the given bit width.
+  static Value createIntScalar(PatternRewriter &rewriter, Location loc,
+      unsigned width, int64_t val) {
+    auto elemType = rewriter.getIntegerType(width);
+    auto tensorType = RankedTensorType::get({1}, elemType);
+    auto attr = DenseElementsAttr::get(
+        tensorType, APInt(width, val, /*isSigned=*/true));
+    return rewriter.create<ONNXConstantOp>(loc, Attribute(), attr);
+  }
+
+  // Emit an onnx.Range in the given integer bit width (default i64). The
+  // seqlens/position/mask index arithmetic in GQA is bounded by the sequence
+  // length, so it can safely be computed in i32 — keeping it off the CPU
+  // fallback that the AIE elementwise/pseudo-op kernels apply to i64.
+  static Value createIntRange(PatternRewriter &rewriter, Location loc,
+      SmallVector<Value> &toCheck, int64_t start, int64_t limit,
+      unsigned width = 64) {
+    auto elemType = rewriter.getIntegerType(width);
+    auto rangeType =
+        RankedTensorType::get({std::max<int64_t>(limit - start, 0)}, elemType);
+    Value startConst = createIntScalar(rewriter, loc, width, start);
+    Value limitConst = createIntScalar(rewriter, loc, width, limit);
+    Value deltaConst = createIntScalar(rewriter, loc, width, 1);
     Value range = rewriter.create<ONNXRangeOp>(
         loc, rangeType, startConst, limitConst, deltaConst);
     toCheck.append({startConst, limitConst, deltaConst, range});
     return range;
   }
 
-  static Value castToI64(PatternRewriter &rewriter, Location loc, Value value,
-      SmallVector<Value> &toCheck) {
+  static Value createI64Range(PatternRewriter &rewriter, Location loc,
+      SmallVector<Value> &toCheck, int64_t start, int64_t limit) {
+    return createIntRange(rewriter, loc, toCheck, start, limit, /*width=*/64);
+  }
+
+  // Cast \p value to the given integer bit width (default i64).
+  static Value castToInt(PatternRewriter &rewriter, Location loc, Value value,
+      SmallVector<Value> &toCheck, unsigned width = 64) {
     auto valueType = cast<ShapedType>(value.getType());
-    auto i64Type =
-        valueType.clone(valueType.getShape(), rewriter.getIntegerType(64));
-    Value castValue = rewriter.create<ONNXCastOp>(loc, i64Type, value, nullptr,
-        TypeAttr::get(rewriter.getIntegerType(64)));
+    auto intType =
+        valueType.clone(valueType.getShape(), rewriter.getIntegerType(width));
+    Value castValue = rewriter.create<ONNXCastOp>(loc, intType, value, nullptr,
+        TypeAttr::get(rewriter.getIntegerType(width)));
     toCheck.push_back(castValue);
     return castValue;
   }
 
-  static Value reshapeI64(PatternRewriter &rewriter, Location loc, Value value,
-      ArrayRef<int64_t> shape, SmallVector<Value> &toCheck) {
+  static Value castToI64(PatternRewriter &rewriter, Location loc, Value value,
+      SmallVector<Value> &toCheck) {
+    return castToInt(rewriter, loc, value, toCheck, /*width=*/64);
+  }
+
+  // Reshape \p value to \p shape, retyped to the given integer bit width
+  // (default i64).
+  static Value reshapeInt(PatternRewriter &rewriter, Location loc, Value value,
+      ArrayRef<int64_t> shape, SmallVector<Value> &toCheck,
+      unsigned width = 64) {
     auto reshapeShape =
         onnx_mlir::getONNXConstOpFromVector(rewriter, loc, shape);
     auto reshapedType =
-        RankedTensorType::get(shape, rewriter.getIntegerType(64));
+        RankedTensorType::get(shape, rewriter.getIntegerType(width));
     Value reshaped = rewriter.create<ONNXReshapeOp>(
         loc, reshapedType, value, reshapeShape, nullptr);
     toCheck.append({reshapeShape, reshaped});
     return reshaped;
+  }
+
+  static Value reshapeI64(PatternRewriter &rewriter, Location loc, Value value,
+      ArrayRef<int64_t> shape, SmallVector<Value> &toCheck) {
+    return reshapeInt(rewriter, loc, value, shape, toCheck, /*width=*/64);
   }
 
   // Generate RoPE position_ids from runtime seqlens_k instead of past_key
@@ -4363,28 +4408,55 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return rewriter.notifyMatchFailure(
           customOp, "expected 'seqlens_k' to have one value per batch");
 
-    Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
-    Value seqlens2d =
-        reshapeI64(rewriter, loc, seqlensI64, {seqlensBatch, 1}, toCheck);
-    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
-        rewriter, loc);
-    Value one = create.onnx.constantInt64({1});
+    // seqlens_k, the position index and the RoPE cos/sin cache index derived
+    // from it are all bounded by the sequence length, which fits comfortably in
+    // i32. Computing the whole chain in i32 (rather than the historical i64)
+    // keeps it on AIE: the downstream elementwise / Gather / Reshape kernels
+    // reject int64, so an i64 chain fragments partitioning onto the CPU.
+    constexpr unsigned kIndexWidth = 32;
+    // The ONNX com.microsoft.GroupQueryAttention spec declares seqlens_k as
+    // tensor(int32), so the value already fits kIndexWidth by definition and
+    // casting to i32 is width-preserving (no truncation). Guard against a
+    // non-conforming wider-than-i32 (or non-integer) seqlens_k so we decline
+    // the decomposition rather than silently truncate.
+    auto seqlensElemType =
+        dyn_cast<IntegerType>(seqlensType.getElementType());
+    if (!seqlensElemType || seqlensElemType.getWidth() > kIndexWidth)
+      return rewriter.notifyMatchFailure(customOp,
+          "expected 'seqlens_k' to be an integer no wider than i32");
+    Value seqlensI32 =
+        castToInt(rewriter, loc, seqlensK, toCheck, kIndexWidth);
+    Value seqlens2d = reshapeInt(
+        rewriter, loc, seqlensI32, {seqlensBatch, 1}, toCheck, kIndexWidth);
+    Value one = createIntScalar(rewriter, loc, kIndexWidth, 1);
     Value validKvLen =
         rewriter.create<ONNXAddOp>(loc, seqlens2d.getType(), seqlens2d, one);
-    Value seqLenConst = create.onnx.constantInt64({seqLen});
+    Value seqLenConst = createIntScalar(rewriter, loc, kIndexWidth, seqLen);
     Value rawStart = rewriter.create<ONNXSubOp>(
         loc, seqlens2d.getType(), validKvLen, seqLenConst);
-    Value zero = create.onnx.constantInt64({0});
+    Value zero = createIntScalar(rewriter, loc, kIndexWidth, 0);
     Value start = rewriter.create<ONNXMaxOp>(
         loc, seqlens2d.getType(), ValueRange{rawStart, zero});
-    Value qRange = createI64Range(rewriter, loc, toCheck, 0, seqLen);
-    Value qRange2d = reshapeI64(rewriter, loc, qRange, {1, seqLen}, toCheck);
-    auto positionIdsType =
-        RankedTensorType::get({batchSize, seqLen}, rewriter.getIntegerType(64));
-    Value positionIds =
+    Value qRange =
+        createIntRange(rewriter, loc, toCheck, 0, seqLen, kIndexWidth);
+    Value qRange2d =
+        reshapeInt(rewriter, loc, qRange, {1, seqLen}, toCheck, kIndexWidth);
+    auto positionIdsType = RankedTensorType::get(
+        {batchSize, seqLen}, rewriter.getIntegerType(kIndexWidth));
+    Value positionIdsInt =
         rewriter.create<ONNXAddOp>(loc, positionIdsType, start, qRange2d);
-    toCheck.append(
-        {one, validKvLen, seqLenConst, rawStart, zero, start, positionIds});
+    // onnx.RotaryEmbedding constrains position_ids to tensor(int64) (see the
+    // op's AnyTypeOf<[TensorOf<[I64]>, NoneType]> operand). The whole index
+    // chain above is computed in i32 to stay on AIE, so widen only the final
+    // position_ids to i64 right before it feeds RotaryEmbedding — otherwise the
+    // op fails verification and the entire GQA decomposition silently bails,
+    // leaving the op on the CPU.
+    auto positionIdsI64Type =
+        RankedTensorType::get({batchSize, seqLen}, rewriter.getIntegerType(64));
+    Value positionIds = rewriter.create<ONNXCastOp>(loc, positionIdsI64Type,
+        positionIdsInt, nullptr, TypeAttr::get(rewriter.getIntegerType(64)));
+    toCheck.append({one, validKvLen, seqLenConst, rawStart, zero, start,
+        positionIdsInt, positionIds});
     return positionIds;
   }
 
@@ -4403,34 +4475,56 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return rewriter.notifyMatchFailure(
           customOp, "expected 'seqlens_k' to have one value per batch");
 
+    // Every index materialized in this mask chain is bounded by a static
+    // sequence length, so it fits a small integer type — no i64 needed. The
+    // largest value we build is max(maskSeqLen /* keyRange limit and
+    // seqlens_k+1, since seqlens_k <= maskSeqLen */, pastSeqLen + qSeqLen /*
+    // qLimit = qRange + (pastSeqLen+1) <= (qSeqLen-1)+(pastSeqLen+1) */).
+    // Compute the whole chain in that width (i16 when it fits, else i32) to
+    // keep the Add/Less/Reshape on AIE instead of falling to the CPU on i64.
+    const int64_t kMaxIndexValue =
+        std::max<int64_t>(maskSeqLen, pastSeqLen + qSeqLen);
+    const unsigned kIndexWidth = chooseIndexWidth(kMaxIndexValue);
+    // seqlens_k is tensor(int32) per the com.microsoft.GroupQueryAttention
+    // spec, so casting it down to kIndexWidth (<= 32) is safe by definition;
+    // guard against a non-conforming wider-than-i32 (or non-integer) seqlens_k
+    // so we decline rather than silently truncate.
+    auto seqlensElemType =
+        dyn_cast<IntegerType>(seqlensType.getElementType());
+    if (!seqlensElemType || seqlensElemType.getWidth() > 32)
+      return rewriter.notifyMatchFailure(customOp,
+          "expected 'seqlens_k' to be an integer no wider than i32");
+
     // Cast/Reshape/Add: valid KV length = seqlens_k + 1, broadcast as
     // [B,1,1,1].
-    Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
-    Value seqlens4d =
-        reshapeI64(rewriter, loc, seqlensI64, {seqlensBatch, 1, 1, 1}, toCheck);
-    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
-        rewriter, loc);
-    Value one = create.onnx.constantInt64({1});
+    Value seqlensInt =
+        castToInt(rewriter, loc, seqlensK, toCheck, kIndexWidth);
+    Value seqlens4d = reshapeInt(rewriter, loc, seqlensInt, {seqlensBatch, 1, 1, 1},
+        toCheck, kIndexWidth);
+    Value one = createIntScalar(rewriter, loc, kIndexWidth, 1);
     Value validKvLen =
         rewriter.create<ONNXAddOp>(loc, seqlens4d.getType(), seqlens4d, one);
 
     // keyValid applies GQA's per-batch seqlens_k limit so keys past the
     // valid KV length are masked out for that batch.
     // Range/Reshape/Less: key_index < valid_kv_length.
-    Value keyRange = createI64Range(rewriter, loc, toCheck, 0, maskSeqLen);
-    Value keyRange4d =
-        reshapeI64(rewriter, loc, keyRange, {1, 1, 1, maskSeqLen}, toCheck);
+    Value keyRange =
+        createIntRange(rewriter, loc, toCheck, 0, maskSeqLen, kIndexWidth);
+    Value keyRange4d = reshapeInt(
+        rewriter, loc, keyRange, {1, 1, 1, maskSeqLen}, toCheck, kIndexWidth);
     Value keyValid = rewriter.create<ONNXLessOp>(loc, keyRange4d, validKvLen);
 
     // causalValid preserves causal attention: query i can only see keys up to
     // past_seq_len + i, even if seqlens_k is larger.
     // Range/Add/Reshape/Less: key_index < past_seq_len + query_index + 1.
-    Value qRange = createI64Range(rewriter, loc, toCheck, 0, qSeqLen);
-    Value pastLimit = create.onnx.constantInt64({pastSeqLen + 1});
+    Value qRange =
+        createIntRange(rewriter, loc, toCheck, 0, qSeqLen, kIndexWidth);
+    Value pastLimit =
+        createIntScalar(rewriter, loc, kIndexWidth, pastSeqLen + 1);
     Value qLimit =
         rewriter.create<ONNXAddOp>(loc, qRange.getType(), qRange, pastLimit);
-    Value qLimit4d =
-        reshapeI64(rewriter, loc, qLimit, {1, 1, qSeqLen, 1}, toCheck);
+    Value qLimit4d = reshapeInt(
+        rewriter, loc, qLimit, {1, 1, qSeqLen, 1}, toCheck, kIndexWidth);
     Value causalValid = rewriter.create<ONNXLessOp>(loc, keyRange4d, qLimit4d);
     auto visibleType = RankedTensorType::get(
         {batchSize, 1, qSeqLen, maskSeqLen}, rewriter.getI1Type());
@@ -4577,21 +4671,35 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
         toCheck.append({delta, selectedDelta, present});
         return present;
       } else {
-        Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
-        Value seqlens4d = reshapeI64(
-            rewriter, loc, seqlensI64, {batchSize, 1, 1, 1}, toCheck);
+        // ScatterElements requires i64 indices, but the Cast/Reshape/Expand
+        // that build them are AIE-supported at i32 and rejected at i64. So
+        // build the whole index chain (seqlens_k is tensor(int32) per the GQA
+        // spec, and bounded by cacheSeqLen) in i32, and cast up to i64 only on
+        // the final Expand result, right before ScatterElements — keeping the
+        // bulk of the chain on AIE and confining i64 to the single scatter op.
+        constexpr unsigned kIndexWidth = 32;
+        Value seqlensI32 =
+            castToInt(rewriter, loc, seqlensK, toCheck, kIndexWidth);
+        Value seqlens4d = reshapeInt(rewriter, loc, seqlensI32,
+            {batchSize, 1, 1, 1}, toCheck, kIndexWidth);
         Value indexShape = onnx_mlir::getONNXConstOpFromVector(
             rewriter, loc, {batchSize, kvNumHeads, 1, headSize});
-        auto indexType = RankedTensorType::get(
+        auto indexI32Type = RankedTensorType::get(
+            {batchSize, kvNumHeads, 1, headSize},
+            rewriter.getIntegerType(kIndexWidth));
+        Value indicesI32 = rewriter.create<ONNXExpandOp>(
+            loc, indexI32Type, seqlens4d, indexShape);
+        // Cast the expanded index up to i64 immediately before the scatter.
+        auto indexI64Type = RankedTensorType::get(
             {batchSize, kvNumHeads, 1, headSize}, rewriter.getIntegerType(64));
-        Value indices = rewriter.create<ONNXExpandOp>(
-            loc, indexType, seqlens4d, indexShape);
+        Value indices = rewriter.create<ONNXCastOp>(loc, indexI64Type,
+            indicesI32, nullptr, TypeAttr::get(rewriter.getIntegerType(64)));
 
         Value present = rewriter.create<ONNXScatterElementsOp>(loc, presentType,
             pastKV, indices, current4d,
             rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), 2),
             rewriter.getStringAttr("none"));
-        toCheck.append({indexShape, indices, present});
+        toCheck.append({indexShape, indicesI32, indices, present});
         return present;
       }
     };
