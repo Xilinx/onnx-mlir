@@ -295,3 +295,20 @@ func.func @test_gather_dynamic_indices(%arg0 : tensor<1x2xf32>, %indices: tensor
 // EXCLUDE-LABEL:   func.func @test_gather_dynamic_indices(
 // EXCLUDE:           onnx.Gather
 }
+
+// -----
+
+// Unsigned ui16 indices are already legalized upstream; skip TOSA
+// negative-index normalization (which would emit unsupported ui16 compares).
+func.func @test_gather_dynamic_indices_ui16(%arg0 : tensor<3x3xf32>, %indices: tensor<1x2xui16>) -> tensor<3x1x2xf32> {
+  %0 = "onnx.Gather"(%arg0, %indices) {axis = 1 : si64} : (tensor<3x3xf32>, tensor<1x2xui16>) -> tensor<3x1x2xf32>
+  "func.return"(%0) : (tensor<3x1x2xf32>) -> ()
+// CHECK-LABEL:   func.func @test_gather_dynamic_indices_ui16(
+// CHECK-NOT:     tosa.greater_equal
+// CHECK:         tosa.cast {{.*}} : (tensor<1x2xui16>) -> tensor<1x2xi32>
+// CHECK:         tosa.gather
+
+// EXCLUDE-LABEL:   func.func @test_gather_dynamic_indices_ui16(
+// EXCLUDE:           onnx.Gather
+// EXCLUDE-NOT:       tosa.gather
+}
