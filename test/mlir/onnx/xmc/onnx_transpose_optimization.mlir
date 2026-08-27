@@ -1585,6 +1585,25 @@ func.func @test_tag_multiuse_transpose(%arg0: tensor<1x3x8x8xf32> {onnx.name = "
 }
 
 // -----
+// Test: the value between two transposes is multi-use, so the named producer
+// feeding the first transpose is tagged with MultiUseConflict.
+// CHECK-LABEL: func @test_tag_multiuse_between_two_transposes
+func.func @test_tag_multiuse_between_two_transposes(%arg0: tensor<1x3x8x8xf32> {onnx.name = "input"}) -> (tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // The first transpose feeds the second transpose and a Sigmoid, so it is
+  // multi-use and its operand (Relu, named "relu_out") gets tagged.
+  // CHECK: "onnx.Relu"(%arg0)
+  // CHECK-SAME: ResultNames = [
+  // CHECK-SAME: ["relu_out", ["MultiUseConflict"]]]
+  // CHECK: "onnx.Transpose"
+  // CHECK: "onnx.Transpose"
+  %0 = "onnx.Relu"(%arg0) {ResultNames = ["relu_out"]} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Transpose"(%0) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %2 = "onnx.Transpose"(%1) {perm = [0, 2, 1, 3]} : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %3 = "onnx.Sigmoid"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %2, %3 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}
+
+// -----
 // Test: Single-use transpose does NOT get tagged
 // CHECK-LABEL: func @test_no_tag_single_use_transpose
 func.func @test_no_tag_single_use_transpose(%arg0: tensor<1x3x8x8xf32> {onnx.name = "input"}) -> tensor<1x8x8x3xf32> {
