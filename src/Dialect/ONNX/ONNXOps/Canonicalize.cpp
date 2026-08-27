@@ -2153,14 +2153,6 @@ public:
     if (std::distance(secondData.use_begin(), secondData.use_end()) > 1) {
       Value conflictVal = firstData; // parent of reshape1
       onnx_mlir::TensorName conflictName(conflictVal);
-      while (!conflictName) {
-        Operation *defOp = conflictVal.getDefiningOp();
-        if (!defOp || defOp->getNumResults() != 1 ||
-            defOp->getNumOperands() != 1)
-          break;
-        conflictVal = defOp->getOperand(0);
-        conflictName = onnx_mlir::TensorName(conflictVal);
-      }
       if (conflictName && llvm::none_of(conflictName.getTransforms(),
                               [](onnx_mlir::Transform *t) {
                                 return isa<onnx_mlir::MultiUseConflict>(t);
