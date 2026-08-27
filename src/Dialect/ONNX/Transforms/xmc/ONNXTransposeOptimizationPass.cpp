@@ -382,7 +382,7 @@ struct FuseConsecutiveTransposes : public OpRewritePattern<ONNXTransposeOp> {
       auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(op,
           op.getType(), prevTranspose.getOperand(),
           rewriter.getI64ArrayAttr(composedPerm));
-      (void)maintainTransposeTag(newTranspose, rewriter);
+      (void)maintainTransposeTag(newTranspose);
     }
 
     return success();
@@ -474,7 +474,7 @@ struct MoveTransposeThroughReshape : public OpRewritePattern<ONNXReshapeOp> {
     auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(reshapeOp,
         reshapeOp.getType(), newReshape.getResult(),
         rewriter.getI64ArrayAttr(newPerm));
-    (void)maintainTransposeTag(newTranspose, rewriter);
+    (void)maintainTransposeTag(newTranspose);
 
     return success();
   }
@@ -764,7 +764,7 @@ struct PushTransposeThroughUnaryOp : public OpRewritePattern<UnaryOp> {
 
     auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(
         op, op.getType(), newOp.getResult(), rewriter.getI64ArrayAttr(*perm));
-    (void)maintainTransposeTag(newTranspose, rewriter);
+    (void)maintainTransposeTag(newTranspose);
 
     return success();
   }
@@ -802,7 +802,7 @@ struct PushTransposeThroughClip : public OpRewritePattern<ONNXClipOp> {
 
     auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(
         op, op.getType(), newOp.getResult(), rewriter.getI64ArrayAttr(*perm));
-    (void)maintainTransposeTag(newTranspose, rewriter);
+    (void)maintainTransposeTag(newTranspose);
 
     return success();
   }
@@ -843,7 +843,7 @@ struct PushTransposeThroughHardSigmoid
 
     auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(
         op, op.getType(), newOp.getResult(), rewriter.getI64ArrayAttr(*perm));
-    (void)maintainTransposeTag(newTranspose, rewriter);
+    (void)maintainTransposeTag(newTranspose);
 
     return success();
   }
@@ -917,7 +917,7 @@ struct PushTransposeThroughQDQ : public OpRewritePattern<QDQOp> {
 
     auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(
         op, op.getType(), newOp.getResult(), rewriter.getI64ArrayAttr(*perm));
-    (void)maintainTransposeTag(newTranspose, rewriter);
+    (void)maintainTransposeTag(newTranspose);
 
     return success();
   }
@@ -993,7 +993,7 @@ struct PushTransposeThroughSCast
 
     if (transposeResultNames)
       newTranspose->setAttr("ResultNames", transposeResultNames);
-    (void)maintainTransposeTag(newTranspose, rewriter);
+    (void)maintainTransposeTag(newTranspose);
 
     return success();
   }
@@ -1047,7 +1047,7 @@ struct FuseBinaryOpTransposes : public OpRewritePattern<BinaryOp> {
 
     auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(op,
         op.getType(), newOp.getResult(), rewriter.getI64ArrayAttr(*lhsPerm));
-    (void)maintainTransposeTag(newTranspose, rewriter);
+    (void)maintainTransposeTag(newTranspose);
 
     return success();
   }
@@ -1170,7 +1170,7 @@ struct FuseTransposeImmuneBinaryOp : public OpRewritePattern<BinaryOp> {
 
     auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(
         op, op.getType(), newOp.getResult(), rewriter.getI64ArrayAttr(*perm));
-    (void)maintainTransposeTag(newTranspose, rewriter);
+    (void)maintainTransposeTag(newTranspose);
 
     return success();
   }
@@ -1351,7 +1351,7 @@ struct PushTransposeThroughBinaryWithConst : public OpRewritePattern<BinaryOp> {
 
       auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(
           op, op.getType(), newOp.getResult(), rewriter.getI64ArrayAttr(*perm));
-      (void)maintainTransposeTag(newTranspose, rewriter);
+      (void)maintainTransposeTag(newTranspose);
 
       return success();
     }
@@ -1499,7 +1499,7 @@ struct PushTransposeThroughBinaryWithConst : public OpRewritePattern<BinaryOp> {
     // Add transpose after the binary op
     auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(
         op, op.getType(), newOp.getResult(), rewriter.getI64ArrayAttr(*perm));
-    (void)maintainTransposeTag(newTranspose, rewriter);
+    (void)maintainTransposeTag(newTranspose);
 
     return success();
   }
@@ -1786,7 +1786,7 @@ struct PushTransposeThroughWhere : public OpRewritePattern<ONNXWhereOp> {
 
     auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(op,
         op.getType(), newWhere.getResult(), rewriter.getI64ArrayAttr(*xPerm));
-    (void)maintainTransposeTag(newTranspose, rewriter);
+    (void)maintainTransposeTag(newTranspose);
 
     return success();
   }
@@ -1909,7 +1909,7 @@ struct PushTransposeThroughVariadicWithConst
 
     auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(op,
         op.getType(), newOp.getResult(), rewriter.getI64ArrayAttr(firstPerm));
-    (void)maintainTransposeTag(newTranspose, rewriter);
+    (void)maintainTransposeTag(newTranspose);
 
     return success();
   }
@@ -1919,7 +1919,7 @@ struct TagMultiUseTransposes : public OpRewritePattern<ONNXTransposeOp> {
   using OpRewritePattern<ONNXTransposeOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(
       ONNXTransposeOp op, PatternRewriter &rewriter) const override {
-    if (failed(maintainTransposeTag(op, rewriter)))
+    if (failed(maintainTransposeTag(op)))
       return rewriter.notifyMatchFailure(op, "no conflict tag needed");
     return success();
   }

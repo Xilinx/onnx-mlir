@@ -58,8 +58,7 @@ static SmallVector<int64_t> inversePermutation(ArrayRef<int64_t> perm) {
 ///
 /// Returns success() only when a new tag was actually added; callers that use
 /// it purely to keep tags fresh after a rewrite may ignore the result.
-static LogicalResult maintainTransposeTag(
-    ONNXTransposeOp op, [[maybe_unused]] PatternRewriter &rewriter) {
+static LogicalResult maintainTransposeTag(ONNXTransposeOp op) {
   if (op->getResult(0).hasOneUse())
     return failure();
 
@@ -452,7 +451,7 @@ struct PushTransposeThroughAxisOp : public OpRewritePattern<OpType> {
 
     // Replace the original operation with the new transpose
     rewriter.replaceOp(op, newTransposeOp.getResult());
-    (void)maintainTransposeTag(newTransposeOp, rewriter);
+    (void)maintainTransposeTag(newTransposeOp);
 
     return success();
   }
@@ -586,7 +585,7 @@ struct PushTransposeThroughConcat : public OpRewritePattern<ONNXConcatOp> {
 
     // Replace the original concat with the new transpose
     rewriter.replaceOp(concatOp, newTransposeOp.getResult());
-    (void)maintainTransposeTag(newTransposeOp, rewriter);
+    (void)maintainTransposeTag(newTransposeOp);
 
     return success();
   }
@@ -774,7 +773,7 @@ struct PushTransposeThroughConcatWithConst
         rewriter.getI64ArrayAttr(firstPerm));
 
     rewriter.replaceOp(concatOp, newTransposeOp.getResult());
-    (void)maintainTransposeTag(newTransposeOp, rewriter);
+    (void)maintainTransposeTag(newTransposeOp);
 
     return success();
   }
