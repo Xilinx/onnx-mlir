@@ -2299,12 +2299,14 @@ static bool isConstantOrDequantizeOfConstant(Value v) {
   return isNoneValue(zp) || getDenseOrDisposableConstLikeElements(zp);
 }
 
-// Pure, constant-foldable ops allowed inside a constant island (excludes
-// Conv/Gemm etc. whose quantized weights must stay integer).
+// Ops that may take part in a constant island. MatMul is included so that a
+// MatMul of two constants folds; a MatMul (or Conv/Gemm) with a real weight is
+// not dequantized because onlyFeedsConstantIsland separately requires every
+// other operand of the consumer to be constant.
 static bool isConstIslandPureOp(Operation *op) {
   return isa<ONNXMatMulOp, ONNXTransposeOp, ONNXConcatOp, ONNXReshapeOp,
-      ONNXSqueezeOp, ONNXUnsqueezeOp, ONNXExpandOp, ONNXGatherOp,
-      ONNXFlattenOp, ONNXSliceOp>(op);
+      ONNXSqueezeOp, ONNXUnsqueezeOp, ONNXExpandOp, ONNXGatherOp, ONNXFlattenOp,
+      ONNXSliceOp>(op);
 }
 
 // True if `value` flows only into constant computation that is re-quantized
@@ -2521,8 +2523,9 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
         RemoveQDQForConst<ONNXSqueezeOp>, RemoveQDQForConst<ONNXUnsqueezeOp>,
         RemoveQDQForConst<ONNXGatherOp>>(patterns.getContext());
   if (enableQuantConstFold)
-    patterns.add<ConstFoldQuantizeLinearOnConst,
-        ConstFoldDequantizeLinearOnConst>(patterns.getContext());
+    patterns
+        .add<ConstFoldQuantizeLinearOnConst, ConstFoldDequantizeLinearOnConst>(
+            patterns.getContext());
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,
