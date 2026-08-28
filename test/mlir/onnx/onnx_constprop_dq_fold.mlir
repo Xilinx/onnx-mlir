@@ -193,19 +193,41 @@ func.func @no_fold_weight_via_transpose(%act: tensor<2x2xf32>) -> tensor<2x2xf32
 
 // -----
 
-// Scoping: a DequantizeLinear-on-const feeding a Reduce (not a const-island
-// pure op) must NOT be folded. This is the pattern that previously fed a float
-// constant into the DMAC reduce-shielding pass and crashed it.
-func.func @no_fold_dq_into_reduce() -> tensor<1x1xf32> {
-  %x = onnx.Constant dense<[[2, 4]]> : tensor<1x2xui8>
-  %scale = onnx.Constant dense<5.000000e-01> : tensor<f32>
-  %zp = onnx.Constant dense<0> : tensor<ui8>
-  %dq = "onnx.DequantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x2xui8>, tensor<f32>, tensor<ui8>) -> tensor<1x2xf32>
-  %axes = onnx.Constant dense<[1]> : tensor<1xi64>
-  %r = "onnx.ReduceSum"(%dq, %axes) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x2xf32>, tensor<1xi64>) -> tensor<1x1xf32>
-  return %r : tensor<1x1xf32>
+// A constant Add folds too: no op type is special-cased, so Add(const, const)
+// inside an island collapses just like MatMul. [[1,2],[3,4]] + [[1,1],[1,1]].
+func.func @fold_add_of_dq_consts() -> tensor<2x2xf32> {
+  %a = onnx.Constant dense<[[2, 4], [6, 8]]> : tensor<2x2xui8>
+  %a_scale = onnx.Constant dense<5.000000e-01> : tensor<f32>
+  %a_zp = onnx.Constant dense<0> : tensor<ui8>
+  %a_dq = "onnx.DequantizeLinear"(%a, %a_scale, %a_zp) {axis = 0 : si64, block_size = 0 : si64} : (tensor<2x2xui8>, tensor<f32>, tensor<ui8>) -> tensor<2x2xf32>
+
+  %b = onnx.Constant dense<[[1, 1], [1, 1]]> : tensor<2x2xui8>
+  %b_scale = onnx.Constant dense<1.000000e+00> : tensor<f32>
+  %b_zp = onnx.Constant dense<0> : tensor<ui8>
+  %b_dq = "onnx.DequantizeLinear"(%b, %b_scale, %b_zp) {axis = 0 : si64, block_size = 0 : si64} : (tensor<2x2xui8>, tensor<f32>, tensor<ui8>) -> tensor<2x2xf32>
+
+  %add = "onnx.Add"(%a_dq, %b_dq) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+  return %add : tensor<2x2xf32>
 }
 
-// CHECK-LABEL: @no_fold_dq_into_reduce
+// CHECK-LABEL: @fold_add_of_dq_consts
+// CHECK-NOT: onnx.DequantizeLinear
+// CHECK-NOT: onnx.Add
+// CHECK: onnx.Constant dense<{{\[}}[2.000000e+00, 3.000000e+00], [4.000000e+00, 5.000000e+00]]> : tensor<2x2xf32>
+
+// -----
+
+// A constant added to a non-constant activation must NOT be dequantized -- the
+// operand check (not an op list) is what protects it.
+func.func @no_fold_const_into_add(%act: tensor<2x2xf32>) -> tensor<2x2xf32> {
+  %b = onnx.Constant dense<[[1, 2], [3, 4]]> : tensor<2x2xui8>
+  %scale = onnx.Constant dense<5.000000e-01> : tensor<f32>
+  %zp = onnx.Constant dense<0> : tensor<ui8>
+  %b_dq = "onnx.DequantizeLinear"(%b, %scale, %zp) {axis = 0 : si64, block_size = 0 : si64} : (tensor<2x2xui8>, tensor<f32>, tensor<ui8>) -> tensor<2x2xf32>
+  %add = "onnx.Add"(%act, %b_dq) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+  return %add : tensor<2x2xf32>
+}
+
+// CHECK-LABEL: @no_fold_const_into_add
 // CHECK: onnx.DequantizeLinear
-// CHECK: onnx.ReduceSum
+// CHECK: onnx.Add

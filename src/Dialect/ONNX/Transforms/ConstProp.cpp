@@ -2299,28 +2299,16 @@ static bool isConstantOrDequantizeOfConstant(Value v) {
   return isNoneValue(zp) || getDenseOrDisposableConstLikeElements(zp);
 }
 
-// Ops that may take part in a constant island. MatMul is included so that a
-// MatMul of two constants folds; a MatMul (or Conv/Gemm) with a real weight is
-// not dequantized because onlyFeedsConstantIsland separately requires every
-// other operand of the consumer to be constant.
-static bool isConstIslandPureOp(Operation *op) {
-  return isa<ONNXMatMulOp, ONNXTransposeOp, ONNXConcatOp, ONNXReshapeOp,
-      ONNXSqueezeOp, ONNXUnsqueezeOp, ONNXExpandOp, ONNXGatherOp, ONNXFlattenOp,
-      ONNXSliceOp>(op);
-}
-
-// True if `value` flows only into constant computation that is re-quantized
-// (or reaches a graph output) -- never into a non-constant op. This confines
-// the DequantizeLinear fold to constant islands (e.g. a constant MatMul chain)
-// and leaves ordinary quantized weights, which feed real activations, intact.
+// True if `value` is only consumed by constant computation ending at a
+// QuantizeLinear or graph output -- never by an op with a non-constant operand.
+// This keeps the fold off ordinary quantized weights (whose consumer mixes in a
+// non-constant activation).
 static bool onlyFeedsConstantIsland(Value value) {
   for (Operation *user : value.getUsers()) {
     if (isa<ONNXQuantizeLinearOp>(user))
       continue;
     if (user->hasTrait<OpTrait::IsTerminator>())
       continue;
-    if (!isConstIslandPureOp(user))
-      return false;
     for (Value operand : user->getOperands()) {
       if (operand == value || isNoneValue(operand))
         continue;
