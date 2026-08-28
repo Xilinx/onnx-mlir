@@ -47,6 +47,7 @@
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
+#include "src/Dialect/ONNX/TensorName.hpp"
 #include "src/Pass/Passes.hpp"
 #include "src/Support/TypeUtilities.hpp"
 
@@ -2144,6 +2145,31 @@ public:
           createONNX.concat(RankedTensorType::get({s2}, rewriter.getI64Type()),
               fusedDims, /*axis=*/0);
     }
+    // If reshape1 (the first/inner reshape) fans out to consumers beyond this
+    // fold (i.e. reshape1 survives, shared with other users), tag reshape1's
+    // parent (its input producer) with MultiUseConflict so the fold does not
+    // clobber the shared producer's name. Checked BEFORE creating the fused
+    // reshape below.
+    if (std::distance(secondData.use_begin(), secondData.use_end()) > 1) {
+      Value conflictVal = firstData; // parent of reshape1
+      onnx_mlir::TensorName conflictName(conflictVal);
+      while (!conflictName) {
+        Operation *defOp = conflictVal.getDefiningOp();
+        if (!defOp || defOp->getNumResults() != 1 ||
+            defOp->getNumOperands() != 1)
+          break;
+        conflictVal = defOp->getOperand(0);
+        conflictName = onnx_mlir::TensorName(conflictVal);
+      }
+      if (conflictName && llvm::none_of(conflictName.getTransforms(),
+                              [](onnx_mlir::Transform *t) {
+                                return isa<onnx_mlir::MultiUseConflict>(t);
+                              })) {
+        conflictName.push_back(std::make_unique<onnx_mlir::MultiUseConflict>());
+        (void)conflictName.setTo(conflictVal);
+      }
+    }
+
     // Emit a new Reshape.
     Value res = createONNX.reshape(secondReshapeOp.getResult().getType(),
         firstData, fusedShape, secondReshapeOp.getAllowzeroAttr());
