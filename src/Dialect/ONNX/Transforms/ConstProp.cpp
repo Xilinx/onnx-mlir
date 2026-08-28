@@ -2285,6 +2285,164 @@ public:
   }
 };
 
+// True if `v` is a constant, or a DequantizeLinear of a constant.
+static bool isConstantOrDequantizeOfConstant(Value v) {
+  if (getDenseOrDisposableConstLikeElements(v))
+    return true;
+  auto dq = v.getDefiningOp<ONNXDequantizeLinearOp>();
+  if (!dq)
+    return false;
+  if (!getDenseOrDisposableConstLikeElements(dq.getX()) ||
+      !getDenseOrDisposableConstLikeElements(dq.getXScale()))
+    return false;
+  Value zp = dq.getXZeroPoint();
+  return isNoneValue(zp) || getDenseOrDisposableConstLikeElements(zp);
+}
+
+// True if `value` is only consumed by constant computation ending at a
+// QuantizeLinear or graph output -- never by an op with a non-constant operand.
+// This keeps the fold off ordinary quantized weights (whose consumer mixes in a
+// non-constant activation).
+static bool onlyFeedsConstantIsland(Value value) {
+  for (Operation *user : value.getUsers()) {
+    if (isa<ONNXQuantizeLinearOp>(user))
+      continue;
+    if (user->hasTrait<OpTrait::IsTerminator>())
+      continue;
+    for (Value operand : user->getOperands()) {
+      if (operand == value || isNoneValue(operand))
+        continue;
+      if (!isConstantOrDequantizeOfConstant(operand))
+        return false;
+    }
+    for (Value result : user->getResults())
+      if (!onlyFeedsConstantIsland(result))
+        return false;
+  }
+  return true;
+}
+
+// Fold DequantizeLinear on constants to `(x - x_zero_point) * x_scale`, the
+// inverse of ConstFoldQuantizeLinearOnConst (same enableQuantConstFold gate).
+// Per-tensor and per-axis are handled; blocked quantization is out of scope.
+// Confined to constant islands (onlyFeedsConstantIsland) so quantized weights
+// are not dequantized.
+class ConstFoldDequantizeLinearOnConst
+    : public OpRewritePattern<ONNXDequantizeLinearOp> {
+public:
+  using OpRewritePattern<ONNXDequantizeLinearOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXDequantizeLinearOp dqOp, PatternRewriter &rewriter) const override {
+    // Blocked quantization is out of scope.
+    if (dqOp.getBlockSize() != 0)
+      return rewriter.notifyMatchFailure(dqOp, "blocked quantization");
+
+    // The input and quantization parameters must all be constants.
+    ElementsAttr xElems = getDenseOrDisposableConstLikeElements(dqOp.getX());
+    if (!xElems)
+      return rewriter.notifyMatchFailure(dqOp, "x is not a constant");
+
+    ElementsAttr scaleElems =
+        getDenseOrDisposableConstLikeElements(dqOp.getXScale());
+    if (!scaleElems)
+      return rewriter.notifyMatchFailure(dqOp, "x_scale is not a constant");
+
+    Value zpValue = dqOp.getXZeroPoint();
+    bool hasZeroPoint = !isNoneValue(zpValue);
+    ElementsAttr zpElems;
+    if (hasZeroPoint) {
+      zpElems = getDenseOrDisposableConstLikeElements(zpValue);
+      if (!zpElems)
+        return rewriter.notifyMatchFailure(
+            dqOp, "x_zero_point is not a constant");
+    }
+
+    auto floatType = dyn_cast<FloatType>(getElementTypeOrSelf(dqOp.getY()));
+    if (!floatType)
+      return rewriter.notifyMatchFailure(dqOp, "non-floating-point output");
+
+    // Only fold inside a constant island, not ordinary quantized weights.
+    if (!onlyFeedsConstantIsland(dqOp.getY()))
+      return rewriter.notifyMatchFailure(
+          dqOp, "not confined to a constant island");
+
+    auto xType = cast<ShapedType>(dqOp.getX().getType());
+    if (!xType.hasStaticShape())
+      return rewriter.notifyMatchFailure(dqOp, "x has dynamic shape");
+    int64_t xRank = xType.getRank();
+    ArrayRef<int64_t> xShape = xType.getShape();
+
+    int64_t scaleElemCount =
+        cast<ShapedType>(scaleElems.getType()).getNumElements();
+    int64_t zpElemCount =
+        hasZeroPoint ? cast<ShapedType>(zpElems.getType()).getNumElements() : 1;
+    bool isPerAxis = scaleElemCount > 1 || zpElemCount > 1;
+
+    int64_t axis = dqOp.getAxis();
+    if (isPerAxis) {
+      if (axis < 0)
+        axis += xRank;
+      if (axis < 0 || axis >= xRank)
+        return rewriter.notifyMatchFailure(dqOp, "axis out of range");
+
+      auto isFoldablePerAxisParam = [&](ElementsAttr elems,
+                                        int64_t count) -> bool {
+        if (count == 1)
+          return true; // Scalar broadcasts trivially.
+        auto type = cast<ShapedType>(elems.getType());
+        return type.getRank() == 1 && count == xShape[axis];
+      };
+      if (!isFoldablePerAxisParam(scaleElems, scaleElemCount) ||
+          (hasZeroPoint && !isFoldablePerAxisParam(zpElems, zpElemCount)))
+        return rewriter.notifyMatchFailure(
+            dqOp, "unsupported per-axis scale/zp");
+    }
+
+    FloatType f64Type = rewriter.getF64Type();
+    OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
+
+    // Reshape a per-axis scale/zp (1-D of length xShape[axis]) so it
+    // broadcasts against x's shape; per-tensor (scalar) needs no reshape.
+    auto broadcastToX = [&](ElementsAttr elems) -> ElementsAttr {
+      auto type = cast<ShapedType>(elems.getType());
+      int64_t numElems = type.getNumElements();
+      if (numElems == 1)
+        return elems; // Per-tensor: scalar broadcasts trivially.
+      SmallVector<int64_t> bcastShape(xRank, 1);
+      bcastShape[axis] = numElems;
+      return elementsBuilder.reshape(elems, bcastShape);
+    };
+
+    ShapedType combinedType = cast<ShapedType>(
+        elementsBuilder.castToFPElementType(xElems, f64Type).getType());
+
+    // shifted = x - zero_point (both in f64).
+    ElementsAttr xF64 = elementsBuilder.castToFPElementType(xElems, f64Type);
+    ElementsAttr shifted = xF64;
+    if (hasZeroPoint) {
+      ElementsAttr zpF64 =
+          broadcastToX(elementsBuilder.castToFPElementType(zpElems, f64Type));
+      shifted = elementsBuilder.combine(
+          xF64, zpF64, combinedType, subCombiner(f64Type));
+    }
+
+    // dequantized = (x - zero_point) * scale (still in f64).
+    ElementsAttr scaleF64 =
+        broadcastToX(elementsBuilder.castToFPElementType(scaleElems, f64Type));
+    ElementsAttr dequantizedF64 = elementsBuilder.combine(shifted, scaleF64,
+        combinedType, elementwiseBinaryOpCombiner<ONNXMulOp>(f64Type));
+
+    // Cast down to the DequantizeLinear result's floating-point type.
+    ElementsAttr dequantized =
+        elementsBuilder.castToFPElementType(dequantizedF64, floatType);
+
+    rewriter.replaceOp(
+        dqOp, createReplacingConstantOp(rewriter, dqOp.getY(), dequantized));
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Code to manage the pass.
 //===----------------------------------------------------------------------===//
@@ -2353,7 +2511,9 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
         RemoveQDQForConst<ONNXSqueezeOp>, RemoveQDQForConst<ONNXUnsqueezeOp>,
         RemoveQDQForConst<ONNXGatherOp>>(patterns.getContext());
   if (enableQuantConstFold)
-    patterns.add<ConstFoldQuantizeLinearOnConst>(patterns.getContext());
+    patterns
+        .add<ConstFoldQuantizeLinearOnConst, ConstFoldDequantizeLinearOnConst>(
+            patterns.getContext());
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,
