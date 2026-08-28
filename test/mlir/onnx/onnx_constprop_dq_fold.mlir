@@ -100,7 +100,7 @@ func.func @fold_dq_bf16() -> tensor<2xbf16> {
 
 // -----
 
-// End-to-end (the PSGT rotary_emb pattern): a MatMul whose operands both come
+// End-to-end: a MatMul whose operands both come
 // from a DequantizeLinear-on-const folds all the way to a single Constant once
 // the DQ folder turns each operand into a Constant.
 // a = [[1,2],[3,4]] (scale 0.5 on [[2,4],[6,8]]), b = [[1,2],[3,4]] (scale 1.0).
