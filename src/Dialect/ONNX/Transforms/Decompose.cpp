@@ -4388,8 +4388,8 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     return positionIds;
   }
 
-  // Builds ONNX Cast/Reshape/Range/Less/And/Where ops to materialize
-  // GQA's seqlens_k and causal visibility as an additive Attention mask.
+  // Builds an additive Attention mask from GQA's runtime seqlens_k and a
+  // statically materialized causal mask.
   static FailureOr<Value> createAdditiveAttentionMask(PatternRewriter &rewriter,
       Location loc, ONNXCustomOp customOp, Value seqlensK, int64_t batchSize,
       int64_t qSeqLen, int64_t maskSeqLen, int64_t pastSeqLen, Type elementType,
@@ -4403,50 +4403,55 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return rewriter.notifyMatchFailure(
           customOp, "expected 'seqlens_k' to have one value per batch");
 
-    // Cast/Reshape/Add: valid KV length = seqlens_k + 1, broadcast as
-    // [B,1,1,1].
+    // Cast/Reshape seqlens_k as [B,1,1,1] for comparison with key indices.
     Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
     Value seqlens4d =
         reshapeI64(rewriter, loc, seqlensI64, {seqlensBatch, 1, 1, 1}, toCheck);
-    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
-        rewriter, loc);
-    Value one = create.onnx.constantInt64({1});
-    Value validKvLen =
-        rewriter.create<ONNXAddOp>(loc, seqlens4d.getType(), seqlens4d, one);
 
-    // keyValid applies GQA's per-batch seqlens_k limit so keys past the
-    // valid KV length are masked out for that batch.
-    // Range/Reshape/Less: key_index < valid_kv_length.
-    Value keyRange = createI64Range(rewriter, loc, toCheck, 0, maskSeqLen);
-    Value keyRange4d =
-        reshapeI64(rewriter, loc, keyRange, {1, 1, 1, maskSeqLen}, toCheck);
-    Value keyValid = rewriter.create<ONNXLessOp>(loc, keyRange4d, validKvLen);
+    // key_index > seqlens_k identifies invalid padding positions while
+    // preserving GQA's last-valid-index convention. Key indices are static.
+    auto keyIndicesType = RankedTensorType::get(
+        {1, 1, 1, maskSeqLen}, rewriter.getIntegerType(64));
+    SmallVector<int64_t> keyIndices(maskSeqLen);
+    std::iota(keyIndices.begin(), keyIndices.end(), 0);
+    Value keyIndices4d = rewriter.create<ONNXConstantOp>(loc, Attribute(),
+        DenseElementsAttr::get(keyIndicesType, ArrayRef(keyIndices)));
+    Value paddingInvalid =
+        rewriter.create<ONNXGreaterOp>(loc, keyIndices4d, seqlens4d);
 
-    // causalValid preserves causal attention: query i can only see keys up to
-    // past_seq_len + i, even if seqlens_k is larger.
-    // Range/Add/Reshape/Less: key_index < past_seq_len + query_index + 1.
-    Value qRange = createI64Range(rewriter, loc, toCheck, 0, qSeqLen);
-    Value pastLimit = create.onnx.constantInt64({pastSeqLen + 1});
-    Value qLimit =
-        rewriter.create<ONNXAddOp>(loc, qRange.getType(), qRange, pastLimit);
-    Value qLimit4d =
-        reshapeI64(rewriter, loc, qLimit, {1, 1, qSeqLen, 1}, toCheck);
-    Value causalValid = rewriter.create<ONNXLessOp>(loc, keyRange4d, qLimit4d);
-    auto visibleType = RankedTensorType::get(
-        {batchSize, 1, qSeqLen, maskSeqLen}, rewriter.getI1Type());
-    Value visible =
-        rewriter.create<ONNXAndOp>(loc, visibleType, keyValid, causalValid);
+    // Causality depends only on static shapes: query i can see keys through
+    // past_seq_len + i. Materialize its additive 0/-inf mask directly.
+    auto causalMaskType =
+        RankedTensorType::get({1, 1, qSeqLen, maskSeqLen}, elementType);
+    const double negInfValue = -std::numeric_limits<double>::infinity();
+    SmallVector<Attribute> causalMaskValues =
+        llvm::map_to_vector(llvm::seq<int64_t>(qSeqLen * maskSeqLen),
+            [&](int64_t linearIndex) -> Attribute {
+              const int64_t q = linearIndex / maskSeqLen;
+              const int64_t k = linearIndex % maskSeqLen;
+              return FloatAttr::get(
+                  elementType, k <= pastSeqLen + q ? 0.0 : negInfValue);
+            });
+    Value causalMask = rewriter.create<ONNXConstantOp>(loc, Attribute(),
+        DenseElementsAttr::get(causalMaskType, ArrayRef(causalMaskValues)));
 
-    // And/Where: combine visibility checks, then emit 0.0 or -inf.
-    Value zero = createScalarFloatConstant(rewriter, loc, elementType, 0.0);
+    // First form the dynamic padding mask as -inf/0 with shape [B,1,1,T],
+    // then add the static causal mask. Keeping causality in the floating-point
+    // mask prevents later canonicalization from recreating a logical And.
     Value negInf = createScalarFloatConstant(
         rewriter, loc, elementType, -std::numeric_limits<double>::infinity());
+    Value floatZero =
+        createScalarFloatConstant(rewriter, loc, elementType, 0.0);
+    auto paddingMaskType =
+        RankedTensorType::get({batchSize, 1, 1, maskSeqLen}, elementType);
+    Value paddingMask = rewriter.create<ONNXWhereOp>(
+        loc, paddingMaskType, paddingInvalid, negInf, floatZero);
     auto maskType =
         RankedTensorType::get({batchSize, 1, qSeqLen, maskSeqLen}, elementType);
     Value additiveMask =
-        rewriter.create<ONNXWhereOp>(loc, maskType, visible, zero, negInf);
-    toCheck.append({one, validKvLen, keyValid, pastLimit, qLimit, causalValid,
-        visible, zero, negInf, additiveMask});
+        rewriter.create<ONNXAddOp>(loc, maskType, paddingMask, causalMask);
+    toCheck.append({keyIndices4d, paddingInvalid, causalMask, negInf, floatZero,
+        paddingMask, additiveMask});
     return additiveMask;
   }
 

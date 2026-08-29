@@ -643,11 +643,21 @@ func.func @minimal_gqa(%q: tensor<1x128x3072xf32>, %k: tensor<1x128x1536xf32>, %
 // onnx.Attention must receive a mask operand and keep is_causal disabled.
 // CHECK-LABEL: func.func @minimal_gqa
 // CHECK-SAME:  (%[[Q:.*]]: tensor<1x128x3072xf32>, %[[K:.*]]: tensor<1x128x1536xf32>, %[[V:.*]]: tensor<1x128x1536xf32>) -> tensor<1x128x3072xf32>
-// CHECK:       %[[NONE:.*]] = "onnx.NoValue"() {value} : () -> none
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x128x128xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x128x128xf32>
-// CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[K]], %[[V]], %[[MASK]], %[[NONE]], %[[NONE]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
+// CHECK-DAG:   %[[ZERO:.*]] = onnx.Constant dense<0.000000e+00> : tensor<f32>
+// CHECK-DAG:   %[[NEG_INF:.*]] = onnx.Constant dense<0xFF800000> : tensor<f32>
+// CHECK-DAG:   %[[CAUSAL_MASK:.*]] = onnx.Constant {{.*}} : tensor<1x1x128x128xf32>
+// CHECK-DAG:   %[[KEY_INDICES:.*]] = onnx.Constant {{.*}} : tensor<1x1x1x128xi64>
+// CHECK-DAG:   %[[SEQLENS_4D_SHAPE:.*]] = onnx.Constant dense<1> : tensor<4xi64>
+// CHECK-DAG:   %[[NONE:.*]] = "onnx.NoValue"() {value} : () -> none
+// CHECK-DAG:   %[[SEQLENS:.*]] = onnx.Constant dense<255> : tensor<1x1xi32>
+// CHECK:       %[[SEQLENS_I64:.*]] = "onnx.Cast"(%[[SEQLENS]]) {saturate = 1 : si64, to = i64} : (tensor<1x1xi32>) -> tensor<1x1xi64>
+// CHECK-NEXT:  %[[SEQLENS_4D:.*]] = "onnx.Reshape"(%[[SEQLENS_I64]], %[[SEQLENS_4D_SHAPE]]) {allowzero = 0 : si64} : (tensor<1x1xi64>, tensor<4xi64>) -> tensor<1x1x1x1xi64>
+// CHECK-NEXT:  %[[PADDING_INVALID:.*]] = "onnx.Greater"(%[[KEY_INDICES]], %[[SEQLENS_4D]]) : (tensor<1x1x1x128xi64>, tensor<1x1x1x1xi64>) -> tensor<1x1x1x128xi1>
+// CHECK-NEXT:  %[[PADDING_MASK:.*]] = "onnx.Where"(%[[PADDING_INVALID]], %[[NEG_INF]], %[[ZERO]]) : (tensor<1x1x1x128xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x128xf32>
+// CHECK-NEXT:  %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], %[[CAUSAL_MASK]]) : (tensor<1x1x1x128xf32>, tensor<1x1x128x128xf32>) -> tensor<1x1x128x128xf32>
+// CHECK-NEXT:  %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[K]], %[[V]], %[[MASK]], %[[NONE]], %[[NONE]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x1x128x128xf32>, none, none) -> (tensor<1x128x3072xf32>, none, none, none)
-// CHECK:       return %[[Y]] : tensor<1x128x3072xf32>
+// CHECK-NEXT:  return %[[Y]] : tensor<1x128x3072xf32>
 
 // -----
 
@@ -672,7 +682,8 @@ func.func @gqa_3d_inputs_present_kv(
 
 // CHECK-LABEL: func.func @gqa_3d_inputs_present_kv
 // CHECK-SAME:  (%[[Q:.*]]: tensor<1x128x3072xf32>, %[[K:.*]]: tensor<1x128x1536xf32>, %[[V:.*]]: tensor<1x128x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x48xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x48xf32>)
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x128x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x128x384xf32>
+// CHECK:       %[[PADDING_MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x384xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], {{.*}}) : (tensor<1x1x1x384xf32>, tensor<1x1x128x384xf32>) -> tensor<1x1x128x384xf32>
 // CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[K]], %[[V]], %[[MASK]], %[[PAST_K]], %[[PAST_V]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x1x128x384xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x48xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x48xf32>, none)
 // CHECK:       return %[[Y]], %[[PK]], %[[PV]] : tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x48xf32>
@@ -699,7 +710,8 @@ func.func @gqa_packed_inputs_3d(
 // CHECK-LABEL: func.func @gqa_packed_inputs_3d
 // CHECK-SAME:  (%[[QKV:.*]]: tensor<1x128x6144xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>)
 // CHECK:       %[[SPLIT:.*]]:3 = "onnx.Split"(%[[QKV]], {{.*}}) {axis = 2 : si64} : (tensor<1x128x6144xf32>, tensor<3xi64>) -> (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>)
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x128x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x128x384xf32>
+// CHECK:       %[[PADDING_MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x384xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], {{.*}}) : (tensor<1x1x1x384xf32>, tensor<1x1x128x384xf32>) -> tensor<1x1x128x384xf32>
 // CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[SPLIT]]#0, %[[SPLIT]]#1, %[[SPLIT]]#2, %[[MASK]], %[[PAST_K]], %[[PAST_V]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x1x128x384xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, none)
 // CHECK:       return %[[Y]], %[[PK]], %[[PV]] : tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>
@@ -732,7 +744,8 @@ func.func @gqa_packed_inputs_3d_rotary_embedding_no_position_ids(
 // CHECK:       %[[POS:.*]] = "onnx.Add"({{.*}}) : (tensor<1x1xi64>, tensor<1x128xi64>) -> tensor<1x128xi64>
 // CHECK:       %[[RQ:.*]] = "onnx.RotaryEmbedding"(%[[SPLIT]]#0, %[[COS]], %[[SIN]], %[[POS]]) {interleaved = 0 : si64, num_heads = 32 : si64, rotary_embedding_dim = 0 : si64} : (tensor<1x128x3072xf32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x128xi64>) -> tensor<1x128x3072xf32>
 // CHECK:       %[[RK:.*]] = "onnx.RotaryEmbedding"(%[[SPLIT]]#1, %[[COS]], %[[SIN]], %[[POS]]) {interleaved = 0 : si64, num_heads = 16 : si64, rotary_embedding_dim = 0 : si64} : (tensor<1x128x1536xf32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x128xi64>) -> tensor<1x128x1536xf32>
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x128x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x128x384xf32>
+// CHECK:       %[[PADDING_MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x384xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], {{.*}}) : (tensor<1x1x1x384xf32>, tensor<1x1x128x384xf32>) -> tensor<1x1x128x384xf32>
 // CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[RQ]], %[[RK]], %[[SPLIT]]#2, %[[MASK]], %[[PAST_K]], %[[PAST_V]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x1x128x384xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, none)
 // CHECK:       return %[[Y]], %[[PK]], %[[PV]] : tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>
@@ -768,7 +781,8 @@ func.func @gqa_rotary_embedding_with_position_ids(
 // CHECK-SAME:  (%[[Q:.*]]: tensor<1x128x3072xf32>, %[[K:.*]]: tensor<1x128x1536xf32>, %[[V:.*]]: tensor<1x128x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>, %[[COS:.*]]: tensor<4096x48xf32>, %[[SIN:.*]]: tensor<4096x48xf32>, %[[POS:.*]]: tensor<1x128xi64>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>)
 // CHECK:       %[[RQ:.*]] = "onnx.RotaryEmbedding"(%[[Q]], %[[COS]], %[[SIN]], %[[POS]]) {interleaved = 1 : si64, num_heads = 32 : si64, rotary_embedding_dim = 0 : si64} : (tensor<1x128x3072xf32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x128xi64>) -> tensor<1x128x3072xf32>
 // CHECK:       %[[RK:.*]] = "onnx.RotaryEmbedding"(%[[K]], %[[COS]], %[[SIN]], %[[POS]]) {interleaved = 1 : si64, num_heads = 16 : si64, rotary_embedding_dim = 0 : si64} : (tensor<1x128x1536xf32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x128xi64>) -> tensor<1x128x1536xf32>
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x128x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x128x384xf32>
+// CHECK:       %[[PADDING_MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x384xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], {{.*}}) : (tensor<1x1x1x384xf32>, tensor<1x1x128x384xf32>) -> tensor<1x1x128x384xf32>
 // CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[RQ]], %[[RK]], %[[V]], %[[MASK]], %[[PAST_K]], %[[PAST_V]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x1x128x384xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, none)
 // CHECK:       return %[[Y]], %[[PK]], %[[PV]] : tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>
@@ -837,7 +851,8 @@ func.func @gqa_with_attention_bias_and_qk_output(
 
 // CHECK-LABEL: func.func @gqa_with_attention_bias_and_qk_output
 // CHECK-SAME:  (%[[Q:.*]]: tensor<1x128x3072xf32>, %[[K:.*]]: tensor<1x128x1536xf32>, %[[V:.*]]: tensor<1x128x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>, %[[BIAS:.*]]: tensor<1x1x128x384xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>)
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x128x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x128x384xf32>
+// CHECK:       %[[PADDING_MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x384xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], {{.*}}) : (tensor<1x1x1x384xf32>, tensor<1x1x128x384xf32>) -> tensor<1x1x128x384xf32>
 // CHECK:       %[[BIAS_MASK:.*]] = "onnx.Add"(%[[BIAS]], %[[MASK]]) : (tensor<1x1x128x384xf32>, tensor<1x1x128x384xf32>) -> tensor<1x1x128x384xf32>
 // CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[K]], %[[V]], %[[BIAS_MASK]], %[[PAST_K]], %[[PAST_V]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x1x128x384xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>)
@@ -870,7 +885,8 @@ func.func @gqa_with_attention_bias_per_head(
 
 // CHECK-LABEL: func.func @gqa_with_attention_bias_per_head
 // CHECK-SAME:  (%[[Q:.*]]: tensor<1x128x3072xf32>, %[[K:.*]]: tensor<1x128x1536xf32>, %[[V:.*]]: tensor<1x128x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>, %[[BIAS:.*]]: tensor<1x32x128x384xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>)
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x128x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x128x384xf32>
+// CHECK:       %[[PADDING_MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x384xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], {{.*}}) : (tensor<1x1x1x384xf32>, tensor<1x1x128x384xf32>) -> tensor<1x1x128x384xf32>
 // CHECK:       %[[BIAS_MASK:.*]] = "onnx.Add"(%[[BIAS]], %[[MASK]]) : (tensor<1x32x128x384xf32>, tensor<1x1x128x384xf32>) -> tensor<1x32x128x384xf32>
 // CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[K]], %[[V]], %[[BIAS_MASK]], %[[PAST_K]], %[[PAST_V]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x32x128x384xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>)
@@ -903,7 +919,8 @@ func.func @gqa_with_scale_softcap_and_qk_output_2(
 
 // CHECK-LABEL: func.func @gqa_with_scale_softcap_and_qk_output_2
 // CHECK-SAME:  (%[[Q:.*]]: tensor<1x128x3072xf32>, %[[K:.*]]: tensor<1x128x1536xf32>, %[[V:.*]]: tensor<1x128x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>)
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x128x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x128x384xf32>
+// CHECK:       %[[PADDING_MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x384xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x384xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], {{.*}}) : (tensor<1x1x1x384xf32>, tensor<1x1x128x384xf32>) -> tensor<1x1x128x384xf32>
 // CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[K]], %[[V]], %[[MASK]], %[[PAST_K]], %[[PAST_V]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 3 : si64, scale = 2.000000e+00 : f32, softcap = 1.000000e+01 : f32}
 // CHECK-SAME:      (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x1x128x384xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>) -> (tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>)
 // CHECK:       return %[[Y]], %[[PK]], %[[PV]], %[[QK]] : tensor<1x128x3072xf32>, tensor<1x16x384x96xf32>, tensor<1x16x384x96xf32>, tensor<1x32x128x256xf32>
@@ -937,7 +954,8 @@ func.func @gqa_batch4_do_rotary_no_position_ids(
 // CHECK:       %[[POS:.*]] = "onnx.Add"({{.*}}) : (tensor<4x1xi64>, tensor<1x128xi64>) -> tensor<4x128xi64>
 // CHECK:       %[[RQ:.*]] = "onnx.RotaryEmbedding"(%[[Q]], %[[COS]], %[[SIN]], %[[POS]]) {interleaved = 0 : si64, num_heads = 32 : si64, rotary_embedding_dim = 0 : si64} : (tensor<4x128x3072xf32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<4x128xi64>) -> tensor<4x128x3072xf32>
 // CHECK:       %[[RK:.*]] = "onnx.RotaryEmbedding"(%[[K]], %[[COS]], %[[SIN]], %[[POS]]) {interleaved = 0 : si64, num_heads = 16 : si64, rotary_embedding_dim = 0 : si64} : (tensor<4x128x1536xf32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<4x128xi64>) -> tensor<4x128x1536xf32>
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<4x1x128x384xi1>, tensor<f32>, tensor<f32>) -> tensor<4x1x128x384xf32>
+// CHECK:       %[[PADDING_MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<4x1x1x384xi1>, tensor<f32>, tensor<f32>) -> tensor<4x1x1x384xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], {{.*}}) : (tensor<4x1x1x384xf32>, tensor<1x1x128x384xf32>) -> tensor<4x1x128x384xf32>
 // CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[RQ]], %[[RK]], %[[V]], %[[MASK]], %[[PAST_K]], %[[PAST_V]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<4x128x3072xf32>, tensor<4x128x1536xf32>, tensor<4x128x1536xf32>, tensor<4x1x128x384xf32>, tensor<4x16x256x96xf32>, tensor<4x16x256x48xf32>) -> (tensor<4x128x3072xf32>, tensor<4x16x384x96xf32>, tensor<4x16x384x48xf32>, none)
 // CHECK:       return %[[Y]], %[[PK]], %[[PV]] : tensor<4x128x3072xf32>, tensor<4x16x384x96xf32>, tensor<4x16x384x48xf32>
@@ -971,7 +989,8 @@ func.func @gqa_rotary_no_position_ids_no_past_key(
 // CHECK:       %[[POS:.*]] = "onnx.Add"({{.*}}) : (tensor<1x1xi64>, tensor<1x128xi64>) -> tensor<1x128xi64>
 // CHECK:       %[[RQ:.*]] = "onnx.RotaryEmbedding"(%[[Q]], %[[COS]], %[[SIN]], %[[POS]]) {interleaved = 0 : si64, num_heads = 32 : si64, rotary_embedding_dim = 0 : si64} : (tensor<1x128x3072xf32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x128xi64>) -> tensor<1x128x3072xf32>
 // CHECK:       %[[RK:.*]] = "onnx.RotaryEmbedding"(%[[K]], %[[COS]], %[[SIN]], %[[POS]]) {interleaved = 0 : si64, num_heads = 16 : si64, rotary_embedding_dim = 0 : si64} : (tensor<1x128x1536xf32>, tensor<4096x48xf32>, tensor<4096x48xf32>, tensor<1x128xi64>) -> tensor<1x128x1536xf32>
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x128x128xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x128x128xf32>
+// CHECK:       %[[PADDING_MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x128xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x128xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], {{.*}}) : (tensor<1x1x1x128xf32>, tensor<1x1x128x128xf32>) -> tensor<1x1x128x128xf32>
 // CHECK:       %[[Y:.*]], %[[PK_NONE:.*]], %[[PV_NONE:.*]], %[[QK:.*]] = "onnx.Attention"(%[[RQ]], %[[RK]], %[[V]], %[[MASK]], %[[NONE]], %[[NONE]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x128x3072xf32>, tensor<1x128x1536xf32>, tensor<1x128x1536xf32>, tensor<1x1x128x128xf32>, none, none) -> (tensor<1x128x3072xf32>, none, none, none)
 // CHECK:       return %[[Y]], {{.*}} : tensor<1x128x3072xf32>, tensor<?x16x?x96xf32>, tensor<?x16x?x48xf32>
@@ -1029,11 +1048,26 @@ func.func @gqa_padded_prefill_mask(
 
 // CHECK-LABEL: func.func @gqa_padded_prefill_mask
 // CHECK-SAME:  (%[[Q:.*]]: tensor<2x4x3072xf32>, %[[K:.*]]: tensor<2x4x1536xf32>, %[[V:.*]]: tensor<2x4x1536xf32>) -> (tensor<2x4x3072xf32>, tensor<2x16x4x96xf32>, tensor<2x16x4x96xf32>)
-// CHECK:       %[[NONE:.*]] = "onnx.NoValue"() {value} : () -> none
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<2x1x4x4xi1>, tensor<f32>, tensor<f32>) -> tensor<2x1x4x4xf32>
-// CHECK:       %[[Y:.*]], %[[PK_NONE:.*]], %[[PV_NONE:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[K]], %[[V]], %[[MASK]], %[[NONE]], %[[NONE]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
+// CHECK-DAG:   %[[ZERO:.*]] = onnx.Constant dense<0.000000e+00> : tensor<f32>
+// CHECK-DAG:   %[[NEG_INF:.*]] = onnx.Constant dense<0xFF800000> : tensor<f32>
+// CHECK-DAG:   %[[CAUSAL_MASK:.*]] = onnx.Constant dense<{{\[\[\[\[}}0.000000e+00, 0xFF800000, 0xFF800000, 0xFF800000], [0.000000e+00, 0.000000e+00, 0xFF800000, 0xFF800000], [0.000000e+00, 0.000000e+00, 0.000000e+00, 0xFF800000], [0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00{{\]\]\]\]}}> : tensor<1x1x4x4xf32>
+// CHECK-DAG:   %[[KEY_INDICES:.*]] = onnx.Constant dense<{{\[\[\[\[}}0, 1, 2, 3{{\]\]\]\]}}> : tensor<1x1x1x4xi64>
+// CHECK-DAG:   %[[SEQLENS_4D_SHAPE:.*]] = onnx.Constant dense<[2, 1, 1, 1]> : tensor<4xi64>
+// CHECK-DAG:   %[[NONE:.*]] = "onnx.NoValue"() {value} : () -> none
+// CHECK-DAG:   %[[SEQLENS:.*]] = onnx.Constant dense<{{\[\[}}2], [3{{\]\]}}> : tensor<2x1xi32>
+// CHECK-DAG:   %[[KV_SHAPE:.*]] = onnx.Constant dense<[2, 4, 16, 96]> : tensor<4xi64>
+// CHECK:       %[[K_RESHAPED:.*]] = "onnx.Reshape"(%[[K]], %[[KV_SHAPE]]) {allowzero = 0 : si64} : (tensor<2x4x1536xf32>, tensor<4xi64>) -> tensor<2x4x16x96xf32>
+// CHECK-NEXT:  %[[PRESENT_K:.*]] = "onnx.Transpose"(%[[K_RESHAPED]]) {perm = [0, 2, 1, 3]} : (tensor<2x4x16x96xf32>) -> tensor<2x16x4x96xf32>
+// CHECK-NEXT:  %[[V_RESHAPED:.*]] = "onnx.Reshape"(%[[V]], %[[KV_SHAPE]]) {allowzero = 0 : si64} : (tensor<2x4x1536xf32>, tensor<4xi64>) -> tensor<2x4x16x96xf32>
+// CHECK-NEXT:  %[[PRESENT_V:.*]] = "onnx.Transpose"(%[[V_RESHAPED]]) {perm = [0, 2, 1, 3]} : (tensor<2x4x16x96xf32>) -> tensor<2x16x4x96xf32>
+// CHECK-NEXT:  %[[SEQLENS_I64:.*]] = "onnx.Cast"(%[[SEQLENS]]) {saturate = 1 : si64, to = i64} : (tensor<2x1xi32>) -> tensor<2x1xi64>
+// CHECK-NEXT:  %[[SEQLENS_4D:.*]] = "onnx.Reshape"(%[[SEQLENS_I64]], %[[SEQLENS_4D_SHAPE]]) {allowzero = 0 : si64} : (tensor<2x1xi64>, tensor<4xi64>) -> tensor<2x1x1x1xi64>
+// CHECK-NEXT:  %[[PADDING_INVALID:.*]] = "onnx.Greater"(%[[KEY_INDICES]], %[[SEQLENS_4D]]) : (tensor<1x1x1x4xi64>, tensor<2x1x1x1xi64>) -> tensor<2x1x1x4xi1>
+// CHECK-NEXT:  %[[PADDING_MASK:.*]] = "onnx.Where"(%[[PADDING_INVALID]], %[[NEG_INF]], %[[ZERO]]) : (tensor<2x1x1x4xi1>, tensor<f32>, tensor<f32>) -> tensor<2x1x1x4xf32>
+// CHECK-NEXT:  %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], %[[CAUSAL_MASK]]) : (tensor<2x1x1x4xf32>, tensor<1x1x4x4xf32>) -> tensor<2x1x4x4xf32>
+// CHECK-NEXT:  %[[Y:.*]], %[[PK_NONE:.*]], %[[PV_NONE:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[K]], %[[V]], %[[MASK]], %[[NONE]], %[[NONE]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<2x4x3072xf32>, tensor<2x4x1536xf32>, tensor<2x4x1536xf32>, tensor<2x1x4x4xf32>, none, none) -> (tensor<2x4x3072xf32>, none, none, none)
-// CHECK:       return %[[Y]], {{.*}} : tensor<2x4x3072xf32>, tensor<2x16x4x96xf32>, tensor<2x16x4x96xf32>
+// CHECK-NEXT:  return %[[Y]], %[[PRESENT_K]], %[[PRESENT_V]] : tensor<2x4x3072xf32>, tensor<2x16x4x96xf32>, tensor<2x16x4x96xf32>
 
 // -----
 
@@ -1073,7 +1107,8 @@ func.func @gqa_preallocated_cache_slot_write(
 // CHECK:       %[[SELECTED_V_DELTA:.*]] = "onnx.Mul"(%[[V_DELTA]], %[[SLOT_SELECTOR]]) : (tensor<1x16x512x96xf32>, tensor<1x1x512x1xf32>) -> tensor<1x16x512x96xf32>
 // CHECK:       %[[PRESENT_V:.*]] = "onnx.Add"(%[[PAST_V]], %[[SELECTED_V_DELTA]]) : (tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>) -> tensor<1x16x512x96xf32>
 // CHECK-NOT:   "onnx.ScatterElements"
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x512xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x512xf32>
+// CHECK:       %[[PADDING_MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x512xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x512xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], {{.*}}) : (tensor<1x1x1x512xf32>, tensor<1x1x1x512xf32>) -> tensor<1x1x1x512xf32>
 // CHECK:       %[[Y:.*]], %[[PK_NONE:.*]], %[[PV_NONE:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[PRESENT_K]], %[[PRESENT_V]], %[[MASK]], %[[NONE]], %[[NONE]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>, tensor<1x1x1x512xf32>, none, none) -> (tensor<1x1x3072xf32>, none, none, none)
 // CHECK:       return %[[Y]], %[[PRESENT_K]], %[[PRESENT_V]] : tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>
@@ -1155,7 +1190,8 @@ func.func @gqa_preallocated_cache_slot_write_with_attention_bias(
 // CHECK:       %[[SELECTED_V_DELTA:.*]] = "onnx.Mul"(%[[V_DELTA]], %[[SLOT_SELECTOR]]) : (tensor<1x16x512x96xf32>, tensor<1x1x512x1xf32>) -> tensor<1x16x512x96xf32>
 // CHECK:       %[[PRESENT_V:.*]] = "onnx.Add"(%[[PAST_V]], %[[SELECTED_V_DELTA]]) : (tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>) -> tensor<1x16x512x96xf32>
 // CHECK-NOT:   "onnx.ScatterElements"
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x512xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x512xf32>
+// CHECK:       %[[PADDING_MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x512xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x512xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], {{.*}}) : (tensor<1x1x1x512xf32>, tensor<1x1x1x512xf32>) -> tensor<1x1x1x512xf32>
 // CHECK:       %[[BIAS_MASK:.*]] = "onnx.Add"(%[[BIAS]], %[[MASK]]) : (tensor<1x32x1x512xf32>, tensor<1x1x1x512xf32>) -> tensor<1x32x1x512xf32>
 // CHECK:       %[[Y:.*]], %[[PK_NONE:.*]], %[[PV_NONE:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[PRESENT_K]], %[[PRESENT_V]], %[[BIAS_MASK]], %[[NONE]], %[[NONE]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x1x3072xf32>, tensor<1x16x512x96xf32>, tensor<1x16x512x96xf32>, tensor<1x32x1x512xf32>, none, none) -> (tensor<1x1x3072xf32>, none, none, none)
@@ -1413,7 +1449,8 @@ func.func @gqa_quant_type_none_decomposes(
 
 // CHECK-LABEL: func.func @gqa_quant_type_none_decomposes
 // CHECK-SAME:  (%[[Q:.*]]: tensor<1x1x3072xf32>, %[[K:.*]]: tensor<1x1x1536xf32>, %[[V:.*]]: tensor<1x1x1536xf32>, %[[PAST_K:.*]]: tensor<1x16x256x96xf32>, %[[PAST_V:.*]]: tensor<1x16x256x96xf32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>)
-// CHECK:       %[[MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x257xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x257xf32>
+// CHECK:       %[[PADDING_MASK:.*]] = "onnx.Where"({{.*}}) : (tensor<1x1x1x257xi1>, tensor<f32>, tensor<f32>) -> tensor<1x1x1x257xf32>
+// CHECK:       %[[MASK:.*]] = "onnx.Add"(%[[PADDING_MASK]], {{.*}}) : (tensor<1x1x1x257xf32>, tensor<1x1x1x257xf32>) -> tensor<1x1x1x257xf32>
 // CHECK:       %[[Y:.*]], %[[PK:.*]], %[[PV:.*]], %[[QK:.*]] = "onnx.Attention"(%[[Q]], %[[K]], %[[V]], %[[MASK]], %[[PAST_K]], %[[PAST_V]]) {is_causal = 0 : si64, kv_num_heads = 16 : si64, q_num_heads = 32 : si64, qk_matmul_output_mode = 0 : si64, softcap = 0.000000e+00 : f32}
 // CHECK-SAME:      (tensor<1x1x3072xf32>, tensor<1x1x1536xf32>, tensor<1x1x1536xf32>, tensor<1x1x1x257xf32>, tensor<1x16x256x96xf32>, tensor<1x16x256x96xf32>) -> (tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>, none)
 // CHECK:       return %[[Y]], %[[PK]], %[[PV]] : tensor<1x1x3072xf32>, tensor<1x16x257x96xf32>, tensor<1x16x257x96xf32>
