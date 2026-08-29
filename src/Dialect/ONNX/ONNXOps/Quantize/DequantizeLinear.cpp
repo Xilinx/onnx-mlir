@@ -79,8 +79,9 @@ LogicalResult ONNXDequantizeLinearOpShapeHelper::computeShape() {
   }
 
   // Get values.
-  // Save the final result.
-  setOutputDims(outputDims);
+  // Store inferred output dims; skip refineDims so Y is not overwritten by
+  // stale static types on Y.
+  setOutputDims(outputDims, /*n=*/0, /*refineShape=*/false);
   return success();
 }
 
