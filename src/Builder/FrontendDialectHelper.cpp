@@ -292,6 +292,21 @@ ElementsAttr createElmAttr(RankedTensorType tensorType,
       return createElmAttrFromRawBytes_LE<T>(tensorType,
           llvm::ArrayRef(reinterpret_cast<char *>(loc.offset), loc.length));
     }
+    // Some exporters write length="0" instead of the correct byte count.
+    // While not officially supported in onnx, the length can also be computed
+    // from the tensor shape and element type so we add support for this "as
+    // an extension".
+    if (loc.length == 0) {
+      // ONNX raw_data / external data stores bools as 1 byte per element
+      // (not bit-packed), even though the MLIR element type is i1 (1 bit).
+      // For all other types the MLIR bitwidth matches the on-disk bit size.
+      const uint64_t bitsPerElem = std::is_same_v<T, bool>
+          ? 8u
+          : static_cast<uint64_t>(tensorType.getElementTypeBitWidth());
+      const uint64_t bits =
+          static_cast<uint64_t>(tensorType.getNumElements()) * bitsPerElem;
+      loc.length = llvm::divideCeil(bits, 8); // round up for sub-byte types (e.g. I4)
+    }
     return createElementsAttrFromMemoryBuffer_LE<T>(
         tensorType, readExternalData_LE(externalDataDir, loc));
   }
