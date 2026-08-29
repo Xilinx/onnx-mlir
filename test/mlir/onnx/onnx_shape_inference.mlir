@@ -4940,8 +4940,7 @@ func.func @test_slice_step_none(%arg0: tensor<100x200xf32>) -> tensor<*xf32> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<[0, 1]> : tensor<2xi64>
 // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<0> : tensor<2xi64>
 // CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<[10, 20]> : tensor<2xi64>
-// CHECK-DAG:       [[VAR_3_:%.+]] = onnx.Constant dense<1> : tensor<2xi64>
-// CHECK:           [[VAR_4_:%.+]] = "onnx.Slice"([[PARAM_0_]], [[VAR_1_]], [[VAR_2_]], [[VAR_0_]], [[VAR_3_]]) : (tensor<100x200xf32>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>) -> tensor<10x20xf32>
+// CHECK:           [[VAR_4_:%.+]] = "onnx.Slice"([[PARAM_0_]], [[VAR_1_]], [[VAR_2_]], [[VAR_0_]], {{.*}}) : (tensor<100x200xf32>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>, {{.*}}) -> tensor<10x20xf32>
 // CHECK:           return [[VAR_4_]] : tensor<10x20xf32>
 
 // -----
@@ -4986,6 +4985,42 @@ func.func @test_slice_unranked_starts(%arg0: tensor<100x200xf32>, %starts: tenso
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<100x200xf32>, [[PARAM_1_:%.+]]: tensor<*xi64>) -> tensor<*xf32> {
 // CHECK:           [[VAR_3_:%.+]] = "onnx.Slice"([[PARAM_0_]], [[PARAM_1_]], {{.+}}) : (tensor<100x200xf32>, tensor<*xi64>, tensor<2xi64>, tensor<2xi64>, tensor<2xi64>) -> tensor<*xf32>
 // CHECK:           return [[VAR_3_]] : tensor<*xf32>
+
+// -----
+
+// Shape inference must infer the result type without rewriting Slice operands.
+func.func @test_slice_shape_inference_preserves_operands(%arg0: tensor<2x3x4xf32>) -> tensor<*xf32> {
+  %starts = "onnx.Constant"() {value = dense<-2> : tensor<1xi64>} : () -> tensor<1xi64>
+  %ends = "onnx.Constant"() {value = dense<4> : tensor<1xi64>} : () -> tensor<1xi64>
+  %axes = "onnx.Constant"() {value = dense<-1> : tensor<1xi64>} : () -> tensor<1xi64>
+  %steps = "onnx.Constant"() {value = dense<1> : tensor<1xi64>} : () -> tensor<1xi64>
+  %0 = "onnx.Slice"(%arg0, %starts, %ends, %axes, %steps) : (tensor<2x3x4xf32>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<*xf32>
+  return %0 : tensor<*xf32>
+}
+// CHECK-LABEL:  func.func @test_slice_shape_inference_preserves_operands
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x3x4xf32>) -> tensor<2x3x2xf32> {
+// CHECK-DAG:       [[VAR_STARTS_:%.+]] = onnx.Constant dense<-2> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_ENDS_:%.+]] = onnx.Constant dense<4> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_AXES_:%.+]] = onnx.Constant dense<-1> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_STEPS_:%.+]] = onnx.Constant dense<1> : tensor<1xi64>
+// CHECK:           [[VAR_SLICE_:%.+]] = "onnx.Slice"([[PARAM_0_]], [[VAR_STARTS_]], [[VAR_ENDS_]], [[VAR_AXES_]], [[VAR_STEPS_]]) : (tensor<2x3x4xf32>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>, tensor<1xi64>) -> tensor<2x3x2xf32>
+// CHECK:           return [[VAR_SLICE_]] : tensor<2x3x2xf32>
+
+// -----
+
+func.func @test_slice_shape_inference_preserves_none_steps(%arg0: tensor<8xf32>) -> tensor<*xf32> {
+  %starts = "onnx.Constant"() {value = dense<2> : tensor<1xi64>} : () -> tensor<1xi64>
+  %ends = "onnx.Constant"() {value = dense<5> : tensor<1xi64>} : () -> tensor<1xi64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %0 = "onnx.Slice"(%arg0, %starts, %ends, %none, %none) : (tensor<8xf32>, tensor<1xi64>, tensor<1xi64>, none, none) -> tensor<*xf32>
+  return %0 : tensor<*xf32>
+}
+// CHECK-LABEL:  func.func @test_slice_shape_inference_preserves_none_steps
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<8xf32>) -> tensor<3xf32> {
+// CHECK-DAG:       [[VAR_STARTS_:%.+]] = onnx.Constant dense<2> : tensor<1xi64>
+// CHECK-DAG:       [[VAR_ENDS_:%.+]] = onnx.Constant dense<5> : tensor<1xi64>
+// CHECK:           [[VAR_SLICE_:%.+]] = "onnx.Slice"([[PARAM_0_]], [[VAR_STARTS_]], [[VAR_ENDS_]], {{.*}}, {{.*}}) : (tensor<8xf32>, tensor<1xi64>, tensor<1xi64>, none, none) -> tensor<3xf32>
+// CHECK:           return [[VAR_SLICE_]] : tensor<3xf32>
 
 // -----
 

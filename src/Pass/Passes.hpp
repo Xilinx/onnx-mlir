@@ -93,6 +93,21 @@ void configureCastDataMovementPatterns(bool enableCastDataMovementPatterns);
 void configureGatherElementsTileCanonicalization(
     bool enableGatherElementsTileCanonicalization);
 
+// Configure whether Slice canonicalizations are enabled.
+void configureSliceCanonicalization(bool enableSliceCanonicalization);
+
+bool isSliceCanonicalizationEnabled();
+
+// Populate the (opt-in) semantics-preserving Slice operand normalization
+// patterns. Defined in Dialect/ONNX/ONNXOps/Tensor/Slice.cpp.
+void populateSliceOperandNormalizationPatterns(
+    mlir::RewritePatternSet &patterns, mlir::MLIRContext *context);
+
+// Populate the (opt-in) Slice-through-Slice/Tile/Pad/Concat rewrite patterns.
+// Defined in Dialect/ONNX/ONNXOps/Tensor/Slice.cpp.
+void populateSliceOpOptimizationPatterns(
+    mlir::RewritePatternSet &patterns, mlir::MLIRContext *context);
+
 void populateQDQDataMovementCanonicalizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
 

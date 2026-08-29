@@ -68,6 +68,9 @@ static bool enablePositiveAxisCanonicalization = true;
 // Populated by configureKeepdimsCanonicalization().
 static bool enableKeepdimsCanonicalization = true;
 
+// Populated by configureSliceCanonicalization().
+static bool enableSliceCanonicalization = false;
+
 // Populated by configureQDQDataMovementCanonicalization().
 static bool enableQDQDataMovementCanonicalization = false;
 
@@ -5304,6 +5307,15 @@ void ONNXShapeOp::getCanonicalizationPatterns(
   results.insert<ShapeToConstantPattern>(context);
 }
 
+/// on the ONNXSliceOp.
+void ONNXSliceOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  if (enableSliceCanonicalization) {
+    populateSliceOperandNormalizationPatterns(results, context);
+    populateSliceOpOptimizationPatterns(results, context);
+  }
+}
+
 /// on the ONNXSubOp.
 void ONNXSubOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
@@ -5512,6 +5524,14 @@ bool onnx_mlir::isPositiveAxisCanonicalizationEnabled() {
 
 void onnx_mlir::configureKeepdimsCanonicalization(bool enable) {
   enableKeepdimsCanonicalization = enable;
+}
+
+void onnx_mlir::configureSliceCanonicalization(bool enable) {
+  enableSliceCanonicalization = enable;
+}
+
+bool onnx_mlir::isSliceCanonicalizationEnabled() {
+  return enableSliceCanonicalization;
 }
 
 void onnx_mlir::configureQDQDataMovementCanonicalization(

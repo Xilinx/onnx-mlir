@@ -75,6 +75,7 @@ void configurePasses() {
   configureCastDataMovementPatterns(enableCastDataMovementPatterns);
   configureGatherElementsTileCanonicalization(
       enableGatherElementsTileCanonicalization);
+  configureSliceCanonicalization(enableSliceCanonicalization);
   configureQDQDataMovementCanonicalization(
       enableQDQDataMovementCanonicalization);
 #ifdef ONNX_MLIR_ENABLE_KRNL
@@ -288,6 +289,7 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.enableCastDataMovementPatterns = enableCastDataMovementPatterns;
     opts.enableGatherElementsTileCanonicalization =
         enableGatherElementsTileCanonicalization;
+    opts.enableSliceCanonicalization = enableSliceCanonicalization;
     opts.enableXFEONNXOpsetVerifier = enableXFEONNXOpsetVerifier;
     opts.enableMatmulAddFusion = enableMatmulAddFusion;
     opts.enableMatmulToConv = enableMatmulToConv;

@@ -9309,6 +9309,7 @@ def ONNXSizeOp:ONNX_Op<"Size",
 
 def ONNXSliceOp:ONNX_Op<"Slice",
   [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Slice operation";
   let description = [{
   Produces a slice of the input tensor along multiple axes. Similar to numpy:

@@ -779,10 +779,52 @@ bool extractSlice1DConst(mlir::ONNXSliceOp sliceOp, int64_t &axis,
   if (mlir::isa<NoneType>(sliceOp.getAxes().getType()) ||
       mlir::isa<NoneType>(sliceOp.getSteps().getType()))
     return false;
-  return extractI64Scalar(sliceOp.getStarts(), start) &&
-         extractI64Scalar(sliceOp.getEnds(), end) &&
-         extractI64Scalar(sliceOp.getAxes(), axis) &&
-         extractI64Scalar(sliceOp.getSteps(), step);
+  if (extractI64Scalar(sliceOp.getStarts(), start) &&
+      extractI64Scalar(sliceOp.getEnds(), end) &&
+      extractI64Scalar(sliceOp.getAxes(), axis) &&
+      extractI64Scalar(sliceOp.getSteps(), step))
+    return true;
+
+  // Canonical Slice operands are full-rank. Recognize that form as a
+  // single-axis slice when every other axis is an identity interval.
+  auto dataType = mlir::dyn_cast<RankedTensorType>(sliceOp.getData().getType());
+  if (!dataType || !dataType.hasStaticShape())
+    return false;
+
+  SmallVector<int64_t> starts, ends, axes, steps;
+  if (!getI64ValuesFromONNXConstantOp(sliceOp.getStarts(), starts) ||
+      !getI64ValuesFromONNXConstantOp(sliceOp.getEnds(), ends) ||
+      !getI64ValuesFromONNXConstantOp(sliceOp.getAxes(), axes) ||
+      !getI64ValuesFromONNXConstantOp(sliceOp.getSteps(), steps))
+    return false;
+
+  const int64_t rank = dataType.getRank();
+  if (starts.size() != static_cast<size_t>(rank) ||
+      ends.size() != static_cast<size_t>(rank) ||
+      axes.size() != static_cast<size_t>(rank) ||
+      steps.size() != static_cast<size_t>(rank))
+    return false;
+
+  std::optional<int64_t> slicedAxis;
+  for (int64_t i = 0; i < rank; ++i) {
+    if (axes[i] != i)
+      return false;
+    const bool isIdentity =
+        starts[i] == 0 && ends[i] == dataType.getDimSize(i) && steps[i] == 1;
+    if (isIdentity)
+      continue;
+    if (slicedAxis)
+      return false;
+    slicedAxis = i;
+  }
+  if (!slicedAxis)
+    return false;
+
+  axis = *slicedAxis;
+  start = starts[axis];
+  end = ends[axis];
+  step = steps[axis];
+  return true;
 }
 
 int64_t indexToOffset(
