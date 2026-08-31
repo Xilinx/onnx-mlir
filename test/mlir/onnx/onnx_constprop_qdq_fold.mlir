@@ -100,7 +100,8 @@ func.func @fold_q_no_zp() -> tensor<1xi8> {
 
 // -----
 
-// End-to-end: Const(fp) -> Q -> DQ collapses to Const(int) -> DQ.
+// End-to-end: Const(fp) -> Q -> DQ collapses all the way to a Const(fp), since
+// both the Q and DQ folders are enabled by enable-quant-const-fold.
 func.func @fold_q_then_dq() -> tensor<3xf32> {
   %x = onnx.Constant dense<[1.0, 2.0, 3.0]> : tensor<3xf32>
   %scale = onnx.Constant dense<5.000000e-01> : tensor<f32>
@@ -112,8 +113,8 @@ func.func @fold_q_then_dq() -> tensor<3xf32> {
 
 // CHECK-LABEL: @fold_q_then_dq
 // CHECK-NOT: onnx.QuantizeLinear
-// CHECK: onnx.Constant dense<[2, 4, 6]> : tensor<3xui8>
-// CHECK: onnx.DequantizeLinear
+// CHECK-NOT: onnx.DequantizeLinear
+// CHECK: onnx.Constant dense<[1.000000e+00, 2.000000e+00, 3.000000e+00]> : tensor<3xf32>
 
 // -----
 
