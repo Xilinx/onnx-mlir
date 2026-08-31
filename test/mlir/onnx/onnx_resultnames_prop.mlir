@@ -122,3 +122,26 @@ func.func @two_reshapes(%arg0: tensor<1x20x12xf32>) -> tensor<4x5x3xf32> {
 // ONLYCANON-SAME: ["output", ["Reshape", [4, 5, 3], [1, 12, 20]]]]
 // ONLYCANON-NEXT: onnx.Reshape
 // ONLYCANON-NEXT: return
+
+// -----
+// FuseTwoReshapes with a multi-use inner reshape (reshape1): folding reshape2
+// into reshape1's parent keeps reshape1 alive (it is still returned), so the
+// parent producer's shared name must be protected. reshape1's parent (Relu,
+// named "producer") is tagged with MultiUseConflict.
+func.func @two_reshapes_multiuse_tags_parent(%arg0: tensor<1x3x4x5xf32>)
+    -> (tensor<4x5x3xf32>, tensor<3x4x5xf32>) {
+  %p = "onnx.Relu"(%arg0) {ResultNames = ["producer"]} : (tensor<1x3x4x5xf32>) -> tensor<1x3x4x5xf32>
+  %shape1 = onnx.Constant dense<[3, 4, 5]> : tensor<3xi64>
+  %1 = "onnx.Reshape"(%p, %shape1) {ResultNames = ["reshape1"]} : (tensor<1x3x4x5xf32>, tensor<3xi64>) -> tensor<3x4x5xf32>
+  %shape2 = onnx.Constant dense<[4, 5, 3]> : tensor<3xi64>
+  %2 = "onnx.Reshape"(%1, %shape2) {ResultNames = ["output"]} : (tensor<3x4x5xf32>, tensor<3xi64>) -> tensor<4x5x3xf32>
+  return %2, %1 : tensor<4x5x3xf32>, tensor<3x4x5xf32>
+}
+
+// ONLYCANON-LABEL: @two_reshapes_multiuse_tags_parent
+// ONLYCANON: "onnx.Relu"(%arg0)
+// ONLYCANON-SAME: ResultNames = [
+// ONLYCANON-SAME: ["producer", ["MultiUseConflict"]]]
+// The multi-use inner reshape survives, and the fused reshape reads the parent.
+// ONLYCANON: onnx.Reshape
+// ONLYCANON: onnx.Reshape

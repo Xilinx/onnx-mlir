@@ -25,8 +25,11 @@
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
+#include "src/Dialect/ONNX/TensorName.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
+
+#include <memory>
 
 #define DEBUG_TYPE "onnx-transpose-optimization"
 
@@ -43,6 +46,39 @@ static SmallVector<int64_t> inversePermutation(ArrayRef<int64_t> perm) {
     inverse[perm[i]] = i;
   }
   return inverse;
+}
+
+/// Maintain the MultiUseConflict tag around a transpose op.
+///
+/// The tag marks the named producer feeding a *multi-use* transpose so that
+/// downstream ResultName propagation does not clobber a name that must be
+/// shared by all the transpose's consumers. It fires only when the transpose
+/// result has more than one use; the producer name reached by walking back
+/// through single-in/single-out ops is then tagged exactly once.
+///
+/// Returns success() only when a new tag was actually added; callers that use
+/// it purely to keep tags fresh after a rewrite may ignore the result.
+static LogicalResult maintainTransposeTag(ONNXTransposeOp op) {
+  if (op->getResult(0).hasOneUse())
+    return failure();
+
+  Value conflictVal = op->getOperand(0);
+  auto conflictName = onnx_mlir::TensorName(conflictVal);
+  while (!conflictName) {
+    Operation *defOp = conflictVal.getDefiningOp();
+    if (!defOp || defOp->getNumResults() != 1 || defOp->getNumOperands() != 1)
+      return failure();
+    conflictVal = defOp->getOperand(0);
+    conflictName = onnx_mlir::TensorName(conflictVal);
+  }
+  if (llvm::any_of(
+          conflictName.getTransforms(), [](onnx_mlir::Transform *trans) {
+            return isa<onnx_mlir::MultiUseConflict>(trans);
+          }))
+    return failure();
+
+  conflictName.push_back(std::make_unique<onnx_mlir::MultiUseConflict>());
+  return conflictName.setTo(conflictVal);
 }
 
 //===----------------------------------------------------------------------===//
@@ -415,6 +451,7 @@ struct PushTransposeThroughAxisOp : public OpRewritePattern<OpType> {
 
     // Replace the original operation with the new transpose
     rewriter.replaceOp(op, newTransposeOp.getResult());
+    (void)maintainTransposeTag(newTransposeOp);
 
     return success();
   }
@@ -548,6 +585,7 @@ struct PushTransposeThroughConcat : public OpRewritePattern<ONNXConcatOp> {
 
     // Replace the original concat with the new transpose
     rewriter.replaceOp(concatOp, newTransposeOp.getResult());
+    (void)maintainTransposeTag(newTransposeOp);
 
     return success();
   }
@@ -735,6 +773,7 @@ struct PushTransposeThroughConcatWithConst
         rewriter.getI64ArrayAttr(firstPerm));
 
     rewriter.replaceOp(concatOp, newTransposeOp.getResult());
+    (void)maintainTransposeTag(newTransposeOp);
 
     return success();
   }
