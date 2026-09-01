@@ -2057,10 +2057,10 @@ static bool onlyFeedsConstantIsland(Value value) {
 }
 
 // Fold DequantizeLinear on constants to `(x - x_zero_point) * x_scale`, the
-// inverse of ConstFoldQuantizeLinearOnConst (same enableQuantConstFold gate).
-// Per-tensor and per-axis are handled; blocked quantization is out of scope.
-// Confined to constant islands (onlyFeedsConstantIsland) so quantized weights
-// are not dequantized.
+// inverse of ConstFoldQuantizeLinearOnConst, gated by
+// enable-dequant-const-fold. Per-tensor and per-axis are handled; blocked
+// quantization is out of scope. Confined to constant islands
+// (onlyFeedsConstantIsland) so quantized weights are not dequantized.
 class ConstFoldDequantizeLinearOnConst
     : public OpRewritePattern<ONNXDequantizeLinearOp> {
 public:
@@ -2190,15 +2190,19 @@ struct ConstPropONNXToONNXPass
   Option<bool> enableQuantConstFold{
       *this, "enable-quant-const-fold", llvm::cl::init(false)};
 
+  Option<bool> enableDequantConstFold{
+      *this, "enable-dequant-const-fold", llvm::cl::init(false)};
+
   Option<int64_t> maxLoopUnrollCount{*this, "max-loop-unroll-count",
       llvm::cl::desc("Maximum constant onnx.Loop trip count to unroll."),
       llvm::cl::init(64)};
 
-  ConstPropONNXToONNXPass(
-      bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount) {
+  ConstPropONNXToONNXPass(bool enableQDQ, bool enableQuantConstFold,
+      int64_t maxLoopUnrollCount, bool enableDequantConstFold) {
     this->enableQDQ = enableQDQ;
     this->enableQuantConstFold = enableQuantConstFold;
     this->maxLoopUnrollCount = maxLoopUnrollCount;
+    this->enableDequantConstFold = enableDequantConstFold;
   }
 
   ConstPropONNXToONNXPass(const ConstPropONNXToONNXPass &other) {
@@ -2219,8 +2223,8 @@ void ConstPropONNXToONNXPass::runOnOperation() {
   MLIRContext *context = &getContext();
 
   RewritePatternSet patterns(context);
-  getConstPropONNXToONNXPatterns(
-      patterns, enableQDQ, enableQuantConstFold, maxLoopUnrollCount);
+  getConstPropONNXToONNXPatterns(patterns, enableQDQ, enableQuantConstFold,
+      maxLoopUnrollCount, enableDequantConstFold);
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
           GreedyRewriteConfig{.listener = &rnUpdater})))
@@ -2230,7 +2234,8 @@ void ConstPropONNXToONNXPass::runOnOperation() {
 } // end anonymous namespace.
 
 void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
-    bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount) {
+    bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount,
+    bool enableDequantConstFold) {
   if (isConstantPropagationDisabled())
     return;
   populateWithGenerated(patterns);
@@ -2253,9 +2258,9 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
         patterns.getContext());
   }
   if (enableQuantConstFold)
-    patterns
-        .add<ConstFoldQuantizeLinearOnConst, ConstFoldDequantizeLinearOnConst>(
-            patterns.getContext());
+    patterns.add<ConstFoldQuantizeLinearOnConst>(patterns.getContext());
+  if (enableDequantConstFold)
+    patterns.add<ConstFoldDequantizeLinearOnConst>(patterns.getContext());
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,
@@ -2273,7 +2278,8 @@ void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,
  * Create a ConstPropONNX pass.
  */
 std::unique_ptr<mlir::Pass> onnx_mlir::createConstPropONNXToONNXPass(
-    bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount) {
-  return std::make_unique<ConstPropONNXToONNXPass>(
-      enableQDQ, enableQuantConstFold, maxLoopUnrollCount);
+    bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount,
+    bool enableDequantConstFold) {
+  return std::make_unique<ConstPropONNXToONNXPass>(enableQDQ,
+      enableQuantConstFold, maxLoopUnrollCount, enableDequantConstFold);
 }
