@@ -29,6 +29,7 @@ static ONNXHybridTransformPassOptions getDecomposeOnlyOptions(
   options.constantPropagation = false;
   options.qdqConstProp = false;
   options.quantConstFold = false;
+  options.dequantConstFold = false;
   options.decomposition = true;
   options.recomposition = false;
   options.quarkQuantizedOpsLegalization = false;
@@ -93,7 +94,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
           /*expansionBound=*/-1, /*disabledPatterns=*/{""},
           /*constantPropIsDisabled=*/false);
       pm.addNestedPass<func::FuncOp>(onnx_mlir::createConstPropONNXToONNXPass(
-          opts.hybrid.qdqConstProp, opts.hybrid.quantConstFold));
+          opts.hybrid.qdqConstProp, opts.hybrid.quantConstFold,
+          /*maxLoopUnrollCount=*/64, opts.hybrid.dequantConstFold));
     }
   } else {
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
@@ -108,7 +110,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     pm.addNestedPass<func::FuncOp>(
         onnx_mlir::createLegalizeQuarkQuantizedOpsPass());
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createConstPropONNXToONNXPass(
-        opts.hybrid.qdqConstProp, opts.hybrid.quantConstFold));
+        opts.hybrid.qdqConstProp, opts.hybrid.quantConstFold,
+        /*maxLoopUnrollCount=*/64, opts.hybrid.dequantConstFold));
     if (opts.onnxOpTransformThreshold > 0) {
       // Dynamic iterate in ONNXOpTransformPass
       pm.addPass(onnx_mlir::createONNXOpTransformPass(
@@ -121,7 +124,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
         pm.addPass(onnx_mlir::createCanonicalizeWithResultNamesPass());
         pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
         pm.addNestedPass<func::FuncOp>(onnx_mlir::createConstPropONNXToONNXPass(
-            opts.hybrid.qdqConstProp, opts.hybrid.quantConstFold));
+            opts.hybrid.qdqConstProp, opts.hybrid.quantConstFold,
+            /*maxLoopUnrollCount=*/64, opts.hybrid.dequantConstFold));
       }
     }
   }
