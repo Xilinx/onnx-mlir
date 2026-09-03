@@ -12,6 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "ONNXOps.hpp"
+#include "mlir/IR/BuiltinTypes.h"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 
 using namespace mlir;
@@ -52,6 +54,56 @@ LogicalResult ONNXTileOpShapeHelper::computeShape() {
 //===----------------------------------------------------------------------===//
 // Verify
 //===----------------------------------------------------------------------===//
+
+LogicalResult ONNXTileOp::verify() {
+  if (!hasShapeAndRank(getInput()) || !hasShapeAndRank(getRepeats()))
+    return success();
+
+  auto inputType = mlir::cast<ShapedType>(getInput().getType());
+  auto repeatsType = mlir::cast<ShapedType>(getRepeats().getType());
+
+  // Repeats must be 1-D.
+  if (repeatsType.getRank() != 1)
+    return emitOpError("repeats must be a 1D tensor");
+
+  int64_t inputRank = inputType.getRank();
+
+  // Repeats length must match input rank.
+  if (repeatsType.hasStaticShape()) {
+    if (repeatsType.getDimSize(0) != inputRank)
+      return emitOpError("repeats length must equal input rank");
+  }
+
+  // Verify output[i] == input[i] * repeats[i] when everything is static.
+  if (!hasShapeAndRank(getOutput()))
+    return success();
+
+  auto outputType = mlir::cast<ShapedType>(getOutput().getType());
+  if (outputType.getRank() != inputRank)
+    return emitOpError("output rank must equal input rank");
+
+  if (!inputType.hasStaticShape() || !outputType.hasStaticShape())
+    return success();
+
+  SmallVector<int64_t, 4> repeatsVals;
+  if (!getI64ValuesFromONNXConstantOp(getRepeats(), repeatsVals))
+    return success();
+
+  ArrayRef<int64_t> inputShape = inputType.getShape();
+  ArrayRef<int64_t> outputShape = outputType.getShape();
+  for (int64_t i = 0; i < inputRank; ++i) {
+    if (repeatsVals[i] < 0)
+      return emitOpError("repeats values must be non-negative");
+
+    int64_t expected = inputShape[i] * repeatsVals[i];
+    if (outputShape[i] != expected)
+      return emitOpError("output dimension ")
+             << i << " must be " << inputShape[i] << " * " << repeatsVals[i]
+             << ", got " << outputShape[i];
+  }
+
+  return success();
+}
 
 //===----------------------------------------------------------------------===//
 // Shape Inference
