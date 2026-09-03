@@ -748,6 +748,7 @@ OpsWithVerifier = [
     "SplitToSequence",
     "Sub",
     "Sum",
+    "Tile",
     "TopK",
     "Unique",
     "Upsample",
