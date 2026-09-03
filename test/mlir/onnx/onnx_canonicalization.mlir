@@ -188,6 +188,70 @@ func.func @test_transpose_removal(%arg0: tensor<10x11x12x13xf32>) -> tensor<10x1
 
 // -----
 
+// a non-identity permutation that only reorders unit-extent axes
+// is a pure data no-op (output shape == input shape, at most one non-unit dim),
+// so RemoveDataNoOpTransposePattern removes it just like a plain identity. This
+// case (perm=[0,2,1,3] on 1x1x1x64, swapping the size-1 axes 1 and 2) comes
+// from PyTorch's LSTM export.
+// CHECK-LABEL: func @test_unit_axis_noop_transpose_4d_removal
+func.func @test_unit_axis_noop_transpose_4d_removal(%arg0: tensor<1x1x1x64xf32>) -> tensor<1x1x1x64xf32> {
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 1, 3]} : (tensor<1x1x1x64xf32>) -> tensor<1x1x1x64xf32>
+  // CHECK-NEXT: onnx.Return %arg0 : tensor<1x1x1x64xf32>
+  "onnx.Return"(%0) : (tensor<1x1x1x64xf32>) -> ()
+}
+
+// -----
+
+// CHECK-LABEL: func @test_unit_axis_noop_transpose_3d_removal
+func.func @test_unit_axis_noop_transpose_3d_removal(%arg0: tensor<1x1x64xf32>) -> tensor<1x1x64xf32> {
+  %0 = "onnx.Transpose"(%arg0) {perm = [1, 0, 2]} : (tensor<1x1x64xf32>) -> tensor<1x1x64xf32>
+  // CHECK-NEXT: onnx.Return %arg0 : tensor<1x1x64xf32>
+  "onnx.Return"(%0) : (tensor<1x1x64xf32>) -> ()
+}
+
+// -----
+
+// size-64 axis moves from slot 2 to slot 3 between unit-extent axes, so no data
+// moves but output_shape != input_shape. ReplaceDataNoOpTransposeByReshapePattern
+// replaces the transpose with a Reshape (which later folds to a plain reshape),
+// instead of over-matching it to the Transpose4d kernel.
+// CHECK-LABEL: func @test_unit_axis_noop_transpose_shape_change_to_reshape
+func.func @test_unit_axis_noop_transpose_shape_change_to_reshape(%arg0: tensor<1x1x64x1xf32>) -> tensor<1x1x1x64xf32> {
+  // CHECK-NOT: onnx.Transpose
+  // CHECK: %[[R:.*]] = "onnx.Reshape"(%arg0, {{.*}}) {{.*}}: (tensor<1x1x64x1xf32>, tensor<4xi64>) -> tensor<1x1x1x64xf32>
+  // CHECK: onnx.Return %[[R]]
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 1, 3, 2]} : (tensor<1x1x64x1xf32>) -> tensor<1x1x1x64xf32>
+  "onnx.Return"(%0) : (tensor<1x1x1x64xf32>) -> ()
+}
+
+// -----
+
+// Negative: a transpose that moves data (two non-unit axes swapped, so the
+// output shape differs from the input) must NOT be removed even though only
+// unit... no: here shapes differ so it is kept.
+// CHECK-LABEL: func @test_nontrivial_transpose_not_removed
+func.func @test_nontrivial_transpose_not_removed(%arg0: tensor<1x1x64x8xf32>) -> tensor<1x1x8x64xf32> {
+  // CHECK: %[[T:.*]] = "onnx.Transpose"(%arg0) {perm = [0, 1, 3, 2]}
+  // CHECK: onnx.Return %[[T]]
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 1, 3, 2]} : (tensor<1x1x64x8xf32>) -> tensor<1x1x8x64xf32>
+  "onnx.Return"(%0) : (tensor<1x1x8x64xf32>) -> ()
+}
+
+// -----
+
+// Negative: a real square transpose keeps its shape (2x2 -> 2x2) but genuinely
+// moves data (two non-unit axes swapped), so it must NOT be removed. This is
+// the case the "at most one non-unit dimension" guard protects against.
+// CHECK-LABEL: func @test_square_transpose_not_removed
+func.func @test_square_transpose_not_removed(%arg0: tensor<2x2xf32>) -> tensor<2x2xf32> {
+  // CHECK: %[[T:.*]] = "onnx.Transpose"(%arg0) {perm = [1, 0]}
+  // CHECK: onnx.Return %[[T]]
+  %0 = "onnx.Transpose"(%arg0) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+  "onnx.Return"(%0) : (tensor<2x2xf32>) -> ()
+}
+
+// -----
+
 // CHECK-LABEL: func @identity_tile
 func.func @identity_tile(%arg0: tensor<32x64xf32>) -> tensor<32x64xf32> {
     %0 = onnx.Constant dense<1> : tensor<2xi64>
@@ -3334,12 +3398,11 @@ func.func @layernorm_transpose_bias_fusable(%arg0: tensor<1x128x128x4xf32>) -> t
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x128x128x4xf32>) -> tensor<1x4x128x128xf32> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<2.000000e-01> : tensor<4x1x1xf32>
 // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<1.000000e-01> : tensor<1x1x1x4xf32>
-// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<[1, 4, 1, 1]> : tensor<4xi64>
-// CHECK:           [[VAR_3_:%.+]] = "onnx.Reshape"([[VAR_0_]], [[VAR_2_]]) {allowzero = 0 : si64} : (tensor<4x1x1xf32>, tensor<4xi64>) -> tensor<1x4x1x1xf32>
-// CHECK:           [[VAR_4_:%.+]] = "onnx.Transpose"([[VAR_3_]]) {perm = [0, 2, 3, 1]} : (tensor<1x4x1x1xf32>) -> tensor<1x1x1x4xf32>
-// CHECK:           [[VAR_Y_:%.+]], [[VAR_Mean_:%.+]], [[VAR_InvStdDev_:%.+]] = "onnx.LayerNormalization"([[PARAM_0_]], [[VAR_1_]], [[VAR_4_]]) {axis = 3 : si64, epsilon = 9.99999997E-7 : f32, stash_type = 1 : si64} : (tensor<1x128x128x4xf32>, tensor<1x1x1x4xf32>, tensor<1x1x1x4xf32>) -> (tensor<1x128x128x4xf32>, none, none)
-// CHECK:           [[VAR_5_:%.+]] = "onnx.Transpose"([[VAR_Y_]]) {perm = [0, 3, 1, 2]} : (tensor<1x128x128x4xf32>) -> tensor<1x4x128x128xf32>
-// CHECK:           return [[VAR_5_]] : tensor<1x4x128x128xf32>
+// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<[1, 1, 1, 4]> : tensor<4xi64>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.Reshape"([[VAR_0_]], [[VAR_2_]]) {allowzero = 0 : si64} : (tensor<4x1x1xf32>, tensor<4xi64>) -> tensor<1x1x1x4xf32>
+// CHECK:           [[VAR_Y_:%.+]], [[VAR_Mean_:%.+]], [[VAR_InvStdDev_:%.+]] = "onnx.LayerNormalization"([[PARAM_0_]], [[VAR_1_]], [[VAR_3_]]) {axis = 3 : si64, epsilon = 9.99999997E-7 : f32, stash_type = 1 : si64} : (tensor<1x128x128x4xf32>, tensor<1x1x1x4xf32>, tensor<1x1x1x4xf32>) -> (tensor<1x128x128x4xf32>, none, none)
+// CHECK:           [[VAR_4_:%.+]] = "onnx.Transpose"([[VAR_Y_]]) {perm = [0, 3, 1, 2]} : (tensor<1x128x128x4xf32>) -> tensor<1x4x128x128xf32>
+// CHECK:           return [[VAR_4_]] : tensor<1x4x128x128xf32>
 // CHECK:         }
 
 // -----
@@ -3357,12 +3420,11 @@ func.func @rms_layernorm_transpose_bias_fusable(%arg0: tensor<1x128x128x4xf32>) 
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x128x128x4xf32>) -> tensor<1x4x128x128xf32> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<2.000000e-01> : tensor<4x1x1xf32>
 // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<1.000000e-01> : tensor<1x1x1x4xf32>
-// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<[1, 4, 1, 1]> : tensor<4xi64>
-// CHECK:           [[VAR_3_:%.+]] = "onnx.Reshape"([[VAR_0_]], [[VAR_2_]]) {allowzero = 0 : si64} : (tensor<4x1x1xf32>, tensor<4xi64>) -> tensor<1x4x1x1xf32>
-// CHECK:           [[VAR_4_:%.+]] = "onnx.Transpose"([[VAR_3_]]) {perm = [0, 2, 3, 1]} : (tensor<1x4x1x1xf32>) -> tensor<1x1x1x4xf32>
-// CHECK:           [[VAR_Y_:%.+]], [[VAR_InvStdDev_:%.+]] = "onnx.RMSLayerNormalization"([[PARAM_0_]], [[VAR_1_]], [[VAR_4_]]) {axis = 3 : si64, epsilon = 9.99999997E-7 : f32, stash_type = 1 : si64} : (tensor<1x128x128x4xf32>, tensor<1x1x1x4xf32>, tensor<1x1x1x4xf32>) -> (tensor<1x128x128x4xf32>, none)
-// CHECK:           [[VAR_5_:%.+]] = "onnx.Transpose"([[VAR_Y_]]) {perm = [0, 3, 1, 2]} : (tensor<1x128x128x4xf32>) -> tensor<1x4x128x128xf32>
-// CHECK:           return [[VAR_5_]] : tensor<1x4x128x128xf32>
+// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<[1, 1, 1, 4]> : tensor<4xi64>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.Reshape"([[VAR_0_]], [[VAR_2_]]) {allowzero = 0 : si64} : (tensor<4x1x1xf32>, tensor<4xi64>) -> tensor<1x1x1x4xf32>
+// CHECK:           [[VAR_Y_:%.+]], [[VAR_InvStdDev_:%.+]] = "onnx.RMSLayerNormalization"([[PARAM_0_]], [[VAR_1_]], [[VAR_3_]]) {axis = 3 : si64, epsilon = 9.99999997E-7 : f32, stash_type = 1 : si64} : (tensor<1x128x128x4xf32>, tensor<1x1x1x4xf32>, tensor<1x1x1x4xf32>) -> (tensor<1x128x128x4xf32>, none)
+// CHECK:           [[VAR_4_:%.+]] = "onnx.Transpose"([[VAR_Y_]]) {perm = [0, 3, 1, 2]} : (tensor<1x128x128x4xf32>) -> tensor<1x4x128x128xf32>
+// CHECK:           return [[VAR_4_]] : tensor<1x4x128x128xf32>
 // CHECK:         }
 
 // -----
@@ -3442,12 +3504,11 @@ func.func @layernorm_3d_and_with_transpose_other_broadcast_kind(%arg0: tensor<12
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<128x128x4xf32>) -> tensor<128x4x128xf32> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<2.000000e-01> : tensor<128xf32>
 // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<1.000000e-01> : tensor<1x128x1xf32>
-// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<[1, 1, 128]> : tensor<3xi64>
-// CHECK:           [[VAR_3_:%.+]] = "onnx.Reshape"([[VAR_0_]], [[VAR_2_]]) {allowzero = 0 : si64} : (tensor<128xf32>, tensor<3xi64>) -> tensor<1x1x128xf32>
-// CHECK:           [[VAR_4_:%.+]] = "onnx.Transpose"([[VAR_3_]]) {perm = [2, 0, 1]} : (tensor<1x1x128xf32>) -> tensor<128x1x1xf32>
-// CHECK:           [[VAR_Y_:%.+]], [[VAR_Mean_:%.+]], [[VAR_InvStdDev_:%.+]] = "onnx.LayerNormalization"([[PARAM_0_]], [[VAR_1_]], [[VAR_4_]]) {axis = 2 : si64, epsilon = 9.99999997E-7 : f32, stash_type = 1 : si64} : (tensor<128x128x4xf32>, tensor<1x128x1xf32>, tensor<128x1x1xf32>) -> (tensor<128x128x4xf32>, none, none)
-// CHECK:           [[VAR_5_:%.+]] = "onnx.Transpose"([[VAR_Y_]]) {perm = [1, 2, 0]} : (tensor<128x128x4xf32>) -> tensor<128x4x128xf32>
-// CHECK:           return [[VAR_5_]] : tensor<128x4x128xf32>
+// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<[128, 1, 1]> : tensor<3xi64>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.Reshape"([[VAR_0_]], [[VAR_2_]]) {allowzero = 0 : si64} : (tensor<128xf32>, tensor<3xi64>) -> tensor<128x1x1xf32>
+// CHECK:           [[VAR_Y_:%.+]], [[VAR_Mean_:%.+]], [[VAR_InvStdDev_:%.+]] = "onnx.LayerNormalization"([[PARAM_0_]], [[VAR_1_]], [[VAR_3_]]) {axis = 2 : si64, epsilon = 9.99999997E-7 : f32, stash_type = 1 : si64} : (tensor<128x128x4xf32>, tensor<1x128x1xf32>, tensor<128x1x1xf32>) -> (tensor<128x128x4xf32>, none, none)
+// CHECK:           [[VAR_4_:%.+]] = "onnx.Transpose"([[VAR_Y_]]) {perm = [1, 2, 0]} : (tensor<128x128x4xf32>) -> tensor<128x4x128xf32>
+// CHECK:           return [[VAR_4_]] : tensor<128x4x128xf32>
 // CHECK:         }
 
 // -----
@@ -3486,12 +3547,11 @@ func.func @layernorm_transpose_with_other_type(%arg0: tensor<1x128x128x4xf16>) -
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x128x128x4xf16>) -> tensor<1x4x128x128xf16> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<1.999510e-01> : tensor<4x1x1xf16>
 // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<9.997550e-02> : tensor<1x1x1x4xf16>
-// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<[1, 4, 1, 1]> : tensor<4xi64>
-// CHECK:           [[VAR_3_:%.+]] = "onnx.Reshape"([[VAR_0_]], [[VAR_2_]]) {allowzero = 0 : si64} : (tensor<4x1x1xf16>, tensor<4xi64>) -> tensor<1x4x1x1xf16>
-// CHECK:           [[VAR_4_:%.+]] = "onnx.Transpose"([[VAR_3_]]) {perm = [0, 2, 3, 1]} : (tensor<1x4x1x1xf16>) -> tensor<1x1x1x4xf16>
-// CHECK:           [[VAR_Y_:%.+]], [[VAR_Mean_:%.+]], [[VAR_InvStdDev_:%.+]] = "onnx.LayerNormalization"([[PARAM_0_]], [[VAR_1_]], [[VAR_4_]]) {axis = 3 : si64, epsilon = 9.99999997E-7 : f32, stash_type = 1 : si64} : (tensor<1x128x128x4xf16>, tensor<1x1x1x4xf16>, tensor<1x1x1x4xf16>) -> (tensor<1x128x128x4xf16>, none, none)
-// CHECK:           [[VAR_5_:%.+]] = "onnx.Transpose"([[VAR_Y_]]) {perm = [0, 3, 1, 2]} : (tensor<1x128x128x4xf16>) -> tensor<1x4x128x128xf16>
-// CHECK:           return [[VAR_5_]] : tensor<1x4x128x128xf16>
+// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<[1, 1, 1, 4]> : tensor<4xi64>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.Reshape"([[VAR_0_]], [[VAR_2_]]) {allowzero = 0 : si64} : (tensor<4x1x1xf16>, tensor<4xi64>) -> tensor<1x1x1x4xf16>
+// CHECK:           [[VAR_Y_:%.+]], [[VAR_Mean_:%.+]], [[VAR_InvStdDev_:%.+]] = "onnx.LayerNormalization"([[PARAM_0_]], [[VAR_1_]], [[VAR_3_]]) {axis = 3 : si64, epsilon = 9.99999997E-7 : f32, stash_type = 1 : si64} : (tensor<1x128x128x4xf16>, tensor<1x1x1x4xf16>, tensor<1x1x1x4xf16>) -> (tensor<1x128x128x4xf16>, none, none)
+// CHECK:           [[VAR_4_:%.+]] = "onnx.Transpose"([[VAR_Y_]]) {perm = [0, 3, 1, 2]} : (tensor<1x128x128x4xf16>) -> tensor<1x4x128x128xf16>
+// CHECK:           return [[VAR_4_]] : tensor<1x4x128x128xf16>
 // CHECK:         }
 
 // -----

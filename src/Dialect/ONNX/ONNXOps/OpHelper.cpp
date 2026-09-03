@@ -854,6 +854,46 @@ bool IsIdentityPermuteVector(ArrayAttr permAttr) {
   return true;
 }
 
+/// Test if a Transpose from `input` to `output` is a pure data no-op, i.e. it
+/// only reorders unit-extent (size-1) axes and therefore leaves the linear
+/// element order (and the shape) unchanged.
+///
+/// This is a superset of the exact-identity permutation: a non-identity
+/// permutation is still a data no-op when at most one dimension has extent > 1
+/// (all reordered axes are size 1), in which case output_shape == input_shape.
+/// e.g. Transpose(1x1x1x64, perm=[0,2,1,3]) -> 1x1x1x64 (from PyTorch LSTM
+/// export). A permutation that swaps two non-unit axes (e.g. 4x4, perm=[1,0])
+/// keeps the shape but *moves data*, so it is correctly rejected here by the
+/// "at most one non-unit dimension" check.
+bool IsDataPreservingTranspose(Value input, Value output) {
+  auto inTy = mlir::dyn_cast<RankedTensorType>(input.getType());
+  auto outTy = mlir::dyn_cast<RankedTensorType>(output.getType());
+  if (!inTy || !outTy)
+    return false;
+  if (!inTy.hasStaticShape() || !outTy.hasStaticShape())
+    return false;
+  if (inTy.getElementType() != outTy.getElementType())
+    return false;
+
+  // At most one non-unit dimension is the exact condition for the transpose to
+  // move no data: the single real axis carries all elements in row-major order
+  // and the permutation only relabels which unit-extent slots surround it. This
+  // holds regardless of whether the output shape equals the input shape (the
+  // real axis may land in a different slot). A permutation that swaps two
+  // non-unit axes (e.g. 4x4, perm=[1,0]) has two non-unit dims and is rejected
+  // here because it genuinely reorders data.
+  //
+  // Note: input and output always have the same number of elements (a legal
+  // transpose is a bijection), so the caller may safely replace the transpose
+  // with the input directly when the shapes match, or with a Reshape to the
+  // output shape when they differ.
+  int64_t nonUnit = 0;
+  for (int64_t d : inTy.getShape())
+    if (d != 1)
+      ++nonUnit;
+  return nonUnit <= 1;
+}
+
 /// Test if the value has the specified constant shape
 bool HasSpecifiedConstantShape(Value value, Value shape) {
   if (!hasShapeAndRank(value) || !hasShapeAndRank(shape))

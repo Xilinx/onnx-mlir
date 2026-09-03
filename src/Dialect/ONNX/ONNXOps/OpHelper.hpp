@@ -323,6 +323,14 @@ mlir::ArrayAttr CombinedTransposePattern(mlir::PatternRewriter &rewriter,
 /// Identity patterns are {0, 1, 2, ... , rank -1}.
 bool IsIdentityPermuteVector(mlir::ArrayAttr permAttr);
 
+/// Test if a Transpose from `input` to `output` is a pure data no-op, i.e. it
+/// only reorders unit-extent (size-1) axes so the linear (row-major) element
+/// order is unchanged (at most one dimension has extent > 1). A superset of the
+/// exact-identity permutation. Does NOT require output_shape == input_shape:
+/// the single non-unit axis may land in a different slot (e.g. 1x1x64x1 ->
+/// 1x1x1x64), in which case the caller inserts a Reshape.
+bool IsDataPreservingTranspose(mlir::Value input, mlir::Value output);
+
 /// Test if the value has the specified constant shape
 bool HasSpecifiedConstantShape(mlir::Value value, mlir::Value shape);
 

@@ -752,6 +752,41 @@ def RemoveIdentityTransposePattern:  Pat<
   // Check that we have indeed a identity transpose pattern.
   [(IsIdentityPermuteAttribute:$p)]>;
 
+// A permutation that reorders only unit-extent axes is a pure data no-op: the
+// single non-unit axis carries all elements in row-major order, so the linear
+// element order is unchanged. This generalizes RemoveIdentityTransposePattern.
+def IsDataPreservingTranspose :
+  Constraint<CPred<"onnx_mlir::IsDataPreservingTranspose($0, $1)">,
+    "transpose only reorders unit-extent axes (a data no-op)">;
+
+// Two flavors of data-no-op transpose need different rewrites:
+//  1. shape-preserving (output_shape == input_shape), e.g.
+//     Transpose(1x1x1x64, perm=[0,2,1,3]) -> 1x1x1x64 (PyTorch LSTM export):
+//     replace the transpose with its input directly.
+//  2. shape-changing (output_shape != input_shape), e.g.
+//     Transpose(1x1x64x1, perm=[0,1,3,2]) -> 1x1x1x64: the value type
+//     changes, so replace with a Reshape to the output shape.
+
+def RemoveDataNoOpTransposePattern:  Pat<
+  // Transpose whose input->output moves no data AND keeps the same shape.
+  (ONNXTransposeOp:$res $val, $p),
+  // Remove the transpose.
+  (replaceWithValue $val),
+  // Pure data no-op and shape unchanged: safe to forward the input directly.
+  [(IsDataPreservingTranspose $val, $res), (HaveSameStaticShape $val, $res)]>;
+
+def ReplaceDataNoOpTransposeByReshapePattern:  Pat<
+  // Transpose whose input->output moves no data but changes the shape.
+  (ONNXTransposeOp:$res $val, $p),
+  // Replace with a Reshape to the (static) output shape. The Reshape target
+  // shape is materialized from the transpose result type.
+  (ONNXReshapeOp $val,
+     (ONNXConstantOpFromDenseAttr (createDenseElementsAttrFromShape $res)),
+     (GetNullIntegerAttr)),
+  // Pure data no-op but shape changed: a Reshape carries the relabeling.
+  [(IsDataPreservingTranspose $val, $res),
+   (IsStaticShapeTensor:$res)]>;
+
 //===----------------------------------------------------------------------===//
 // Canonicalization for ONNXReshapeOp
 //===----------------------------------------------------------------------===//

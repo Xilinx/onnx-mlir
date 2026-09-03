@@ -5417,6 +5417,8 @@ void ONNXTransposeOp::getCanonicalizationPatterns(
   result.insert<FuseTransposeAndTanPattern>(context);
   result.insert<FuseTransposeAndTanhPattern>(context);
   result.insert<RemoveIdentityTransposePattern>(context);
+  result.insert<RemoveDataNoOpTransposePattern>(context);
+  result.insert<ReplaceDataNoOpTransposeByReshapePattern>(context);
 }
 
 /// on the ONNXUnsqueezeOp.
