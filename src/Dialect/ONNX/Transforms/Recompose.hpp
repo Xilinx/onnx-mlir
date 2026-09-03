@@ -43,10 +43,20 @@ namespace onnx_mlir {
 // DepthToSpace decomposition is enabled, the DepthToSpace recompose patterns
 // must be disabled so they do not immediately fold the decomposed
 // reshape/transpose/reshape chain back into an onnx.DepthToSpace.
+// `enableClipFromWhereMinMax` enables recomposing the explicit clamp idiom
+// (a nested pair of onnx.Where implementing min(hi, max(lo, x))) back into a
+// single onnx.Clip(x, lo, hi). Only fires when both bounds are finite
+// single-element constants with lo <= hi.
 void getRecomposeONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
     bool enableRotaryEmbeddingRecompose = false,
     bool enableReduceL2Recompositions = false,
-    bool enableDepthToSpaceDecompose = false);
+    bool enableDepthToSpaceDecompose = false,
+    bool enableClipFromWhereMinMax = false);
+
+// Adds only the RecomposeClipFromWhereMinMaxPattern (the clamp-from-Where
+// recomposition) to `patterns`, so callers that just want this one pattern do
+// not pull in the rest of the RecomposeONNXToONNX pattern set.
+void getRecomposeClipFromWhereMinMaxPatterns(mlir::RewritePatternSet &patterns);
 
 } // namespace onnx_mlir
 #endif
