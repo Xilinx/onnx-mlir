@@ -3976,8 +3976,7 @@ struct FoldCeilModeIntoPadPattern : public OpRewritePattern<ONNXAveragePoolOp> {
       return rewriter.notifyMatchFailure(avgOp, "auto_pad is not NOTSET");
 
     auto inputType = mlir::dyn_cast<RankedTensorType>(avgOp.getX().getType());
-    auto outputType =
-        mlir::dyn_cast<RankedTensorType>(avgOp.getResult().getType());
+    auto outputType = dyn_cast<RankedTensorType>(avgOp.getResult().getType());
     if (!inputType || !outputType)
       return rewriter.notifyMatchFailure(avgOp, "unranked input/output");
 
@@ -3985,10 +3984,10 @@ struct FoldCeilModeIntoPadPattern : public OpRewritePattern<ONNXAveragePoolOp> {
     // [begin_0..begin_{n-1}, end_0..end_{n-1}].
     ArrayRef<int64_t> inputShape = inputType.getShape();
     ArrayRef<int64_t> outputShape = outputType.getShape();
-    int64_t rank = inputType.getRank();
+    const int64_t rank = inputType.getRank();
     if (rank < 3 || outputType.getRank() != rank)
       return rewriter.notifyMatchFailure(avgOp, "unexpected rank");
-    int64_t numSpatialDims = rank - 2;
+    const int64_t numSpatialDims = rank - 2;
 
     // Reads element `i` of an optional i64 array attribute (strides, dilations,
     // pads), falling back to `dflt` when the attribute is absent or too short.
