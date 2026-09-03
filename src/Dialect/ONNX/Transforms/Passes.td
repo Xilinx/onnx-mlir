@@ -160,7 +160,14 @@ def ONNXRecomposePatternOptions {
            "enable-reducel2-recompositions",
            "bool", /*default=*/"false",
            "Recompose ReduceL2 from Sqrt/Pow(0.5) square-reduction "
-           "chains into ReduceL2. Off by default.">
+           "chains into ReduceL2. Off by default.">,
+
+    Option<"enableClipFromWhereMinMax",
+           "enable-clip-from-where-min-max",
+           "bool", /*default=*/"false",
+           "Recompose the explicit clamp idiom "
+           "Where(Greater(x, hi), hi, Where(Less(x, lo), lo, x)) into a single "
+           "onnx.Clip(x, lo, hi). Off by default.">
   ];
 }
 

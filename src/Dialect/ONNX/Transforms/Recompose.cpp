@@ -22,6 +22,7 @@
 //===----------------------------------------------------------------------===//
 
 #include <cassert>
+#include <cmath>
 #include <numeric>
 #include <optional>
 
@@ -846,6 +847,227 @@ struct RecomposeHardSigmoidFromMulClipPattern
     }
 
     return failure();
+  }
+};
+
+/// Recomposes the explicit clamp idiom -- a nested pair of `onnx.Where`s that
+/// implement `min(hi, max(lo, x))` -- back into a single `onnx.Clip(x, lo,
+/// hi)`.
+///
+/// The canonical shape is
+///
+///   Where(Greater(x, hi), hi, Where(Less(x, lo), lo, x))
+///
+/// but the matcher is order-agnostic and accepts every semantically-equivalent
+/// spelling that ONNX exporters emit:
+///   * either compare operand order (`Greater(x, hi)` == `Less(hi, x)`,
+///     `Less(x, lo)` == `Greater(lo, x)`);
+///   * the `OrEqual` compare variants (`GreaterOrEqual`/`LessOrEqual`) -- at
+///   the
+///     boundary `x == bound` both the strict and the or-equal form select a
+///     value equal to `bound`, so the clamp result is identical;
+///   * the branch-swapped `Where` (a negated condition with then/else swapped,
+///     e.g. `Where(Less(x, hi), x, hi)` for the upper clamp);
+///   * either nesting order (the outer `Where` may be the upper- OR the
+///     lower-clamp, with the other nested inside).
+///
+/// Safety: `onnx.Clip` lowers to `min(hi, max(lo, x))`; the Where chain lowers
+/// to nested `arith.select`s driven by ordered compares. For finite
+/// ("in-range") bounds with `lo <= hi` the two forms are bit-identical on every
+/// non-NaN input, so the rewrite only fires when both bounds are finite
+/// single-element constants with `lo <= hi`. Constant bounds that are
+/// non-finite or inverted (`lo > hi`) fall into onnx.Clip's
+/// implementation-defined region and are left untouched; non-constant bounds
+/// cannot be validated and are skipped.
+struct RecomposeClipFromWhereMinMaxPattern
+    : public OpRewritePattern<ONNXWhereOp> {
+  using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
+
+  static bool matchScalarConstant(Value v, double &out) {
+    using namespace onnx_mlir;
+    if (!isDenseONNXConstant(v))
+      return false;
+    ElementsAttr attr = getElementAttributeFromONNXValue(v);
+    if (!attr || attr.getNumElements() != 1)
+      return false;
+    out = getScalarValue<double>(attr, attr.getElementType());
+    return true;
+  }
+
+  // A single-sided clamp recognized from one Where: either the upper clamp
+  // `min(passthrough, bound)` or the lower clamp `max(passthrough, bound)`.
+  //
+  // The compared tensor `x` (the non-bound operand of the compare) and the
+  // Where's passthrough branch need not be the same SSA value: the canonical
+  // nested idiom
+  //
+  //   Where(Greater(x, hi), hi, Where(Less(x, lo), lo, x))
+  //
+  // compares the *original* `x` in the outer Where while passing through the
+  // inner Where's result. `x` is used to check both Wheres clamp the same
+  // tensor; `passthrough` is the value actually selected on the non-bound side.
+  enum class ClampKind { Upper, Lower };
+  struct ClampMatch {
+    Value x;           // the compared tensor (non-bound compare operand)
+    Value passthrough; // the branch selected when not clamped to `bound`
+    Value bound;       // the (constant) clamp bound
+    ClampKind kind;
+  };
+
+  // Normalize an ordered compare to the predicate `a > b` (strict) or
+  // `a >= b`. onnx: Greater(a,b)=a>b, GreaterOrEqual(a,b)=a>=b,
+  // Less(a,b)=a<b=b>a, LessOrEqual(a,b)=a<=b=b>=a. Returns false if `cond`
+  // is not one of these four compares.
+  static bool normalizeCompare(
+      Value cond, Value &gtLhs, Value &gtRhs, bool &orEqual) {
+    Operation *op = cond.getDefiningOp();
+    if (!op)
+      return false;
+    if (auto c = dyn_cast<ONNXGreaterOp>(op)) {
+      gtLhs = c.getA();
+      gtRhs = c.getB();
+      orEqual = false;
+      return true;
+    }
+    if (auto c = dyn_cast<ONNXGreaterOrEqualOp>(op)) {
+      gtLhs = c.getA();
+      gtRhs = c.getB();
+      orEqual = true;
+      return true;
+    }
+    if (auto c = dyn_cast<ONNXLessOp>(op)) {
+      gtLhs = c.getB(); // a < b  <=>  b > a
+      gtRhs = c.getA();
+      orEqual = false;
+      return true;
+    }
+    if (auto c = dyn_cast<ONNXLessOrEqualOp>(op)) {
+      gtLhs = c.getB(); // a <= b  <=>  b >= a
+      gtRhs = c.getA();
+      orEqual = true;
+      return true;
+    }
+    return false;
+  }
+
+  // Classify one Where as a single-sided clamp of `x` against a scalar-constant
+  // `bound`. Handles both branch orders and (via normalizeCompare) both compare
+  // operand orders and the OrEqual variants. The (equal-tie) OrEqual vs strict
+  // distinction does not change the clamp result, so it is intentionally
+  // ignored once matched.
+  //
+  // The Where computes `P ? tVal : fVal`, with the normalized predicate
+  // `P = (predBig > predSmall)`. One of the branches is the scalar-constant
+  // `bound`; the other is the `passthrough` value selected when not clamped.
+  // The compare tests `x` (the non-bound compare operand) against `bound`.
+  // Enumerating the four (branch order) x (predicate order) combinations,
+  // writing pt for passthrough:
+  //   predBig=x,    tVal=bound => x>bound ? bound : pt = min-side  Upper
+  //   predBig=bound,tVal=bound => bound>x ? bound : pt = max-side  Lower
+  //   predBig=x,    tVal=pt    => x>bound ? pt : bound = max-side  Lower
+  //   predBig=bound,tVal=pt    => bound>x ? pt : bound = min-side  Upper
+  // `bound` is disambiguated as the branch that is a scalar constant and also
+  // one of the compare operands; `passthrough` is the other branch.
+  static std::optional<ClampMatch> matchClampWhere(ONNXWhereOp whereOp) {
+    Value gtLhs; // predBig
+    Value gtRhs; // predSmall
+    bool orEqual;
+    if (!normalizeCompare(whereOp.getCondition(), gtLhs, gtRhs, orEqual))
+      return std::nullopt;
+    (void)orEqual;
+
+    Value tVal = whereOp.getX(); // selected when condition is true
+    Value fVal = whereOp.getY(); // selected when condition is false
+
+    // Identify the scalar-constant bound among the compare operands, and `x`
+    // as the other (non-constant) compare operand.
+    double dummy;
+    Value x;
+    Value bound;
+    if (matchScalarConstant(gtRhs, dummy) &&
+        !matchScalarConstant(gtLhs, dummy)) {
+      bound = gtRhs;
+      x = gtLhs;
+    } else if (matchScalarConstant(gtLhs, dummy) &&
+               !matchScalarConstant(gtRhs, dummy)) {
+      bound = gtLhs;
+      x = gtRhs;
+    } else {
+      // Neither or both are scalar constants -- cannot form a clamp.
+      return std::nullopt;
+    }
+
+    // Exactly one Where branch must be the same `bound` constant; the other is
+    // the passthrough value.
+    Value passthrough;
+    if (tVal == bound)
+      passthrough = fVal;
+    else if (fVal == bound)
+      passthrough = tVal;
+    else
+      return std::nullopt;
+
+    // Apply the truth table using (predBig==x?) and (tVal==bound?).
+    const bool predBigIsX = (gtLhs == x);
+    const bool trueIsBound = (tVal == bound);
+    ClampKind kind;
+    if (predBigIsX)
+      kind = trueIsBound ? ClampKind::Upper : ClampKind::Lower;
+    else
+      kind = trueIsBound ? ClampKind::Lower : ClampKind::Upper;
+
+    return ClampMatch{x, passthrough, bound, kind};
+  }
+
+  LogicalResult matchAndRewrite(
+      ONNXWhereOp outerWhere, PatternRewriter &rewriter) const final {
+    using namespace onnx_mlir;
+
+    // The outer Where must be one side of the clamp, and its passthrough
+    // (false/else) value must be the inner Where implementing the other side.
+    std::optional<ClampMatch> outer = matchClampWhere(outerWhere);
+    if (!outer)
+      return failure();
+
+    // The inner Where feeds the outer's passthrough branch.
+    auto innerWhere = outer->passthrough.getDefiningOp<ONNXWhereOp>();
+    if (!innerWhere)
+      return failure();
+
+    std::optional<ClampMatch> inner = matchClampWhere(innerWhere);
+    if (!inner)
+      return failure();
+
+    // The two Wheres must clamp the SAME tensor `x` on OPPOSITE sides. The
+    // outer's passthrough is the inner Where's result (checked above), and the
+    // inner's passthrough must bottom out at that same `x`.
+    if (inner->x != outer->x)
+      return failure();
+    if (inner->passthrough != outer->x)
+      return failure();
+    if (outer->kind == inner->kind)
+      return failure();
+
+    Value x = outer->x;
+    Value hi = (outer->kind == ClampKind::Upper) ? outer->bound : inner->bound;
+    Value lo = (outer->kind == ClampKind::Lower) ? outer->bound : inner->bound;
+
+    // Only recompose when both bounds are finite compile-time constants with
+    // lo <= hi -- the regime where min(hi, max(lo, x)) is bit-identical to the
+    // Where chain. Non-constant, non-finite, or inverted bounds are skipped.
+    double loVal;
+    double hiVal;
+    if (!matchScalarConstant(lo, loVal) || !matchScalarConstant(hi, hiVal))
+      return failure();
+    if (!std::isfinite(loVal) || !std::isfinite(hiVal) || loVal > hiVal)
+      return failure();
+
+    auto loc = mlir::FusedLoc::get(
+        rewriter.getContext(), {outerWhere.getLoc(), innerWhere.getLoc()});
+    Value clipOp = rewriter.create<ONNXClipOp>(
+        loc, outerWhere.getResult().getType(), x, lo, hi);
+    rewriter.replaceOp(outerWhere, clipOp);
+    return success();
   }
 };
 
@@ -2112,7 +2334,7 @@ void RecomposeONNXToONNXPass::runOnOperation() {
   RewritePatternSet patterns(context);
   onnx_mlir::getRecomposeONNXToONNXPatterns(patterns,
       enableRotaryEmbeddingRecompose, enableReduceL2Recompositions,
-      enableDepthToSpaceDecompose);
+      enableDepthToSpaceDecompose, enableClipFromWhereMinMax);
 
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
@@ -2124,10 +2346,13 @@ void RecomposeONNXToONNXPass::runOnOperation() {
 
 void onnx_mlir::getRecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns, bool enableRotaryEmbeddingRecompose,
-    bool enableReduceL2Recompositions, bool enableDepthToSpaceDecompose) {
+    bool enableReduceL2Recompositions, bool enableDepthToSpaceDecompose,
+    bool enableClipFromWhereMinMax) {
   MLIRContext *context = patterns.getContext();
   patterns.insert<RecomposeHardSwishFromMulPattern>(context);
   patterns.insert<RecomposeHardSigmoidFromMulClipPattern>(context);
+  if (enableClipFromWhereMinMax)
+    patterns.insert<RecomposeClipFromWhereMinMaxPattern>(context);
   patterns.insert<RecomposeGeluFromMulPattern>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, false>>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXMulOp, false>>(context);
@@ -2150,4 +2375,9 @@ void onnx_mlir::getRecomposeONNXToONNXPatterns(
   // AMD Disabled as downstream has no special support for it
   // patterns.insert<RecomposeQLinearMatMulFromQuantizeLinearPattern>(context);
   // patterns.insert<CombineParallelConv2DPattern>(context);
+}
+
+void onnx_mlir::getRecomposeClipFromWhereMinMaxPatterns(
+    mlir::RewritePatternSet &patterns) {
+  patterns.insert<RecomposeClipFromWhereMinMaxPattern>(patterns.getContext());
 }
