@@ -1,4 +1,4 @@
-* @jorickert @p-lanza
+* @jorickert @gerion-amd
 
 # Files/Folders excluded from default ownership
 /src/Compiler/XmcMlirPasses.cpp
