@@ -24,6 +24,7 @@
 #define ONNX_MLIR_DECOMPOSE_H
 
 #include "mlir/IR/PatternMatch.h"
+#include "src/Dialect/ONNX/Transforms/DecomposeLSTM.hpp"
 
 namespace onnx_mlir {
 
@@ -41,6 +42,12 @@ extern bool separatePhasedConvsForConvTransposeActive;
 // interleave instead of Reshape/Transpose/Reshape. Defined in Decompose.cpp.
 extern bool convTransposeDepthToSpaceActive;
 
+// Same communication channel as above, for the convert-convtranspose-to-resize
+// option. When true, a nearest-neighbor upsampling ConvTranspose is kept out of
+// the phased-Conv decomposition so it can be rewritten to onnx.Resize. Defined
+// in Decompose.cpp.
+extern bool convTransposeToResizeActive;
+
 // Exports the DecomposeONNXToONNXPass patterns. They are all plain rewrite
 // patterns that can be used with any PatternRewriter, not conversion patterns.
 void getDecomposeONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
@@ -53,8 +60,10 @@ void getDecomposeONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
     bool enableLstmSeqDecompose = false, bool enableReduceL2Decompose = true,
     bool disableGenericDecompositions = false, bool enableGatherToSlice = true,
     bool enableHardSwishDecompose = true,
-    bool enableGroupQueryAttentionCacheSlicing = true,
-    bool enableDepthToSpaceDecompose = false);
+    bool enableDepthToSpaceDecompose = false,
+    bool enableGQAUint16CacheSlotRewrite = false,
+    bool enableConvTransposeToResize = false, bool enableLstmDecompose = false,
+    LSTMDecompositionPredicate lstmDecompositionPredicate = {});
 
 // Decompose onnx.DepthToSpace (DCR and CRD) into Reshape/Transpose/Reshape
 void populateDecomposeDepthToSpacePattern(mlir::RewritePatternSet &patterns,

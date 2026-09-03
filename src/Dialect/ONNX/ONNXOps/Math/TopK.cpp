@@ -110,8 +110,19 @@ LogicalResult ONNXTopKOp::inferShapes(
 
   Builder b(getContext());
   Type elementType = mlir::cast<ShapedType>(getX().getType()).getElementType();
+  // Preserve any pre-existing integer element type on the Indices result so any
+  // widening to ui16/ui32 is not lost. Default to i64 element type.
+  Type indicesElementType = b.getI64Type();
+  if (auto indicesType = mlir::dyn_cast<ShapedType>(getIndices().getType())) {
+    if (indicesType.getElementType()) {
+      Type existing = indicesType.getElementType();
+      if (existing && mlir::isa<IntegerType>(existing))
+        indicesElementType = existing;
+    }
+  }
   ONNXTopKOpShapeHelper shapeHelper(getOperation(), {});
-  return shapeHelper.computeShapeAndUpdateTypes({elementType, b.getI64Type()});
+  return shapeHelper.computeShapeAndUpdateTypes(
+      {elementType, indicesElementType});
 }
 
 //===----------------------------------------------------------------------===//

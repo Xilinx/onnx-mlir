@@ -21,6 +21,7 @@
 
 #include "mlir/IR/DialectResourceBlobManager.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Path.h"
 
@@ -316,6 +317,88 @@ void ArrayAttrIntVals(ArrayAttr a, mlir::SmallVectorImpl<int64_t> &i) {
     i.emplace_back(mlir::cast<IntegerAttr>(a.getValue()[k]).getInt());
 }
 
+FailureOr<ConvGeometry> getConvGeometry(ONNXConvOp convOp) {
+  Value W = convOp.getW();
+  if (!hasShapeAndRank(W))
+    return failure();
+  ArrayRef<int64_t> wShape = mlir::cast<ShapedType>(W.getType()).getShape();
+  const int64_t firstSpatialAxis = 2;
+  const int64_t spatialRank = wShape.size() - firstSpatialAxis;
+  if (spatialRank < 1)
+    return failure();
+
+  // ONNXConvOp::verify() has already checked the attribute ranks.
+  auto readOrFill = [spatialRank](std::optional<ArrayAttr> a, int64_t defVal) {
+    SmallVector<int64_t> vals(spatialRank, defVal);
+    if (a.has_value())
+      for (int64_t i = 0; i < spatialRank; ++i)
+        vals[i] = ArrayAttrIntVal(a, i);
+    return vals;
+  };
+
+  ConvGeometry geometry;
+  geometry.strides = readOrFill(convOp.getStrides(), 1);
+  geometry.dilations = readOrFill(convOp.getDilations(), 1);
+  geometry.pads.assign(2 * spatialRank, 0);
+
+  StringRef autoPad = convOp.getAutoPad();
+  if (autoPad == "NOTSET") {
+    if (auto padsAttr = convOp.getPads())
+      for (int64_t i = 0; i < 2 * spatialRank; ++i)
+        geometry.pads[i] = ArrayAttrIntVal(padsAttr, i);
+    return geometry;
+  }
+  // VALID leaves the pads at zero.
+  if (autoPad == "VALID")
+    return geometry;
+  if (autoPad != "SAME_UPPER" && autoPad != "SAME_LOWER")
+    return failure();
+
+  Value X = convOp.getX();
+  if (!hasShapeAndRank(X))
+    return failure();
+  ArrayRef<int64_t> xShape = mlir::cast<ShapedType>(X.getType()).getShape();
+  const bool isSameUpper = autoPad == "SAME_UPPER";
+
+  for (int64_t i = 0; i < spatialRank; ++i) {
+    const int64_t inputSize = xShape[firstSpatialAxis + i];
+    if (ShapedType::isDynamic(inputSize))
+      return failure();
+
+    // The last output window starts at (outputSize - 1) * stride and spans
+    // effectiveKernel input positions. The padded input must be large
+    // enough to cover that window:
+    //
+    //   inputSize + totalPad >=
+    //     (outputSize - 1) * stride + effectiveKernel
+    //
+    // Therefore the minimum total pad is:
+    //   totalPad = max(0,
+    //       (outputSize - 1) * stride + effectiveKernel - inputSize)
+    //
+    // This is equivalent to inverting:
+    //   outputSize = floor((inputSize + totalPad - effectiveKernel) /
+    //   stride) + 1
+    // The floor is accounted for by choosing the minimum totalPad that
+    // reaches the next output window; no extra floor is applied to
+    // totalPad itself.
+    const int64_t stride = geometry.strides[i];
+    const int64_t effectiveKernel =
+        (wShape[firstSpatialAxis + i] - 1) * geometry.dilations[i] + 1;
+    const int64_t outputSize = llvm::divideCeil(inputSize, stride);
+    const int64_t sumOfPad = std::max<int64_t>(
+        0, (outputSize - 1) * stride + effectiveKernel - inputSize);
+
+    // An odd total pad puts the extra element at the end for SAME_UPPER and at
+    // the beginning for SAME_LOWER.
+    const int64_t padBegin =
+        isSameUpper ? sumOfPad / 2 : sumOfPad - sumOfPad / 2;
+    geometry.pads[i] = padBegin;
+    geometry.pads[spatialRank + i] = sumOfPad - padBegin;
+  }
+  return geometry;
+}
+
 ElementsAttr getElementAttributeFromONNXValue(Value value) {
   ONNXConstantOp constantOp = getONNXConstantOp(value);
   // In case the ConstantOp has not been normalized yet
@@ -389,11 +472,296 @@ bool getI64ValuesFromONNXConstantOp(
   ElementsAttr elemsAttr = getElementAttributeFromONNXValue(val);
   if (!elemsAttr)
     return false;
-  if (!getElementType(elemsAttr.getType()).isInteger(64))
+  Type elemType = getElementType(elemsAttr.getType());
+  auto intType = dyn_cast<IntegerType>(elemType);
+  if (!intType)
     return false;
-  SmallVector<int64_t, 4> iVals(elemsAttr.getValues<int64_t>());
-  iRes.append(iVals);
+  // Directly copy i64
+  if (intType.isSignlessInteger(64)) {
+    SmallVector<int64_t, 4> iVals(elemsAttr.getValues<int64_t>());
+    iRes.append(iVals);
+    return true;
+  }
+  // Convert other integer types to i64 before copying
+  for (APInt v : elemsAttr.getValues<APInt>()) {
+    if (intType.isUnsigned())
+      iRes.push_back(static_cast<int64_t>(v.getZExtValue()));
+    else
+      iRes.push_back(v.getSExtValue());
+  }
   return true;
+}
+
+SmallVector<int64_t> valToVector(Value val) {
+  ElementsAttr elements = getDenseOrDisposableConstLikeElements(val);
+  if (!elements || !getElementType(elements.getType()).isIntOrIndex())
+    return {};
+
+  SmallVector<int64_t> vector;
+  for (APInt v : elements.getValues<APInt>())
+    vector.push_back(v.getSExtValue());
+  return vector;
+}
+
+static bool hasLegacyBroadcastAxis(Operation *op) {
+  return op->hasAttr("broadcast") && op->hasAttr("axis");
+}
+
+struct ONNXAxisFieldConfig {
+  ONNXAxisOperandKind kind;
+  ONNXAxisRankKind rankKind;
+  bool includeRank = false;
+  bool canCanonicalize = true;
+};
+
+static std::optional<ONNXAxisFieldConfig> getAxisAttrConfig(Operation *op) {
+  if (hasLegacyBroadcastAxis(op))
+    return std::nullopt;
+
+  const StringRef name = op->getName().getStringRef();
+  if (name == "onnx.Flatten")
+    return ONNXAxisFieldConfig{ONNXAxisOperandKind::Scalar,
+        ONNXAxisRankKind::FirstOperand, /*includeRank=*/true};
+  if (name == "onnx.ConcatFromSequence")
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::Scalar, ONNXAxisRankKind::ConcatFromSequence};
+  if (name == "onnx.OneHot")
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::Scalar, ONNXAxisRankKind::FirstOperandPlusOne};
+  if (name == "onnx.DFTV17")
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::Scalar, ONNXAxisRankKind::FirstOperandMinusOne};
+
+  if (name == "onnx.AMDQuarkBFPQuantizeDequantizeOp" ||
+      name == "onnx.AMDQuarkExtendedDequantizeLinearOp" ||
+      name == "onnx.AMDQuarkExtendedQuantizeLinearOp" ||
+      name == "onnx.ArgMax" || name == "onnx.ArgMin" ||
+      name == "onnx.Compress" || name == "onnx.Concat" ||
+      name == "onnx.DequantizeLinear" || name == "onnx.Gather" ||
+      name == "onnx.GatherElements" || name == "onnx.Hardmax" ||
+      name == "onnx.LayerNormalization" || name == "onnx.LogSoftmax" ||
+      name == "onnx.LpNormalization" || name == "onnx.RMSLayerNormalization" ||
+      name == "onnx.QuantizeLinear" || name == "onnx.Scatter" ||
+      name == "onnx.ScatterElements" || name == "onnx.Softmax" ||
+      name == "onnx.Split" || name == "onnx.SplitV11" ||
+      name == "onnx.SplitV13" || name == "onnx.SplitToSequence" ||
+      name == "onnx.TopK" || name == "onnx.Unique")
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::Scalar, ONNXAxisRankKind::FirstOperand};
+
+  return std::nullopt;
+}
+
+static std::optional<ONNXAxisFieldConfig> getAxesAttrConfig(Operation *op) {
+  const StringRef name = op->getName().getStringRef();
+  if (name == "onnx.UnsqueezeV11")
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::UnsqueezeAxes, ONNXAxisRankKind::UnsqueezeOutput};
+  if (name == "onnx.SqueezeV11" || name.starts_with("onnx.Reduce"))
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::Axes, ONNXAxisRankKind::FirstOperand};
+
+  if (name == "onnx.Resize")
+    return ONNXAxisFieldConfig{
+        ONNXAxisOperandKind::Axes, ONNXAxisRankKind::FirstOperand};
+
+  return std::nullopt;
+}
+
+struct ONNXAxisOperandSpec {
+  ONNXAxisOperandKind kind;
+  unsigned index;
+  ONNXAxisRankKind rankKind;
+};
+
+static ONNXAxisOperandSpec getONNXAxisOperandSpec(Operation *op) {
+  const StringRef name = op->getName().getStringRef();
+  if (name == "onnx.CumSum")
+    return {ONNXAxisOperandKind::Scalar, 1, ONNXAxisRankKind::FirstOperand};
+  if (name == "onnx.DFT")
+    return {
+        ONNXAxisOperandKind::Scalar, 2, ONNXAxisRankKind::FirstOperandMinusOne};
+  if (name == "onnx.Slice")
+    return {ONNXAxisOperandKind::Axes, 3, ONNXAxisRankKind::FirstOperand};
+  if (name == "onnx.Pad" || name == "onnx.PadV18")
+    return {ONNXAxisOperandKind::Axes, 3, ONNXAxisRankKind::FirstOperand};
+  if (name == "onnx.Squeeze")
+    return {ONNXAxisOperandKind::Axes, 1, ONNXAxisRankKind::FirstOperand};
+  if (name == "onnx.Unsqueeze")
+    return {ONNXAxisOperandKind::UnsqueezeAxes, 1,
+        ONNXAxisRankKind::UnsqueezeOutput};
+  if (name.starts_with("onnx.Reduce") && op->getNumOperands() >= 2)
+    return {ONNXAxisOperandKind::Axes, 1, ONNXAxisRankKind::FirstOperand};
+  return {ONNXAxisOperandKind::None, 0, ONNXAxisRankKind::None};
+}
+
+std::optional<ONNXAxisValueSpec> getONNXAxisValueSpec(Operation *op) {
+  if (op->getName().getDialectNamespace() != ONNXDialect::getDialectNamespace())
+    return std::nullopt;
+
+  std::optional<ONNXAxisValueSpec> spec;
+  bool duplicateSpec = false;
+  auto setSpec = [&](ONNXAxisValueSpec newSpec) {
+    assert(!spec && "expected at most one known ONNX axis/axes source per op");
+    if (spec) {
+      duplicateSpec = true;
+      return;
+    }
+    spec = newSpec;
+  };
+
+  if (op->getAttrOfType<IntegerAttr>("axis") && !hasLegacyBroadcastAxis(op)) {
+    const std::optional<ONNXAxisFieldConfig> config = getAxisAttrConfig(op);
+    setSpec({config ? config->kind : ONNXAxisOperandKind::Scalar,
+        ONNXAxisValueSource::Attribute, "axis", 0,
+        config ? config->canCanonicalize : false,
+        config ? config->rankKind : ONNXAxisRankKind::None,
+        config ? config->includeRank : false});
+  }
+
+  if (op->getAttrOfType<ArrayAttr>("axes")) {
+    const std::optional<ONNXAxisFieldConfig> config = getAxesAttrConfig(op);
+    setSpec({config ? config->kind : ONNXAxisOperandKind::Axes,
+        ONNXAxisValueSource::Attribute, "axes", 0,
+        config ? config->canCanonicalize : false,
+        config ? config->rankKind : ONNXAxisRankKind::None,
+        config ? config->includeRank : false});
+  }
+
+  const ONNXAxisOperandSpec operandSpec = getONNXAxisOperandSpec(op);
+  if (operandSpec.kind != ONNXAxisOperandKind::None) {
+    setSpec({operandSpec.kind, ONNXAxisValueSource::Operand, "",
+        operandSpec.index, /*canCanonicalize=*/true, operandSpec.rankKind,
+        /*includeRank=*/false});
+  }
+  if (duplicateSpec)
+    return std::nullopt;
+  return spec;
+}
+
+bool getONNXAxisValues(Operation *op, const ONNXAxisValueSpec &spec,
+    SmallVectorImpl<int64_t> &values) {
+  assert(values.empty() && "expected caller to provide empty output vector");
+  if (spec.source == ONNXAxisValueSource::Attribute) {
+    if (spec.kind == ONNXAxisOperandKind::Scalar) {
+      const auto axisAttr = op->getAttrOfType<IntegerAttr>(spec.attrName);
+      if (!axisAttr)
+        return false;
+      values.push_back(axisAttr.getValue().getSExtValue());
+      return true;
+    }
+
+    const auto axesAttr = op->getAttrOfType<ArrayAttr>(spec.attrName);
+    if (!axesAttr || axesAttr.empty())
+      return false;
+    for (const Attribute attr : axesAttr) {
+      const auto axisAttr = mlir::dyn_cast<IntegerAttr>(attr);
+      if (!axisAttr)
+        return false;
+      values.push_back(axisAttr.getValue().getSExtValue());
+    }
+    return true;
+  }
+
+  if (spec.index >= op->getNumOperands())
+    return false;
+  const Value axisOperand = op->getOperand(spec.index);
+  if (mlir::isa<NoneType>(axisOperand.getType()))
+    return false;
+  if (!getI64ValuesFromONNXConstantOp(axisOperand, values) || values.empty())
+    return false;
+  return spec.kind != ONNXAxisOperandKind::Scalar || values.size() == 1;
+}
+
+static std::optional<int64_t> getTensorOrSequenceElementRank(Type type) {
+  if (const auto rankedTensorType = mlir::dyn_cast<RankedTensorType>(type))
+    return rankedTensorType.getRank();
+  if (const auto seqType = mlir::dyn_cast<SeqType>(type))
+    if (const auto elementType =
+            mlir::dyn_cast<RankedTensorType>(seqType.getElementType()))
+      return elementType.getRank();
+  return std::nullopt;
+}
+
+static std::optional<int64_t> getFirstOperandTensorRank(Operation *op) {
+  if (op->getNumOperands() == 0)
+    return std::nullopt;
+  return getTensorOrSequenceElementRank(op->getOperand(0).getType());
+}
+
+static std::optional<int64_t> getConcatFromSequenceAxisRank(Operation *op) {
+  const std::optional<int64_t> elementRank = getFirstOperandTensorRank(op);
+  if (!elementRank)
+    return std::nullopt;
+  const auto newAxisAttr = op->getAttrOfType<IntegerAttr>("new_axis");
+  return *elementRank +
+         ((newAxisAttr && newAxisAttr.getValue().getSExtValue() == 1) ? 1 : 0);
+}
+
+std::optional<int64_t> getONNXAxisNormalizationRank(
+    Operation *op, const ONNXAxisValueSpec &spec, int64_t axesCount) {
+  switch (spec.rankKind) {
+  case ONNXAxisRankKind::None:
+    return std::nullopt;
+  case ONNXAxisRankKind::FirstOperand:
+    return getFirstOperandTensorRank(op);
+  case ONNXAxisRankKind::FirstOperandMinusOne: {
+    const std::optional<int64_t> rank = getFirstOperandTensorRank(op);
+    if (!rank || *rank <= 0)
+      return std::nullopt;
+    return *rank - 1;
+  }
+  case ONNXAxisRankKind::FirstOperandPlusOne:
+    if (const std::optional<int64_t> rank = getFirstOperandTensorRank(op))
+      return *rank + 1;
+    return std::nullopt;
+  case ONNXAxisRankKind::ConcatFromSequence:
+    return getConcatFromSequenceAxisRank(op);
+  case ONNXAxisRankKind::UnsqueezeOutput:
+    if (const std::optional<int64_t> rank = getFirstOperandTensorRank(op))
+      return *rank + axesCount;
+    return std::nullopt;
+  }
+  llvm_unreachable("unknown ONNX axis rank kind");
+}
+
+std::optional<int64_t> normalizeONNXAxisValue(
+    int64_t axis, int64_t rank, bool includeRank) {
+  if (!isAxisInRange(axis, rank, includeRank))
+    return std::nullopt;
+  return axis;
+}
+
+FailureOr<bool> normalizeONNXAxisValues(ArrayRef<int64_t> axes, int64_t rank,
+    bool includeRank, SmallVectorImpl<int64_t> &normalized) {
+  bool changed = false;
+  assert(
+      normalized.empty() && "expected caller to provide empty output vector");
+
+  normalized.reserve(axes.size());
+  for (const int64_t axis : axes) {
+    const std::optional<int64_t> normalizedAxis =
+        normalizeONNXAxisValue(axis, rank, includeRank);
+    if (!normalizedAxis)
+      return failure();
+    normalized.push_back(*normalizedAxis);
+    changed |= *normalizedAxis != axis;
+  }
+  return changed;
+}
+
+bool hasNegativeONNXAxisValue(Operation *op) {
+  const std::optional<ONNXAxisValueSpec> spec = getONNXAxisValueSpec(op);
+  if (!spec)
+    return false;
+
+  SmallVector<int64_t> values;
+  if (!getONNXAxisValues(op, *spec, values))
+    return false;
+  for (const int64_t value : values)
+    if (value < 0)
+      return true;
+  return false;
 }
 
 bool extractI64Scalar(mlir::Value v, int64_t &out) {
@@ -415,6 +783,28 @@ bool extractSlice1DConst(mlir::ONNXSliceOp sliceOp, int64_t &axis,
          extractI64Scalar(sliceOp.getEnds(), end) &&
          extractI64Scalar(sliceOp.getAxes(), axis) &&
          extractI64Scalar(sliceOp.getSteps(), step);
+}
+
+int64_t indexToOffset(
+    llvm::ArrayRef<int64_t> shape, llvm::ArrayRef<int64_t> index) {
+  int64_t offset = 0;
+  for (size_t i = 0; i < shape.size(); i++) {
+    offset = offset * shape[i] + index[i];
+  }
+  return offset;
+}
+
+SmallVector<int64_t> offsetToIndex(
+    llvm::ArrayRef<int64_t> shape, int64_t offset) {
+  auto rank = shape.size();
+  // The rank of the index will be equal to the rank of the shape
+  SmallVector<int64_t> resultIndex;
+  for (int32_t i = rank - 1; i >= 0; i--) {
+    resultIndex.push_back(offset % shape[i]);
+    offset /= shape[i];
+  }
+  std::reverse(resultIndex.begin(), resultIndex.end());
+  return resultIndex;
 }
 
 //===----------------------------------------------------------------------===//
@@ -522,14 +912,7 @@ bool hasShapeAndRank(Operation *op) {
 }
 
 bool isInQuantizedDomain(Operation *op, Value result) {
-  auto hasQuantElt = [](Type t) -> bool {
-    auto shaped = mlir::dyn_cast_if_present<ShapedType>(t);
-    if (!shaped)
-      return false;
-    Type elt = shaped.getElementType();
-    return elt && mlir::isa<mlir::quant::QuantizedType>(elt);
-  };
-  if (result && hasQuantElt(result.getType()))
+  if (result && hasQuantizedElementType(result))
     return true;
   // `op` may be null when `updateType` is invoked outside an op-typing
   // context (e.g. ONNXToTOSALegalizeUtils::CreateOpAndInfer passes
@@ -538,7 +921,7 @@ bool isInQuantizedDomain(Operation *op, Value result) {
   if (!op)
     return false;
   for (Value operand : op->getOperands())
-    if (operand && hasQuantElt(operand.getType()))
+    if (operand && hasQuantizedElementType(operand))
       return true;
   return false;
 }
@@ -576,10 +959,43 @@ DenseElementsAttr createDenseElementsAttrFromFloatAttr(
   return DenseElementsAttr::get(tensorType, {f});
 }
 
+// Create a rank-1 DenseElementsAttr from an existing ArrayAttr.
+DenseElementsAttr createDenseArrayAttr(
+    PatternRewriter &rewriter, ArrayAttr origAttrs) {
+  assert(origAttrs && "handle EXISTING ArrayAttr only");
+
+  if (mlir::dyn_cast<FloatAttr>(origAttrs.getValue()[0])) {
+    Type elementType = rewriter.getF32Type();
+    int nElements = origAttrs.getValue().size();
+    SmallVector<float, 4> wrapper(nElements, 0);
+    for (int i = 0; i < nElements; ++i)
+      wrapper[i] =
+          mlir::cast<FloatAttr>(origAttrs.getValue()[i]).getValueAsDouble();
+
+    return DenseElementsAttr::get(
+        RankedTensorType::get(wrapper.size(), elementType),
+        llvm::ArrayRef(wrapper));
+  }
+
+  if (mlir::dyn_cast<IntegerAttr>(origAttrs.getValue()[0])) {
+    Type elementType = rewriter.getIntegerType(64);
+    int nElements = origAttrs.getValue().size();
+    SmallVector<int64_t, 4> wrapper(nElements, 0);
+    for (int i = 0; i < nElements; ++i)
+      wrapper[i] = mlir::cast<IntegerAttr>(origAttrs.getValue()[i]).getInt();
+
+    return DenseElementsAttr::get(
+        RankedTensorType::get(wrapper.size(), elementType),
+        llvm::ArrayRef(wrapper));
+  }
+
+  llvm_unreachable("unexpected attribute type");
+}
+
 ONNXCastOp castTo(
     PatternRewriter &rewriter, Value val, Type newElementTy, int64_t saturate) {
   return rewriter.create<ONNXCastOp>(val.getLoc(),
-      val.getType().cast<RankedTensorType>().clone(newElementTy), val,
+      mlir::cast<RankedTensorType>(val.getType()).clone(newElementTy), val,
       rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), saturate),
       TypeAttr::get(newElementTy));
 }
@@ -729,6 +1145,18 @@ RESULT_TYPE getScalarValue(ONNXConstantOp constantOp) {
 template double getScalarValue<double>(ONNXConstantOp constantOp);
 template int64_t getScalarValue<int64_t>(ONNXConstantOp constantOp);
 
+// Read a scalar (single-element) constant Value into a double. getScalarValue
+// handles float (incl. f16/bf16) and integer storage. Fails if `v` is
+// absent/None or not a single-element constant.
+FailureOr<double> readScalarConstant(Value v) {
+  if (!v || mlir::isa<NoneType>(v.getType()))
+    return failure();
+  ElementsAttr attr = getElementAttributeFromONNXValue(v);
+  if (!attr || attr.getNumElements() != 1)
+    return failure();
+  return getScalarValue<double>(attr, attr.getElementType());
+}
+
 /// Return the wide type of a value.
 WideNum asWideNum(double n, Type elemType) {
   return wideZeroDispatch(elemType, [n](auto wideZero) {
@@ -749,6 +1177,28 @@ bool isConstOf(Value constValue, double n) {
   assert(!elemType.isInteger(1) && "booleans are not supported");
   WideNum w = asWideNum(n, elemType);
   return ElementsAttrBuilder::allEqual(constElements, w);
+}
+
+bool isShapePreservingBroadcast(Value source, Value target) {
+  auto sourceType = mlir::dyn_cast<RankedTensorType>(source.getType());
+  if (!sourceType)
+    return false;
+  if (sourceType.getRank() == 0)
+    return true;
+
+  auto targetType = mlir::dyn_cast<RankedTensorType>(target.getType());
+  if (!targetType || sourceType.getRank() > targetType.getRank())
+    return false;
+
+  const int64_t rankOffset = targetType.getRank() - sourceType.getRank();
+  for (int64_t i = 0; i < sourceType.getRank(); ++i) {
+    const int64_t sourceDim = sourceType.getDimSize(i);
+    const int64_t targetDim = targetType.getDimSize(rankOffset + i);
+    if (sourceDim != 1 &&
+        (ShapedType::isDynamic(targetDim) || sourceDim != targetDim))
+      return false;
+  }
+  return true;
 }
 
 bool isFloatAttrApprox(mlir::FloatAttr attr, double expected, double epsilon) {
@@ -918,26 +1368,18 @@ bool hasIntegerPowerExponent(ONNXPowOp *op, int64_t &exponentValue) {
   // we want to check the dequantized value of the exponent
   if (auto dequantizeOp = mlir::dyn_cast_or_null<ONNXDequantizeLinearOp>(
           exponent.getDefiningOp())) {
-    ElementsAttr xAttr = getElementAttributeFromONNXValue(dequantizeOp.getX());
-    ElementsAttr scaleAttr =
-        getElementAttributeFromONNXValue(dequantizeOp.getXScale());
-    ElementsAttr zeroPointAttr =
-        getElementAttributeFromONNXValue(dequantizeOp.getXZeroPoint());
-
-    if (!(isScalarConstantTensor(dequantizeOp.getXScale()) &&
-            isScalarConstantTensor(dequantizeOp.getXZeroPoint())))
+    FailureOr<double> x = readScalarConstant(dequantizeOp.getX());
+    FailureOr<double> scale = readScalarConstant(dequantizeOp.getXScale());
+    FailureOr<double> zeroPoint =
+        readScalarConstant(dequantizeOp.getXZeroPoint());
+    if (failed(x) || failed(scale) || failed(zeroPoint))
       return false;
-
-    auto x = getScalarValue<double>(xAttr, xAttr.getElementType());
-    auto scale = getScalarValue<double>(scaleAttr, scaleAttr.getElementType());
-    auto zeroPoint =
-        getScalarValue<double>(zeroPointAttr, zeroPointAttr.getElementType());
 
     // Calculate dequantized value for exponent (This is an approximation and
     // isn't expected to match the actual calculation done by the
     // DequantizeLinear op. However, it should be good enough for checking that
     // the exponent is an integer)
-    double dequantizedExponent = (x - zeroPoint) * scale;
+    double dequantizedExponent = (*x - *zeroPoint) * (*scale);
     double nearest = std::round(dequantizedExponent);
     if (std::fabs(dequantizedExponent - nearest) > kPowExponentNearIntegerTol)
       return false;
@@ -1188,6 +1630,8 @@ bool hasQuantizedElementType(mlir::Type type) {
 }
 
 bool hasQuantizedElementType(mlir::Value value) {
+  if (isNoneValue(value))
+    return false;
   return hasQuantizedElementType(value.getType());
 }
 

@@ -31,6 +31,7 @@
 #include "llvm/Support/Debug.h"
 
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
+#include "src/Dialect/ONNX/ElementsAttr/ElementsAttrHelper.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/WideNum.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
@@ -41,8 +42,9 @@
 #include "src/Pass/Passes.hpp"
 #include "src/Support/TypeUtilities.hpp"
 
-#include <fenv.h>
-#include <math.h>
+#include <algorithm>
+#include <cfenv>
+#include <cmath>
 #include <numeric>
 
 #define DEBUG_TYPE "constprop-onnx"
@@ -73,14 +75,26 @@ namespace {
 struct ConstPropONNXToONNXPassConfiguration {
   static bool roundFPToInt;
   static int expansionBound;
+  static int64_t maxTileFoldSize;
   static StringSet<> disabledPatterns;
   static bool constantPropIsDisabled;
 };
 
 bool ConstPropONNXToONNXPassConfiguration::roundFPToInt = false;
 int ConstPropONNXToONNXPassConfiguration::expansionBound = -1; // -1 == no bound
+int64_t ConstPropONNXToONNXPassConfiguration::maxTileFoldSize = 0;
 StringSet<> ConstPropONNXToONNXPassConfiguration::disabledPatterns = {};
 bool ConstPropONNXToONNXPassConfiguration::constantPropIsDisabled = false;
+
+bool satisfiesMaxTileFoldSize(Value result) {
+  int64_t maxSize = ConstPropONNXToONNXPassConfiguration::maxTileFoldSize;
+  if (maxSize <= 0)
+    return true;
+  auto resultType = dyn_cast<RankedTensorType>(result.getType());
+  if (!resultType || !resultType.hasStaticShape())
+    return false;
+  return getSizeInBytes(resultType) <= maxSize;
+}
 
 // Precondition: result has ranked tensor type with static shape and int or
 // float element type.
@@ -1141,6 +1155,48 @@ Value ConstPropExpand(
 }
 
 //===----------------------------------------------------------------------===//
+// Constant propagation for TileOp.
+//===----------------------------------------------------------------------===//
+
+Value ConstPropTile(
+    PatternRewriter &rewriter, Value replacingValue, Value constValue) {
+  auto inputType = mlir::cast<ShapedType>(constValue.getType());
+  auto outputType = mlir::cast<ShapedType>(replacingValue.getType());
+  ArrayRef<int64_t> inputShape = inputType.getShape();
+  ArrayRef<int64_t> outputShape = outputType.getShape();
+
+  // A zero repeat (or zero-sized input) yields an empty tensor.
+  if (outputType.getNumElements() == 0)
+    return createReplacingConstantOp(rewriter, replacingValue,
+        DenseElementsAttr::get(outputType, ArrayRef<Attribute>{}));
+
+  ElementsAttr elements = getConstValueElements(constValue);
+
+  if (elements.isSplat())
+    return createReplacingConstantOp(rewriter, replacingValue,
+        DenseElementsAttr::get(
+            outputType, {elements.getSplatValue<Attribute>()}));
+
+  // Collect the elements of TileOp as a broadcast:
+  // - Insert a singleton dimension in front of each axis
+  // - Expand those dimensions up to the per-axis repeat counts
+  // - Flatten back to the tiled shape
+  // This way we only allocate an ElementsAttr once.
+  SmallVector<int64_t> singletonShape;
+  SmallVector<int64_t> broadcastShape;
+  for (auto [in, out] : llvm::zip(inputShape, outputShape)) {
+    singletonShape.append({1, in});
+    broadcastShape.append({out / in, in});
+  }
+
+  OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
+  elements = elementsBuilder.reshape(elements, singletonShape);
+  elements = elementsBuilder.expand(elements, broadcastShape);
+  elements = elementsBuilder.reshape(elements, outputShape);
+  return createReplacingConstantOp(rewriter, replacingValue, elements);
+}
+
+//===----------------------------------------------------------------------===//
 // Code to perform constant propagation for ShapeOp.
 //===----------------------------------------------------------------------===//
 
@@ -1252,7 +1308,423 @@ Value ConstPropNonZero(
   ElementsAttr constElements = getConstValueElements(constValue);
   OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
   ElementsAttr nonZeroElements = elementsBuilder.nonZero(constElements);
+  Type resultElementType = getElementType(replacingValue.getType());
+  if (auto resultIntTy = dyn_cast<IntegerType>(resultElementType)) {
+    if (nonZeroElements.getElementType() != resultElementType)
+      nonZeroElements = elementsBuilder.castToIntElementType(
+          nonZeroElements, resultIntTy, /*round=*/false);
+  }
   return createReplacingConstantOp(rewriter, replacingValue, nonZeroElements);
+}
+
+//===----------------------------------------------------------------------===//
+// Code to perform constant propagation for Resize.
+//
+// Resize with a constant data input (and constant/absent roi, scales, sizes)
+// is a pure compile-time computation. onnx-mlir has no ElementsAttrBuilder
+// primitive for it, so the resampling is implemented here directly. Only a
+// subset of the Resize spec is handled; isResizeConstPropagatable() gates the
+// pattern so any unsupported configuration is simply left untouched.
+//
+// ONNX Resize spec (attribute semantics, CTM/mode formulas) reference:
+//   https://onnx.ai/onnx/operators/onnx__Resize.html
+//
+// Mental model:
+//
+//     output pixel  --CTM-->  input coordinate  --mode-->  output value
+//
+//   * coordinate_transformation_mode (CTM) answers WHERE to look: given an
+//     output index, what (fractional) input coordinate does it map to?
+//     -> resizeSourceCoord().
+//   * mode answers HOW to compute the value once there:
+//       nearest -> copy the 1 closest sample
+//       linear  -> blend the 2 surrounding samples  (2x2 in 2D)
+//       cubic   -> smooth curve over 4 samples       (4x4 in 2D)
+//     -> resizeNearestIndex() / (linear inline) / resizeCubicWeight().
+//
+// Resize is separable: we resample one axis at a time (1-D interpolation along
+// that axis, repeated), which composes into bilinear / bicubic for images.
+//===----------------------------------------------------------------------===//
+
+// CTM ("where to look"): maps an output index x back to the (fractional) input
+// coordinate per the ONNX coordinate_transformation_mode. The variants differ
+// only in how they align the two grids:
+//   asymmetric          - samples at integer coords, no half-pixel shift:
+//                         src = x / scale.
+//   half_pixel          - samples are cell centers (coord = idx + 0.5); the
+//                         standard, keeps the image centered when scaling.
+//   pytorch_half_pixel  - half_pixel, but maps to 0 when outLen == 1.
+//   align_corners       - pins the first/last output onto the first/last input
+//                         exactly (corners line up).
+//   half_pixel_symmetric- half_pixel with a centering correction when
+//                         scale*inLen != outLen.
+// tf_crop_and_resize is intentionally unsupported (gated out).
+double resizeSourceCoord(
+    int64_t x, double scale, int64_t inLen, int64_t outLen, StringRef ctm) {
+  if (ctm == "asymmetric")
+    return static_cast<double>(x) / scale;
+  if (ctm == "align_corners")
+    return outLen == 1 ? 0.0
+                       : static_cast<double>(x) * (inLen - 1) / (outLen - 1);
+  if (ctm == "pytorch_half_pixel")
+    return outLen > 1 ? (x + 0.5) / scale - 0.5 : 0.0;
+  if (ctm == "half_pixel_symmetric") {
+    double adjustment = static_cast<double>(outLen) / (scale * inLen);
+    double center = inLen / 2.0;
+    double offset = center * (1.0 - adjustment);
+    return offset + (x + 0.5) / scale - 0.5;
+  }
+  // "half_pixel" (default).
+  return (x + 0.5) / scale - 0.5;
+}
+
+// mode=nearest ("how", part 1): once CTM has given the fractional source
+// coordinate, snap it to a single integer input index and copy that sample
+// (weight 1.0 - nearest computes no new value). nearest_mode only decides the
+// tie-break / rounding direction when the coordinate falls between two samples.
+int64_t resizeNearestIndex(double src, StringRef nearestMode) {
+  if (nearestMode == "floor")
+    return static_cast<int64_t>(std::floor(src));
+  if (nearestMode == "ceil")
+    return static_cast<int64_t>(std::ceil(src));
+  if (nearestMode == "round_prefer_ceil")
+    return static_cast<int64_t>(std::floor(src + 0.5));
+  // "round_prefer_floor" (default).
+  return static_cast<int64_t>(std::ceil(src - 0.5));
+}
+
+// mode=cubic ("how", part 2): returns the weight for ONE input sample given
+// `distance` = signed distance from the (fractional) source coordinate to that
+// sample (the body uses dist = |distance| and cubC = cubicCoeffA to match the
+// standard cubic-convolution formula).
+//
+// Bigger picture: for an output that lands at source coord `src`, cubic uses
+// the 4 nearest input samples at indices floor(src)-1 .. floor(src)+2. This
+// helper is called once per sample to get its weight; resizeBuildAxisTaps then
+// records the 4 {index, weight} taps and the value is sum(weight_i * sample_i)
+// (weights are renormalized to sum to 1 so a flat input is preserved).
+//
+// The kernel is a piecewise cubic in |x| (the two branches below), so the
+// weight depends only on distance, and larger distance => smaller weight. The
+// 4 samples always fall into two distance bands. With `frac = src - floor(src)`
+// (so frac is in [0,1)):
+//
+//   sample:    P0        P1      [src]   P2        P3
+//   distance:  1+frac     frac  .        1-frac    2-frac    <- |x|, from src
+//   band:      (1,2)      [0,1]          [0,1]     (1,2)
+//   -> weight: small/-ve  large          large     small/-ve <- kernel(|x|)
+//              (far)       (near)         (near)    (far)
+//
+// So P0 and P3 have the LARGEST distances (1+frac and 2-frac, both in (1,2)),
+// which is exactly why their WEIGHTS come out small/negative: distance and
+// weight are inverse.
+//
+//   * |x| <= 1  -> first branch, the two NEAR samples (P1, P2): weight peaks
+//                  at x=0 and tapers to 0 by |x|=1.
+//   * 1<|x|<2   -> second branch, the two FAR samples (P0, P3): small and,
+//                  for the usual a=-0.75, negative. Those negative lobes let
+//                  cubic sharpen edges and slightly overshoot, unlike linear.
+//   * |x| >= 2  -> 0 (sample too far to contribute).
+//
+// cubicCoeffA is ONNX cubic_coeff_a (default -0.75) and sets how pronounced
+// those lobes are. (linear needs no such helper: its 2 weights are just
+// 1-frac and frac, computed inline in resizeBuildAxisTaps.)
+double resizeCubicWeight(double distance, double cubicCoeffA) {
+  double absDistance = std::abs(distance);
+  if (absDistance <= 1.0)
+    return ((cubicCoeffA + 2.0) * absDistance - (cubicCoeffA + 3.0)) *
+               absDistance * absDistance +
+           1.0;
+  if (absDistance < 2.0)
+    return (((absDistance - 5.0) * absDistance + 8.0) * absDistance - 4.0) *
+           cubicCoeffA;
+  return 0.0;
+}
+
+struct ResizeTap {
+  int64_t index;
+  double weight;
+};
+
+// Precomputes, for a single spatial axis, how every output position is built
+// from the input samples along that axis. A "tap" is one {input index, weight}
+// contribution; interpolating an output position is just the weighted sum of
+// its taps over the input:  out[o] = sum_t weight_t * in[index_t].
+//
+// Called once per resampled axis (the separable resize loop in ConstPropResize
+// invokes it for each axis whose length changes), then resizeAlongAxis applies
+// the returned taps along that axis.
+//
+// The weight is the fractional contribution of that input sample to the output
+// value - i.e. the interpolation kernel evaluated at the distance between the
+// output's (fractional) source coordinate and that input sample. It is a pure
+// geometric coefficient (independent of the data): larger weight = the sample
+// is closer / more influential. For a well-formed position the weights sum to
+// 1.0, so a flat input is reproduced exactly (a region of constant value stays
+// that value). Examples:
+//   nearest -> the single tap has weight 1.0 (copy the closest sample).
+//   linear  -> two taps with weights (1 - frac) and frac, where frac is how far
+//              the source coord sits between the two neighbors (e.g. exactly
+//              halfway -> 0.5 / 0.5, a plain average).
+//   cubic   -> four taps whose weights come from the cubic kernel; the nearer
+//              two are positive and the outer two are typically small/negative.
+//
+// Return value: taps[o] is the list of taps for output position o, so the
+// result has one inner list per output position (outer size == outLen). The
+// number of taps per position depends only on the mode:
+//   nearest -> 1 tap   (the single closest sample, weight 1.0)
+//   linear  -> 2 taps  (the two neighbors bracketing the source coord)
+//   cubic   -> 4 taps  (the cubic kernel's 4-sample support)
+//
+// Mental model: we walk the OUTPUT positions and, for each, ask "where does
+// this land in the INPUT?" (its fractional "source coordinate"), then gather
+// the nearby input samples as taps. coordinate_transformation_mode is simply
+// the formula for that output -> input mapping; mode is how we blend around it.
+//
+// Example 1 - asymmetric, nearest. inLen=4, outLen=2,
+// scale=0.5 (downsample by 2). "asymmetric" puts input samples at integer
+// coordinates and maps  src = out_index / scale, with no half-pixel shift:
+//
+//   input idx:      0     1     2     3      (values, say:  a  b  c  d)
+//   input coord:    0     1     2     3
+//                   |     |     |     |
+//   out[0] src=0    •                        nearest -> idx 0    taps: {0, 1.0}
+//   out[1] src=2                •            nearest -> idx 2    taps: {2, 1.0}
+//
+//   returns: [ [{0,1.0}], [{2,1.0}] ]        -> output = [a, c]
+//
+// Example 2 - linear, half_pixel. Same sizes/scale, but "half_pixel" treats
+// samples as cell centers (coord = idx + 0.5) and maps
+// src = (out_index + 0.5) / scale - 0.5, so an output can land *between* two
+// input samples and we take 2 taps that blend them:
+//
+//   input idx:      0     1     2     3
+//   input coord:   0.5   1.5   2.5   3.5
+//                   |     |     |     |
+//   out[0] src=0.5  •-----'                 taps: {0, 0.5}, {1, 0.5}
+//   out[1] src=2.5              •-----'      taps: {2, 0.5}, {3, 0.5}
+//
+//   returns: [ [{0,0.5},{1,0.5}],           <- taps for out[0]
+//              [{2,0.5},{3,0.5}] ]           <- taps for out[1]
+//
+// Out-of-range indices (near the borders) are clamped into [0, inLen-1]; with
+// excludeOutside those outside taps get zero weight and the remaining weights
+// are renormalized so each output position's weights still sum to 1.
+SmallVector<SmallVector<ResizeTap>> resizeBuildAxisTaps(int64_t inLen,
+    int64_t outLen, double scale, StringRef mode, StringRef ctm,
+    StringRef nearestMode, double cubicA, bool excludeOutside) {
+  SmallVector<SmallVector<ResizeTap>> taps(outLen);
+  for (int64_t outIdx = 0; outIdx < outLen; ++outIdx) {
+    double src = resizeSourceCoord(outIdx, scale, inLen, outLen, ctm);
+    SmallVector<ResizeTap> &posTaps = taps[outIdx];
+
+    // Records one interpolation tap (input sample `idx` contributing `weight`)
+    // and accumulates `weightSum` for later normalization. Handles the border:
+    // an out-of-range sample either contributes nothing (exclude_outside) or is
+    // pulled to the nearest edge pixel (clamp).
+    double weightSum = 0.0;
+    auto addTap = [&](int64_t idx, double weight) {
+      if (idx < 0 || idx >= inLen) {
+        if (excludeOutside)
+          weight = 0.0;
+        idx = std::clamp<int64_t>(idx, 0, inLen - 1);
+      }
+      posTaps.push_back({idx, weight});
+      weightSum += weight;
+    };
+
+    // An interpolated value is a weighted average, so the tap weights must add
+    // up to 1. Near a border some taps get dropped (exclude_outside) or merged
+    // by clamping, which can make the total drift from 1; dividing every weight
+    // by the actual total restores that. Without it, e.g. an all-5.0 input
+    // region could resize to something other than 5.0.
+    auto normalizeTaps = [&]() {
+      if (weightSum != 0.0)
+        llvm::for_each(
+            posTaps, [&](ResizeTap &tap) { tap.weight /= weightSum; });
+    };
+
+    if (mode == "nearest") {
+      // Pick the single closest sample; weight 1.0, nothing to normalize.
+      int64_t idx = std::clamp<int64_t>(
+          resizeNearestIndex(src, nearestMode), 0, inLen - 1);
+      posTaps.push_back({idx, 1.0});
+    } else if (mode == "linear") {
+      // Blend the two samples bracketing src: leftIdx and leftIdx+1 (right).
+      // `frac` in [0,1) is how far src lies past leftIdx, so the right sample
+      // gets weight `frac` and the left gets the rest.
+      auto leftIdx = static_cast<int64_t>(std::floor(src));
+      double frac = src - leftIdx;
+      addTap(leftIdx, 1.0 - frac);
+      addTap(leftIdx + 1, frac);
+      // Interior linear taps already sum to 1; only exclude_outside (which can
+      // zero a tap) requires renormalizing.
+      if (excludeOutside)
+        normalizeTaps();
+    } else { // "cubic"
+      // Blend the 4 samples baseIdx-1 .. baseIdx+2 with the cubic kernel
+      // evaluated at each sample's distance from src.
+      auto baseIdx = static_cast<int64_t>(std::floor(src));
+      double frac = src - baseIdx;
+      for (int k = -1; k <= 2; ++k)
+        addTap(baseIdx + k, resizeCubicWeight(frac - k, cubicA));
+      normalizeTaps();
+    }
+  }
+  return taps;
+}
+
+// Resamples one axis of a row-major flat buffer using precomputed 1-D taps.
+//
+// The trick is to view the N-D row-major tensor as just three grouped ranges,
+// [outerLen, axisLen, innerLen], where:
+//   outerLen = product of the dims BEFORE `axis`  (slices that repeat the pass)
+//   innerLen = product of the dims AFTER  `axis`   (contiguous block per elem)
+// Only the middle range changes length (inAxisLen -> outAxisLen)
+// This makes the resample axis-agnostic: the same code handles H, W, or any
+// other axis.
+//
+//   in  [outerLen][ inAxisLen][innerLen]
+//                --taps-->
+//   out [outerLen][outAxisLen][innerLen]
+//
+// Each output element is the tap-weighted sum of input samples along the axis
+SmallVector<double> resizeAlongAxis(ArrayRef<double> in,
+    ArrayRef<int64_t> inShape, int64_t axis, int64_t outAxisLen,
+    ArrayRef<SmallVector<ResizeTap>> taps) {
+  int64_t inAxisLen = inShape[axis];
+  // outerLen/innerLen are the products of the dims before/after `axis`.
+  auto product = [](ArrayRef<int64_t> dims) {
+    return std::accumulate(
+        dims.begin(), dims.end(), int64_t{1}, std::multiplies<int64_t>());
+  };
+  int64_t outerLen = product(inShape.take_front(axis));
+  // If the axis is innermost dim, the range below is empty and innerLen will
+  // be 1.
+  int64_t innerLen = product(inShape.drop_front(axis + 1));
+
+  // Flat offset of element (outerIdx, axisIdx, innerIdx) in an
+  // [outerLen][axisLen][innerLen] row-major buffer. Input and output share this
+  // layout and differ only in the axis length (inAxisLen vs outAxisLen).
+  auto offset = [&](int64_t outerIdx, int64_t axisIdx, int64_t axisLen,
+                    int64_t innerIdx) {
+    size_t outerStride = static_cast<size_t>(axisLen) * innerLen;
+    size_t axisStride = innerLen;
+    return outerIdx * outerStride + axisIdx * axisStride + innerIdx;
+  };
+
+  SmallVector<double> out(
+      static_cast<size_t>(outerLen) * outAxisLen * innerLen, 0.0);
+  for (int64_t outerIdx : llvm::seq<int64_t>(0, outerLen)) {
+    for (int64_t outAxisIdx : llvm::seq<int64_t>(0, outAxisLen)) {
+      ArrayRef<ResizeTap> positionTaps = taps[outAxisIdx];
+      for (int64_t innerIdx : llvm::seq<int64_t>(0, innerLen)) {
+        out[offset(outerIdx, outAxisIdx, outAxisLen, innerIdx)] =
+            std::accumulate(positionTaps.begin(), positionTaps.end(), 0.0,
+                [&](double acc, const ResizeTap &tap) {
+                  return acc + tap.weight * in[offset(outerIdx, tap.index,
+                                                inAxisLen, innerIdx)];
+                });
+      }
+    }
+  }
+  return out;
+}
+
+bool isResizeConstPropagatable(Operation *op) {
+  auto resizeOp = cast<ONNXResizeOp>(op);
+  auto inType = dyn_cast<RankedTensorType>(resizeOp.getX().getType());
+  auto outType = dyn_cast<RankedTensorType>(resizeOp.getResult().getType());
+  if (!inType || !outType || !inType.hasStaticShape() ||
+      !outType.hasStaticShape())
+    return false;
+  if (inType.getRank() != outType.getRank())
+    return false;
+  // Restrict to float element types
+  if (!isa<FloatType>(inType.getElementType()))
+    return false;
+  // roi is only considered in tf_crop_and_resize mode.
+  // Since tf_crop_and_resize mode is not supported,
+  // roi is not supported.
+  if (!isa<NoneType>(resizeOp.getRoi().getType()))
+    return false;
+  if (resizeOp.getAxesAttr())
+    return false;
+  if (resizeOp.getAntialias() != 0)
+    return false;
+  static constexpr StringRef kSupportedModes[] = {"nearest", "linear", "cubic"};
+  if (!llvm::is_contained(kSupportedModes, resizeOp.getMode()))
+    return false;
+  static constexpr StringRef kSupportedCTMs[] = {"half_pixel",
+      "half_pixel_symmetric", "pytorch_half_pixel", "align_corners",
+      "asymmetric"};
+  return llvm::is_contained(
+      kSupportedCTMs, resizeOp.getCoordinateTransformationMode());
+}
+
+Value ConstPropResize(
+    PatternRewriter &rewriter, Value replacingValue, Value dataValue) {
+  auto resizeOp = cast<ONNXResizeOp>(replacingValue.getDefiningOp());
+  auto inType = cast<RankedTensorType>(dataValue.getType());
+  auto outType = cast<ShapedType>(replacingValue.getType());
+  ArrayRef<int64_t> inShape = inType.getShape();
+  ArrayRef<int64_t> outShape = outType.getShape();
+  int64_t rank = inType.getRank();
+
+  StringRef mode = resizeOp.getMode();
+  StringRef ctm = resizeOp.getCoordinateTransformationMode();
+  StringRef nearestMode = resizeOp.getNearestMode();
+  double cubicA = resizeOp.getCubicCoeffAAttr().getValueAsDouble();
+  bool excludeOutside = resizeOp.getExcludeOutside() != 0;
+
+  // Per-axis scale: prefer explicit 'scales' when present, else derive from
+  // the output/input shapes (the 'sizes' path).
+  SmallVector<double> scales = llvm::to_vector(
+      llvm::map_range(llvm::zip_equal(outShape, inShape), [](const auto &dims) {
+        return static_cast<double>(std::get<0>(dims)) / std::get<1>(dims);
+      }));
+  Value scalesVal = resizeOp.getScales();
+  if (!isa<NoneType>(scalesVal.getType())) {
+    ArrayBuffer<WideNum> scalesBuf =
+        getElementsWideNums(getConstValueElements(scalesVal));
+    ArrayRef<WideNum> s = scalesBuf.get();
+    if (static_cast<int64_t>(s.size()) == rank)
+      scales = llvm::to_vector(
+          llvm::map_range(s, [](WideNum num) { return num.dbl; }));
+  }
+
+  // Read the constant data as doubles.
+  ArrayBuffer<WideNum> dataBuf =
+      getElementsWideNums(getConstValueElements(dataValue));
+  SmallVector<double> buffer = llvm::to_vector(
+      llvm::map_range(dataBuf.get(), [](WideNum num) { return num.dbl; }));
+
+  // Separable resize: an N-D interpolation is done as independent 1-D passes,
+  // one axis at a time, each consuming the previous pass's output. E.g. 2-D
+  // bilinear = interpolate along X, then interpolate along Y of that result:
+  //   10 20      x@0.25   12.5     y@0.25
+  //   30 40   ---------->  32.5  ---------->  17.5
+  // The per-axis weights are independent (they only depend on that axis's
+  // in/out length); the data flows through the axes sequentially. `curShape`
+  // tracks the running shape so each pass strides over the intermediate buffer.
+  SmallVector<int64_t> curShape(inShape.begin(), inShape.end());
+  for (int64_t axis = 0; axis < rank; ++axis) {
+    if (scales[axis] == 1.0)
+      continue;
+    SmallVector<SmallVector<ResizeTap>> taps =
+        resizeBuildAxisTaps(curShape[axis], outShape[axis], scales[axis], mode,
+            ctm, nearestMode, cubicA, excludeOutside);
+    buffer = resizeAlongAxis(buffer, curShape, axis, outShape[axis], taps);
+    curShape[axis] = outShape[axis];
+  }
+
+  OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
+  ElementsAttr resultElements =
+      elementsBuilder.fromWideNums(outType, [&](MutableArrayRef<WideNum> dst) {
+        for (size_t i = 0; i < dst.size(); ++i)
+          dst[i] = WideNum::widen<BType::DOUBLE>(buffer[i]);
+      });
+  return createReplacingConstantOp(rewriter, replacingValue, resultElements);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1311,19 +1783,18 @@ class SplitOfConst : public OpRewritePattern<ONNXSplitOp> {
 public:
   using OpRewritePattern<ONNXSplitOp>::OpRewritePattern;
 
-  LogicalResult match(ONNXSplitOp splitOp) const override {
+  LogicalResult matchAndRewrite(
+      ONNXSplitOp splitOp, PatternRewriter &rewriter) const override {
     if (!isDenseONNXConstant(splitOp.getInput()))
       return failure();
     Value split = splitOp.getSplit();
     if (!(isa<NoneType>(split.getType()) || isDenseONNXConstant(split)))
       return failure();
-    return success();
-  }
 
-  void rewrite(ONNXSplitOp splitOp, PatternRewriter &rewriter) const override {
     rewriter.replaceOp(splitOp,
         ConstPropSplit(rewriter, splitOp.getResults(), splitOp.getInput(),
             splitOp.getSplit(), splitOp.getAxis()));
+    return success();
   }
 };
 
@@ -1338,14 +1809,16 @@ public:
 //
 // Match conditions:
 //   • NoneType condition input (always run for exactly M trips)
-//   • Constant dense trip-count M in (0, kMaxUnrollCount]
+//   • Constant dense trip-count M in (0, maxLoopUnrollCount]
 //===----------------------------------------------------------------------===//
 
 class LoopUnroll : public OpRewritePattern<ONNXLoopOp> {
-  static constexpr int64_t kMaxUnrollCount = 64;
+  int64_t maxLoopUnrollCount;
 
 public:
-  using OpRewritePattern<ONNXLoopOp>::OpRewritePattern;
+  LoopUnroll(MLIRContext *context, int64_t maxLoopUnrollCount)
+      : OpRewritePattern<ONNXLoopOp>(context),
+        maxLoopUnrollCount(maxLoopUnrollCount) {}
 
   LogicalResult matchAndRewrite(
       ONNXLoopOp loopOp, PatternRewriter &rewriter) const override {
@@ -1357,9 +1830,9 @@ public:
           loopOp, "trip count must be a constant i64 scalar");
     int64_t M = mVals[0];
 
-    if (M < 0 || M > kMaxUnrollCount)
+    if (M < 0 || M > maxLoopUnrollCount)
       return rewriter.notifyMatchFailure(
-          loopOp, "M is out of the unrollable range (0, kMaxUnrollCount]");
+          loopOp, "M is out of the configured unrollable range");
 
     MLIRContext *ctx = rewriter.getContext();
     Location loc = loopOp.getLoc();
@@ -1541,13 +2014,11 @@ class IfOfConst : public OpRewritePattern<ONNXIfOp> {
 public:
   using OpRewritePattern<ONNXIfOp>::OpRewritePattern;
 
-  LogicalResult match(ONNXIfOp ifOp) const override {
+  LogicalResult matchAndRewrite(
+      ONNXIfOp ifOp, PatternRewriter &rewriter) const override {
     if (!isDenseONNXConstant(ifOp.getCond()))
       return failure();
-    return success();
-  }
 
-  void rewrite(ONNXIfOp ifOp, PatternRewriter &rewriter) const override {
     Value cond = ifOp.getCond();
     ElementsAttr condElements = getConstValueElements(cond);
     auto splitValues = condElements.getValues<bool>();
@@ -1570,6 +2041,7 @@ public:
     rewriter.eraseOp(yieldOp);
     rewriter.inlineBlockBefore(newBlock, ifOp);
     rewriter.replaceOp(ifOp, outputs);
+    return success();
   }
 };
 
@@ -1691,6 +2163,286 @@ public:
   }
 };
 
+// Fold Const(fp) -> QuantizeLinear into Const(int)
+class ConstFoldQuantizeLinearOnConst
+    : public OpRewritePattern<ONNXQuantizeLinearOp> {
+public:
+  using OpRewritePattern<ONNXQuantizeLinearOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXQuantizeLinearOp qOp, PatternRewriter &rewriter) const override {
+    // Blocked quantization is out of scope.
+    if (qOp.getBlockSize() != 0)
+      return rewriter.notifyMatchFailure(qOp, "blocked quantization");
+
+    // The input and quantization parameters must all be constants.
+    ElementsAttr xElems = getDenseOrDisposableConstLikeElements(qOp.getX());
+    if (!xElems)
+      return rewriter.notifyMatchFailure(qOp, "x is not a constant");
+    if (!isa<FloatType>(xElems.getElementType()))
+      return rewriter.notifyMatchFailure(qOp, "x is not floating point");
+
+    ElementsAttr scaleElems =
+        getDenseOrDisposableConstLikeElements(qOp.getYScale());
+    if (!scaleElems)
+      return rewriter.notifyMatchFailure(qOp, "y_scale is not a constant");
+
+    Value zpValue = qOp.getYZeroPoint();
+    bool hasZeroPoint = !isNoneValue(zpValue);
+    ElementsAttr zpElems;
+    if (hasZeroPoint) {
+      zpElems = getDenseOrDisposableConstLikeElements(zpValue);
+      if (!zpElems)
+        return rewriter.notifyMatchFailure(
+            qOp, "y_zero_point is not a constant");
+    }
+
+    auto intType = dyn_cast<IntegerType>(getElementTypeOrSelf(qOp.getY()));
+    if (!intType)
+      return rewriter.notifyMatchFailure(qOp, "non-integer output type");
+
+    auto xType = cast<ShapedType>(qOp.getX().getType());
+    if (!xType.hasStaticShape())
+      return rewriter.notifyMatchFailure(qOp, "x has dynamic shape");
+    int64_t xRank = xType.getRank();
+    ArrayRef<int64_t> xShape = xType.getShape();
+
+    int64_t scaleElemCount =
+        cast<ShapedType>(scaleElems.getType()).getNumElements();
+    int64_t zpElemCount =
+        hasZeroPoint ? cast<ShapedType>(zpElems.getType()).getNumElements() : 1;
+    bool isPerAxis = scaleElemCount > 1 || zpElemCount > 1;
+
+    int64_t axis = qOp.getAxis();
+    if (isPerAxis) {
+      if (axis < 0)
+        axis += xRank;
+      if (axis < 0 || axis >= xRank)
+        return rewriter.notifyMatchFailure(qOp, "axis out of range");
+
+      auto isFoldablePerAxisParam = [&](ElementsAttr elems,
+                                        int64_t count) -> bool {
+        if (count == 1)
+          return true; // Scalar broadcasts trivially.
+        auto type = cast<ShapedType>(elems.getType());
+        return type.getRank() == 1 && count == xShape[axis];
+      };
+      if (!isFoldablePerAxisParam(scaleElems, scaleElemCount) ||
+          (hasZeroPoint && !isFoldablePerAxisParam(zpElems, zpElemCount)))
+        return rewriter.notifyMatchFailure(
+            qOp, "unsupported per-axis scale/zp");
+    }
+
+    FloatType f64Type = rewriter.getF64Type();
+    OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
+
+    // Reshape a per-axis scale/zp (1-D of length xShape[axis]) so it
+    // broadcasts against x's shape; per-tensor (scalar) needs no reshape.
+    auto broadcastToX = [&](ElementsAttr elems) -> ElementsAttr {
+      auto type = cast<ShapedType>(elems.getType());
+      int64_t numElems = type.getNumElements();
+      if (numElems == 1)
+        return elems; // Per-tensor: scalar broadcasts trivially.
+      SmallVector<int64_t> bcastShape(xRank, 1);
+      bcastShape[axis] = numElems;
+      return elementsBuilder.reshape(elems, bcastShape);
+    };
+
+    ShapedType combinedType = cast<ShapedType>(
+        elementsBuilder.castToFPElementType(xElems, f64Type).getType());
+
+    // scaled = x / scale (both in f64).
+    ElementsAttr xF64 = elementsBuilder.castToFPElementType(xElems, f64Type);
+    ElementsAttr scaleF64 =
+        broadcastToX(elementsBuilder.castToFPElementType(scaleElems, f64Type));
+    ElementsAttr scaled = elementsBuilder.combine(xF64, scaleF64, combinedType,
+        elementwiseBinaryOpCombiner<ONNXDivOp>(f64Type));
+
+    // shifted = (x / scale) + zero_point
+    ElementsAttr shifted = scaled;
+    if (hasZeroPoint) {
+      ElementsAttr zpF64 =
+          broadcastToX(elementsBuilder.castToFPElementType(zpElems, f64Type));
+      shifted = elementsBuilder.combine(
+          scaled, zpF64, combinedType, addCombiner(f64Type));
+    }
+
+    ElementsAttr rounded =
+        elementsBuilder.transform(shifted, f64Type, [](WideNum n) {
+          int savedMode = fegetround();
+          fesetround(FE_TONEAREST);
+          double r = std::nearbyint(n.narrow<BType::DOUBLE>());
+          fesetround(savedMode);
+          return WideNum::widen<BType::DOUBLE>(r);
+        });
+
+    ElementsAttr quantized =
+        elementsBuilder.castToIntElementType(rounded, intType, /*round=*/false);
+
+    rewriter.replaceOp(
+        qOp, createReplacingConstantOp(rewriter, qOp.getY(), quantized));
+    return success();
+  }
+};
+
+// True if `v` is a constant, or a DequantizeLinear of a constant.
+static bool isConstantOrDequantizeOfConstant(Value v) {
+  if (getDenseOrDisposableConstLikeElements(v))
+    return true;
+  auto dq = v.getDefiningOp<ONNXDequantizeLinearOp>();
+  if (!dq)
+    return false;
+  if (!getDenseOrDisposableConstLikeElements(dq.getX()) ||
+      !getDenseOrDisposableConstLikeElements(dq.getXScale()))
+    return false;
+  Value zp = dq.getXZeroPoint();
+  return isNoneValue(zp) || getDenseOrDisposableConstLikeElements(zp);
+}
+
+// True if `value` is only consumed by constant computation ending at a
+// QuantizeLinear or graph output -- never by an op with a non-constant operand.
+// This keeps the fold off ordinary quantized weights (whose consumer mixes in a
+// non-constant activation).
+static bool onlyFeedsConstantIsland(Value value) {
+  for (Operation *user : value.getUsers()) {
+    if (isa<ONNXQuantizeLinearOp>(user))
+      continue;
+    if (user->hasTrait<OpTrait::IsTerminator>())
+      continue;
+    for (Value operand : user->getOperands()) {
+      if (operand == value || isNoneValue(operand))
+        continue;
+      if (!isConstantOrDequantizeOfConstant(operand))
+        return false;
+    }
+    for (Value result : user->getResults())
+      if (!onlyFeedsConstantIsland(result))
+        return false;
+  }
+  return true;
+}
+
+// Fold DequantizeLinear on constants to `(x - x_zero_point) * x_scale`, the
+// inverse of ConstFoldQuantizeLinearOnConst (same enableQuantConstFold gate).
+// Per-tensor and per-axis are handled; blocked quantization is out of scope.
+// Confined to constant islands (onlyFeedsConstantIsland) so quantized weights
+// are not dequantized.
+class ConstFoldDequantizeLinearOnConst
+    : public OpRewritePattern<ONNXDequantizeLinearOp> {
+public:
+  using OpRewritePattern<ONNXDequantizeLinearOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXDequantizeLinearOp dqOp, PatternRewriter &rewriter) const override {
+    // Blocked quantization is out of scope.
+    if (dqOp.getBlockSize() != 0)
+      return rewriter.notifyMatchFailure(dqOp, "blocked quantization");
+
+    // The input and quantization parameters must all be constants.
+    ElementsAttr xElems = getDenseOrDisposableConstLikeElements(dqOp.getX());
+    if (!xElems)
+      return rewriter.notifyMatchFailure(dqOp, "x is not a constant");
+
+    ElementsAttr scaleElems =
+        getDenseOrDisposableConstLikeElements(dqOp.getXScale());
+    if (!scaleElems)
+      return rewriter.notifyMatchFailure(dqOp, "x_scale is not a constant");
+
+    Value zpValue = dqOp.getXZeroPoint();
+    bool hasZeroPoint = !isNoneValue(zpValue);
+    ElementsAttr zpElems;
+    if (hasZeroPoint) {
+      zpElems = getDenseOrDisposableConstLikeElements(zpValue);
+      if (!zpElems)
+        return rewriter.notifyMatchFailure(
+            dqOp, "x_zero_point is not a constant");
+    }
+
+    auto floatType = dyn_cast<FloatType>(getElementTypeOrSelf(dqOp.getY()));
+    if (!floatType)
+      return rewriter.notifyMatchFailure(dqOp, "non-floating-point output");
+
+    // Only fold inside a constant island, not ordinary quantized weights.
+    if (!onlyFeedsConstantIsland(dqOp.getY()))
+      return rewriter.notifyMatchFailure(
+          dqOp, "not confined to a constant island");
+
+    auto xType = cast<ShapedType>(dqOp.getX().getType());
+    if (!xType.hasStaticShape())
+      return rewriter.notifyMatchFailure(dqOp, "x has dynamic shape");
+    int64_t xRank = xType.getRank();
+    ArrayRef<int64_t> xShape = xType.getShape();
+
+    int64_t scaleElemCount =
+        cast<ShapedType>(scaleElems.getType()).getNumElements();
+    int64_t zpElemCount =
+        hasZeroPoint ? cast<ShapedType>(zpElems.getType()).getNumElements() : 1;
+    bool isPerAxis = scaleElemCount > 1 || zpElemCount > 1;
+
+    int64_t axis = dqOp.getAxis();
+    if (isPerAxis) {
+      if (axis < 0)
+        axis += xRank;
+      if (axis < 0 || axis >= xRank)
+        return rewriter.notifyMatchFailure(dqOp, "axis out of range");
+
+      auto isFoldablePerAxisParam = [&](ElementsAttr elems,
+                                        int64_t count) -> bool {
+        if (count == 1)
+          return true; // Scalar broadcasts trivially.
+        auto type = cast<ShapedType>(elems.getType());
+        return type.getRank() == 1 && count == xShape[axis];
+      };
+      if (!isFoldablePerAxisParam(scaleElems, scaleElemCount) ||
+          (hasZeroPoint && !isFoldablePerAxisParam(zpElems, zpElemCount)))
+        return rewriter.notifyMatchFailure(
+            dqOp, "unsupported per-axis scale/zp");
+    }
+
+    FloatType f64Type = rewriter.getF64Type();
+    OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
+
+    // Reshape a per-axis scale/zp (1-D of length xShape[axis]) so it
+    // broadcasts against x's shape; per-tensor (scalar) needs no reshape.
+    auto broadcastToX = [&](ElementsAttr elems) -> ElementsAttr {
+      auto type = cast<ShapedType>(elems.getType());
+      int64_t numElems = type.getNumElements();
+      if (numElems == 1)
+        return elems; // Per-tensor: scalar broadcasts trivially.
+      SmallVector<int64_t> bcastShape(xRank, 1);
+      bcastShape[axis] = numElems;
+      return elementsBuilder.reshape(elems, bcastShape);
+    };
+
+    ShapedType combinedType = cast<ShapedType>(
+        elementsBuilder.castToFPElementType(xElems, f64Type).getType());
+
+    // shifted = x - zero_point (both in f64).
+    ElementsAttr xF64 = elementsBuilder.castToFPElementType(xElems, f64Type);
+    ElementsAttr shifted = xF64;
+    if (hasZeroPoint) {
+      ElementsAttr zpF64 =
+          broadcastToX(elementsBuilder.castToFPElementType(zpElems, f64Type));
+      shifted = elementsBuilder.combine(
+          xF64, zpF64, combinedType, subCombiner(f64Type));
+    }
+
+    // dequantized = (x - zero_point) * scale (still in f64).
+    ElementsAttr scaleF64 =
+        broadcastToX(elementsBuilder.castToFPElementType(scaleElems, f64Type));
+    ElementsAttr dequantizedF64 = elementsBuilder.combine(shifted, scaleF64,
+        combinedType, elementwiseBinaryOpCombiner<ONNXMulOp>(f64Type));
+
+    // Cast down to the DequantizeLinear result's floating-point type.
+    ElementsAttr dequantized =
+        elementsBuilder.castToFPElementType(dequantizedF64, floatType);
+
+    rewriter.replaceOp(
+        dqOp, createReplacingConstantOp(rewriter, dqOp.getY(), dequantized));
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Code to manage the pass.
 //===----------------------------------------------------------------------===//
@@ -1701,7 +2453,19 @@ struct ConstPropONNXToONNXPass
 
   Option<bool> enableQDQ{*this, "enable-qdq", llvm::cl::init(true)};
 
-  ConstPropONNXToONNXPass(bool enableQDQ) { this->enableQDQ = enableQDQ; }
+  Option<bool> enableQuantConstFold{
+      *this, "enable-quant-const-fold", llvm::cl::init(false)};
+
+  Option<int64_t> maxLoopUnrollCount{*this, "max-loop-unroll-count",
+      llvm::cl::desc("Maximum constant onnx.Loop trip count to unroll."),
+      llvm::cl::init(64)};
+
+  ConstPropONNXToONNXPass(
+      bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount) {
+    this->enableQDQ = enableQDQ;
+    this->enableQuantConstFold = enableQuantConstFold;
+    this->maxLoopUnrollCount = maxLoopUnrollCount;
+  }
 
   ConstPropONNXToONNXPass(const ConstPropONNXToONNXPass &other) {
     copyOptionValuesFrom(&other);
@@ -1721,30 +2485,35 @@ void ConstPropONNXToONNXPass::runOnOperation() {
   MLIRContext *context = &getContext();
 
   RewritePatternSet patterns(context);
-  getConstPropONNXToONNXPatterns(patterns, enableQDQ);
+  getConstPropONNXToONNXPatterns(
+      patterns, enableQDQ, enableQuantConstFold, maxLoopUnrollCount);
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
-          GreedyRewriteConfig{.listener = &rnUpdater})))
+          GreedyRewriteConfig().setListener(&rnUpdater))))
     signalPassFailure();
 }
 
 } // end anonymous namespace.
 
-void onnx_mlir::getConstPropONNXToONNXPatterns(
-    RewritePatternSet &patterns, bool enableQDQ) {
+void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
+    bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount) {
   if (isConstantPropagationDisabled())
     return;
   populateWithGenerated(patterns);
   if (isNotDisabled("SplitOfConst"))
     patterns.insert<SplitOfConst>(patterns.getContext());
   patterns.insert<IfOfConst>(patterns.getContext());
-  patterns.insert<LoopUnroll>(patterns.getContext());
+  patterns.insert<LoopUnroll>(patterns.getContext(), maxLoopUnrollCount);
   patterns.insert<ConstPropConcatFromSequence>(patterns.getContext());
   if (enableQDQ)
     patterns.add<RemoveQDQForConst<ONNXSliceOp>,
         RemoveQDQForConst<ONNXTransposeOp>, RemoveQDQForConst<ONNXReshapeOp>,
         RemoveQDQForConst<ONNXSqueezeOp>, RemoveQDQForConst<ONNXUnsqueezeOp>,
         RemoveQDQForConst<ONNXGatherOp>>(patterns.getContext());
+  if (enableQuantConstFold)
+    patterns
+        .add<ConstFoldQuantizeLinearOnConst, ConstFoldDequantizeLinearOnConst>(
+            patterns.getContext());
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,
@@ -1758,10 +2527,15 @@ void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,
       constantPropIsDisabled;
 }
 
+void onnx_mlir::configureConstPropMaxTileFoldSize(int64_t maxTileFoldSize) {
+  ConstPropONNXToONNXPassConfiguration::maxTileFoldSize = maxTileFoldSize;
+}
+
 /*!
  * Create a ConstPropONNX pass.
  */
 std::unique_ptr<mlir::Pass> onnx_mlir::createConstPropONNXToONNXPass(
-    bool enableQDQ) {
-  return std::make_unique<ConstPropONNXToONNXPass>(enableQDQ);
+    bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount) {
+  return std::make_unique<ConstPropONNXToONNXPass>(
+      enableQDQ, enableQuantConstFold, maxLoopUnrollCount);
 }

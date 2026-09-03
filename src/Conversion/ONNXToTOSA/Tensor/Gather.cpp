@@ -4,7 +4,7 @@
 
 //===---------------- Gather.cpp - Gather Op ------------------------------===//
 //
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -16,6 +16,7 @@
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
+#include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Support/TypeUtilities.hpp"
 #include "llvm/ADT/SmallVector.h"
@@ -35,7 +36,7 @@ public:
 
     auto loc = op.getLoc();
 
-    TosaBuilder tosaBuilder(rewriter, loc);
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(rewriter, loc);
 
     Value input = adaptor.getData();
     Value indices = adaptor.getIndices();
@@ -73,37 +74,43 @@ public:
                                             : indicesValInteger + size[axis];
 
       size[axis] = 1;
-      Value sliceOp = tosaBuilder.slice(input, size, starts);
-      auto reshape = tosaBuilder.reshape(sliceOp, resultTy.getShape());
+      Value sliceOp = create.onnx.slice(input, starts, size);
+      auto reshape = create.tosa.reshape(sliceOp, resultTy.getShape());
       rewriter.replaceOp(op, reshape);
       return success();
     }
 
-    SmallVector<int32_t, 4> newIndicesValues;
-    newIndicesValues.resize(indicesType.getNumElements());
-
     ArrayRef<int64_t> inputShape = cast<ShapedType>(inputType).getShape();
 
-    // ONNX allows negative indices and TOSA doesn't.
-    // We will emit ops to compute
-    //   newIndices = indices >= 0 ? indices : indices + dimSize
-    // element-wise.
+    auto indicesElemType = dyn_cast<IntegerType>(indicesType.getElementType());
+    // Unsigned indices cannot be negative and so do not need to be normalized
+    const bool skipNegativeIndexNormalization =
+        indicesElemType && indicesElemType.isUnsigned();
 
-    // Create an 1x..x1 constant containing the size of the gathered dimension.
-    auto dimSize = tosaBuilder.getSplattedConst(
-        inputShape[axis], indicesType.getElementType(), indicesType.getRank());
-    auto indicesPlusDimSize =
-        tosaBuilder.binaryOp<mlir::tosa::AddOp>(indices, dimSize);
+    Value gatherIndices = indices;
+    if (!skipNegativeIndexNormalization) {
+      // ONNX allows negative indices and TOSA doesn't.
+      // We will emit ops to compute
+      //   newIndices = indices >= 0 ? indices : indices + dimSize
+      // element-wise.
 
-    auto zero = tosaBuilder.getSplattedConst(
-        (int64_t)0, indicesType.getElementType(), indicesType.getRank());
-    auto indicesPositive = tosaBuilder.greaterEqual(indices, zero);
+      // Create an 1x..x1 constant containing the size of the gathered
+      // dimension.
+      auto dimSize = create.tosa.getSplattedConst(inputShape[axis],
+          indicesType.getElementType(), indicesType.getRank());
+      auto indicesPlusDimSize =
+          create.tosa.binaryOp<mlir::tosa::AddOp>(indices, dimSize);
 
-    auto newIndices =
-        tosaBuilder.select(indicesPositive, indices, indicesPlusDimSize);
+      auto zero = create.tosa.getSplattedConst(
+          (int64_t)0, indicesType.getElementType(), indicesType.getRank());
+      auto indicesPositive = create.tosa.greaterEqual(indices, zero);
+
+      gatherIndices =
+          create.tosa.select(indicesPositive, indices, indicesPlusDimSize);
+    }
 
     auto newGather =
-        tosaBuilder.gather(result, input, newIndices, 0, (int32_t)axis);
+        create.tosa.gather(result, input, gatherIndices, 0, (int32_t)axis);
 
     if (!newGather.has_value()) {
       return failure();

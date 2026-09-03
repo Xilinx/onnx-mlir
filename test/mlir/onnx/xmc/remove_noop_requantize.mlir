@@ -13,7 +13,7 @@ func.func @noop_requantize_removed(
     %w: tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>,
     %b: none
 ) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>> {
-  %0 = "onnx.XFEConv"(%arg0, %w, %b) {ResultNames = ["conv_out"], activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
+  %0 = "onnx.XFEConv"(%arg0, %w, %b) {ResultNames = ["conv_out"], activation = "NONE", dilations = [1, 1], group = 1 : si64, pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
   %1 = "onnx.XCOMPILERRequantize"(%0) {ResultNames = ["requant_out"], a_scale = [5.000000e-01 : f32], a_zero_point = [0], y_scale = [5.000000e-01 : f32], y_zero_point = [0]} : (tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
   return %1 : tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
 
@@ -36,7 +36,7 @@ func.func @attrs_noop_but_types_differ_kept(
     %w: tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>,
     %b: none
 ) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>> {
-  %0 = "onnx.XFEConv"(%arg0, %w, %b) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.25:0>>
+  %0 = "onnx.XFEConv"(%arg0, %w, %b) {activation = "NONE", dilations = [1, 1], group = 1 : si64, pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.25:0>>
   // Attributes claim a no-op (0.5 == 0.5), but the input type is 0.25 and the
   // output type is 0.5, so the requantize is NOT a no-op.
   %1 = "onnx.XCOMPILERRequantize"(%0) {a_scale = [5.000000e-01 : f32], a_zero_point = [0], y_scale = [5.000000e-01 : f32], y_zero_point = [0]} : (tensor<1x8x8x4x!quant.uniform<i8:f32, 0.25:0>>) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
@@ -57,7 +57,7 @@ func.func @scale_change_kept(
     %w: tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>,
     %b: none
 ) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>> {
-  %0 = "onnx.XFEConv"(%arg0, %w, %b) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.25:0>>
+  %0 = "onnx.XFEConv"(%arg0, %w, %b) {activation = "NONE", dilations = [1, 1], group = 1 : si64, pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.25:0>>
   %1 = "onnx.XCOMPILERRequantize"(%0) {a_scale = [2.500000e-01 : f32], a_zero_point = [0], y_scale = [5.000000e-01 : f32], y_zero_point = [0]} : (tensor<1x8x8x4x!quant.uniform<i8:f32, 0.25:0>>) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
   return %1 : tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
 
@@ -76,7 +76,7 @@ func.func @zp_mismatch_kept(
     %w: tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>,
     %b: none
 ) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:5>> {
-  %0 = "onnx.XFEConv"(%arg0, %w, %b) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
+  %0 = "onnx.XFEConv"(%arg0, %w, %b) {activation = "NONE", dilations = [1, 1], group = 1 : si64, pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
   %1 = "onnx.XCOMPILERRequantize"(%0) {a_scale = [5.000000e-01 : f32], a_zero_point = [0], y_scale = [5.000000e-01 : f32], y_zero_point = [5]} : (tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:5>>
   return %1 : tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:5>>
 
@@ -95,7 +95,7 @@ func.func @dtype_change_kept(
     %w: tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>,
     %b: none
 ) -> tensor<1x8x8x4x!quant.uniform<i16:f32, 0.5:0>> {
-  %0 = "onnx.XFEConv"(%arg0, %w, %b) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
+  %0 = "onnx.XFEConv"(%arg0, %w, %b) {activation = "NONE", dilations = [1, 1], group = 1 : si64, pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
   %1 = "onnx.XCOMPILERRequantize"(%0) {a_scale = [5.000000e-01 : f32], a_zero_point = [0], y_scale = [5.000000e-01 : f32], y_zero_point = [0]} : (tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>) -> tensor<1x8x8x4x!quant.uniform<i16:f32, 0.5:0>>
   return %1 : tensor<1x8x8x4x!quant.uniform<i16:f32, 0.5:0>>
 
@@ -116,9 +116,9 @@ func.func @noop_requantize_into_conv(
     %w1: tensor<8x1x1x4x!quant.uniform<i8:f32, 0.0078125>>,
     %b: none
 ) -> tensor<1x8x8x8x!quant.uniform<i8:f32, 0.5:0>> {
-  %0 = "onnx.XFEConv"(%arg0, %w0, %b) {ResultNames = ["conv0_out"], activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
+  %0 = "onnx.XFEConv"(%arg0, %w0, %b) {ResultNames = ["conv0_out"], activation = "NONE", dilations = [1, 1], group = 1 : si64, pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
   %1 = "onnx.XCOMPILERRequantize"(%0) {ResultNames = ["requant_out"], a_scale = [5.000000e-01 : f32], a_zero_point = [0], y_scale = [5.000000e-01 : f32], y_zero_point = [0]} : (tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
-  %2 = "onnx.XFEConv"(%1, %w1, %b) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>, tensor<8x1x1x4x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x8x!quant.uniform<i8:f32, 0.5:0>>
+  %2 = "onnx.XFEConv"(%1, %w1, %b) {activation = "NONE", dilations = [1, 1], group = 1 : si64, pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>, tensor<8x1x1x4x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x8x!quant.uniform<i8:f32, 0.5:0>>
   return %2 : tensor<1x8x8x8x!quant.uniform<i8:f32, 0.5:0>>
 
   // CHECK: %[[C0:.*]] = "onnx.XFEConv"(%arg0,
@@ -139,7 +139,7 @@ func.func @multi_use_producer_kept(
     %w: tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>,
     %b: none
 ) -> (tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>, tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>) {
-  %0 = "onnx.XFEConv"(%arg0, %w, %b) {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
+  %0 = "onnx.XFEConv"(%arg0, %w, %b) {activation = "NONE", dilations = [1, 1], group = 1 : si64, pads = [0, 0, 0, 0], strides = [1, 1]} : (tensor<1x8x8x16x!quant.uniform<i8:f32, 0.25:0>>, tensor<4x1x1x16x!quant.uniform<i8:f32, 0.0078125>>, none) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
   %1 = "onnx.XCOMPILERRequantize"(%0) {a_scale = [5.000000e-01 : f32], a_zero_point = [0], y_scale = [5.000000e-01 : f32], y_zero_point = [0]} : (tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>) -> tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
   return %1, %0 : tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>, tensor<1x8x8x4x!quant.uniform<i8:f32, 0.5:0>>
 

@@ -75,7 +75,7 @@ func.func @conv_dynamic_spatial(%x: tensor<1x?x?x3xf32>, %w: tensor<64x3x3x3xf32
 
 // Corner: unranked X → hasShapeAndRank returns false → skip all checks
 func.func @conv_unranked_x(%x: tensor<*xf32>, %w: tensor<64x3x3x3xf32>, %b: tensor<64xf32>) -> tensor<*xf32> {
-  %0 = "onnx.XFEConv"(%x, %w, %b) {} : (tensor<*xf32>, tensor<64x3x3x3xf32>, tensor<64xf32>) -> tensor<*xf32>
+  %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1, 1], pads = [0, 0, 0, 0], dilations = [1, 1]} : (tensor<*xf32>, tensor<64x3x3x3xf32>, tensor<64xf32>) -> tensor<*xf32>
   onnx.Return %0 : tensor<*xf32>
 }
 
@@ -83,7 +83,7 @@ func.func @conv_unranked_x(%x: tensor<*xf32>, %w: tensor<64x3x3x3xf32>, %b: tens
 
 // Corner: unranked W → hasShapeAndRank returns false → skip all checks
 func.func @conv_unranked_w(%x: tensor<1x28x28x3xf32>, %w: tensor<*xf32>, %b: tensor<64xf32>) -> tensor<*xf32> {
-  %0 = "onnx.XFEConv"(%x, %w, %b) {} : (tensor<1x28x28x3xf32>, tensor<*xf32>, tensor<64xf32>) -> tensor<*xf32>
+  %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1, 1], pads = [0, 0, 0, 0], dilations = [1, 1]} : (tensor<1x28x28x3xf32>, tensor<*xf32>, tensor<64xf32>) -> tensor<*xf32>
   onnx.Return %0 : tensor<*xf32>
 }
 
@@ -92,6 +92,24 @@ func.func @conv_unranked_w(%x: tensor<1x28x28x3xf32>, %w: tensor<*xf32>, %b: ten
 // Corner: grouped convolution (group > 1)
 func.func @conv_grouped(%x: tensor<1x28x28x32xf32>, %w: tensor<64x3x3x16xf32>, %b: tensor<64xf32>) -> tensor<*xf32> {
   %0 = "onnx.XFEConv"(%x, %w, %b) {group = 2 : si64, strides = [1, 1], pads = [1, 1, 1, 1], dilations = [1, 1]} : (tensor<1x28x28x32xf32>, tensor<64x3x3x16xf32>, tensor<64xf32>) -> tensor<*xf32>
+  onnx.Return %0 : tensor<*xf32>
+}
+
+// -----
+
+// Corner: strides length does not match spatial rank
+func.func @conv_wrong_strides_length(%x: tensor<1x28x28x3xf32>, %w: tensor<64x3x3x3xf32>, %b: tensor<64xf32>) -> tensor<*xf32> {
+  // expected-error@+1 {{strides, dilations, and pads must match the spatial rank}}
+  %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1], pads = [0, 0, 0, 0], dilations = [1, 1]} : (tensor<1x28x28x3xf32>, tensor<64x3x3x3xf32>, tensor<64xf32>) -> tensor<*xf32>
+  onnx.Return %0 : tensor<*xf32>
+}
+
+// -----
+
+// Corner: negative pad value
+func.func @conv_negative_pad(%x: tensor<1x28x28x3xf32>, %w: tensor<64x3x3x3xf32>, %b: tensor<64xf32>) -> tensor<*xf32> {
+  // expected-error@+1 {{pads must be nonnegative}}
+  %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1, 1], pads = [0, 0, 0, -1], dilations = [1, 1]} : (tensor<1x28x28x3xf32>, tensor<64x3x3x3xf32>, tensor<64xf32>) -> tensor<*xf32>
   onnx.Return %0 : tensor<*xf32>
 }
 
@@ -1078,7 +1096,7 @@ func.func @conv3d_peraxis_correct(%x: tensor<1x4x4x4x3x!quant.uniform<i8:f32:4, 
 func.func @conv_unranked_bypass(%x: tensor<*x!quant.uniform<i8:f32:1, {0.1, 0.2}>>,
                                 %w: tensor<4x3x3x3x!quant.uniform<i8:f32, 0.2>>,
                                 %b: tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>> {
-  %0 = "onnx.XFEConv"(%x, %w, %b) {} :
+  %0 = "onnx.XFEConv"(%x, %w, %b) {strides = [1, 1], pads = [0, 0, 0, 0], dilations = [1, 1]} :
     (tensor<*x!quant.uniform<i8:f32:1, {0.1, 0.2}>>,
      tensor<4x3x3x3x!quant.uniform<i8:f32, 0.2>>,
      tensor<4xi32>) -> tensor<*x!quant.uniform<i8:f32, 0.1>>

@@ -358,7 +358,8 @@ public:
     // == Rewrite section == //
     // -> TopK -> Cast -> [Reshape] -dq-> Tile -q->
 
-    auto castOutputType = topK.getIndices().getType().clone(storageType);
+    auto castOutputType =
+        mlir::cast<ShapedType>(topK.getIndices().getType()).clone(storageType);
     Value value = rewriter.create<ONNXCastOp>(
         tileOp.getLoc(), castOutputType, topK.getIndices(), 1, storageType);
     if (inputType.getShape() != castOutputType.getShape()) {
@@ -409,16 +410,16 @@ struct ReplaceQuantizedTileToAddPass
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
-    patterns.add<MoveBroadcastTileForwardPattern>(context);
+    //    patterns.add<MoveBroadcastTileForwardPattern>(context);
     patterns.add<ReplaceQuantizedTileToAddPattern>(context);
     patterns.add<ReplaceIntegerTileToQuantizedTile>(context);
 
     GreedyRewriteConfig config;
-    config.enableRegionSimplification = GreedySimplifyRegionLevel::Disabled;
+    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Disabled);
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
 
-    if (failed(applyPatternsAndFoldGreedily(
+    if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       getOperation().emitError(
           "replace-quantized-tile-to-add: greedy pattern rewrite did not "

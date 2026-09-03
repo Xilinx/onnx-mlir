@@ -98,7 +98,6 @@ struct ReplaceQDQResizeToAddPattern : public OpRewritePattern<XFEResizeOp> {
     auto addOp = rewriter.create<ONNXAddOp>(
         loc, outType, input, zpTensorConst.getResult());
 
-    onnx_mlir::ResultNamesUpdater().notifyOperationReplaced(resizeOp, addOp);
     rewriter.replaceOp(resizeOp, addOp.getResult());
     return success();
   }
@@ -123,11 +122,11 @@ struct ReplaceQDQResizePass
     patterns.add<ReplaceQDQResizeToAddPattern>(context);
 
     GreedyRewriteConfig config;
-    config.enableRegionSimplification = GreedySimplifyRegionLevel::Disabled;
+    config.setRegionSimplificationLevel(GreedySimplifyRegionLevel::Disabled);
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
 
-    if (failed(applyPatternsAndFoldGreedily(
+    if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       getOperation().emitError(
           "replace-qdq-resize: greedy pattern rewrite did not converge");

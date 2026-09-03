@@ -58,6 +58,8 @@ struct OnnxBuilder : DialectBuilder {
       mlir::Value input, mlir::IntegerAttr saturate, mlir::TypeAttr to) const;
   mlir::Value cast(mlir::Value input, mlir::TypeAttr to) const;
   mlir::Value cast(mlir::Value input, mlir::Type to) const;
+  [[nodiscard]] mlir::Value castToNewTensorElementType(
+      mlir::Value input, mlir::Type newElemTy) const;
 
   // ONNXCeilOp
   mlir::Value ceil(mlir::Value input) const;
@@ -67,6 +69,7 @@ struct OnnxBuilder : DialectBuilder {
       bool scalarType = false) const;
 
   // ONNXConcatOp
+  mlir::Value concat(mlir::ValueRange inputs, int64_t axis) const;
   mlir::Value concat(
       mlir::Type outputType, mlir::ValueRange inputs, int64_t axis) const;
 
@@ -183,6 +186,12 @@ struct OnnxBuilder : DialectBuilder {
   mlir::Value reverseSequence(mlir::Type outputType, mlir::Value input,
       mlir::Value sequenceLens, int64_t batchAxis, int64_t timeAxis) const;
 
+  // ONNXRotaryEmbeddingOp
+  mlir::Value rotaryEmbedding(mlir::Type outputType, mlir::Value X,
+      mlir::Value cosCache, mlir::Value sinCache, mlir::Value positionIds,
+      int64_t interleaved, mlir::IntegerAttr numHeads,
+      int64_t rotaryEmbeddingDim) const;
+
   // ONNXRoundOp
   mlir::Value round(mlir::Value input, bool scalarType = false) const;
 
@@ -209,6 +218,8 @@ struct OnnxBuilder : DialectBuilder {
   mlir::Value slice(mlir::Type outputType, mlir::Value input,
       mlir::Value starts, mlir::Value ends, mlir::Value axes,
       mlir::Value steps) const;
+  mlir::Value slice(mlir::Value input, llvm::ArrayRef<int64_t> starts,
+      llvm::ArrayRef<int64_t> sizes) const;
   mlir::Value slice(mlir::Type outputType, mlir::Value input, int64_t start,
       int64_t end, int64_t step = 1) const; // 1D slice
 

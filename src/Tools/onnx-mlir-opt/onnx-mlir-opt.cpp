@@ -138,7 +138,8 @@ int main(int argc, char **argv) {
   // Remove unrelated options except common ones and the onnx-mlir-opt options
   removeUnrelatedOptions({&OnnxMlirCommonOptions, &OnnxMlirOptOptions});
 
-  DialectRegistry registry = registerDialects(maccel);
+  DialectRegistry registry;
+  registerDialects(registry, maccel);
   registry.insert<tosa::TosaDialect>();
   registry.insert<mlir::quant::QuantDialect>();
 
@@ -212,7 +213,9 @@ int main(int argc, char **argv) {
   MlirOptMainConfig config;
   config.setPassPipelineSetupFn(passManagerSetupFn)
       .splitInputFile(split_input_file ? kDefaultSplitMarker : "")
-      .verifyDiagnostics(verify_diagnostics)
+      .verifyDiagnostics(verify_diagnostics
+                             ? SourceMgrDiagnosticVerifierHandler::Level::All
+                             : SourceMgrDiagnosticVerifierHandler::Level::None)
       .verifyPasses(verify_passes)
       .allowUnregisteredDialects(allowUnregisteredDialects)
       .emitBytecode(false)

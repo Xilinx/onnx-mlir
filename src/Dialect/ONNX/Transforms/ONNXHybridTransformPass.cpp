@@ -113,10 +113,13 @@ struct ONNXHybridTransformPass
 
       if (isQDQDataMovementCanonicalizationEnabled())
         populateQDQDataMovementCanonicalizationPatterns(cumulativePatterns);
+      if (isPositiveAxisCanonicalizationEnabled())
+        populateONNXPositiveAxisCanonicalizationPatterns(cumulativePatterns);
     }
 
     if (constantPropagation) {
-      getConstPropONNXToONNXPatterns(cumulativePatterns, qdqConstProp);
+      getConstPropONNXToONNXPatterns(
+          cumulativePatterns, qdqConstProp, quantConstFold);
     }
 
     if (decomposition) {
@@ -129,8 +132,9 @@ struct ONNXHybridTransformPass
           enableSplitToSliceDecompose, enableConcatFuse, enableLstmSeqDecompose,
           enableReduceL2Decompose,
           /*disableGenericDecompositions=*/false, enableGatherToSlice,
-          enableHardSwishDecompose, enableGroupQueryAttentionCacheSlicing,
-          enableDepthToSpaceDecompose);
+          enableHardSwishDecompose, enableDepthToSpaceDecompose,
+          enableGQAUint16CacheSlotRewrite, enableConvTransposeToResize,
+          enableLstmDecompose);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
       if (target == "stablehlo") {
@@ -141,8 +145,11 @@ struct ONNXHybridTransformPass
     }
 
     if (recomposition) {
-      getRecomposeONNXToONNXPatterns(
-          cumulativePatterns, enableRotaryEmbeddingRecompose);
+      getRecomposeONNXToONNXPatterns(cumulativePatterns,
+          enableRotaryEmbeddingRecompose,
+          enableReduceL2Recompositions &&
+              !(decomposition && enableReduceL2Decompose),
+          enableDepthToSpaceDecompose);
     }
 
     patterns = FrozenRewritePatternSet(std::move(cumulativePatterns));
@@ -156,13 +163,15 @@ struct ONNXHybridTransformPass
         this->enableSeparatePhasedConvsForConvTranspose.getValue();
     onnx_mlir::convTransposeDepthToSpaceActive =
         this->enableConvTransposeDecomposeToDepthToSpace.getValue();
+    onnx_mlir::convTransposeToResizeActive =
+        this->enableConvTransposeToResize.getValue();
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
-    config.useTopDownTraversal = true;
+    config.setListener(&rnUpdater);
+    config.setUseTopDownTraversal(true);
     if (maxNumRewritesOffset == -1) {
-      config.maxNumRewrites = GreedyRewriteConfig::kNoLimit;
+      config.setMaxNumRewrites(GreedyRewriteConfig::kNoLimit);
     } else {
       // Count all ops reachable from the function body, including ops inside
       // loop/if sub-regions.  Loop unrolling moves sub-region ops to the top
@@ -170,8 +179,8 @@ struct ONNXHybridTransformPass
       // failures on models with unrollable loops.
       int64_t numOps = 0;
       body.walk([&](Operation *) { ++numOps; });
-      config.maxNumRewrites =
-          maxNumRewritesOffset + maxNumRewritesMultiplier * numOps;
+      config.setMaxNumRewrites(
+          maxNumRewritesOffset + maxNumRewritesMultiplier * numOps);
     }
     if (failed(applyPatternsGreedily(body, patterns, config))) {
       llvm::errs() << "\nWarning: onnx-hybrid-transform didn't converge with "

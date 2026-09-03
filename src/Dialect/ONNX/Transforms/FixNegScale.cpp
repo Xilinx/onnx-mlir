@@ -121,7 +121,7 @@ class FixNegScalePass
     patterns.add<FixNegScale>(ctx);
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(applyPatternsGreedily(func, std::move(patterns), config)))
       signalPassFailure();
   }

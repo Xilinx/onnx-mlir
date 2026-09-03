@@ -21,6 +21,7 @@
 #include "RegisterPasses.hpp"
 
 #include "mlir/Conversion/ReconcileUnrealizedCasts/ReconcileUnrealizedCasts.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "src/Accelerators/Accelerator.hpp"
 #include "src/Compiler/CompilerPasses.hpp"
 
@@ -134,6 +135,10 @@ void registerOMPasses(int optLevel) {
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createReplaceQDQReductionPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createReplaceQDQReduceL2Pass();
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
@@ -322,6 +327,10 @@ void registerOMPasses(int optLevel) {
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createQuantizeConcatConstInputPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createONNXHybridTransformPass();
   });
 
@@ -418,6 +427,7 @@ void registerOMPasses(int optLevel) {
 
   mlir::registerPass(createQuantTypesPass);
   mlir::registerPass(createONNXCSEPass);
+  mlir::registerPass(createDedupDQsPass);
   mlir::registerPass(createFixNegScalePass);
   mlir::registerPass(createInferTensorNames);
   mlir::registerPass(createCanonicalizeWithResultNamesPass);
@@ -450,7 +460,7 @@ void registerMLIRPasses() {
     return mlir::createLowerAffinePass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return mlir::createConvertSCFToCFPass();
+    return mlir::createSCFToControlFlowPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return mlir::createConvertVectorToLLVMPass();

@@ -23,6 +23,7 @@
 
 #include <cassert>
 #include <numeric>
+#include <optional>
 
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
@@ -89,6 +90,11 @@ ValueRange emitSplitByChannels(PatternRewriter &rewriter, Location loc,
   return results;
 }
 
+} // namespace onnx_mlir
+
+namespace onnx_mlir {
+#define GEN_PASS_DEF_RECOMPOSEONNXTOONNXPASS
+#include "src/Dialect/ONNX/Transforms/Passes.h.inc"
 } // namespace onnx_mlir
 
 namespace {
@@ -747,7 +753,16 @@ private:
   }
 };
 
-// Recompose HardSigmoid from `clip(x * a + b, 0, 1)`.
+// Recompose HardSigmoid from two structurally distinct but equivalent forms,
+// where the scale (alpha) is applied either by a Mul or by a Div:
+//   * clip(mul(x, a) + b, 0, 1)   -> HardSigmoid(x, alpha=a,   beta=b)
+//   * clip(div(x + b, c), 0, 1)   -> HardSigmoid(x, alpha=1/c, beta=b/c)
+// The Div form is what the scaled-range HardSigmoid div(clip(x + b, 0, c), c)
+// collapses to once DivClipConstDistributive distributes the outer division
+// into the clip (and DivConstProp folds the resulting bounds to [0, 1]).
+//
+// Assumes the Add/Mul constant is on operand 1 (mul(x, a), add(x, b));
+// ConstProp's Add/MulConstCommutative1 normalize this before the pass runs.
 struct RecomposeHardSigmoidFromMulClipPattern
     : public OpRewritePattern<ONNXClipOp> {
   using OpRewritePattern<ONNXClipOp>::OpRewritePattern;
@@ -761,6 +776,18 @@ struct RecomposeHardSigmoidFromMulClipPattern
       return false;
     out = getScalarValue<double>(attr, attr.getElementType());
     return true;
+  }
+
+  static LogicalResult replaceWithHardSigmoid(PatternRewriter &rewriter,
+      ONNXClipOp clipOp, ArrayRef<Location> fusedLocs, Value x, double alpha,
+      double beta) {
+    auto alphaAttr = rewriter.getF32FloatAttr(alpha);
+    auto betaAttr = rewriter.getF32FloatAttr(beta);
+    auto loc = mlir::FusedLoc::get(rewriter.getContext(), fusedLocs);
+    Value hardSigmoidOp = rewriter.create<ONNXHardSigmoidOp>(
+        loc, clipOp.getType(), x, alphaAttr, betaAttr);
+    rewriter.replaceOp(clipOp, hardSigmoidOp);
+    return success();
   }
 
   LogicalResult matchAndRewrite(
@@ -778,33 +805,47 @@ struct RecomposeHardSigmoidFromMulClipPattern
         !isConstOf(clipMin, 0.0) || !isConstOf(clipMax, 1.0))
       return failure();
 
-    // add(mul(x, a), b)
-    auto addOp = clipOp.getInput().getDefiningOp<ONNXAddOp>();
-    if (!addOp)
-      return failure();
+    Value input = clipOp.getInput();
 
-    auto mulOp = addOp.getOperand(0).getDefiningOp<ONNXMulOp>();
-    if (!mulOp)
-      return failure();
+    // Mul form: clip(add(mul(x, a), b), 0, 1) -> HardSigmoid(x, a, b).
+    if (auto addOp = input.getDefiningOp<ONNXAddOp>()) {
+      auto mulOp = addOp.getOperand(0).getDefiningOp<ONNXMulOp>();
+      if (!mulOp)
+        return failure();
 
-    Value x = mulOp.getOperand(0);
-    double alpha;
-    if (!matchScalarConstant(mulOp.getOperand(1), alpha) || alpha <= 0.0)
-      return failure();
+      Value x = mulOp.getOperand(0);
+      double alpha;
+      if (!matchScalarConstant(mulOp.getOperand(1), alpha) || alpha <= 0.0)
+        return failure();
 
-    double beta;
-    if (!matchScalarConstant(addOp.getOperand(1), beta))
-      return failure();
+      double beta;
+      if (!matchScalarConstant(addOp.getOperand(1), beta))
+        return failure();
 
-    auto alphaAttr = rewriter.getF32FloatAttr(alpha);
-    auto betaAttr = rewriter.getF32FloatAttr(beta);
+      return replaceWithHardSigmoid(rewriter, clipOp,
+          {clipOp.getLoc(), addOp.getLoc(), mulOp.getLoc()}, x, alpha, beta);
+    }
 
-    auto loc = mlir::FusedLoc::get(rewriter.getContext(),
-        {clipOp.getLoc(), addOp.getLoc(), mulOp.getLoc()});
-    Value hardSigmoidOp = rewriter.create<ONNXHardSigmoidOp>(
-        loc, clipOp.getType(), x, alphaAttr, betaAttr);
-    rewriter.replaceOp(clipOp, hardSigmoidOp);
-    return success();
+    // Div form: clip(div(add(x, b), c), 0, 1) -> HardSigmoid(x, 1/c, b/c).
+    if (auto divOp = input.getDefiningOp<ONNXDivOp>()) {
+      double c;
+      if (!matchScalarConstant(divOp.getB(), c) || c <= 0.0)
+        return failure();
+
+      auto addOp = divOp.getA().getDefiningOp<ONNXAddOp>();
+      if (!addOp)
+        return failure();
+
+      Value x = addOp.getOperand(0);
+      double b;
+      if (!matchScalarConstant(addOp.getOperand(1), b))
+        return failure();
+
+      return replaceWithHardSigmoid(rewriter, clipOp,
+          {clipOp.getLoc(), divOp.getLoc(), addOp.getLoc()}, x, 1.0 / c, b / c);
+    }
+
+    return failure();
   }
 };
 
@@ -820,13 +861,23 @@ struct RecomposeHardSwishFromMulPattern : public OpRewritePattern<ONNXMulOp> {
       return rewriter.notifyMatchFailure(
           mulOp, "HardSwish recompose is not valid on quantized types");
 
-    Value x = mulOp.getOperand(0);
-    auto hardSigmoidOp = mulOp.getOperand(1).getDefiningOp<ONNXHardSigmoidOp>();
-    if (!hardSigmoidOp)
-      return failure();
-    if (hardSigmoidOp.getX() != x)
-      return rewriter.notifyMatchFailure(
-          mulOp, "Mul lhs and HardSigmoid input are not the same SSA value");
+    // Match Mul(x, HardSigmoid(x)) in either operand order.
+    Value lhs = mulOp.getOperand(0);
+    Value rhs = mulOp.getOperand(1);
+    Value x;
+    ONNXHardSigmoidOp hardSigmoidOp;
+    if (auto hs = rhs.getDefiningOp<ONNXHardSigmoidOp>();
+        hs && hs.getX() == lhs) {
+      x = lhs;
+      hardSigmoidOp = hs;
+    } else if (auto hs = lhs.getDefiningOp<ONNXHardSigmoidOp>();
+        hs && hs.getX() == rhs) {
+      x = rhs;
+      hardSigmoidOp = hs;
+    } else {
+      return rewriter.notifyMatchFailure(mulOp,
+          "Mul operand and HardSigmoid input are not the same SSA value");
+    }
     FloatAttr alphaAttr = hardSigmoidOp.getAlphaAttr();
     FloatAttr betaAttr = hardSigmoidOp.getBetaAttr();
     constexpr double eps = 1e-5;
@@ -1288,69 +1339,116 @@ struct RecomposeDepthToSpaceCRD
   }
 };
 
-// Recompose `ReduceSum(Mul(x, x))` into `ReduceSumSquare(x)`. This inverts
-// `ReduceSumSquareOpPattern` from Decompose.td and is the first stage of the
-// staged recomposition that ultimately rebuilds `ReduceL2`.
-struct RecomposeReduceSumSquareFromMulReduceSumPattern
-    : public OpRewritePattern<ONNXReduceSumOp> {
-  using OpRewritePattern<ONNXReduceSumOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(
-      ONNXReduceSumOp reduceSumOp, PatternRewriter &rewriter) const final {
-    auto mulOp = reduceSumOp.getData().getDefiningOp<ONNXMulOp>();
-    if (!mulOp)
-      return failure();
-    if (!mulOp->hasOneUse())
-      return failure();
-    if (mulOp.getA() != mulOp.getB())
-      return failure();
-
-    // pessimistic: bail out if any involved value carries a quantized
-    if (onnx_mlir::hasQuantizedElementType(mulOp.getA()) ||
-        onnx_mlir::hasQuantizedElementType(mulOp.getC()) ||
-        onnx_mlir::hasQuantizedElementType(reduceSumOp.getReduced()))
-      return failure();
-
-    const Value x = mulOp.getA();
-    const auto loc = mlir::FusedLoc::get(
-        rewriter.getContext(), {reduceSumOp.getLoc(), mulOp.getLoc()});
-    const Value reduceSumSquare = rewriter.create<ONNXReduceSumSquareOp>(loc,
-        reduceSumOp.getType(), x, reduceSumOp.getAxes(),
-        reduceSumOp.getKeepdimsAttr(), reduceSumOp.getNoopWithEmptyAxesAttr());
-    rewriter.replaceOp(reduceSumOp, reduceSumSquare);
-    return success();
-  }
+struct SquaredInputMatch {
+  Value input;
+  Location producerLoc;
 };
 
-// Recompose `Sqrt(ReduceSumSquare(x))` into `ReduceL2(x)`. This inverts
-// `DecomposeReduceL2Pattern` from Decompose.cpp.
-struct RecomposeReduceL2FromSqrtReduceSumSquarePattern
-    : public OpRewritePattern<ONNXSqrtOp> {
+// Match an explicitly squared value without introducing ReduceSumSquare.
+// Requiring one use avoids duplicating the square when the full L2 chain is
+// replaced.
+std::optional<SquaredInputMatch> matchSquaredInput(Value value) {
+  // Mul needs no broadcast check: both operands are the same value, so the
+  // result always has the shape of the value being squared.
+  if (auto mulOp = value.getDefiningOp<ONNXMulOp>()) {
+    if (!mulOp->hasOneUse() || mulOp.getA() != mulOp.getB())
+      return std::nullopt;
+    return SquaredInputMatch{mulOp.getA(), mulOp.getLoc()};
+  }
+
+  // A Pow exponent that broadcasts would expand the squared value, so dropping
+  // it in favor of ReduceL2 would change the reduced shape.
+  if (auto powOp = value.getDefiningOp<ONNXPowOp>()) {
+    if (!powOp->hasOneUse() || !onnx_mlir::isDenseONNXConstant(powOp.getY()) ||
+        !onnx_mlir::isConstOf(powOp.getY(), 2.0) ||
+        !onnx_mlir::isShapePreservingBroadcast(powOp.getY(), powOp.getX()))
+      return std::nullopt;
+    return SquaredInputMatch{powOp.getX(), powOp.getLoc()};
+  }
+
+  return std::nullopt;
+}
+
+struct ReduceL2ReductionMatch {
+  Value input;
+  Value axes;
+  IntegerAttr keepdims;
+  IntegerAttr noopWithEmptyAxes;
+  SmallVector<Location, 2> innerLocs;
+};
+
+// Match either an imported ReduceSumSquare or its supported decomposed forms.
+// The reduction must have one use so replacing the outer root does not
+// duplicate a potentially expensive reduction.
+std::optional<ReduceL2ReductionMatch> matchReduceL2Reduction(Value value) {
+  if (auto reduceSumSquareOp = value.getDefiningOp<ONNXReduceSumSquareOp>()) {
+    if (!reduceSumSquareOp->hasOneUse() ||
+        onnx_mlir::hasQuantizedElementType(reduceSumSquareOp.getData()) ||
+        onnx_mlir::hasQuantizedElementType(reduceSumSquareOp.getReduced()))
+      return std::nullopt;
+
+    return ReduceL2ReductionMatch{reduceSumSquareOp.getData(),
+        reduceSumSquareOp.getAxes(), reduceSumSquareOp.getKeepdimsAttr(),
+        reduceSumSquareOp.getNoopWithEmptyAxesAttr(),
+        {reduceSumSquareOp.getLoc()}};
+  }
+
+  auto reduceSumOp = value.getDefiningOp<ONNXReduceSumOp>();
+  if (!reduceSumOp || !reduceSumOp->hasOneUse())
+    return std::nullopt;
+
+  const std::optional<SquaredInputMatch> square =
+      matchSquaredInput(reduceSumOp.getData());
+  if (!square || onnx_mlir::hasQuantizedElementType(square->input) ||
+      onnx_mlir::hasQuantizedElementType(reduceSumOp.getData()) ||
+      onnx_mlir::hasQuantizedElementType(reduceSumOp.getReduced()))
+    return std::nullopt;
+
+  return ReduceL2ReductionMatch{square->input, reduceSumOp.getAxes(),
+      reduceSumOp.getKeepdimsAttr(), reduceSumOp.getNoopWithEmptyAxesAttr(),
+      {reduceSumOp.getLoc(), square->producerLoc}};
+}
+
+LogicalResult replaceWithReduceL2(
+    Operation *rootOp, Value reduction, PatternRewriter &rewriter) {
+  const std::optional<ReduceL2ReductionMatch> match =
+      matchReduceL2Reduction(reduction);
+  if (!match || onnx_mlir::hasQuantizedElementType(rootOp->getResult(0)))
+    return failure();
+
+  SmallVector<Location, 3> locations{rootOp->getLoc()};
+  locations.append(match->innerLocs);
+  const auto loc = mlir::FusedLoc::get(rewriter.getContext(), locations);
+  const Value reduceL2 =
+      rewriter.create<ONNXReduceL2Op>(loc, rootOp->getResult(0).getType(),
+          match->input, match->axes, match->keepdims, match->noopWithEmptyAxes);
+  rewriter.replaceOp(rootOp, reduceL2);
+  return success();
+}
+
+// Recompose Sqrt(ReduceSum(square(x))) or Sqrt(ReduceSumSquare(x)) directly
+// into ReduceL2 without exposing a ReduceSumSquare intermediate.
+struct RecomposeReduceL2FromSqrtPattern : public OpRewritePattern<ONNXSqrtOp> {
   using OpRewritePattern<ONNXSqrtOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
       ONNXSqrtOp sqrtOp, PatternRewriter &rewriter) const final {
-    auto reduceSumSquareOp =
-        sqrtOp.getX().getDefiningOp<ONNXReduceSumSquareOp>();
-    if (!reduceSumSquareOp)
-      return failure();
-    if (!reduceSumSquareOp->hasOneUse())
-      return failure();
+    return replaceWithReduceL2(sqrtOp.getOperation(), sqrtOp.getX(), rewriter);
+  }
+};
 
-    // pessimistic: bail out if any involved value carries a quantized
-    if (onnx_mlir::hasQuantizedElementType(reduceSumSquareOp.getData()) ||
-        onnx_mlir::hasQuantizedElementType(sqrtOp.getX()) ||
-        onnx_mlir::hasQuantizedElementType(sqrtOp.getY()))
-      return failure();
+// Recompose Pow(ReduceSum(square(x)), 0.5) or
+// Pow(ReduceSumSquare(x), 0.5) directly into ReduceL2.
+struct RecomposeReduceL2FromPowPattern : public OpRewritePattern<ONNXPowOp> {
+  using OpRewritePattern<ONNXPowOp>::OpRewritePattern;
 
-    const auto loc = mlir::FusedLoc::get(
-        rewriter.getContext(), {sqrtOp.getLoc(), reduceSumSquareOp.getLoc()});
-    const Value reduceL2 = rewriter.create<ONNXReduceL2Op>(loc,
-        sqrtOp.getType(), reduceSumSquareOp.getData(),
-        reduceSumSquareOp.getAxes(), reduceSumSquareOp.getKeepdimsAttr(),
-        reduceSumSquareOp.getNoopWithEmptyAxesAttr());
-    rewriter.replaceOp(sqrtOp, reduceL2);
-    return success();
+  LogicalResult matchAndRewrite(
+      ONNXPowOp powOp, PatternRewriter &rewriter) const final {
+    if (!onnx_mlir::isDenseONNXConstant(powOp.getY()) ||
+        !onnx_mlir::isConstOf(powOp.getY(), 0.5) ||
+        !onnx_mlir::isShapePreservingBroadcast(powOp.getY(), powOp.getX()))
+      return failure();
+    return replaceWithReduceL2(powOp.getOperation(), powOp.getX(), rewriter);
   }
 };
 
@@ -2001,50 +2099,10 @@ struct RecomposeRotaryEmbeddingPattern
 };
 
 struct RecomposeONNXToONNXPass
-    : public PassWrapper<RecomposeONNXToONNXPass, OperationPass<func::FuncOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RecomposeONNXToONNXPass)
-
-  RecomposeONNXToONNXPass(const std::string &target,
-      bool enableRotaryEmbeddingRecompose, bool enableReduceL2Recompositions) {
-    this->target = target;
-    this->enableRotaryEmbeddingRecompose = enableRotaryEmbeddingRecompose;
-    this->enableReduceL2Recompositions = enableReduceL2Recompositions;
-  }
-  RecomposeONNXToONNXPass(const RecomposeONNXToONNXPass &pass)
-      : mlir::PassWrapper<RecomposeONNXToONNXPass,
-            OperationPass<func::FuncOp>>() {
-    this->target = pass.target.getValue();
-    this->enableRotaryEmbeddingRecompose =
-        pass.enableRotaryEmbeddingRecompose.getValue();
-  }
-
-  StringRef getArgument() const override { return "recompose-onnx"; }
-
-  StringRef getDescription() const override {
-    return "Recompose ONNX operations into composition of other ONNX "
-           "operations.";
-  }
-
-  Option<std::string> target{*this, "target",
-      llvm::cl::desc("Target Dialect to Recompose into"), ::llvm::cl::init("")};
-
-  Option<bool> enableRotaryEmbeddingRecompose{*this,
-      "enable-rotary-embedding-recompose",
-      llvm::cl::desc(
-          "Recompose HuggingFace-style RoPE elementwise subgraphs "
-          "(rotate_half + 2 muls + 1 add) into onnx.RotaryEmbedding"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableReduceL2Recompositions{*this,
-      "enable-reducel2-recompositions",
-      llvm::cl::desc("Recompose ReduceL2 from Sqrt(ReduceSumSquare(x)) and "
-                     "ReduceSumSquare from ReduceSum(Mul(x, x))"),
-      ::llvm::cl::init(false)};
-
+    : public onnx_mlir::impl::RecomposeONNXToONNXPassBase<
+          RecomposeONNXToONNXPass> {
+  using Base::Base;
   void runOnOperation() final;
-
-  typedef PassWrapper<RecomposeONNXToONNXPass, OperationPass<func::FuncOp>>
-      BaseType;
 };
 
 void RecomposeONNXToONNXPass::runOnOperation() {
@@ -2052,12 +2110,13 @@ void RecomposeONNXToONNXPass::runOnOperation() {
   MLIRContext *context = &getContext();
 
   RewritePatternSet patterns(context);
-  onnx_mlir::getRecomposeONNXToONNXPatterns(
-      patterns, enableRotaryEmbeddingRecompose, enableReduceL2Recompositions);
+  onnx_mlir::getRecomposeONNXToONNXPatterns(patterns,
+      enableRotaryEmbeddingRecompose, enableReduceL2Recompositions,
+      enableDepthToSpaceDecompose);
 
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
-          GreedyRewriteConfig{.listener = &rnUpdater})))
+          GreedyRewriteConfig().setListener(&rnUpdater))))
     signalPassFailure();
 }
 
@@ -2065,7 +2124,7 @@ void RecomposeONNXToONNXPass::runOnOperation() {
 
 void onnx_mlir::getRecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns, bool enableRotaryEmbeddingRecompose,
-    bool enableReduceL2Recompositions) {
+    bool enableReduceL2Recompositions, bool enableDepthToSpaceDecompose) {
   MLIRContext *context = patterns.getContext();
   patterns.insert<RecomposeHardSwishFromMulPattern>(context);
   patterns.insert<RecomposeHardSigmoidFromMulClipPattern>(context);
@@ -2076,26 +2135,19 @@ void onnx_mlir::getRecomposeONNXToONNXPatterns(
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, true>>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXMulOp, true>>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXPowOp, true>>(context);
-  patterns.insert<RecomposeDepthToSpaceCRD>(context);
-  patterns.insert<RecomposeDepthToSpaceDCR>(context);
+  // Skip when DepthToSpace decomposition is active, otherwise the recompose
+  // patterns would immediately undo the decompose.
+  if (!enableDepthToSpaceDecompose) {
+    patterns.insert<RecomposeDepthToSpaceCRD>(context);
+    patterns.insert<RecomposeDepthToSpaceDCR>(context);
+  }
   if (enableRotaryEmbeddingRecompose)
     patterns.insert<RecomposeRotaryEmbeddingPattern>(context);
   if (enableReduceL2Recompositions) {
-    patterns.insert<RecomposeReduceSumSquareFromMulReduceSumPattern>(context);
-    patterns.insert<RecomposeReduceL2FromSqrtReduceSumSquarePattern>(context);
+    patterns.insert<RecomposeReduceL2FromSqrtPattern>(context);
+    patterns.insert<RecomposeReduceL2FromPowPattern>(context);
   }
-
   // AMD Disabled as downstream has no special support for it
   // patterns.insert<RecomposeQLinearMatMulFromQuantizeLinearPattern>(context);
   // patterns.insert<CombineParallelConv2DPattern>(context);
-}
-
-/*!
- * Create a RecomposeONNX pass.
- */
-std::unique_ptr<mlir::Pass> onnx_mlir::createRecomposeONNXToONNXPass(
-    const std::string &target, bool enableRotaryEmbeddingRecompose,
-    bool enableReduceL2Recompositions) {
-  return std::make_unique<RecomposeONNXToONNXPass>(
-      target, enableRotaryEmbeddingRecompose, enableReduceL2Recompositions);
 }

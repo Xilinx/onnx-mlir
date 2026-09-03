@@ -50,6 +50,8 @@ def IsNoneType : Constraint<CPred<"isa<NoneType>(($_self).getType())">>;
 
 def IsIntOrFloatType : Constraint<CPred<"isa<IntegerType, FloatType>(mlir::cast<ShapedType>(($_self).getType()).getElementType())">>;
 
+def IsNotUnsignedIntType : Constraint<CPred<"!mlir::cast<ShapedType>(($_self).getType()).getElementType().isUnsignedInteger()">>;
+
 def IsNotAConstant :
   Constraint<CPred<"! static_cast<bool>(getDenseOrDisposableConstLikeElements($_self))">,
   "operation is not a constant">;
@@ -68,6 +70,14 @@ def IsFromDenseConstLikeOrNone:
 def IsVariadicOperandDenseONNXConstantOp:
     Constraint<CPred<"isVariadicOperandFromDenseONNXConstantOp($_self)">,
   "All variadic operands are produced by dense ConstantLike ops">;
+
+def IsFromSplatDenseConstLike:
+    Constraint<And<[
+      CPred<"static_cast<bool>(getDenseOrDisposableConstLikeElements($_self))">,
+      CPred<"getDenseOrDisposableConstLikeElements($_self).isSplat()">
+    ]>,
+  "Value is produced by a ConstantLike op that folds to a splat dense "
+  "ElementsAttr (DenseElementsAttr or DisposableElementsAttr)">;
 
 def HasStaticShape: Constraint<CPred<
   "hasStaticShape($_self.getType())">,
@@ -101,7 +111,7 @@ def ValuesHaveSameType : Constraint<
   "Values have same type">;
 
 def ValuesHaveSameDType : Constraint<
-  CPred<"$0.getType().cast<mlir::ShapedType>().getElementType() == $1.getType().cast<mlir::ShapedType>().getElementType()">,
+  CPred<"mlir::cast<mlir::ShapedType>($0.getType()).getElementType() == mlir::cast<mlir::ShapedType>($1.getType()).getElementType()">,
   "Values have same dtype">;
 
 def TransposeConstPropTypesMatch : Constraint<
@@ -126,6 +136,13 @@ def OpIsLikelyToBeFusedWithBias: Constraint<
 
 def SatisfiesExpansionBound: Constraint<
   CPred<"satisfiesExpansionBound($_self)">>;
+
+def SatisfiesMaxTileFoldSize: Constraint<
+  CPred<"satisfiesMaxTileFoldSize($_self)">>;
+
+def IsResizeConstPropagatable: Constraint<
+  CPred<"isResizeConstPropagatable($_self.getDefiningOp())">,
+  "onnx.Resize configuration is supported by constant propagation">;
 
 class IsNotDisabled<string name>: Constraint<
   CPred<"isNotDisabled(\"" # name # "\")">>;
@@ -316,6 +333,9 @@ def CreateConcatOfConst:
 def CreateExpandOfConst:
    NativeCodeCall<"ConstPropExpand($_builder, $0, $1)">;
 
+def CreateTileOfConst:
+   NativeCodeCall<"ConstPropTile($_builder, $0, $1)">;
+
 def CreateGatherOfConst:
    NativeCodeCall<"ConstPropGather($_builder, $0, $1, $2)">;
 
@@ -330,6 +350,9 @@ def CreateRangeOfThreeConst :
 
 def CreateNonZeroOfConst :
    NativeCodeCall<"ConstPropNonZero($_builder, $0, $1)">;
+
+def CreateResizeOfConst :
+   NativeCodeCall<"ConstPropResize($_builder, $0, $1)">;
 
 def CreateScatterNDOfConst :
     NativeCodeCall<"ConstPropScatterND($_builder, $0, $1, $2, $3)">;
@@ -613,7 +636,7 @@ def SubConstToNeg : NamedPat<"SubConstToNeg",
     // To x + (-c).
     (ONNXAddOp $x, (CreateNegOfConst $input, $input)),
     [(IsNotAConstant:$x), (IsFromDenseConstLike:$input),
-     (IsIntOrFloatType:$input)]>;
+     (IsIntOrFloatType:$input), (IsNotUnsignedIntType:$input)]>;
 
 // Constant Propagation for Sqrt
 def SqrtofConst : NamedPat<"SqrtofConst",
@@ -779,6 +802,26 @@ def MulClipConstDistributive : NamedPat<"MulClipConstDistributive",
   [(IsFromDenseConstLike:$a), (IsFromDenseConstLike:$l), (IsFromDenseConstLike:$u),
    (IsNotAConstant:$x), (HasOneUse:$clipOp), (IsIntOrFloatType:$x), 
   (IsIntOrFloatType:$a), (IsIntOrFloatType:$l), (IsIntOrFloatType:$u)]>;
+
+// Distribute division into clip: div(clip(x, l, u), a) -> clip(div(x, a),
+// div(l, a), div(u, a)). div(l, a) and div(u, a) are folded to single constants
+// by DivConstProp in a later iteration. The div analog of
+// MulClipConstDistributive.
+def DivClipConstDistributive : NamedPat<"DivClipConstDistributive",
+  // From div(clip(x, l, u), a) where a, l, u are constants.
+  (ONNXDivOp
+    (ONNXClipOp:$clipOp $x,
+      $l,
+      $u),
+    $a),
+  // To clip(div(x, a), div(l, a), div(u, a)).
+  (ONNXClipOp
+    (ONNXDivOp $x, $a),
+    (ONNXDivOp $l, $a),
+    (ONNXDivOp $u, $a)),
+  [(IsFromDenseConstLike:$a), (IsFromDenseConstLike:$l), (IsFromDenseConstLike:$u),
+   (IsNotAConstant:$x), (HasOneUse:$clipOp), (IsIntOrFloatType:$x),
+   (IsIntOrFloatType:$a), (IsIntOrFloatType:$l), (IsIntOrFloatType:$u)]>;
 
 // Constant Propagation for Mul
 def MulConstProp : NamedPat<"MulConstProp",
@@ -1294,6 +1337,26 @@ def ExpandofConst : NamedPat<"ExpandofConst",
      (SatisfiesExpansionBound:$resOp)]>;
 
 //===----------------------------------------------------------------------===//
+// Patterns to enable opportunities with Tile operations.
+//===----------------------------------------------------------------------===//
+
+def TileofConst : NamedPat<"TileofConst",
+    // From Tile (x, repeats)
+    (ONNXTileOp:$resOp $input, $repeats),
+    // To c where c is the tiled value.
+    (CreateTileOfConst $resOp, $input),
+    [(IsFromDenseConstLike:$input), (IsIntOrFloatType:$input),
+     (HasStaticShape:$resOp), (ValuesHaveSameDType $resOp, $input),
+     (SatisfiesExpansionBound:$resOp), (SatisfiesMaxTileFoldSize:$resOp)]>;
+
+def SplatTileofConst : NamedPat<"SplatTileofConst",
+    (ONNXTileOp:$resOp $input, $repeats),
+    (CreateTileOfConst $resOp, $input),
+    [(IsFromSplatDenseConstLike:$input), (IsIntOrFloatType:$input),
+     (HasStaticShape:$resOp), (ValuesHaveSameDType $resOp, $input)],
+    [], (addBenefit 1)>;
+
+//===----------------------------------------------------------------------===//
 // Patterns to enable opportunities with Gather operations.
 //===----------------------------------------------------------------------===//
 
@@ -1392,5 +1455,21 @@ def PowConstProp : NamedPat<"PowConstProp",
      (IsIntOrFloatType:$lhs), (IsIntOrFloatType:$rhs),
      (SatisfiesExpansionBound:$powOp), (ValuesHaveSameDType $lhs, $rhs),
      (HasStaticShape:$powOp)]>;
+
+//===----------------------------------------------------------------------===//
+// Patterns for Resize.
+//===----------------------------------------------------------------------===//
+
+def ResizeofConst : NamedPat<"ResizeofConst",
+    // From Resize(x, roi, scales, sizes) with the op's 9 attributes.
+    (ONNXResizeOp:$resOp $X, $roi, $scales, $sizes,
+      $_, $_, $_, $_, $_, $_, $_, $_, $_),
+    // To c where c is the resampled constant.
+    (CreateResizeOfConst $resOp, $X),
+    [(IsFromDenseConstLike:$X),
+     (IsFromDenseConstLikeOrNone:$scales),
+     (IsFromDenseConstLikeOrNone:$sizes),
+     (IsResizeConstPropagatable:$resOp),
+     (SatisfiesExpansionBound:$resOp), (HasStaticShape:$resOp)]>;
 
 #endif // ONNX_CONSTPROP

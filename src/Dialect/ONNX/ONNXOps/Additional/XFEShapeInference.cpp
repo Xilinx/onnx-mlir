@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+
 // IMPLEMENT YOUR SHAPE INFERENCE HERE
 // This file contains templates - safe to edit and customize
 // Move to: src/Dialect/ONNX/ONNXOps/Additional/XFEShapeInference.cpp
@@ -111,44 +113,17 @@ LogicalResult XFEConvOpShapeInference(
   int64_t N = xShape[0];             // batch
   int64_t C_out = wShape[0]; // output channels (first dimension in OHWI)
 
-  // Get attributes
-  auto stridesAttr = convOp.getStrides();
-  auto padsAttr = convOp.getPads();
-  auto dilationsAttr = convOp.getDilations();
-  // Default values (all 1s for strides/dilations, 0s for pads)
-  SmallVector<int64_t, 4> strides(numSpatialDims, 1);
-  SmallVector<int64_t, 8> pads(
-      numSpatialDims * 2, 0); // begin and end pads for each dim
-  SmallVector<int64_t, 4> dilations(numSpatialDims, 1);
-
-  // Parse strides
-  if (stridesAttr.has_value()) {
-    auto stridesArray = stridesAttr.value();
-    for (size_t i = 0; i < std::min(stridesArray.size(), strides.size()); ++i) {
-      strides[i] = mlir::cast<IntegerAttr>(stridesArray[i]).getInt();
-    }
-  }
-
-  // Parse dilations
-  if (dilationsAttr.has_value()) {
-    auto dilationsArray = dilationsAttr.value();
-    for (size_t i = 0; i < std::min(dilationsArray.size(), dilations.size());
-        ++i) {
-      dilations[i] = mlir::cast<IntegerAttr>(dilationsArray[i]).getInt();
-    }
-  }
-
-  // Check auto_pad mode
-  StringRef autoPad = convOp.getAutoPad();
-  bool isSamePad = (autoPad == "SAME_UPPER" || autoPad == "SAME_LOWER");
-
-  // Parse explicit pads only when not using auto_pad SAME
-  if (!isSamePad && padsAttr.has_value()) {
-    auto padsArray = padsAttr.value();
-    for (size_t i = 0; i < std::min(padsArray.size(), pads.size()); ++i) {
-      pads[i] = mlir::cast<IntegerAttr>(padsArray[i]).getInt();
-    }
-  }
+  SmallVector<int64_t, 4> strides;
+  SmallVector<int64_t, 4> dilations;
+  SmallVector<int64_t, 8> pads;
+  onnx_mlir::ArrayAttrIntVals(convOp.getStrides(), strides);
+  onnx_mlir::ArrayAttrIntVals(convOp.getDilations(), dilations);
+  onnx_mlir::ArrayAttrIntVals(convOp.getPads(), pads);
+  if ((int64_t)strides.size() != numSpatialDims ||
+      (int64_t)dilations.size() != numSpatialDims ||
+      (int64_t)pads.size() != 2 * numSpatialDims)
+    return op->emitError(
+        "strides, dilations, and pads must match the spatial rank");
 
   // Compute output spatial dimensions
   SmallVector<int64_t, 6> outputShape;
@@ -157,23 +132,12 @@ LogicalResult XFEConvOpShapeInference(
   for (int64_t i = 0; i < numSpatialDims; ++i) {
     int64_t inputDim = xShape[i + 1]; // spatial dimension from input (NHWC)
     int64_t stride = strides[i];
-
-    int64_t outputDim;
-    if (isSamePad) {
-      // SAME padding: output = ceil(input / stride)
-      if (inputDim == ShapedType::kDynamic) {
-        outputDim = ShapedType::kDynamic;
-      } else {
-        outputDim = (inputDim + stride - 1) / stride;
-      }
-    } else {
-      int64_t kernelDim = wShape[i + 1];
-      int64_t padBegin = pads[i];
-      int64_t padEnd = pads[numSpatialDims + i];
-      int64_t dilation = dilations[i];
-      outputDim = computeChannelLastSpatialDim(
-          inputDim, kernelDim, padBegin, padEnd, stride, dilation);
-    }
+    int64_t kernelDim = wShape[i + 1];
+    int64_t padBegin = pads[i];
+    int64_t padEnd = pads[numSpatialDims + i];
+    int64_t dilation = dilations[i];
+    int64_t outputDim = computeChannelLastSpatialDim(
+        inputDim, kernelDim, padBegin, padEnd, stride, dilation);
     outputShape.push_back(outputDim);
   }
 
@@ -221,7 +185,10 @@ LogicalResult XFEConvTransposeOpShapeInference(
   int64_t rank = xShape.size();
   int64_t numSpatialDims = rank - 2; // exclude batch and channel
   int64_t N = xShape[0];             // batch
-  int64_t C_out = wShape[0]; // output channels (first dimension in OHWI)
+  // For a (grouped) ConvTranspose the OHWI weight's first dim is
+  // C_out/group, so the total output channels are (C_out/group) * group.
+  int64_t group = convTransposeOp.getGroup();
+  int64_t C_out = wShape[0] * group; // total output channels
 
   // Get attributes
   auto stridesAttr = convTransposeOp.getStrides();

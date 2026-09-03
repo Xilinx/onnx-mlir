@@ -54,11 +54,13 @@ add_onnx_mlir_library(OMONNXRewrite
   FoldQuantizedBinary.cpp
   ConvOpt.cpp
   Decompose.cpp
+  DecomposeLSTM.cpp
   DecomposeEinsum.cpp
   ScrubDisposablePass.cpp
   SetONNXNodeName.cpp
   Recompose.cpp
   LegalizeQuarkQuantizedOps.cpp
+  DedupDQs.cpp
   ONNXCSE.cpp
   QuantTypes.cpp
   FixNegScale.cpp
@@ -89,6 +91,7 @@ add_onnx_mlir_library(OMONNXRewrite
   xmc/TransferReduceMeanSumToConvPass.cpp
   xmc/TransferReduceHdimToReduceCdimPass.cpp
   xmc/ReplaceQDQReductionPass.cpp
+  xmc/ReplaceQDQReduceL2Pass.cpp
   xmc/ConvertMulToDepthwiseConv2dPass.cpp
   xmc/TransferOp3dToOp2dPass.cpp
   xmc/TransferPoolFixToDownsampleFixPass.cpp
@@ -123,6 +126,7 @@ add_onnx_mlir_library(OMONNXRewrite
   xmc/TransferScaleToDwConv2dPass.cpp
   xmc/ONNXTransposeOptimizationPass.cpp
   xmc/ONNXTransposeOptimizationAxisChangePatterns.cpp
+  xmc/QuantizeConcatConstInputPass.cpp
   xmc/ConvWithBiasPass.cpp
   xmc/FuseMatMulAddToXFEMatMulBiasPass.cpp
   xmc/RemoveRedundantReshapePass.cpp

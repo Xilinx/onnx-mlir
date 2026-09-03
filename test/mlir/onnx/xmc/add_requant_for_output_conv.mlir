@@ -21,8 +21,8 @@ func.func @xfeconv_multi_fanout_output(
     -> (tensor<1x1x240x32xf32>,
         tensor<1x1x240x32x!quant.uniform<u8:f32, 0.15:116>>) {
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [1, 7], pads = [0, 0, 0, 5],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [0, 0, 0, 5],
        strides = [1, 2]}
       : (tensor<1x1x480x2x!quant.uniform<u8:f32, 0.05:128>>,
          tensor<32x1x7x2x!quant.uniform<i8:f32, 0.02>>,
@@ -83,8 +83,8 @@ func.func @xfeconv_propagates_result_names(
         tensor<1x1x240x32x!quant.uniform<u8:f32, 0.15:116>>) {
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
       {ResultNames = ["out_menc00_QuantizeLinear_Output"],
-       activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [1, 7], pads = [0, 0, 0, 5],
+       activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [0, 0, 0, 5],
        strides = [1, 2]}
       : (tensor<1x1x480x2x!quant.uniform<u8:f32, 0.05:128>>,
          tensor<32x1x7x2x!quant.uniform<i8:f32, 0.02>>,
@@ -222,8 +222,8 @@ func.func @xfeconv_single_use_no_insert(
     %dq_scale: tensor<f32>, %dq_zp: tensor<ui8>)
     -> tensor<1x1x240x32xf32> {
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [1, 7], pads = [0, 0, 0, 5],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [0, 0, 0, 5],
        strides = [1, 2]}
       : (tensor<1x1x480x2x!quant.uniform<u8:f32, 0.05:128>>,
          tensor<32x1x7x2x!quant.uniform<i8:f32, 0.02>>,

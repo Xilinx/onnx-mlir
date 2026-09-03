@@ -432,6 +432,17 @@ func.func @test_neg_2(%arg0: tensor<3x2xi32>) -> tensor<3x2xi32> {
 
 // -----
 
+// CHECK-LABEL: @test_neg_unsigned(%arg0: tensor<3x2xui16>) -> tensor<3x2xui16>
+func.func @test_neg_unsigned(%arg0: tensor<3x2xui16>) -> tensor<3x2xui16> {
+  %0 = onnx.Constant dense<2> : tensor<3x2xui16>
+  %1 = "onnx.Sub"(%arg0, %0) : (tensor<3x2xui16> , tensor<3x2xui16>) -> tensor<3x2xui16>
+  "onnx.Return"(%1) : (tensor<3x2xui16>) -> ()
+  // CHECK-NEXT: [[CONST1:%.+]] = onnx.Constant dense<2> : tensor<3x2xui16>
+  // CHECK-NEXT: [[SUB1:%.+]] = "onnx.Sub"(%arg0, [[CONST1]]) : (tensor<3x2xui16>, tensor<3x2xui16>) -> tensor<3x2xui16>
+}
+
+// -----
+
 // CHECK-LABEL: @test_neg_3(%arg0: tensor<3x2xi32>) -> tensor<3x2xi32>
 func.func @test_neg_3(%arg0: tensor<3x2xi32>) -> tensor<3x2xi32> {
   %0 = onnx.Constant dense<[[2, 3], [4, 5], [6, 7]]> : tensor<3x2xi32>
@@ -701,6 +712,27 @@ func.func @test_div_by_zero() -> tensor<2xui32> {
   "onnx.Return"(%2) : (tensor<2xui32>) -> ()
   // The behavior is undefined, so the value don't matter. Just don't crash.
   // CHECK-NOT: {{.*}} = "onnx.Div"{{.*}}
+}
+
+// -----
+
+// DivClipConstDistributive: div(clip(x, l, u), a) -> clip(div(x, a), div(l, a), div(u, a)).
+// The distributed bounds div(l, a) and div(u, a) are folded by DivConstProp, so
+// the clip ends up with constant bounds and the division is pushed onto x.
+// CHECK-LABEL: @test_div_clip_const_distributive(%arg0: tensor<3x2xf32>) -> tensor<3x2xf32>
+func.func @test_div_clip_const_distributive(%arg0 : tensor<3x2xf32>) -> tensor<3x2xf32> {
+  %l = onnx.Constant dense<0.000000e+00> : tensor<f32>
+  %u = onnx.Constant dense<6.000000e+00> : tensor<f32>
+  %a = onnx.Constant dense<6.000000e+00> : tensor<f32>
+  %0 = "onnx.Clip"(%arg0, %l, %u) : (tensor<3x2xf32>, tensor<f32>, tensor<f32>) -> tensor<3x2xf32>
+  %1 = "onnx.Div"(%0, %a) : (tensor<3x2xf32>, tensor<f32>) -> tensor<3x2xf32>
+  onnx.Return %1 : tensor<3x2xf32>
+  // CHECK-DAG:   [[LO:%.+]] = onnx.Constant dense<0.000000e+00> : tensor<f32>
+  // CHECK-DAG:   [[HI:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<f32>
+  // CHECK-DAG:   [[SIX:%.+]] = onnx.Constant dense<6.000000e+00> : tensor<f32>
+  // CHECK:       [[DIV:%.+]] = "onnx.Div"(%arg0, [[SIX]]) : (tensor<3x2xf32>, tensor<f32>) -> tensor<3x2xf32>
+  // CHECK:       [[CLIP:%.+]] = "onnx.Clip"([[DIV]], [[LO]], [[HI]]) : (tensor<3x2xf32>, tensor<f32>, tensor<f32>) -> tensor<3x2xf32>
+  // CHECK:       onnx.Return [[CLIP]] : tensor<3x2xf32>
 }
 
 // -----
@@ -1906,6 +1938,20 @@ func.func @test_cast_i32_i1_i32() -> tensor<4xi32> {
 
 // -----
 
+func.func @test_cast_i1_i32() -> tensor<4xi32> {
+  %0 = onnx.Constant dense<[false, true, false, true]> : tensor<4xi1>
+  %1 = "onnx.Cast"(%0) {to = i32} : (tensor<4xi1>) -> tensor<4xi32>
+  "onnx.Return"(%1) : (tensor<4xi32>) -> ()
+
+  // CHECK-LABEL:  func @test_cast_i1_i32
+  // CHECK-SAME:   () -> tensor<4xi32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[0, 1, 0, 1]> : tensor<4xi32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<4xi32>
+  // CHECK:         }
+}
+
+// -----
+
 func.func @test_cast_i32_i64() -> tensor<3x2xi64> {
   %0 = onnx.Constant dense<[[2, 3], [4, 5], [6, 7]]> : tensor<3x2xi32>
   %1 = "onnx.Cast"(%0) {to = i64} : (tensor<3x2xi32>) -> tensor<3x2xi64>
@@ -2289,6 +2335,71 @@ func.func @test_expand_2_broadcast() -> tensor<*xf32> {
 
 // -----
 
+//===----------------------------------------------------------------------===//
+// Tile
+//===----------------------------------------------------------------------===//
+
+func.func @test_tile() -> tensor<*xf32> {
+  %0 = onnx.Constant dense<[1.0, 2.0, 3.0]> : tensor<3xf32>
+  %1 = onnx.Constant dense<[2]> : tensor<1xi64>
+  %2 = "onnx.Tile"(%0, %1) : (tensor<3xf32>, tensor<1xi64>) -> tensor<*xf32>
+  "onnx.Return"(%2) : (tensor<*xf32>) -> ()
+
+  // CHECK-LABEL:  func.func @test_tile
+  // CHECK-SAME:   () -> tensor<6xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[1.000000e+00, 2.000000e+00, 3.000000e+00, 1.000000e+00, 2.000000e+00, 3.000000e+00]> : tensor<6xf32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<6xf32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_tile_repeat_nonunit_axis() -> tensor<*xf32> {
+  %0 = onnx.Constant dense<[[1.0, 2.0], [3.0, 4.0]]> : tensor<2x2xf32>
+  %1 = onnx.Constant dense<[2, 1]> : tensor<2xi64>
+  %2 = "onnx.Tile"(%0, %1) : (tensor<2x2xf32>, tensor<2xi64>) -> tensor<*xf32>
+  "onnx.Return"(%2) : (tensor<*xf32>) -> ()
+
+  // CHECK-LABEL:  func.func @test_tile_repeat_nonunit_axis
+  // CHECK-SAME:   () -> tensor<4x2xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}[1.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00], [1.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00]]> : tensor<4x2xf32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<4x2xf32>
+  // CHECK:         }
+}
+
+// -----
+
+// Tile repeating multiple axes at once.
+func.func @test_tile_multi_axis() -> tensor<*xi32> {
+  %0 = onnx.Constant dense<[[1, 2], [3, 4]]> : tensor<2x2xi32>
+  %1 = onnx.Constant dense<[2, 2]> : tensor<2xi64>
+  %2 = "onnx.Tile"(%0, %1) : (tensor<2x2xi32>, tensor<2xi64>) -> tensor<*xi32>
+  "onnx.Return"(%2) : (tensor<*xi32>) -> ()
+
+  // CHECK-LABEL:  func.func @test_tile_multi_axis
+  // CHECK-SAME:   () -> tensor<4x4xi32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}[1, 2, 1, 2], [3, 4, 3, 4], [1, 2, 1, 2], [3, 4, 3, 4]]> : tensor<4x4xi32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<4x4xi32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_tile_splat() -> tensor<*xf32> {
+  %0 = onnx.Constant dense<5.0> : tensor<1x1xf32>
+  %1 = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  %2 = "onnx.Tile"(%0, %1) : (tensor<1x1xf32>, tensor<2xi64>) -> tensor<*xf32>
+  "onnx.Return"(%2) : (tensor<*xf32>) -> ()
+
+  // CHECK-LABEL:  func.func @test_tile_splat
+  // CHECK-SAME:   () -> tensor<2x3xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<5.000000e+00> : tensor<2x3xf32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<2x3xf32>
+  // CHECK:         }
+}
+
+// -----
+
 func.func @test_gather_axis_0() -> tensor<*xf32>{
   %0 = onnx.Constant dense<[[1.0, 1.2], [2.3, 3.4], [4.5, 5.7]]> : tensor<3x2xf32>
   %1 = onnx.Constant dense<[[0, 1], [1, 2]]> : tensor<2x2xi64>
@@ -2344,6 +2455,84 @@ func.func @test_gather_rank0_int32_indices() -> tensor<*xf32>{
   // CHECK-SAME:   () -> tensor<2xf32> {
   // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[2.300000e+00, 3.400000e+00]> : tensor<2xf32>
   // CHECK:           onnx.Return [[VAR_0_]] : tensor<2xf32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_gather_ui16_indices() -> tensor<*xf32> {
+  %0 = onnx.Constant dense<[[1.0, 1.2], [2.3, 3.4], [4.5, 5.7]]> : tensor<3x2xf32>
+  %1 = onnx.Constant dense<[[0, 1], [1, 2]]> : tensor<2x2xui16>
+  %2 = "onnx.Gather"(%0, %1) {axis = 0 : si64} : (tensor<3x2xf32>, tensor<2x2xui16>) -> tensor<*xf32>
+  "onnx.Return"(%2) : (tensor<*xf32>) -> ()
+
+  // CHECK-LABEL:  func @test_gather_ui16_indices
+  // CHECK-SAME:   () -> tensor<2x2x2xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}{{.}}[1.000000e+00, 1.200000e+00], [2.300000e+00, 3.400000e+00]{{.}}, {{.}}[2.300000e+00, 3.400000e+00], [4.500000e+00, 5.700000e+00]{{.}}{{.}}> : tensor<2x2x2xf32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<2x2x2xf32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_gather_ui32_indices() -> tensor<*xf32> {
+  %0 = onnx.Constant dense<[[1.0, 1.2, 1.9], [2.3, 3.4, 3.9], [4.5, 5.7, 5.9]]> : tensor<3x3xf32>
+  %1 = onnx.Constant dense<[[0, 2]]> : tensor<1x2xui32>
+  %2 = "onnx.Gather"(%0, %1) {axis = 1 : si64} : (tensor<3x3xf32>, tensor<1x2xui32>) -> tensor<*xf32>
+  "onnx.Return"(%2) : (tensor<*xf32>) -> ()
+
+  // CHECK-LABEL:  func @test_gather_ui32_indices
+  // CHECK-SAME:   () -> tensor<3x1x2xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}{{.}}[1.000000e+00, 1.900000e+00]{{.}}, {{.}}[2.300000e+00, 3.900000e+00]{{.}}, {{.}}[4.500000e+00, 5.900000e+00]{{.}}{{.}}> : tensor<3x1x2xf32>
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<3x1x2xf32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_scatternd_ui16_indices() -> tensor<4x4xf32> {
+  %0 = onnx.Constant dense<0.0> : tensor<4x4xf32>
+  %1 = onnx.Constant dense<[[0, 0], [1, 1]]> : tensor<2x2xui16>
+  %2 = onnx.Constant dense<[1.0, 2.0]> : tensor<2xf32>
+  %3 = "onnx.ScatterND"(%0, %1, %2) {reduction = "none"} : (tensor<4x4xf32>, tensor<2x2xui16>, tensor<2xf32>) -> tensor<4x4xf32>
+  "onnx.Return"(%3) : (tensor<4x4xf32>) -> ()
+
+  // CHECK-LABEL:  func @test_scatternd_ui16_indices
+  // CHECK-SAME:   () -> tensor<4x4xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}{{.}}1.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00], [0.000000e+00, 2.000000e+00, 0.000000e+00, 0.000000e+00], [0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00], [0.000000e+00, 0.000000e+00, 0.000000e+00, 0.000000e+00]{{.}}> : tensor<4x4xf32>
+  // CHECK-NOT:       onnx.ScatterND
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<4x4xf32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_scatternd_ui32_indices() -> tensor<2x3xf32> {
+  %0 = onnx.Constant dense<0.0> : tensor<2x3xf32>
+  %1 = onnx.Constant dense<[[0, 1], [1, 2]]> : tensor<2x2xui32>
+  %2 = onnx.Constant dense<[1.0, 2.0]> : tensor<2xf32>
+  %3 = "onnx.ScatterND"(%0, %1, %2) {reduction = "none"} : (tensor<2x3xf32>, tensor<2x2xui32>, tensor<2xf32>) -> tensor<2x3xf32>
+  "onnx.Return"(%3) : (tensor<2x3xf32>) -> ()
+
+  // CHECK-LABEL:  func @test_scatternd_ui32_indices
+  // CHECK-SAME:   () -> tensor<2x3xf32> {
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}{{.}}0.000000e+00, 1.000000e+00, 0.000000e+00], [0.000000e+00, 0.000000e+00, 2.000000e+00]{{.}}> : tensor<2x3xf32>
+  // CHECK-NOT:       onnx.ScatterND
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<2x3xf32>
+  // CHECK:         }
+}
+
+// -----
+
+func.func @test_nonzero_ui16_indices() -> tensor<2x2xui16> {
+  %0 = onnx.Constant dense<[[1, 0], [0, 1]]> : tensor<2x2xi32>
+  %1 = "onnx.NonZero"(%0) : (tensor<2x2xi32>) -> tensor<2x2xui16>
+  "onnx.Return"(%1) : (tensor<2x2xui16>) -> ()
+
+  // CHECK-LABEL:  func @test_nonzero_ui16_indices
+  // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}{{.}}0, 1], [0, 1]{{.}}> : tensor<2x2xui16>
+  // CHECK-NOT:       onnx.NonZero
+  // CHECK:           onnx.Return [[VAR_0_]] : tensor<2x2xui16>
   // CHECK:         }
 }
 

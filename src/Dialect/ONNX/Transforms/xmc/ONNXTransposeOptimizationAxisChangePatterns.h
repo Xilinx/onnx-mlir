@@ -17,12 +17,19 @@
 #ifndef ONNX_MLIR_ONNXTRANSPOSEOPTIMIZATIONAXISCHANGEPATTERNS_H
 #define ONNX_MLIR_ONNXTRANSPOSEOPTIMIZATIONAXISCHANGEPATTERNS_H
 
+#include "mlir/Dialect/Quant/IR/QuantTypes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
+#include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
+#include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
+#include "src/Dialect/ONNX/TensorName.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
+
+#include <memory>
 
 #define DEBUG_TYPE "onnx-transpose-optimization"
 
@@ -39,6 +46,39 @@ static SmallVector<int64_t> inversePermutation(ArrayRef<int64_t> perm) {
     inverse[perm[i]] = i;
   }
   return inverse;
+}
+
+/// Maintain the MultiUseConflict tag around a transpose op.
+///
+/// The tag marks the named producer feeding a *multi-use* transpose so that
+/// downstream ResultName propagation does not clobber a name that must be
+/// shared by all the transpose's consumers. It fires only when the transpose
+/// result has more than one use; the producer name reached by walking back
+/// through single-in/single-out ops is then tagged exactly once.
+///
+/// Returns success() only when a new tag was actually added; callers that use
+/// it purely to keep tags fresh after a rewrite may ignore the result.
+static LogicalResult maintainTransposeTag(ONNXTransposeOp op) {
+  if (op->getResult(0).hasOneUse())
+    return failure();
+
+  Value conflictVal = op->getOperand(0);
+  auto conflictName = onnx_mlir::TensorName(conflictVal);
+  while (!conflictName) {
+    Operation *defOp = conflictVal.getDefiningOp();
+    if (!defOp || defOp->getNumResults() != 1 || defOp->getNumOperands() != 1)
+      return failure();
+    conflictVal = defOp->getOperand(0);
+    conflictName = onnx_mlir::TensorName(conflictVal);
+  }
+  if (llvm::any_of(
+          conflictName.getTransforms(), [](onnx_mlir::Transform *trans) {
+            return isa<onnx_mlir::MultiUseConflict>(trans);
+          }))
+    return failure();
+
+  conflictName.push_back(std::make_unique<onnx_mlir::MultiUseConflict>());
+  return conflictName.setTo(conflictVal);
 }
 
 //===----------------------------------------------------------------------===//
@@ -411,6 +451,7 @@ struct PushTransposeThroughAxisOp : public OpRewritePattern<OpType> {
 
     // Replace the original operation with the new transpose
     rewriter.replaceOp(op, newTransposeOp.getResult());
+    (void)maintainTransposeTag(newTransposeOp);
 
     return success();
   }
@@ -544,6 +585,195 @@ struct PushTransposeThroughConcat : public OpRewritePattern<ONNXConcatOp> {
 
     // Replace the original concat with the new transpose
     rewriter.replaceOp(concatOp, newTransposeOp.getResult());
+    (void)maintainTransposeTag(newTransposeOp);
+
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// PushTransposeThroughConcatWithConst - Concat with mixed transpose/const
+//===----------------------------------------------------------------------===//
+
+// Foldable if produced by a transpose or is a constant.
+static bool isConcatFoldableInput(Value v) {
+  if (v.getDefiningOp<ONNXTransposeOp>())
+    return true;
+  return static_cast<bool>(onnx_mlir::getElementAttributeFromONNXValue(v));
+}
+
+// Eliminable if single-use, or multi-use with every user a foldable concat.
+static bool transposeEliminableThroughConcats(ONNXTransposeOp transposeOp) {
+  Value result = transposeOp.getResult();
+  if (result.hasOneUse())
+    return true;
+  if (result.use_empty())
+    return false;
+  for (Operation *user : result.getUsers()) {
+    auto userConcat = dyn_cast<ONNXConcatOp>(user);
+    if (!userConcat)
+      return false;
+    for (Value input : userConcat.getInputs())
+      if (!isConcatFoldableInput(input))
+        return false;
+  }
+  return true;
+}
+
+// Push a transpose through a Concat with mixed transpose and constant inputs,
+// folding each constant through the inverse permutation.
+struct PushTransposeThroughConcatWithConst
+    : public OpRewritePattern<ONNXConcatOp> {
+  using OpRewritePattern<ONNXConcatOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXConcatOp concatOp, PatternRewriter &rewriter) const override {
+    auto inputs = concatOp.getInputs();
+    if (inputs.empty())
+      return failure();
+
+    SmallVector<int64_t> firstPerm;
+    bool havePerm = false;
+    bool haveConst = false;
+    for (auto input : inputs) {
+      auto transposeOp = input.getDefiningOp<ONNXTransposeOp>();
+      if (!transposeOp) {
+        haveConst = true;
+        continue;
+      }
+
+      if (!transposeEliminableThroughConcats(transposeOp))
+        return failure();
+
+      auto permAttr = transposeOp.getPermAttr();
+      if (!permAttr)
+        return failure();
+
+      SmallVector<int64_t> perm;
+      for (auto attr : permAttr.getValue())
+        perm.push_back(mlir::cast<IntegerAttr>(attr).getInt());
+
+      if (!havePerm) {
+        firstPerm = perm;
+        havePerm = true;
+      } else if (perm != firstPerm) {
+        return failure();
+      }
+    }
+    if (!havePerm || !haveConst)
+      return failure();
+
+    LLVM_DEBUG(
+        llvm::dbgs() << "Pushing transpose through Concat with const inputs\n");
+
+    auto axisAttr = concatOp.getAxisAttr();
+    if (!axisAttr)
+      return failure();
+
+    int64_t axis = axisAttr.getValue().getSExtValue();
+    auto rank = static_cast<int64_t>(firstPerm.size());
+
+    if (axis < 0)
+      axis += rank;
+
+    if (axis < 0 || axis >= rank)
+      return failure();
+
+    int64_t newAxis = firstPerm[axis];
+
+    SmallVector<int64_t> invPerm(rank);
+    for (int64_t k = 0; k < rank; ++k) {
+      int64_t p = firstPerm[k];
+      if (p < 0 || p >= rank)
+        return failure();
+      invPerm[p] = k;
+    }
+
+    auto originalConcatOutputType =
+        mlir::dyn_cast<RankedTensorType>(concatOp.getType());
+    if (!originalConcatOutputType)
+      return failure();
+
+    rewriter.setInsertionPoint(concatOp);
+
+    SmallVector<uint64_t> invPermU;
+    for (int64_t k = 0; k < rank; ++k)
+      invPermU.push_back(static_cast<uint64_t>(invPerm[k]));
+
+    SmallVector<Value> newInputs;
+    for (auto input : inputs) {
+      auto transposeOp = input.getDefiningOp<ONNXTransposeOp>();
+      if (transposeOp) {
+        newInputs.push_back(transposeOp.getData());
+        continue;
+      }
+      ElementsAttr elements =
+          onnx_mlir::getElementAttributeFromONNXValue(input);
+      if (!elements)
+        return failure();
+      onnx_mlir::OnnxElementsAttrBuilder elementsBuilder(concatOp.getContext());
+      ElementsAttr transposedElements =
+          elementsBuilder.transpose(elements, invPermU);
+
+      // Rebuild with the original quantized type so the fold preserves it.
+      auto inTensorType = mlir::cast<RankedTensorType>(input.getType());
+      if (auto qType = mlir::dyn_cast<quant::UniformQuantizedType>(
+              inTensorType.getElementType())) {
+        auto quantResultType = RankedTensorType::get(
+            transposedElements.getShapedType().getShape(), qType);
+        auto newQConst = rewriter.create<ONNXConstantOp>(concatOp.getLoc(),
+            quantResultType, /*sparse_value=*/Attribute(),
+            /*value=*/transposedElements,
+            /*value_floats=*/nullptr, /*value_float=*/nullptr,
+            /*value_ints=*/nullptr, /*value_int=*/nullptr,
+            /*value_strings=*/nullptr, /*value_string=*/nullptr);
+        newInputs.push_back(newQConst.getResult());
+        continue;
+      }
+
+      Value newConst = onnx_mlir::OnnxBuilder(rewriter, concatOp.getLoc())
+                           .constant(transposedElements);
+      newInputs.push_back(newConst);
+    }
+
+    SmallVector<int64_t> newConcatShape;
+    auto firstInputType =
+        mlir::dyn_cast<RankedTensorType>(newInputs[0].getType());
+    if (!firstInputType)
+      return failure();
+    newConcatShape.assign(
+        firstInputType.getShape().begin(), firstInputType.getShape().end());
+
+    int64_t concatDimSize = 0;
+    for (auto v : newInputs) {
+      auto vType = mlir::dyn_cast<RankedTensorType>(v.getType());
+      if (!vType)
+        return failure();
+      auto vShape = vType.getShape();
+      if (newAxis < 0 || static_cast<size_t>(newAxis) >= vShape.size())
+        return failure();
+      if (vShape[newAxis] == mlir::ShapedType::kDynamic)
+        return failure();
+      concatDimSize += vShape[newAxis];
+    }
+    newConcatShape[newAxis] = concatDimSize;
+
+    auto newConcatType = RankedTensorType::get(
+        newConcatShape, originalConcatOutputType.getElementType());
+
+    auto newAxisAttr = rewriter.getIntegerAttr(
+        rewriter.getIntegerType(64, /*isSigned=*/true), newAxis);
+
+    rewriter.setInsertionPoint(concatOp);
+    auto newConcatOp = rewriter.create<ONNXConcatOp>(
+        concatOp.getLoc(), newConcatType, newInputs, newAxisAttr);
+
+    auto newTransposeOp = rewriter.create<ONNXTransposeOp>(concatOp.getLoc(),
+        originalConcatOutputType, newConcatOp.getResult(),
+        rewriter.getI64ArrayAttr(firstPerm));
+
+    rewriter.replaceOp(concatOp, newTransposeOp.getResult());
+    (void)maintainTransposeTag(newTransposeOp);
 
     return success();
   }

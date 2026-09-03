@@ -11,12 +11,25 @@
 
 include "mlir/Pass/PassBase.td"
 
-def ONNXDecomposePatternOptions {
+// Options common to both decompose-onnx and recompose-onnx: same C++ member,
+// same meaning. Declared once and pulled into both passes (and the hybrid pass)
+// so the generated options struct never gets a duplicate member.
+def SharedDecomposeRecomposePatternOptions {
   list<Option> options = [
     Option<"target", "target", "std::string", /*default=*/"\"\"",
-           "Target dialect to decompose into (e.g. stablehlo); "
-           "empty string means the default ONNX-to-ONNX decomposition.">,
+           "Target dialect to decompose/recompose into (e.g. stablehlo); "
+           "empty string means the default ONNX-to-ONNX behavior.">,
+    Option<"enableDepthToSpaceDecompose",
+           "enable-depthtospace-decompose",
+           "bool", /*default=*/"false",
+           "Decompose onnx.DepthToSpace (DCR and CRD) into "
+           "Reshape/Transpose/Reshape so backends without a DepthToSpace "
+           "kernel can run it.">
+  ];
+}
 
+def ONNXDecomposePatternOptions {
+  list<Option> options = [
     Option<"enableConvTransposeDecompose", "enable-convtranspose",
            "bool", /*default=*/"false",
            "Enable decomposition of ConvTranspose.">,
@@ -54,6 +67,12 @@ def ONNXDecomposePatternOptions {
            "Enable decomposition of Microsoft GroupQueryAttention to "
            "onnx.Attention and onnx.RotaryEmbedding ops.">,
 
+    Option<"enableGQAUint16CacheSlotRewrite",
+           "enable-gqa-uint16-cache-slot-rewrite",
+           "bool", /*default=*/"false",
+           "Rewrite preallocated GroupQueryAttention cache slot updates using "
+           "a uint16 selector and arithmetic instead of Expand/ScatterElements. Warning: this is not safe if the value cannot fit into uint16 range.">,
+
     Option<"enableSplitToSliceDecompose", "enable-split-to-slice",
            "bool", /*default=*/"false",
            "Enable decomposition of Split to Slice operations.">,
@@ -66,6 +85,11 @@ def ONNXDecomposePatternOptions {
            "bool", /*default=*/"false",
            "Enable sequence-length decomposition of LSTM (unroll a "
            "seq_len>1 LSTM into a chain of seq_len=1 LSTMs).">,
+
+    Option<"enableLstmDecompose", "enable-lstm-decomposition",
+           "bool", /*default=*/"false",
+           "Enable decomposition of static LSTM operations into basic ONNX "
+           "operations and bounded onnx.Loop operations.">,
 
     Option<"enableReduceL2Decompose", "enable-reducel2-decompose",
            "bool", /*default=*/"true",
@@ -81,13 +105,6 @@ def ONNXDecomposePatternOptions {
            "Enable decomposition of HardSwish into "
            "x * HardSigmoid(x) (alpha=1/6, beta=0.5).">,
 
-    Option<"enableGroupQueryAttentionCacheSlicing",
-           "enable-groupqueryattention-cache-slicing",
-           "bool", /*default=*/"true",
-           "Enable slicing of cos/sin caches during GroupQueryAttention "
-           "decomposition. Set to false to keep the cache and synthesize "
-           "position_ids instead.">,
-
     Option<"enableSeparatePhasedConvsForConvTranspose",
            "enable-separate-phased-convs-for-convtranspose",
            "bool", /*default=*/"false",
@@ -102,14 +119,68 @@ def ONNXDecomposePatternOptions {
            "(DCR) as the final interleave instead of "
            "Reshape/Transpose/Reshape.">,
 
-    Option<"enableDepthToSpaceDecompose",
-           "enable-depthtospace-decompose",
+    Option<"enableConvTransposeToResize",
+           "convert-convtranspose-to-resize",
            "bool", /*default=*/"false",
-           "Decompose onnx.DepthToSpace (DCR and CRD) into "
-           "Reshape/Transpose/Reshape so backends without a DepthToSpace "
-           "kernel can run it.">
+           "Rewrite a nearest-neighbor upsampling ConvTranspose (kernel==stride, "
+           "pads=0, per-channel all-ones weights, group=1 block-diagonal or "
+           "depthwise group=C) into onnx.Resize (nearest mode) and keep it out "
+           "of the phased-Conv ConvTranspose decomposition.">,
+
   ];
 }
+
+def DecomposeONNXToONNXPass : Pass<"decompose-onnx", "::mlir::func::FuncOp"> {
+  let summary = "Decompose ONNX operations into composition of other ONNX "
+                "operations.";
+  let description = [{
+    This pass rewrites ONNX operations into equivalent compositions of simpler
+    ONNX operations.  It is applied before shape inference so there is no
+    expectation of ranked tensor types at this point.
+
+    Individual decompositions can be enabled or disabled via the options below.
+    The pass-level defaults match the programmatic defaults used by
+    createDecomposeONNXToONNXPass().
+  }];
+
+  let options = SharedDecomposeRecomposePatternOptions.options
+              # ONNXDecomposePatternOptions.options;
+}
+
+// Recompose-specific options. The shared `target` option lives in
+// SharedDecomposeRecomposePatternOptions.
+def ONNXRecomposePatternOptions {
+  list<Option> options = [
+    Option<"enableRotaryEmbeddingRecompose", "enable-rotary-embedding-recompose",
+           "bool", /*default=*/"false",
+           "Recompose HuggingFace-style RoPE elementwise subgraphs "
+           "(rotate_half + 2 muls + 1 add) into onnx.RotaryEmbedding">,
+
+    Option<"enableReduceL2Recompositions",
+           "enable-reducel2-recompositions",
+           "bool", /*default=*/"false",
+           "Recompose ReduceL2 from Sqrt/Pow(0.5) square-reduction "
+           "chains into ReduceL2. Off by default.">
+  ];
+}
+
+def RecomposeONNXToONNXPass : Pass<"recompose-onnx", "::mlir::func::FuncOp"> {
+  let summary = "Recompose ONNX operations into composition of other ONNX "
+                "operations.";
+  let description = [{
+    This pass rewrites ONNX operations into equivalent compositions of higher level
+    ONNX operations.  It is applied before shape inference so there is no
+    expectation of ranked tensor types at this point.
+
+    Individual decompositions can be enabled or disabled via the options above.
+    The pass-level defaults match the programmatic defaults used by
+    createRecomposeONNXToONNXPass().
+  }];
+
+  let options = SharedDecomposeRecomposePatternOptions.options
+              # ONNXRecomposePatternOptions.options;
+}
+
 
 def ONNXHybridTransformOptions {
   list<Option> options = [
@@ -125,6 +196,10 @@ def ONNXHybridTransformOptions {
     Option<"qdqConstProp", "qdq-const-prop",
            "bool", /*default=*/"false",
            "Enable constant propagation for QDQ.">,
+    Option<"quantConstFold", "quant-const-fold",
+           "bool", /*default=*/"false",
+           "Enable folding of a constant QuantizeLinear into an integer "
+           "constant.">,
     Option<"decomposition", "decomposition",
            "bool", /*default=*/"true",
            "Enable decomposition in hybrid transform.">,
@@ -145,28 +220,7 @@ def ONNXHybridTransformOptions {
     Option<"enableGAPToReduceMean", "enable-globalaveragepool-to-reducemean",
            "bool", /*default=*/"true",
            "Enable canonicalize from GlobalAveragePool to ReduceMean.">,
-    Option<"enableRotaryEmbeddingRecompose",
-           "enable-rotary-embedding-recompose",
-           "bool", /*default=*/"false",
-           "Recompose LlamaRotaryEmbedding style RoPE into "
-           "onnx.RotaryEmbedding.">
   ];
-}
-
-def DecomposeONNXToONNXPass : Pass<"decompose-onnx", "::mlir::func::FuncOp"> {
-  let summary = "Decompose ONNX operations into composition of other ONNX "
-                "operations.";
-  let description = [{
-    This pass rewrites ONNX operations into equivalent compositions of simpler
-    ONNX operations.  It is applied before shape inference so there is no
-    expectation of ranked tensor types at this point.
-
-    Individual decompositions can be enabled or disabled via the options below.
-    The pass-level defaults match the programmatic defaults used by
-    createDecomposeONNXToONNXPass().
-  }];
-
-  let options = ONNXDecomposePatternOptions.options;
 }
 
 def ONNXHybridTransformPass
@@ -179,7 +233,7 @@ def ONNXHybridTransformPass
   }];
 
   let options =
-      ONNXHybridTransformOptions.options # ONNXDecomposePatternOptions.options;
+      ONNXHybridTransformOptions.options # SharedDecomposeRecomposePatternOptions.options # ONNXDecomposePatternOptions.options # ONNXRecomposePatternOptions.options;
 
   let genOptionsParser = 1;
 }
@@ -194,6 +248,13 @@ def XFEONNXOpsetVerifierPass
   let options = [
     Option<"disallowedOps", "disallowed-ops", "std::string",
            /*default=*/"\"Flatten,Squeeze,Unsqueeze\"",
-           "Comma-separated bare ONNX op names that must not appear. Skips ops with non-static shapes.">
+           "Comma-separated bare ONNX op names that must not appear. Skips ops with non-static shapes.">,
+    Option<"verifyNonNegativeAxis", "verify-non-negative-axis", "bool",
+           /*default=*/"true",
+           "Verify ranked ONNX ops do not carry negative constant axis/axes values.">
   ];
+}
+
+def DedupDQsPass : Pass<"dedup-dqs", "::mlir::func::FuncOp"> {
+  let summary = "Alternative to CSE, targets only DQ ops";
 }

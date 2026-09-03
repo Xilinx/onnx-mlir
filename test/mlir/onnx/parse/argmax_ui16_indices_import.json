@@ -1,0 +1,104 @@
+// RUN: onnx-mlir --EmitONNXIR --useOnnxModelTypes=true --printIR %s | FileCheck --check-prefix=MODEL-TYPE %s
+// MODEL-TYPE-LABEL: func.func @main_graph
+// MODEL-TYPE: "onnx.ArgMax"({{.*}}) {{.*}} : (tensor<2x3xf32>) -> tensor<2xui16>
+// Graph output types are always applied to returned values, even when
+// --useOnnxModelTypes=false skips model types during node construction.
+// RUN: onnx-mlir --EmitONNXIR --useOnnxModelTypes=false --printIR %s | FileCheck --check-prefix=GRAPH-OUTPUT %s
+// GRAPH-OUTPUT-LABEL: func.func @main_graph
+// GRAPH-OUTPUT: "onnx.ArgMax"({{.*}}) {{.*}} : (tensor<2x3xf32>) -> tensor<2xui16>
+{
+  "irVersion": "13",
+  "producerName": "onnx-mlir-test",
+  "graph": {
+    "node": [
+      {
+        "input": [
+          "X"
+        ],
+        "output": [
+          "Y"
+        ],
+        "name": "argmax_node",
+        "opType": "ArgMax",
+        "attribute": [
+          {
+            "name": "axis",
+            "i": "1",
+            "type": "INT"
+          },
+          {
+            "name": "keepdims",
+            "i": "0",
+            "type": "INT"
+          },
+          {
+            "name": "select_last_index",
+            "i": "0",
+            "type": "INT"
+          }
+        ]
+      }
+    ],
+    "name": "argmax_graph",
+    "input": [
+      {
+        "name": "X",
+        "type": {
+          "tensorType": {
+            "elemType": 1,
+            "shape": {
+              "dim": [
+                {
+                  "dimValue": "2"
+                },
+                {
+                  "dimValue": "3"
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "output": [
+      {
+        "name": "Y",
+        "type": {
+          "tensorType": {
+            "elemType": 4,
+            "shape": {
+              "dim": [
+                {
+                  "dimValue": "2"
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "valueInfo": [
+      {
+        "name": "Y",
+        "type": {
+          "tensorType": {
+            "elemType": 4,
+            "shape": {
+              "dim": [
+                {
+                  "dimValue": "2"
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  },
+  "opsetImport": [
+    {
+      "domain": "",
+      "version": "13"
+    }
+  ]
+}

@@ -9,6 +9,7 @@
 #include <mlir/IR/BuiltinAttributes.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/Value.h>
+#include <mlir/Interfaces/SideEffectInterfaces.h>
 #include <mlir/Pass/Pass.h>
 #include <mlir/Support/LLVM.h>
 #include <mlir/Transforms/GreedyPatternRewriteDriver.h>
@@ -60,8 +61,24 @@ void inferTensorNames(ValueRange replOperands) {
 }
 
 bool hasNameAndManyUses(Value value) {
-  auto numUses = std::distance(value.use_begin(), value.use_end());
-  return TensorName(value) && numUses > 1;
+  if (!TensorName(value))
+    return false;
+  // Count only live uses. A use whose owner is already trivially dead (but not
+  // yet DCE'd by the greedy driver) is not a real consumer, so ignore it. This
+  // mirrors the driver's own O(1) deadness check and avoids a transient dead
+  // use blocking ResultNames propagation onto a producer.
+  int liveUses = 0;
+  for (OpOperand &use : value.getUses())
+    if (!isOpTriviallyDead(use.getOwner()))
+      ++liveUses;
+  return liveUses > 1;
+}
+
+// True if `value` currently carries a MultiUseConflict transform in its name.
+bool hasConflictMarker(Value value) {
+  TensorName tn(value);
+  return tn && llvm::any_of(tn.getTransforms(),
+                   [](Transform *t) { return isa<MultiUseConflict>(t); });
 }
 
 } // namespace
@@ -71,8 +88,14 @@ void ResultNamesUpdater::notifyOperationReplaced(
   if (!op->hasAttrOfType<ArrayAttr>("ResultNames"))
     return;
 
-  // If replacements have existing name and many uses, don't update ResultNames
-  if (llvm::any_of(replacement->getResults(), hasNameAndManyUses))
+  // Don't overwrite the replacement's ResultNames if it already has a name with
+  // many uses, or if it is a flagged conflict producer. A MultiUseConflict
+  // marker means "this producer's name must be preserved"; it can be
+  // momentarily single-use during greedy rewriting (e.g. right before a
+  // transpose is folded onto it), so guard on the marker directly rather than
+  // only on the live-use count.
+  if (llvm::any_of(replacement->getResults(), hasNameAndManyUses) ||
+      llvm::any_of(replacement->getResults(), hasConflictMarker))
     return;
 
   // First, copy the ResultNames attribute for the last value
@@ -93,8 +116,10 @@ void ResultNamesUpdater::notifyOperationReplaced(
       replSingleOp && replSingleOp->getResults() == replacement)
     return notifyOperationReplaced(op, replSingleOp);
 
-  // If replacements have existing name and many uses, don't update ResultNames
-  if (llvm::any_of(replacement, hasNameAndManyUses))
+  // If replacements have existing name and many uses, or carry a conflict
+  // marker, don't update ResultNames (see the single-op overload above).
+  if (llvm::any_of(replacement, hasNameAndManyUses) ||
+      llvm::any_of(replacement, hasConflictMarker))
     return;
 
   // First, copy the ResultNames attribute for the last value
@@ -149,7 +174,6 @@ std::unique_ptr<mlir::Pass> createInferTensorNames() {
 struct CanonicalizeWithResultNamesPass
     : public mlir::PassWrapper<CanonicalizeWithResultNamesPass,
           mlir::OperationPass<func::FuncOp>> {
-
   llvm::StringRef getArgument() const override {
     return "canonicalize-with-rn";
   }
@@ -168,10 +192,12 @@ struct CanonicalizeWithResultNamesPass
 
     if (isQDQDataMovementCanonicalizationEnabled())
       populateQDQDataMovementCanonicalizationPatterns(patterns);
+    if (isPositiveAxisCanonicalizationEnabled())
+      populateONNXPositiveAxisCanonicalizationPatterns(patterns);
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(
             applyPatternsGreedily(getOperation(), std::move(patterns), config)))
       return signalPassFailure();

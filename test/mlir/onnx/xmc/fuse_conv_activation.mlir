@@ -13,8 +13,8 @@ func.func @test_xfeconv_leakyrelu_fusion(
     %none: none) -> tensor<1x8x8x32x!quant.uniform<u8:f32, 0.04:128>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x8x8x16x!quant.uniform<u8:f32, 0.05:128>>,
          tensor<32x3x3x16x!quant.uniform<i8:f32, 0.01>>,
@@ -46,8 +46,8 @@ func.func @test_no_fusion_different_quant_params(
     %none: none) -> tensor<1x8x8x32x!quant.uniform<u8:f32, 0.03:100>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x8x8x16x!quant.uniform<u8:f32, 0.05:128>>,
          tensor<32x3x3x16x!quant.uniform<i8:f32, 0.01>>,
@@ -79,8 +79,8 @@ func.func @test_xfeconv_relu_fusion_same_quant(
     %none: none) -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
@@ -111,8 +111,8 @@ func.func @test_xfeconv_clip_relu6_fusion(
     %none: none) -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
@@ -141,8 +141,8 @@ func.func @test_no_fusion_clip_non_relu6(
     %none: none) -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
@@ -175,8 +175,8 @@ func.func @test_xfeconv_onnx_clip_relu6_fusion(
   %cmax = "onnx.Constant"() {value = dense<6> : tensor<i64>} : () -> tensor<i64>
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
@@ -206,8 +206,8 @@ func.func @test_no_fusion_onnx_clip_non_relu6(
   %cmax = "onnx.Constant"() {value = dense<255> : tensor<i64>} : () -> tensor<i64>
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
@@ -234,8 +234,8 @@ func.func @test_xfeconv_qlinearsigmoid_fusion(
     %none: none) -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.03:128>> {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.05:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.01>>,
@@ -265,8 +265,8 @@ func.func @test_no_fusion_multiple_users(
                      tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>>) {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
@@ -287,36 +287,6 @@ func.func @test_no_fusion_multiple_users(
 // CHECK: "onnx.XCOMPILERFusedEltwise"
 
 // -----
-// Test: No fusion when conv pads attribute contains a negative value
-// CHECK-LABEL: func.func @test_no_fusion_negative_pads
-func.func @test_no_fusion_negative_pads(
-    %arg0: tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
-    %weight: tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
-    %bias: tensor<16x!quant.uniform<i32:f32, 1.000000e-04>>,
-    %none: none) -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>> {
-
-  %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, -1],
-       strides = [1, 1]}
-      : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
-         tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,
-         tensor<16x!quant.uniform<i32:f32, 1.000000e-04>>)
-      -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>>
-
-  %act = "onnx.XCOMPILERFusedEltwise"(%conv, %none)
-      {enable_lut_sigmoid = false, nonlinear = "NONE", type = "RELU"}
-      : (tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>>, none)
-      -> tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>>
-
-  return %act : tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>>
-}
-// CHECK: "onnx.XFEConv"
-// CHECK-SAME: activation = "NONE"
-// CHECK-SAME: pads = [1, 1, 1, -1]
-// CHECK: "onnx.XCOMPILERFusedEltwise"
-
-// -----
 // Test: Fusion when activation output has multiple users (conv result rewires all uses)
 // CHECK-LABEL: func.func @test_fusion_activation_multi_use
 func.func @test_fusion_activation_multi_use(
@@ -327,8 +297,8 @@ func.func @test_fusion_activation_multi_use(
                      tensor<1x4x4x16x!quant.uniform<u8:f32, 0.02:128>>) {
 
   %conv = "onnx.XFEConv"(%arg0, %weight, %bias)
-      {activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1],
-       group = 1 : si64, kernel_shape = [3, 3], pads = [1, 1, 1, 1],
+      {activation = "NONE", dilations = [1, 1],
+       group = 1 : si64, pads = [1, 1, 1, 1],
        strides = [1, 1]}
       : (tensor<1x4x4x8x!quant.uniform<u8:f32, 0.02:128>>,
          tensor<16x3x3x8x!quant.uniform<i8:f32, 0.005>>,

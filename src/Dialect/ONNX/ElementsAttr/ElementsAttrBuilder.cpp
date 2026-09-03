@@ -6,6 +6,9 @@
 //
 // Builds DisposableElementsAttr instances.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "src/Dialect/ONNX/ElementsAttr/ElementsAttrBuilder.hpp"
@@ -411,11 +414,13 @@ ElementsAttr ElementsAttrBuilder::castToIntElementType(
     //
     // TODO: Add configuration options to support other behaviors.
     //       See https://github.com/onnx/onnx-mlir/issues/2209
-    if (newElementType.isUnsigned() != oldElementType.isUnsignedInteger()) {
+    BType oldBType = btypeOfMlirType(oldElementType);
+    BType newBType = btypeOfMlirType(newElementType);
+    if (wideBTypeOfBType(oldBType) != wideBTypeOfBType(newBType)) {
       // DisposableElementsAttr requires transformation between integers with
       // different signs.
       // TODO: Consider relaxing the requirement and omit this transformation.
-      transformer = newElementType.isUnsigned()
+      transformer = wideBTypeOfBType(newBType) == BType::UINT64
                         ? functionTransformer(wideCast<uint64_t, int64_t>)
                         : functionTransformer(wideCast<int64_t, uint64_t>);
     } else {
@@ -1045,8 +1050,9 @@ ElementsAttr ElementsAttrBuilder::gather(
   assert(axis < inputShape.size() && "gather axis out of range");
   auto postAxisShape = inputShape.drop_front(axis + 1);
   ShapedType indicesType = indices.getShapedType();
-  assert(indicesType.getElementType().isSignlessInteger() &&
-         "gather indices must be i32 or i64");
+  assert((indicesType.getElementType().isSignlessInteger() ||
+             indicesType.getElementType().isUnsignedInteger()) &&
+         "gather indices must be a signless or unsigned integer (i32/i64/uiN)");
   ArrayRef<int64_t> indicesShape = indicesType.getShape();
   SmallVector<int64_t> outShape(inputShape.take_front(axis));
   outShape.append(indicesShape.begin(), indicesShape.end());
@@ -1080,6 +1086,12 @@ ElementsAttr ElementsAttrBuilder::gather(
 
 ElementsAttr ElementsAttrBuilder::scatterND(
     ElementsAttr input, ElementsAttr indices, ElementsAttr updates) {
+  ShapedType indicesType = indices.getShapedType();
+  assert((indicesType.getElementType().isSignlessInteger() ||
+             indicesType.getElementType().isUnsignedInteger()) &&
+         "scatterND indices must be a signless or unsigned integer "
+         "(i32/i64/uiN)");
+
   return fromWideNums(input.getShapedType(), [&](MutableArrayRef<WideNum> dst) {
     // numpy implementation:
     //
@@ -1089,7 +1101,7 @@ ElementsAttr ElementsAttrBuilder::scatterND(
     //     dst[indices[idx]] = updates[idx]
 
     ArrayRef<int64_t> inputShape = input.getShapedType().getShape();
-    ArrayRef<int64_t> indicesShape = indices.getShapedType().getShape();
+    ArrayRef<int64_t> indicesShape = indicesType.getShape();
     ArrayRef<int64_t> updatesShape = updates.getShapedType().getShape();
 
     int64_t indices_nd = indicesShape.back();
@@ -1106,8 +1118,10 @@ ElementsAttr ElementsAttrBuilder::scatterND(
         getWideNumsAndStrides(updates, updatesStrides);
     StridesRange<1> updatesRange(updatesShape, {updatesStrides});
     auto updatesIter = updatesRange.begin();
-    ArrayBuffer<int64_t> indicesBuffer = getElementsArray<int64_t>(indices);
-    const int64_t *indicesIter = indicesBuffer.get().begin();
+    ArrayBuffer<WideNum> indicesWideNums = getElementsWideNums(indices);
+    ArrayRef<int64_t> indicesArray =
+        castArrayRef<int64_t, WideNum>(indicesWideNums.get());
+    const int64_t *indicesIter = indicesArray.begin();
     for (int64_t i = 0; i < n_slices; ++i) {
       ArrayRef<uint64_t> idxs =
           castArrayRef<uint64_t>(ArrayRef(indicesIter, indices_nd));

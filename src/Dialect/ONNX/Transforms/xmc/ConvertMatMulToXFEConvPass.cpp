@@ -663,10 +663,7 @@ struct MatMulToXFEConvPattern : public OpRewritePattern<ONNXMatMulOp> {
         RankedTensorType::get(convOutputShape, finalOutputElemType);
 
     // Create attributes for XFEConv
-    auto autoPadAttr = rewriter.getStringAttr("NOTSET");
     auto stridesAttr = rewriter.getI64ArrayAttr(convShapes.stride);
-    auto kernelShapeAttr = rewriter.getI64ArrayAttr(
-        {convShapes.weightShape[1], convShapes.weightShape[2]});
     auto padsAttr = rewriter.getI64ArrayAttr({0, 0, 0, 0});
     auto dilationsAttr = rewriter.getI64ArrayAttr({1, 1});
     auto groupAttr =
@@ -685,7 +682,7 @@ struct MatMulToXFEConvPattern : public OpRewritePattern<ONNXMatMulOp> {
     // Create XFEConv operation
     auto convOp = rewriter.create<XFEConvOp>(loc, convOutputType,
         reshape1Output, convWeight, bias, rewriter.getStringAttr("NONE"),
-        autoPadAttr, dilationsAttr, groupAttr, kernelShapeAttr,
+        dilationsAttr, groupAttr,
         /*leakyrelu_alpha=*/FloatAttr(), padsAttr,
         /*prelu_in=*/IntegerAttr(), /*prelu_shift=*/IntegerAttr(), stridesAttr);
 
@@ -882,10 +879,7 @@ struct GemmToXFEConvPattern : public OpRewritePattern<ONNXGemmOp> {
         RankedTensorType::get(convOutputShape, outputElementType);
 
     // Create attributes for XFEConv
-    auto autoPadAttr = rewriter.getStringAttr("NOTSET");
     auto stridesAttr = rewriter.getI64ArrayAttr(convShapes.stride);
-    auto kernelShapeAttr = rewriter.getI64ArrayAttr(
-        {convShapes.weightShape[1], convShapes.weightShape[2]});
     auto padsAttr = rewriter.getI64ArrayAttr({0, 0, 0, 0});
     auto dilationsAttr = rewriter.getI64ArrayAttr({1, 1});
     auto groupAttr =
@@ -911,7 +905,7 @@ struct GemmToXFEConvPattern : public OpRewritePattern<ONNXGemmOp> {
     // Create XFEConv operation
     auto convOp = rewriter.create<XFEConvOp>(loc, convOutputType,
         reshape1Output, convWeight, bias, rewriter.getStringAttr("NONE"),
-        autoPadAttr, dilationsAttr, groupAttr, kernelShapeAttr,
+        dilationsAttr, groupAttr,
         /*leakyrelu_alpha=*/FloatAttr(), padsAttr,
         /*prelu_in=*/IntegerAttr(), /*prelu_shift=*/IntegerAttr(), stridesAttr);
 
@@ -958,7 +952,7 @@ struct ConvertMatMulToXFEConvPass
 
     GreedyRewriteConfig config;
     onnx_mlir::ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(applyPatternsGreedily(func, std::move(patterns), config))) {
       signalPassFailure();
     }

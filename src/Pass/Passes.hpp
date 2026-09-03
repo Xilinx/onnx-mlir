@@ -45,10 +45,6 @@ std::unique_ptr<mlir::Pass> createONNXOpTransformPass(int threshold,
     bool report, bool targetCPU, bool enableSimdDataLayoutOpt,
     bool enableConvOptPass, bool enableRecomposeOptPass);
 
-std::unique_ptr<mlir::Pass> createRecomposeONNXToONNXPass(
-    const std::string &target = "", bool enableRotaryEmbeddingRecompose = false,
-    bool enableReduceL2Recompositions = false);
-
 std::unique_ptr<mlir::Pass> createConvOptONNXToONNXPass(
     bool enableSimdDataLayoutOpt = false);
 
@@ -57,6 +53,8 @@ std::unique_ptr<mlir::Pass> createShapeInferencePass();
 // To configure ConstPropONNXToONNXPass at program start.
 void configureConstPropONNXToONNXPass(bool roundFPToInt, int expansionBound,
     llvm::ArrayRef<std::string> disabledPatterns, bool constantPropIsDisabled);
+
+void configureConstPropMaxTileFoldSize(int64_t maxTileFoldSize);
 
 // To configure whether BatchNorm decomposition is disabled in canonicalization.
 void configureBatchNormCanonicalization(bool disableBatchNormDecompose);
@@ -68,17 +66,42 @@ void configureUnsafeMathCanonicalization(bool enableUnsafeMathOptimizations);
 // enabled.
 void configureReshapeCanonicalization(bool enableReshapeCanonicalization);
 
+// Configure whether negative axis/axes values are canonicalized to positive
+// equivalents when rank is known.
+void configurePositiveAxisCanonicalization(
+    bool enablePositiveAxisCanonicalization);
+
+bool isPositiveAxisCanonicalizationEnabled();
+
+// Configure whether keepdims=0 -> keepdims=1 + Reshape canonicalization is
+// enabled.
+void configureKeepdimsCanonicalization(bool enableKeepdimsCanonicalization);
+
 // Configure QDQ canonicalizations for data-movement/view ONNX ops.
 void configureQDQDataMovementCanonicalization(
     bool enableQDQDataMovementCanonicalization);
 
 bool isQDQDataMovementCanonicalizationEnabled();
 
+// Configure whether Expand-to-Tile / Expand-to-Reshape+Tile canonicalization is
+// enabled.
+void configureExpandCanonicalization(bool enableExpandCanonicalization);
+
+// Configure whether Cast data-movement patterns are enabled.
+void configureCastDataMovementPatterns(bool enableCastDataMovementPatterns);
+
+void configureGatherElementsTileCanonicalization(
+    bool enableGatherElementsTileCanonicalization);
+
 void populateQDQDataMovementCanonicalizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
 
+void populateONNXPositiveAxisCanonicalizationPatterns(
+    mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
+
 std::unique_ptr<mlir::Pass> createConstPropONNXToONNXPass(
-    bool enableQDQ = false);
+    bool enableQDQ = false, bool enableQuantConstFold = false,
+    int64_t maxLoopUnrollCount = 64);
 
 std::unique_ptr<mlir::Pass> createQDQCanonicalizePass(bool removeBinary = false,
     bool removeQDQAroundOps = false, int64_t maxRoundTripDiff = 0);
@@ -132,6 +155,10 @@ std::unique_ptr<mlir::Pass> createSetONNXNodeNamePass();
 /// Supports: Conv, AveragePool, MaxPool, GlobalAveragePool, GlobalMaxPool,
 /// InstanceNormalization, DepthToSpace, SpaceToDepth
 std::unique_ptr<mlir::Pass> createConvertToChannelLastPass();
+/// Converts only the ops named in `whitelist` (e.g. "onnx.Conv"). An empty
+/// list converts every supported op.
+std::unique_ptr<mlir::Pass> createConvertToChannelLastPass(
+    llvm::ArrayRef<std::string> whitelist);
 
 /// Pass for merging Slice->Concat patterns with downstream ops.
 std::unique_ptr<mlir::Pass> createMergeSliceConcatPass();
@@ -141,6 +168,10 @@ std::unique_ptr<mlir::Pass> createMergeStridedSliceConcatConvPass();
 std::unique_ptr<mlir::Pass> createMergeContinuousStridedSlicePass();
 
 std::unique_ptr<mlir::Pass> createONNXTransposeOptimizationPass();
+
+/// Pass to bake plain-float constant inputs of a per-tensor quantized Concat
+/// into quantized constants sharing the concat's quantization parameters.
+std::unique_ptr<mlir::Pass> createQuantizeConcatConstInputPass();
 
 /// Pass to combine two transpose with same input and same perm.
 std::unique_ptr<mlir::Pass> createCombineTransposePairPass();
@@ -201,6 +232,10 @@ std::unique_ptr<mlir::Pass> createTransferReduceHdimToReduceCdimPass();
 
 /// Reshape Reduce(Sum/Mean/Max/Min) so its input is rank-4 + keep_dims=true.
 std::unique_ptr<mlir::Pass> createReplaceQDQReductionPass();
+
+/// Fuse quantized Pow(2)->ReduceSum->[eps-Add]->Sqrt (L2-norm) into
+/// onnx.ReduceL2 (AIESW-40266).
+std::unique_ptr<mlir::Pass> createReplaceQDQReduceL2Pass();
 
 /// Pass for transferring Conv->Slice patterns to Conv operations.
 std::unique_ptr<mlir::Pass> createTransferConvSliceToConvPass();
