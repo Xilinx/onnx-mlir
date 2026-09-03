@@ -113,6 +113,7 @@ def ONNXAddOp:ONNX_Op<"Add",
   
   This operator supports **multidirectional (i.e., Numpy-style) broadcasting**; for more details please check [the doc](Broadcasting.md).
   
+  For integer inputs, the result is computed using truncating division (rounding toward zero).
   (Opset 14 change): Extend supported types to include uint8, int8, uint16, and int16.
   }];
   let arguments = (ins AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[BF16]>, TensorOf<[quant_QuantizedType]>]>:$A,
@@ -2126,7 +2127,6 @@ def ONNXDivOp:ONNX_Op<"Div",
   
   This operator supports **multidirectional (i.e., Numpy-style) broadcasting**; for more details please check [the doc](Broadcasting.md).
   
-  For integer inputs, the result is computed using truncating division (rounding toward zero).
   (Opset 14 change): Extend supported types to include uint8, int8, uint16, and int16.
   }];
   let arguments = (ins AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[BF16]>, TensorOf<[quant_QuantizedType]>]>:$A,
@@ -4495,7 +4495,7 @@ def ONNXLoopOp:ONNX_Op<"Loop",
   1) Values from the enclosing scope (i.e. variable \"a\" here) are in scope and can
      be referenced in the inputs of the loop.
   2) Any values computed in the loop body that needs to be used in a subsequent
-     iteration or after the loop are modeled using a pair of variables in the loop-body,
+     iteration or after the loop are modelled using a pair of variables in the loop-body,
      consisting of an input variable (eg., b_in) and an output variable (eg., b_out).
      These are referred to as loop-carried dependences. The loop operation node
      supplies the input value of the input variable for the first iteration, and
@@ -10339,6 +10339,7 @@ def ONNXTileOp:ONNX_Op<"Tile",
       return sh;
     }
   }];
+  let hasVerifier = 1;
 }
 
 def ONNXTopKOp:ONNX_Op<"TopK",

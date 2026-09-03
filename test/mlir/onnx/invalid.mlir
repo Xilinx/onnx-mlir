@@ -1127,3 +1127,40 @@ func.func @test_argmin_verifier_ui16_axis_dim_oob(%arg0 : tensor<2x70000xf32>) -
   %1 = "onnx.ArgMin"(%arg0) {axis = 1 : si64, keepdims = 0 : si64} : (tensor<2x70000xf32>) -> tensor<2xui16>
   "onnx.Return"(%1) : (tensor<2xui16>) -> ()
 }
+
+// -----
+
+// Tile: repeats must be 1-D
+func.func @test_tile_repeats_not_1d(%arg0 : tensor<2x3xf32>, %arg1 : tensor<2x3xi64>) -> tensor<*xf32> {
+  // expected-error @+1 {{'onnx.Tile' op repeats must be a 1D tensor}}
+  %0 = "onnx.Tile"(%arg0, %arg1) : (tensor<2x3xf32>, tensor<2x3xi64>) -> tensor<*xf32>
+  "onnx.Return"(%0) : (tensor<*xf32>) -> ()
+}
+
+// -----
+
+// Tile: repeats length must match input rank
+func.func @test_tile_repeats_length_mismatch(%arg0 : tensor<2x3xf32>, %arg1 : tensor<3xi64>) -> tensor<*xf32> {
+  // expected-error @+1 {{'onnx.Tile' op repeats length must equal input rank}}
+  %0 = "onnx.Tile"(%arg0, %arg1) : (tensor<2x3xf32>, tensor<3xi64>) -> tensor<*xf32>
+  "onnx.Return"(%0) : (tensor<*xf32>) -> ()
+}
+
+// -----
+
+// Tile: output rank must equal input rank
+func.func @test_tile_output_rank_mismatch(%arg0 : tensor<2x3xf32>, %arg1 : tensor<2xi64>) -> tensor<6x6x6xf32> {
+  // expected-error @+1 {{'onnx.Tile' op output rank must equal input rank}}
+  %0 = "onnx.Tile"(%arg0, %arg1) : (tensor<2x3xf32>, tensor<2xi64>) -> tensor<6x6x6xf32>
+  "onnx.Return"(%0) : (tensor<6x6x6xf32>) -> ()
+}
+
+// -----
+
+// Tile: output dimension mismatch
+func.func @test_tile_output_dim_mismatch(%arg0 : tensor<2x3xf32>) -> tensor<4x7xf32> {
+  %repeats = onnx.Constant dense<[2, 2]> : tensor<2xi64>
+  // expected-error @+1 {{'onnx.Tile' op output dimension 1 must be 3 * 2, got 7}}
+  %0 = "onnx.Tile"(%arg0, %repeats) : (tensor<2x3xf32>, tensor<2xi64>) -> tensor<4x7xf32>
+  "onnx.Return"(%0) : (tensor<4x7xf32>) -> ()
+}
