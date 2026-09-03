@@ -231,3 +231,28 @@ func.func @no_fold_const_into_add(%act: tensor<2x2xf32>) -> tensor<2x2xf32> {
 // CHECK-LABEL: @no_fold_const_into_add
 // CHECK: onnx.DequantizeLinear
 // CHECK: onnx.Add
+
+// -----
+
+// Scoping: a weight requantize boundary -- Const<ui8> -> DQ -> QuantizeLinear
+// <ui16> -> DQ -> MatMul(activation, weight) -- must NOT be folded. Folding the
+// leading DQ would collapse the chain up to the QuantizeLinear and materialize a
+// quantized weight, pre-empting the backend's requantization/narrowing of it.
+func.func @no_fold_weight_requantize_into_matmul(%act: tensor<2x2xf32>) -> tensor<2x2xf32> {
+  %w = onnx.Constant dense<[[10, 20], [30, 40]]> : tensor<2x2xui8>
+  %s1 = onnx.Constant dense<2.500000e-03> : tensor<f32>
+  %z1 = onnx.Constant dense<122> : tensor<ui8>
+  %w_dq = "onnx.DequantizeLinear"(%w, %s1, %z1) {axis = 1 : si64, block_size = 0 : si64} : (tensor<2x2xui8>, tensor<f32>, tensor<ui8>) -> tensor<2x2xf32>
+  %s2 = onnx.Constant dense<8.900000e-06> : tensor<f32>
+  %z2 = onnx.Constant dense<35358> : tensor<ui16>
+  %q = "onnx.QuantizeLinear"(%w_dq, %s2, %z2) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<2x2xf32>, tensor<f32>, tensor<ui16>) -> tensor<2x2xui16>
+  %rq_dq = "onnx.DequantizeLinear"(%q, %s2, %z2) {axis = 1 : si64, block_size = 0 : si64} : (tensor<2x2xui16>, tensor<f32>, tensor<ui16>) -> tensor<2x2xf32>
+  %mm = "onnx.MatMul"(%act, %rq_dq) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+  return %mm : tensor<2x2xf32>
+}
+
+// CHECK-LABEL: @no_fold_weight_requantize_into_matmul
+// CHECK: onnx.Constant dense<{{\[}}[10, 20], [30, 40]]> : tensor<2x2xui8>
+// CHECK: onnx.DequantizeLinear
+// CHECK: onnx.QuantizeLinear
+// CHECK: onnx.MatMul

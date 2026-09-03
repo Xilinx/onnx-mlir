@@ -2033,14 +2033,35 @@ static bool isConstantOrDequantizeOfConstant(Value v) {
   return isNoneValue(zp) || getDenseOrDisposableConstLikeElements(zp);
 }
 
-// True if `value` is only consumed by constant computation ending at a
-// QuantizeLinear or graph output -- never by an op with a non-constant operand.
-// This keeps the fold off ordinary quantized weights (whose consumer mixes in a
-// non-constant activation).
+// True if `q` is a weight requantize boundary: Q -> DQ -> Op(activation, ...),
+// not the end of a constant island.
+static bool requantizeFeedsNonConstantConsumer(ONNXQuantizeLinearOp q) {
+  for (Operation *qUser : q.getY().getUsers()) {
+    auto dq = dyn_cast<ONNXDequantizeLinearOp>(qUser);
+    if (!dq)
+      continue;
+    for (Operation *dqUser : dq.getY().getUsers())
+      for (Value operand : dqUser->getOperands()) {
+        // Skip the island path itself and None operands.
+        if (operand == dq.getY() || isNoneValue(operand))
+          continue;
+        if (!isConstantOrDequantizeOfConstant(operand))
+          return true;
+      }
+  }
+  return false;
+}
+
+// True if `value` is only consumed by constant computation (no op with a
+// non-constant operand), so it is safe to dequantize.
 static bool onlyFeedsConstantIsland(Value value) {
   for (Operation *user : value.getUsers()) {
-    if (isa<ONNXQuantizeLinearOp>(user))
+    if (auto q = dyn_cast<ONNXQuantizeLinearOp>(user)) {
+      // A QuantizeLinear ends the island unless it is a weight requantize.
+      if (requantizeFeedsNonConstantConsumer(q))
+        return false;
       continue;
+    }
     if (user->hasTrait<OpTrait::IsTerminator>())
       continue;
     for (Value operand : user->getOperands()) {
