@@ -3949,6 +3949,101 @@ struct FusePadIntoAveragePoolPattern
   }
 };
 
+// Rewrite AveragePool with ceil_mode=1 into an equivalent floor-mode pool by
+// enlarging the end padding so the floor output-shape formula reproduces the
+// original (ceil) output shape. The trailing ceil window's overhang becomes
+// explicit end padding; because count_include_pad=0 (see match below), that
+// padding is excluded from the divisor, so every window average is unchanged.
+struct FoldCeilModeIntoPadPattern : public OpRewritePattern<ONNXAveragePoolOp> {
+  using OpRewritePattern<ONNXAveragePoolOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXAveragePoolOp avgOp, PatternRewriter &rewriter) const override {
+    // Nothing to do unless ceil_mode is set; clearing it makes this idempotent.
+    if (avgOp.getCeilMode() == 0)
+      return rewriter.notifyMatchFailure(avgOp, "ceil_mode already floor");
+
+    // Folding the ceil overhang into padding only preserves the averages when
+    // the padding is excluded from the divisor (count_include_pad=0). With
+    // count_include_pad=1 the extra padding would change the trailing window's
+    // divisor, so leave those pools untouched.
+    if (avgOp.getCountIncludePad() != 0)
+      return rewriter.notifyMatchFailure(avgOp, "count_include_pad != 0");
+
+    // auto_pad SAME_* derives the output shape independently of ceil_mode, so
+    // there is nothing to fold; only handle explicit padding.
+    if (avgOp.getAutoPad() != "NOTSET")
+      return rewriter.notifyMatchFailure(avgOp, "auto_pad is not NOTSET");
+
+    auto inputType = mlir::dyn_cast<RankedTensorType>(avgOp.getX().getType());
+    auto outputType = dyn_cast<RankedTensorType>(avgOp.getResult().getType());
+    if (!inputType || !outputType)
+      return rewriter.notifyMatchFailure(avgOp, "unranked input/output");
+
+    // ONNX AveragePool is channel-first: X is [N, C, spatial...]; pads follow
+    // [begin_0..begin_{n-1}, end_0..end_{n-1}].
+    ArrayRef<int64_t> inputShape = inputType.getShape();
+    ArrayRef<int64_t> outputShape = outputType.getShape();
+    const int64_t rank = inputType.getRank();
+    if (rank < 3 || outputType.getRank() != rank)
+      return rewriter.notifyMatchFailure(avgOp, "unexpected rank");
+    const int64_t numSpatialDims = rank - 2;
+
+    // Reads element `i` of an optional i64 array attribute (strides, dilations,
+    // pads), falling back to `dflt` when the attribute is absent or too short.
+    auto attrOr = [](std::optional<ArrayAttr> arr, int64_t i, int64_t dflt) {
+      if (arr && i < static_cast<int64_t>(arr->size()))
+        return mlir::cast<IntegerAttr>((*arr)[i]).getInt();
+      return dflt;
+    };
+
+    ArrayAttr kernelShape = avgOp.getKernelShape();
+    std::optional<ArrayAttr> strides = avgOp.getStrides();
+    std::optional<ArrayAttr> dilations = avgOp.getDilations();
+    std::optional<ArrayAttr> pads = avgOp.getPads();
+
+    SmallVector<int64_t, 4> beginPads;
+    SmallVector<int64_t, 4> endPads;
+    for (int64_t i = 0; i < numSpatialDims; ++i) {
+      int64_t inputDim = inputShape[i + 2];
+      int64_t outputDim = outputShape[i + 2];
+      if (inputDim == ShapedType::kDynamic || outputDim == ShapedType::kDynamic)
+        return rewriter.notifyMatchFailure(avgOp, "dynamic spatial dim");
+
+      int64_t kernel = mlir::cast<IntegerAttr>(kernelShape[i]).getInt();
+      int64_t stride = attrOr(strides, i, 1);
+      int64_t dilation = attrOr(dilations, i, 1);
+      int64_t beginPad = attrOr(pads, i, 0);
+      int64_t endPad = attrOr(pads, numSpatialDims + i, 0);
+
+      // Extra end padding that turns the trailing ceil-mode overhang into
+      // explicit padding, so the floor output-shape formula reproduces the
+      // op's already-inferred (ceil) output dim -- keeping the result type
+      // unchanged.
+      int64_t effectiveKernel = (kernel - 1) * dilation + 1;
+      int64_t delta = (outputDim - 1) * stride + effectiveKernel -
+                      (inputDim + beginPad + endPad);
+
+      beginPads.push_back(beginPad);
+      endPads.push_back(delta > 0 ? endPad + delta : endPad);
+    }
+
+    SmallVector<int64_t, 8> newPads(beginPads.begin(), beginPads.end());
+    newPads.append(endPads.begin(), endPads.end());
+
+    auto zeroCeilMode = rewriter.getIntegerAttr(
+        rewriter.getIntegerType(64, /*isSigned=*/true), 0);
+
+    rewriter.modifyOpInPlace(avgOp, [&]() {
+      avgOp->setAttr(
+          avgOp.getPadsAttrName(), rewriter.getI64ArrayAttr(newPads));
+      avgOp->setAttr(avgOp.getCeilModeAttrName(), zeroCeilMode);
+    });
+
+    return success();
+  }
+};
+
 // LeakyRelu with alpha == 0.0 is equivalent to Relu.
 class LeakyReluAlphaZeroToReluPattern
     : public OpRewritePattern<ONNXLeakyReluOp> {
@@ -4959,6 +5054,7 @@ void ONNXAndOp::getCanonicalizationPatterns(
 void ONNXAveragePoolOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<FusePadIntoAveragePoolPattern>(context);
+  results.insert<FoldCeilModeIntoPadPattern>(context);
 }
 
 /// on the ONNXBatchNormOp.
