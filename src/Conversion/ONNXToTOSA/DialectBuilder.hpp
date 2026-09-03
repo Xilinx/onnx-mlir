@@ -4,7 +4,7 @@
 
 //====------ DialectBuilder.hpp - TOSA dialect builder --------------------===//
 //
-// Copyright (c) 2022-2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -26,6 +26,8 @@
 #include "src/Dialect/Mlir/IndexExprBuilder.hpp"
 
 namespace onnx_mlir {
+
+struct OnnxBuilder;
 
 // =============================================================================
 // TOSA Builder
@@ -56,6 +58,10 @@ struct TosaBuilder : DialectBuilder {
   mlir::Value unaryOp(mlir::Value &input);
   mlir::Value sqrt(mlir::Value &input);
 
+  /// Round \p input to the nearest integer, resolving ties to the even
+  /// neighbour, keeping the floating-point element type.
+  mlir::Value roundEven(mlir::Value input);
+
   template <typename T>
   mlir::Value compareOp(mlir::PatternRewriter &rewriter, mlir::Location loc,
       mlir::Value &lhs, mlir::Value &rhs);
@@ -73,8 +79,8 @@ struct TosaBuilder : DialectBuilder {
   /// the input can only have values that are actually used. To achieve this we
   /// have to reduce padding and if this is not enough, we even have to insert a
   /// slice op.
-  mlir::FailureOr<mlir::Value> resizeWindowBasedOps(mlir::Value &value,
-      llvm::ArrayRef<int64_t> inputShape,
+  mlir::FailureOr<mlir::Value> resizeWindowBasedOps(OnnxBuilder &onnxBuilder,
+      mlir::Value &value, llvm::ArrayRef<int64_t> inputShape,
       llvm::ArrayRef<int64_t> weightSpatialShape,
       llvm::SmallVectorImpl<int64_t> &padding,
       llvm::ArrayRef<int64_t> strides = {1, 1},
@@ -134,6 +140,16 @@ protected:
 
 private:
   mlir::PatternRewriter *patternRewriter;
+};
+
+// Recursive class specialized for TosaBuilder refereed to as tosa.
+template <class... Ts>
+struct MultiDialectBuilder<TosaBuilder, Ts...> : MultiDialectBuilder<Ts...> {
+  MultiDialectBuilder(mlir::PatternRewriter &b, mlir::Location loc)
+      : MultiDialectBuilder<Ts...>(b, loc), tosa(b, loc) {}
+  MultiDialectBuilder(const DialectBuilder &db)
+      : MultiDialectBuilder<Ts...>(db), tosa(db) {}
+  TosaBuilder tosa;
 };
 
 // =============================================================================

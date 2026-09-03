@@ -79,7 +79,8 @@ static XCOMPILERFusedEltwiseOp createQLinearSigmoidOp(PatternRewriter &rewriter,
       mulY ? rewriter.getFloatAttr(rewriter.getF32Type(), *mulY) : FloatAttr();
   BoolAttr enableLutAttr = rewriter.getBoolAttr(enableLutSigmoid);
   return rewriter.create<XCOMPILERFusedEltwiseOp>(loc, outputType, inputA,
-      inputB, enableLutAttr,
+      inputB,
+      /*approximate=*/StringAttr(), enableLutAttr,
       /*leakyrelu_alpha=*/FloatAttr(),
       /*max=*/IntegerAttr(),
       /*min=*/IntegerAttr(), mulYAttr,
@@ -166,7 +167,7 @@ struct ReplaceQDQSigmoidPass
     // patterns.add<ReplaceQuantizedSigmoidMulPattern>(ctx, enableLutSigmoid);
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(
             applyPatternsGreedily(getOperation(), std::move(patterns), config)))
       signalPassFailure();

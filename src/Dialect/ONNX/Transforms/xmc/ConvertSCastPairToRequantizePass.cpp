@@ -5,8 +5,10 @@
 //
 // Converts back-to-back quant.scast pairs into XCOMPILERRequantize ops.
 // Also converts:
-//   1. Q node -> Scast node (with diff scale/zp) -> Requantize
-//   2. Scast node -> Dequantize node (with diff scale/zp) -> Requantize + DQ
+//   1. Q node -> Scast node (with diff scale/zp) -> scast(Q params) +
+//   Requantize
+//   2. Scast node -> Dequantize node (with diff scale/zp) -> Requantize +
+//      scast(storage) + DQ
 //
 // Pattern 1:
 //   %a = quant.scast %x : tensor<...x!quant.uniform<T1>> to tensor<...xT>
@@ -185,7 +187,7 @@ struct ConvertSCastPairToRequantizePattern
     if (inputQType && outputQType) {
       // Per-tensor quantization
       // Skip if params are identical (not a requantization)
-      if (std::abs(inputQType.getScale() - outputQType.getScale()) < 1e-6 &&
+      if (inputQType.getScale() == outputQType.getScale() &&
           inputQType.getZeroPoint() == outputQType.getZeroPoint())
         return failure();
 
@@ -220,7 +222,8 @@ struct ConvertSCastPairToRequantizePattern
 
 /// Pattern 2: Q node -> Scast node with diff scale and zp -> Requantize
 /// ONNXQuantizeLinear(x, scale_q, zp_q) -> quant.scast -> tensor<...x!quant.T2>
-/// Replace with XCOMPILERRequantize(Q.result, scale_q, zp_q, scale_s, zp_s).
+/// Replace with QuantizeLinear -> quant.scast(Q params) ->
+/// XCOMPILERRequantize(scale_q, zp_q -> scale_s, zp_s).
 struct ConvertQAndScastToRequantizePattern
     : public OpRewritePattern<quant::StorageCastOp> {
   using OpRewritePattern<quant::StorageCastOp>::OpRewritePattern;
@@ -238,8 +241,14 @@ struct ConvertQAndScastToRequantizePattern
     if (!outputQType && !outputQPerAxis)
       return failure();
 
-    // Input to Scast must be produced by ONNX QuantizeLinear
+    // Input to Scast must be produced by ONNX QuantizeLinear (storage type).
     Value scastInput = scast.getOperand();
+    auto storageType = dyn_cast<RankedTensorType>(scastInput.getType());
+    if (!storageType)
+      return failure();
+    if (isa<quant::QuantizedType>(storageType.getElementType()))
+      return failure();
+
     auto qOp = scastInput.getDefiningOp<ONNXQuantizeLinearOp>();
     if (!qOp)
       return failure();
@@ -282,8 +291,35 @@ struct ConvertQAndScastToRequantizePattern
       yZpAttr = buildZeroPointAttr(rewriter, outputQPerAxis);
     }
 
-    auto requantizeOp = rewriter.create<XCOMPILERRequantizeOp>(scast.getLoc(),
-        resultType, qOp.getResult(), aScaleAttr, aZpAttr, yScaleAttr, yZpAttr);
+    // Attach Q's quant wrapper via scast; requantize handles scale/zp change
+    // only.
+    RankedTensorType inputQuantTensorTy;
+    if (outputQType) {
+      auto inputQType = quant::UniformQuantizedType::get(outputQType.getFlags(),
+          outputQType.getStorageType(), outputQType.getExpressedType(),
+          qParams->first[0], qParams->second[0],
+          outputQType.getStorageTypeMin(), outputQType.getStorageTypeMax());
+      inputQuantTensorTy =
+          RankedTensorType::get(storageType.getShape(), inputQType);
+    } else {
+      SmallVector<double> scalesDouble(
+          qParams->first.begin(), qParams->first.end());
+      auto inputQPerAxis = quant::UniformQuantizedPerAxisType::get(
+          outputQPerAxis.getFlags(), outputQPerAxis.getStorageType(),
+          outputQPerAxis.getExpressedType(), scalesDouble, qParams->second,
+          outputQPerAxis.getQuantizedDimension(),
+          outputQPerAxis.getStorageTypeMin(),
+          outputQPerAxis.getStorageTypeMax());
+      inputQuantTensorTy =
+          RankedTensorType::get(storageType.getShape(), inputQPerAxis);
+    }
+
+    auto qScast = rewriter.create<quant::StorageCastOp>(
+        qOp.getLoc(), inputQuantTensorTy, qOp.getResult());
+
+    auto requantizeOp =
+        rewriter.create<XCOMPILERRequantizeOp>(scast.getLoc(), resultType,
+            qScast.getResult(), aScaleAttr, aZpAttr, yScaleAttr, yZpAttr);
     rewriter.replaceOp(scast, requantizeOp.getResult());
     return success();
   }
@@ -291,7 +327,7 @@ struct ConvertQAndScastToRequantizePattern
 
 /// Pattern 3: Scast node -> Dequantize node with diff scale and zp
 /// quant.scast(quant_type_1) -> ONNXDequantizeLinear(scale_dq, zp_dq)
-/// Replace with XCOMPILERRequantize(...) ->
+/// Replace with XCOMPILERRequantize(...) -> quant.scast(storage) ->
 /// ONNXDequantizeLinear(scale_dq,zp_dq).
 struct ConvertScastAndDQToRequantizePattern
     : public OpRewritePattern<ONNXDequantizeLinearOp> {
@@ -368,10 +404,17 @@ struct ConvertScastAndDQToRequantizePattern
     auto requantizeOp = rewriter.create<XCOMPILERRequantizeOp>(dqOp.getLoc(),
         resultType, scastInput, aScaleAttr, aZpAttr, yScaleAttr, yZpAttr);
 
-    // Keep DQ to produce f32: DQ(requantize_result, scale_dq, zp_dq)
+    // DQ consumes storage type; strip the quant wrapper after requantize.
+    auto outQuantTy = cast<quant::QuantizedType>(resultType.getElementType());
+    auto storageTy = RankedTensorType::get(
+        resultType.getShape(), outQuantTy.getStorageType());
+    auto storageScast = rewriter.create<quant::StorageCastOp>(
+        dqOp.getLoc(), storageTy, requantizeOp.getResult());
+
+    // Keep DQ to produce f32: DQ(storage, scale_dq, zp_dq)
     auto dqResultType = cast<RankedTensorType>(dqOp.getResult().getType());
     auto newDQOp = rewriter.create<ONNXDequantizeLinearOp>(dqOp.getLoc(),
-        dqResultType, requantizeOp.getResult(), dqOp.getXScale(),
+        dqResultType, storageScast.getResult(), dqOp.getXScale(),
         dqOp.getXZeroPoint(), dqOp.getAxisAttr(), dqOp.getBlockSizeAttr());
 
     rewriter.replaceOp(dqOp, newDQOp.getResult());
@@ -409,8 +452,8 @@ struct ConvertSCastPairToRequantizePass
 
     GreedyRewriteConfig config;
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
-    config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
+    config.setListener(&rnUpdater);
+    config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps);
     if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       signalPassFailure();

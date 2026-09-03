@@ -40,6 +40,7 @@ std::string march;                                     // common for both
 InstrumentStages instrumentStage;                      // common for both
 bool onnxConstPropRoundFPToInt;                        // common for both
 int onnxConstPropExpansionBound;                       // common for both
+int64_t onnxConstPropMaxTileFoldSize;                  // common for both
 std::vector<std::string> onnxConstPropDisablePatterns; // common for both
 bool enableONNXHybridPass;                             // common for both
 std::vector<std::string> functionsToDecompose;         // common for both
@@ -47,11 +48,18 @@ std::string opsForCall;                                // common for both
 bool disableKrnlOpFusion;                              // common for both
 bool disableQuantZeroPoint;                            // common for both
 bool enableUnsafeMathOptimizations;                    // common for both
+bool enableQDQDataMovementCanonicalization;            // common for both
 bool enableKrnlBufferReuse;                            // common for both
-bool enableConvTransposeDecomposeToPhasedConv;         // common for both
-bool enableConvTranspose1dDecomposeToPhasedConv;       // common for both
+std::string onnxTransformOptions;                      // onnx-mlir only
 bool enableQuarkQuantizerLegalization;                 // common for both
 bool disableBatchNormDecompose;                        // common for both
+bool enableReshapeCanonicalization;                    // common for both
+bool enablePositiveAxisCanonicalization;               // common for both
+bool enableExpandCanonicalization;                     // common for both
+bool enableCastDataMovementPatterns;                   // common for both
+bool enableKeepdimsCanonicalization;                   // common for both
+bool enableGatherElementsTileCanonicalization;         // common for both
+bool enableXFEONNXOpsetVerifier;                       // common for both
 bool enableSafeCodeGen;                                // common for both
 bool disableMemRefPrefetch;                            // common for both
 uint64_t compilationNumThreads;                        // common for both
@@ -93,7 +101,6 @@ bool enableParallel;                       // onnx-mlir only
 bool disableSimdOption;                    // onnx-mlir only
 bool enableFastMathOption;                 // onnx-mlir only
 bool disableRecomposeOption;               // onnx-mlir only
-bool enableConvTransposeDecomposeOption;   // onnx-mlir only
 bool enableSimdDataLayout;                 // onnx-mlir only
 bool verifyInputTensors;                   // onnx-mlir only
 bool allowSorting;                         // onnx-mlir only
@@ -103,6 +110,8 @@ std::string modelTag;                      // onnx-mlir only
 bool enableConvOptPass;                    // onnx-mlir only
 bool enableXMCPasses;                      // onnx-mlir only
 bool enableHoistGatherAboveLayerNorm;      // onnx-mlir only
+bool enableMatmulAddFusion;                // onnx-mlir only
+bool enableMatmulToConv;                   // onnx-mlir only
 bool disableConstantProp;                  // onnx-mlir only
 std::vector<std::string> extraLibPaths;    // onnx-mlir only
 std::vector<std::string> extraLibs;        // onnx-mlir only
@@ -223,6 +232,16 @@ static llvm::cl::opt<int, true> onnxConstPropExpansionBoundOpt(
     llvm::cl::location(onnxConstPropExpansionBound), llvm::cl::init(-1),
     llvm::cl::cat(OnnxMlirCommonOptions));
 
+static llvm::cl::opt<int64_t, true> onnxConstPropMaxTileFoldSizeOpt(
+    "onnx-const-prop-max-tile-fold-size",
+    llvm::cl::desc(
+        "Maximum size in bytes of the constant produced when constant "
+        "propagating an onnx.Tile.\n"
+        "The Tile is not folded if the resulting constant would exceed this "
+        "size.\nSet to 0 (the default) to disable the limit."),
+    llvm::cl::location(onnxConstPropMaxTileFoldSize), llvm::cl::init(0),
+    llvm::cl::cat(OnnxMlirCommonOptions));
+
 static llvm::cl::list<std::string, std::vector<std::string>>
     onnxConstPropDisablePatternsOpt("onnx-const-prop-disable-pattern",
         llvm::cl::desc("Named constant propagation pattern to disable.\n"
@@ -269,6 +288,15 @@ static llvm::cl::opt<bool, true> enableUnsafeMathOptimizationsOpt(
     llvm::cl::location(enableUnsafeMathOptimizations), llvm::cl::init(true),
     llvm::cl::cat(OnnxMlirCommonOptions));
 
+static llvm::cl::opt<bool, true> enableQDQDataMovementCanonicalizationOpt(
+    "enable-qdq-data-movement-canonicalization",
+    llvm::cl::desc(
+        "Enable canonicalization patterns that move "
+        "DequantizeLinear/QuantizeLinear through data-movement and view ops "
+        "(default=false)."),
+    llvm::cl::location(enableQDQDataMovementCanonicalization),
+    llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
+
 static llvm::cl::opt<bool, true> enableKrnlBufferReuseOpt(
     "enable-krnl-buffer-reuse",
     llvm::cl::desc("enable buffer reuse within an op in onnx-to-krnl pass "
@@ -308,27 +336,14 @@ static llvm::cl::opt<bool, true> disableRecomposeOptionOpt("disable-recompose",
     llvm::cl::location(disableRecomposeOption), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirOptions));
 
-static llvm::cl::opt<bool, true> disableConvTranposeDecomposeOptionOpt(
-    "enable-convtranspose-decompose",
-    llvm::cl::desc("Enable decomposition of ONNX ConvTranspose operator."),
-    llvm::cl::location(enableConvTransposeDecomposeOption),
-    llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
-
-static llvm::cl::opt<bool, true> enableConvTransposeDecomposeTo4ConvOptionOpt(
-    "enable-convtranspose-decompose-phased-conv",
-    llvm::cl::desc("Enable decomposition of ONNX ConvTranspose operator to 4 "
-                   "phased Conv."),
-    llvm::cl::location(enableConvTransposeDecomposeToPhasedConv),
-    llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
-
-static llvm::cl::opt<bool, true>
-    enableConvTranspose1dDecomposeToPhasedConvOptionOpt(
-        "enable-convtranspose-1d-decompose-phased-conv",
-        llvm::cl::desc(
-            "Enable decomposition of ONNX ConvTranspose 1D operator to "
-            "phased Conv."),
-        llvm::cl::location(enableConvTranspose1dDecomposeToPhasedConv),
-        llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
+static llvm::cl::opt<std::string, true> onnxTransformOptionsOpt(
+    "onnx-transform-options",
+    llvm::cl::desc("Options forwarded to ONNX transform passes. Syntax is "
+                   "space-separated pass options, e.g. "
+                   "\"enable-convtranspose=true "
+                   "enable-instancenorm-decompose=false\"."),
+    llvm::cl::location(onnxTransformOptions), llvm::cl::init(""),
+    llvm::cl::cat(OnnxMlirOptions));
 
 static llvm::cl::opt<bool, true> enableQuarkQuantizerLegalizationOptionOpt(
     "enable-quark-quantizer-legalization",
@@ -343,6 +358,63 @@ static llvm::cl::opt<bool, true> disableBatchNormDecomposeOpt(
         "patterns (default=false). Set to 'true' to keep BatchNorm as a "
         "single op."),
     llvm::cl::location(disableBatchNormDecompose), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableReshapeCanonicalizationOpt(
+    "enable-reshape-canonicalization",
+    llvm::cl::desc(
+        "Enable canonicalization of Flatten/Squeeze/Unsqueeze to Reshape "
+        "(default=true, i.e. the rewrite is enabled by default)."),
+    llvm::cl::location(enableReshapeCanonicalization), llvm::cl::init(true),
+    llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enablePositiveAxisCanonicalizationOpt(
+    "enable-positive-axis-canonicalization",
+    llvm::cl::desc(
+        "Enable canonicalization of negative ONNX axis/axes values to "
+        "positive equivalents when rank is known"),
+    llvm::cl::location(enablePositiveAxisCanonicalization),
+    llvm::cl::init(true), llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableExpandCanonicalizationOpt(
+    "enable-expand-canonicalization",
+    llvm::cl::desc(
+        "Enable canonicalization of static Expand to Tile (same rank) or "
+        "Reshape+Tile (rank increase) (default=false, i.e. the rewrite is "
+        "disabled by default)."),
+    llvm::cl::location(enableExpandCanonicalization), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableKeepdimsCanonicalizationOpt(
+    "enable-keepdims-canonicalization",
+    llvm::cl::desc(
+        "Enable canonicalization of reduce, ArgMin, and ArgMax ops with "
+        "keepdims=0 into keepdims=1 + Reshape (default=false, i.e. the "
+        "rewrite is disabled)."),
+    llvm::cl::location(enableKeepdimsCanonicalization), llvm::cl::init(false),
+    llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableCastDataMovementPatternsOpt(
+    "enable-cast-data-movement-patterns",
+    llvm::cl::desc(
+        "Enable canonicalization that moves Cast through Concat and Slice "
+        "(default=true)."),
+    llvm::cl::location(enableCastDataMovementPatterns), llvm::cl::init(true),
+    llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableGatherElementsTileCanonicalizationOpt(
+    "enable-gather-elements-tile-canonicalization",
+    llvm::cl::desc(
+        "Enable simplification of GatherElements with tiled indices into "
+        "Gather with reshaped indices (default=true)."),
+    llvm::cl::location(enableGatherElementsTileCanonicalization),
+    llvm::cl::init(true), llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true> enableXFEONNXOpsetVerifierOpt(
+    "enable-xfe-onnx-opset-verifier",
+    llvm::cl::desc(
+        "Enable the XFE ONNX opset verifier at the end of the ONNX pipeline."),
+    llvm::cl::location(enableXFEONNXOpsetVerifier), llvm::cl::init(true),
     llvm::cl::cat(OnnxMlirCommonOptions));
 
 // Options for onnx-mlir only
@@ -808,6 +880,18 @@ static llvm::cl::opt<bool, true> enableHoistGatherAboveLayerNormOpt(
         "Enable hoist-gather-above-layernorm in the XMC pipeline. Default is "
         "false."),
     llvm::cl::location(enableHoistGatherAboveLayerNorm), llvm::cl::init(false),
+static llvm::cl::opt<bool, true> enableMatmulAddFusionOpt(
+    "enable-matmul-add-fusion",
+    llvm::cl::desc(
+        "Enable fusing MatMul+Add into XFE MatMul bias (XMC passes only). "
+        "Default is true."),
+    llvm::cl::location(enableMatmulAddFusion), llvm::cl::init(true),
+    llvm::cl::cat(OnnxMlirOptions));
+
+static llvm::cl::opt<bool, true> enableMatmulToConvOpt("enable-matmul-to-conv",
+    llvm::cl::desc("Enable converting MatMul to XFE Conv (XMC passes only). "
+                   "Default is false."),
+    llvm::cl::location(enableMatmulToConv), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirOptions));
 
 static llvm::cl::opt<bool, true> disableConstantPropOpt("disable-constant-prop",

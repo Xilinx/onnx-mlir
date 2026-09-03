@@ -1,4 +1,4 @@
-// Copyright (C) 2022 - 2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2022-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 //===----------------------------------------------------------------------===//
 // ConvertXFEConvToDepthwiseConvPass
@@ -105,6 +105,13 @@ bool isDepthwiseConv(XFEConvOp convOp) {
   // Get group attribute (defaults to 1)
   int64_t group = convOp.getGroup();
 
+  // A grouped/depthwise conv requires group > 1. With group == 1 the op is an
+  // ordinary convolution; for a single-channel input (C_in == 1) the condition
+  // group == input_channels would otherwise be trivially satisfied (1 == 1) and
+  // misclassify a regular conv as depthwise.
+  if (group <= 1)
+    return false;
+
   // Get input X shape to determine number of channels
   Value X = convOp.getX();
   auto xType = mlir::dyn_cast<RankedTensorType>(X.getType());
@@ -151,19 +158,10 @@ bool isDepthwiseConv(XFEConvOp convOp) {
          outputChannels == inputChannels;
 }
 
-/// Extract kernel shape from weights or attribute
+/// Extract kernel shape from weights.
 /// Weight format is OHWI: [C_out, kH, kW, C_in/group] for 2D
 ///                        [C_out, kD, kH, kW, C_in/group] for 3D
 SmallVector<int64_t> getKernelShape(XFEConvOp convOp) {
-  // First try to get from attribute
-  if (auto kernelShapeAttr = convOp.getKernelShapeAttr()) {
-    SmallVector<int64_t> kernelShape;
-    for (auto attr : kernelShapeAttr)
-      kernelShape.push_back(mlir::cast<IntegerAttr>(attr).getInt());
-    return kernelShape;
-  }
-
-  // Otherwise infer from weight shape (OHWI format)
   Value W = convOp.getW();
   auto wType = mlir::dyn_cast<RankedTensorType>(W.getType());
   if (!wType || !wType.hasRank())
@@ -209,7 +207,7 @@ struct ConvertXFEConvToDepthwiseConvPattern
     auto kernelShapeAttr = rewriter.getI64ArrayAttr(kernelShape);
 
     // Get optional attributes
-    auto autoPadAttr = convOp.getAutoPadAttr();
+    auto autoPadAttr = rewriter.getStringAttr("NOTSET");
     auto stridesAttr = convOp.getStridesAttr();
     auto padsAttr = convOp.getPadsAttr();
     auto dilationsAttr = convOp.getDilationsAttr();
@@ -319,9 +317,9 @@ struct ConvertXFEConvToDepthwiseConvPass
     patterns.add<ConvertXFEConvToDepthwiseConvPattern>(context);
 
     GreedyRewriteConfig config;
-    config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
+    config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps);
     onnx_mlir::ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       signalPassFailure();

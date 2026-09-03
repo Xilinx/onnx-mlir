@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+
 // IMPLEMENT YOUR SHAPE INFERENCE HERE
 // This file contains templates - safe to edit and customize
 // Move to: src/Dialect/ONNX/ONNXOps/Additional/XFEShapeInference.cpp
@@ -60,9 +62,14 @@ LogicalResult XFEMatMulBiasOpShapeInference(
   if (!hasShapeAndRank(A) || !hasShapeAndRank(B))
     return success();
 
-  // Reuse the existing MatMul shape helper by creating a temporary helper
-  // The helper computes shape following ONNX MatMul semantics
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to A's. The central `updateType` (which `computeShapeAndUpdateType`
+  // calls) applies the same rule, but we pre-compute the right element type
+  // here so the API contract stays consistent.
   Type elementType = mlir::cast<ShapedType>(A.getType()).getElementType();
+  if (isInQuantizedDomain(op, matmulOp.getResult()))
+    elementType =
+        mlir::cast<ShapedType>(matmulOp.getResult().getType()).getElementType();
 
   // Use ONNXMatMulOpShapeHelper to compute the shape
   // We pass A and B as operands (bias doesn't affect shape)
@@ -106,44 +113,17 @@ LogicalResult XFEConvOpShapeInference(
   int64_t N = xShape[0];             // batch
   int64_t C_out = wShape[0]; // output channels (first dimension in OHWI)
 
-  // Get attributes
-  auto stridesAttr = convOp.getStrides();
-  auto padsAttr = convOp.getPads();
-  auto dilationsAttr = convOp.getDilations();
-  // Default values (all 1s for strides/dilations, 0s for pads)
-  SmallVector<int64_t, 4> strides(numSpatialDims, 1);
-  SmallVector<int64_t, 8> pads(
-      numSpatialDims * 2, 0); // begin and end pads for each dim
-  SmallVector<int64_t, 4> dilations(numSpatialDims, 1);
-
-  // Parse strides
-  if (stridesAttr.has_value()) {
-    auto stridesArray = stridesAttr.value();
-    for (size_t i = 0; i < std::min(stridesArray.size(), strides.size()); ++i) {
-      strides[i] = mlir::cast<IntegerAttr>(stridesArray[i]).getInt();
-    }
-  }
-
-  // Parse dilations
-  if (dilationsAttr.has_value()) {
-    auto dilationsArray = dilationsAttr.value();
-    for (size_t i = 0; i < std::min(dilationsArray.size(), dilations.size());
-        ++i) {
-      dilations[i] = mlir::cast<IntegerAttr>(dilationsArray[i]).getInt();
-    }
-  }
-
-  // Check auto_pad mode
-  StringRef autoPad = convOp.getAutoPad();
-  bool isSamePad = (autoPad == "SAME_UPPER" || autoPad == "SAME_LOWER");
-
-  // Parse explicit pads only when not using auto_pad SAME
-  if (!isSamePad && padsAttr.has_value()) {
-    auto padsArray = padsAttr.value();
-    for (size_t i = 0; i < std::min(padsArray.size(), pads.size()); ++i) {
-      pads[i] = mlir::cast<IntegerAttr>(padsArray[i]).getInt();
-    }
-  }
+  SmallVector<int64_t, 4> strides;
+  SmallVector<int64_t, 4> dilations;
+  SmallVector<int64_t, 8> pads;
+  onnx_mlir::ArrayAttrIntVals(convOp.getStrides(), strides);
+  onnx_mlir::ArrayAttrIntVals(convOp.getDilations(), dilations);
+  onnx_mlir::ArrayAttrIntVals(convOp.getPads(), pads);
+  if ((int64_t)strides.size() != numSpatialDims ||
+      (int64_t)dilations.size() != numSpatialDims ||
+      (int64_t)pads.size() != 2 * numSpatialDims)
+    return op->emitError(
+        "strides, dilations, and pads must match the spatial rank");
 
   // Compute output spatial dimensions
   SmallVector<int64_t, 6> outputShape;
@@ -152,35 +132,23 @@ LogicalResult XFEConvOpShapeInference(
   for (int64_t i = 0; i < numSpatialDims; ++i) {
     int64_t inputDim = xShape[i + 1]; // spatial dimension from input (NHWC)
     int64_t stride = strides[i];
-
-    int64_t outputDim;
-    if (isSamePad) {
-      // SAME padding: output = ceil(input / stride)
-      if (inputDim == ShapedType::kDynamic) {
-        outputDim = ShapedType::kDynamic;
-      } else {
-        outputDim = (inputDim + stride - 1) / stride;
-      }
-    } else {
-      int64_t kernelDim = wShape[i + 1];
-      int64_t padBegin = pads[i];
-      int64_t padEnd = pads[numSpatialDims + i];
-      int64_t dilation = dilations[i];
-      outputDim = computeChannelLastSpatialDim(
-          inputDim, kernelDim, padBegin, padEnd, stride, dilation);
-    }
+    int64_t kernelDim = wShape[i + 1];
+    int64_t padBegin = pads[i];
+    int64_t padEnd = pads[numSpatialDims + i];
+    int64_t dilation = dilations[i];
+    int64_t outputDim = computeChannelLastSpatialDim(
+        inputDim, kernelDim, padBegin, padEnd, stride, dilation);
     outputShape.push_back(outputDim);
   }
 
   outputShape.push_back(C_out); // output channels
 
-  // Set the result type
-  // CRITICAL: Preserve existing element type if already set (e.g., quantized
-  // types). Only fall back to input element type if result is unranked
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to X's.
   Type elementType = xType.getElementType();
-  if (auto existingType = dyn_cast<ShapedType>(convOp.getResult().getType())) {
-    elementType = existingType.getElementType();
-  }
+  if (isInQuantizedDomain(op, convOp.getResult()))
+    elementType =
+        mlir::cast<ShapedType>(convOp.getResult().getType()).getElementType();
   auto resultType = RankedTensorType::get(outputShape, elementType);
   convOp.getResult().setType(resultType);
 
@@ -217,7 +185,10 @@ LogicalResult XFEConvTransposeOpShapeInference(
   int64_t rank = xShape.size();
   int64_t numSpatialDims = rank - 2; // exclude batch and channel
   int64_t N = xShape[0];             // batch
-  int64_t C_out = wShape[0]; // output channels (first dimension in OHWI)
+  // For a (grouped) ConvTranspose the OHWI weight's first dim is
+  // C_out/group, so the total output channels are (C_out/group) * group.
+  int64_t group = convTransposeOp.getGroup();
+  int64_t C_out = wShape[0] * group; // total output channels
 
   // Get attributes
   auto stridesAttr = convTransposeOp.getStrides();
@@ -300,14 +271,12 @@ LogicalResult XFEConvTransposeOpShapeInference(
 
   outputShape.push_back(C_out); // output channels
 
-  // Set the result type
-  // CRITICAL: Preserve existing element type if already set (e.g., quantized
-  // types)
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to X's.
   Type elementType = xType.getElementType();
-  if (auto existingType =
-          dyn_cast<ShapedType>(convTransposeOp.getResult().getType())) {
-    elementType = existingType.getElementType();
-  }
+  if (isInQuantizedDomain(op, convTransposeOp.getResult()))
+    elementType = mlir::cast<ShapedType>(convTransposeOp.getResult().getType())
+                      .getElementType();
   auto resultType = RankedTensorType::get(outputShape, elementType);
   convTransposeOp.getResult().setType(resultType);
 
@@ -402,12 +371,12 @@ LogicalResult XFEAveragePoolOpShapeInference(
 
   outputShape.push_back(C); // channels
 
-  // CRITICAL: Preserve existing element type if already set (e.g., quantized
-  // types)
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to X's.
   Type elementType = xType.getElementType();
-  if (auto existingType = dyn_cast<ShapedType>(poolOp.getResult().getType())) {
-    elementType = existingType.getElementType();
-  }
+  if (isInQuantizedDomain(op, poolOp.getResult()))
+    elementType =
+        mlir::cast<ShapedType>(poolOp.getResult().getType()).getElementType();
   auto resultType = RankedTensorType::get(outputShape, elementType);
   poolOp.getResult().setType(resultType);
 
@@ -514,12 +483,12 @@ LogicalResult XFEMaxPoolOpShapeInference(
 
   outputShape.push_back(C); // channels
 
-  // CRITICAL: Preserve existing element type if already set (e.g., quantized
-  // types)
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to X's.
   Type elementType = xType.getElementType();
-  if (auto existingType = dyn_cast<ShapedType>(poolOp.getResult().getType())) {
-    elementType = existingType.getElementType();
-  }
+  if (isInQuantizedDomain(op, poolOp.getResult()))
+    elementType =
+        mlir::cast<ShapedType>(poolOp.getResult().getType()).getElementType();
   auto resultType = RankedTensorType::get(outputShape, elementType);
   poolOp.getResult().setType(resultType);
 
@@ -557,12 +526,12 @@ LogicalResult XFEGlobalAveragePoolOpShapeInference(
   }
   outputShape.push_back(C); // channels
 
-  // CRITICAL: Preserve existing element type if already set (e.g., quantized
-  // types)
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to X's.
   Type elementType = xType.getElementType();
-  if (auto existingType = dyn_cast<ShapedType>(poolOp.getResult().getType())) {
-    elementType = existingType.getElementType();
-  }
+  if (isInQuantizedDomain(op, poolOp.getResult()))
+    elementType =
+        mlir::cast<ShapedType>(poolOp.getResult().getType()).getElementType();
   auto resultType = RankedTensorType::get(outputShape, elementType);
   poolOp.getResult().setType(resultType);
 
@@ -600,12 +569,12 @@ LogicalResult XFEGlobalMaxPoolOpShapeInference(
   }
   outputShape.push_back(C); // channels
 
-  // CRITICAL: Preserve existing element type if already set (e.g., quantized
-  // types)
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to X's.
   Type elementType = xType.getElementType();
-  if (auto existingType = dyn_cast<ShapedType>(poolOp.getResult().getType())) {
-    elementType = existingType.getElementType();
-  }
+  if (isInQuantizedDomain(op, poolOp.getResult()))
+    elementType =
+        mlir::cast<ShapedType>(poolOp.getResult().getType()).getElementType();
   auto resultType = RankedTensorType::get(outputShape, elementType);
   poolOp.getResult().setType(resultType);
 
@@ -633,10 +602,12 @@ LogicalResult XFEBatchNormalizationOpShapeInference(
   // Output shape: same as input
   SmallVector<int64_t, 6> outputShape(inputShape.begin(), inputShape.end());
 
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to the input's.
   Type elementType = inputType.getElementType();
-  if (auto existingType = dyn_cast<ShapedType>(bnOp.getY().getType())) {
-    elementType = existingType.getElementType();
-  }
+  if (isInQuantizedDomain(op, bnOp.getY()))
+    elementType =
+        mlir::cast<ShapedType>(bnOp.getY().getType()).getElementType();
   auto resultType = RankedTensorType::get(outputShape, elementType);
   bnOp.getY().setType(resultType);
 
@@ -664,10 +635,12 @@ LogicalResult XFEInstanceNormalizationOpShapeInference(
   // Output shape: same as input
   SmallVector<int64_t, 6> outputShape(inputShape.begin(), inputShape.end());
 
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to the input's.
   Type elementType = inputType.getElementType();
-  if (auto existingType = dyn_cast<ShapedType>(normOp.getResult().getType())) {
-    elementType = existingType.getElementType();
-  }
+  if (isInQuantizedDomain(op, normOp.getResult()))
+    elementType =
+        mlir::cast<ShapedType>(normOp.getResult().getType()).getElementType();
   auto resultType = RankedTensorType::get(outputShape, elementType);
   normOp.getResult().setType(resultType);
 
@@ -693,10 +666,12 @@ LogicalResult XFEGroupNormalizationOpShapeInference(
 
   SmallVector<int64_t, 6> outputShape(inputShape.begin(), inputShape.end());
 
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to the input's.
   Type elementType = inputType.getElementType();
-  if (auto existingType = dyn_cast<ShapedType>(gnOp.getY().getType())) {
-    elementType = existingType.getElementType();
-  }
+  if (isInQuantizedDomain(op, gnOp.getY()))
+    elementType =
+        mlir::cast<ShapedType>(gnOp.getY().getType()).getElementType();
   auto resultType = RankedTensorType::get(outputShape, elementType);
   gnOp.getY().setType(resultType);
 
@@ -749,10 +724,12 @@ LogicalResult XFEDepthToSpaceOpShapeInference(
 
   SmallVector<int64_t, 4> outputShape = {N, H_out, W_out, C_out};
 
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to the input's.
   Type elementType = inputType.getElementType();
-  if (auto existingType = dyn_cast<ShapedType>(d2sOp.getResult().getType())) {
-    elementType = existingType.getElementType();
-  }
+  if (isInQuantizedDomain(op, d2sOp.getResult()))
+    elementType =
+        mlir::cast<ShapedType>(d2sOp.getResult().getType()).getElementType();
   auto resultType = RankedTensorType::get(outputShape, elementType);
   d2sOp.getResult().setType(resultType);
 
@@ -807,10 +784,12 @@ LogicalResult XFESpaceToDepthOpShapeInference(
 
   SmallVector<int64_t, 4> outputShape = {N, H_out, W_out, C_out};
 
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to the input's.
   Type elementType = inputType.getElementType();
-  if (auto existingType = dyn_cast<ShapedType>(s2dOp.getResult().getType())) {
-    elementType = existingType.getElementType();
-  }
+  if (isInQuantizedDomain(op, s2dOp.getResult()))
+    elementType =
+        mlir::cast<ShapedType>(s2dOp.getResult().getType()).getElementType();
   auto resultType = RankedTensorType::get(outputShape, elementType);
   s2dOp.getResult().setType(resultType);
 
@@ -912,14 +891,12 @@ LogicalResult XFEResizeOpShapeInference(
     return success();
   }
 
-  // Set the result type
-  // CRITICAL: Preserve existing element type if already set (e.g., quantized
-  // types)
+  // In a quant domain, preserve the result's element type; otherwise default
+  // to X's.
   Type elementType = xType.getElementType();
-  if (auto existingType =
-          dyn_cast<ShapedType>(resizeOp.getResult().getType())) {
-    elementType = existingType.getElementType();
-  }
+  if (isInQuantizedDomain(op, resizeOp.getResult()))
+    elementType =
+        mlir::cast<ShapedType>(resizeOp.getResult().getType()).getElementType();
   auto resultType = RankedTensorType::get(outputShape, elementType);
   resizeOp.getResult().setType(resultType);
 

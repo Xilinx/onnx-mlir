@@ -33,7 +33,7 @@ func.func @add_two_quantized_constants() -> tensor<2xf32> {
 // CHECK:         onnx.Constant {value = dense<[10, 20]> : tensor<2xui8>} : tensor<2x!quant.uniform<u8:f32, 5.000000e-01>>
 // CHECK:         onnx.Constant {value = dense<[6, 12]> : tensor<2xui8>} : tensor<2x!quant.uniform<u8:f32, 2.500000e-01>>
 // CHECK:         onnx.Add
-// CHECK-SAME:      (tensor<2x!quant.uniform<u8:f32, 5.000000e-01>>, tensor<2x!quant.uniform<u8:f32, 2.500000e-01>>)
+// CHECK-SAME:      (tensor<2x!quant.uniform<u8:f32, 2.500000e-01>>, tensor<2x!quant.uniform<u8:f32, 5.000000e-01>>)
 
 
 func.func @mul_two_quantized_constants() -> tensor<2xf32> {
@@ -62,7 +62,7 @@ func.func @mul_two_quantized_constants() -> tensor<2xf32> {
 // CHECK:         onnx.Constant {value = dense<[10, 20]> : tensor<2xui8>} : tensor<2x!quant.uniform<u8:f32, 5.000000e-01>>
 // CHECK:         onnx.Constant {value = dense<[8, 4]> : tensor<2xui8>} : tensor<2x!quant.uniform<u8:f32, 2.500000e-01>>
 // CHECK:         onnx.Mul
-// CHECK-SAME:      (tensor<2x!quant.uniform<u8:f32, 5.000000e-01>>, tensor<2x!quant.uniform<u8:f32, 2.500000e-01>>)
+// CHECK-SAME:      (tensor<2x!quant.uniform<u8:f32, 2.500000e-01>>, tensor<2x!quant.uniform<u8:f32, 5.000000e-01>>)
 
 
 func.func @sub_two_quantized_constants() -> tensor<2xf32> {

@@ -4,7 +4,7 @@
 
 //===---------------- Resize.cpp - Resize Op-------------------------------===//
 //
-// Copyright (c) 2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -178,7 +178,7 @@ public:
     Location loc = op->getLoc();
     OpAdaptor adaptor(operands, op->getAttrDictionary());
 
-    TosaBuilder tosaBuilder(rewriter, loc);
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(rewriter, loc);
 
     Value input = adaptor.getX();
     auto inputType = mlir::dyn_cast<RankedTensorType>(input.getType());
@@ -305,7 +305,7 @@ public:
             halfPixel, isNearest, isNearestModeFloor);
 
     // Convert input [N,IC,IH,IW] -> [N,IH,IW,IC]
-    Value newInput = tosaBuilder.transpose(input, {0, 2, 3, 1});
+    Value newInput = create.onnx.transposeInt64(input, {0, 2, 3, 1});
 
     // Create resizeOp
     auto scale = rewriter.getDenseI64ArrayAttr({yDimension.numerator,
@@ -324,7 +324,7 @@ public:
         newOutputType, newInput, scale, offset, border, resizeModeAttr);
 
     // Convert output [N,OH,OW,OC] -> [N,OC,OH,OW]
-    Value newOutput = tosaBuilder.transpose(resize, {0, 3, 1, 2});
+    Value newOutput = create.onnx.transposeInt64(resize, {0, 3, 1, 2});
 
     rewriter.replaceOp(resizeOp, newOutput);
 

@@ -83,6 +83,41 @@ func.func @test_concat_from_sequence_verifier_2(%arg0 : !onnx.Seq<tensor<5x5x1x3
 
 // -----
 
+func.func @test_expand_verifier_static_mismatch(%arg0 : tensor<8xf32>) -> tensor<*xf32> {
+  %shape = onnx.Constant dense<[16]> : tensor<1xi64>
+  // expected-error @+1 {{onnx.Expand: input dimension 8 at index 0 is incompatible with target shape dimension 16 at index 0: two corresponding dimensions must have the same value, or one of them is equal to 1}}
+  %0 = "onnx.Expand"(%arg0, %shape) : (tensor<8xf32>, tensor<1xi64>) -> tensor<*xf32>
+  "onnx.Return"(%0) : (tensor<*xf32>) -> ()
+}
+
+// -----
+
+func.func @test_expand_verifier_negative_shape(%arg0 : tensor<8xf32>) -> tensor<*xf32> {
+  %shape = onnx.Constant dense<[-1]> : tensor<1xi64>
+  // expected-error @+1 {{onnx.Expand: shape dimension -1 at index 0 is negative}}
+  %0 = "onnx.Expand"(%arg0, %shape) : (tensor<8xf32>, tensor<1xi64>) -> tensor<*xf32>
+  "onnx.Return"(%0) : (tensor<*xf32>) -> ()
+}
+
+// -----
+
+func.func @test_expand_verifier_negative_shape_multidim(%arg0 : tensor<2x8xf32>) -> tensor<*xf32> {
+  %shape = onnx.Constant dense<[3, -2]> : tensor<2xi64>
+  // expected-error @+1 {{onnx.Expand: shape dimension -2 at index 1 is negative}}
+  %0 = "onnx.Expand"(%arg0, %shape) : (tensor<2x8xf32>, tensor<2xi64>) -> tensor<*xf32>
+  "onnx.Return"(%0) : (tensor<*xf32>) -> ()
+}
+
+// -----
+
+func.func @test_expand_verifier_target_one_is_legal(%arg0 : tensor<2x1x6x5xf32>) -> tensor<2x3x6x5xf32> {
+  %shape = onnx.Constant dense<[1, 3, 6, 1]> : tensor<4xi64>
+  %0 = "onnx.Expand"(%arg0, %shape) : (tensor<2x1x6x5xf32>, tensor<4xi64>) -> tensor<2x3x6x5xf32>
+  "onnx.Return"(%0) : (tensor<2x3x6x5xf32>) -> ()
+}
+
+// -----
+
 func.func @test_dim_verifier_1(%arg0 : tensor<*xf32>) -> tensor<i64> {
   // expected-error @+1 {{input must have shape and rank}}
   %1 = "onnx.Dim"(%arg0) {axis = 0 : si64} : (tensor<*xf32>)  -> tensor<i64>
@@ -1047,4 +1082,48 @@ func.func @test_bfp_quant_dequant_axis_negative_out_of_range(%arg0: tensor<16x32
   // expected-error @+1 {{'onnx.AMDQuarkBFPQuantizeDequantizeOp' op axis attribute value -3 is out of range [-2, 2)}}
   %0 = "onnx.AMDQuarkBFPQuantizeDequantizeOp"(%arg0) { axis = -3: si64 }  : (tensor<16x32xf32>) -> tensor<16x32xf32>
   return %0 : tensor<16x32xf32>
+}
+
+// -----
+
+// COM: Unsigned index tensors use [0, s-1] bounds instead of [-s, s-1].
+func.func @test_gather_elements_verifier_ui16_oob(%arg0 : tensor<3xf32>) -> tensor<*xf32> {
+  // expected-error @+2 {{onnx.GatherElements: 'indices' value is 3, accepted range is [0, 2]}}
+  %indices = "onnx.Constant"() {value = dense<[3]> : tensor<1xui16>} : () -> tensor<1xui16>
+  %1 = "onnx.GatherElements"(%arg0, %indices) {axis = 0 : si64} : (tensor<3xf32>, tensor<1xui16>)  -> tensor<*xf32>
+  "onnx.Return"(%1) : (tensor<*xf32>) -> ()
+}
+
+// -----
+
+func.func @test_gatherND_verifier_ui16_oob(%arg0 : tensor<3x4x4x4xf32>) -> tensor<*xf32> {
+  // expected-error @+2 {{onnx.GatherND: 'indices[0]' value is 3, accepted range is [0, 2]}}
+  %indices = "onnx.Constant"() {value = dense<[[3, 0], [0, 1], [1, 2]]> : tensor<3x2xui16>} : () -> tensor<3x2xui16>
+  %1 = "onnx.GatherND"(%arg0, %indices) : (tensor<3x4x4x4xf32>, tensor<3x2xui16>)  -> tensor<*xf32>
+  "onnx.Return"(%1) : (tensor<*xf32>) -> ()
+}
+
+// -----
+
+func.func @test_scatterelements_verifier_ui16_oob(%arg0 : tensor<3xf32>, %arg1 : tensor<3xf32>) -> tensor<*xf32> {
+  // expected-error @+2 {{onnx.ScatterElements: 'indices' value is 3, accepted range is [0, 2]}}
+  %indices = "onnx.Constant"() {value = dense<[3]> : tensor<1xui16>} : () -> tensor<1xui16>
+  %1 = "onnx.ScatterElements"(%arg0, %indices, %arg1) {axis = 0 : si64} : (tensor<3xf32>, tensor<1xui16>, tensor<3xf32>)  -> tensor<*xf32>
+  "onnx.Return"(%1) : (tensor<*xf32>) -> ()
+}
+
+// -----
+
+func.func @test_argmax_verifier_ui16_axis_dim_oob(%arg0 : tensor<2x70000xf32>) -> tensor<2xui16> {
+  // expected-error @+1 {{onnx.ArgMax: 'reduced' value is 69999, accepted range is [0, 65535]}}
+  %1 = "onnx.ArgMax"(%arg0) {axis = 1 : si64, keepdims = 0 : si64} : (tensor<2x70000xf32>) -> tensor<2xui16>
+  "onnx.Return"(%1) : (tensor<2xui16>) -> ()
+}
+
+// -----
+
+func.func @test_argmin_verifier_ui16_axis_dim_oob(%arg0 : tensor<2x70000xf32>) -> tensor<2xui16> {
+  // expected-error @+1 {{onnx.ArgMin: 'reduced' value is 69999, accepted range is [0, 65535]}}
+  %1 = "onnx.ArgMin"(%arg0) {axis = 1 : si64, keepdims = 0 : si64} : (tensor<2x70000xf32>) -> tensor<2xui16>
+  "onnx.Return"(%1) : (tensor<2xui16>) -> ()
 }

@@ -4,7 +4,7 @@
 
 //===------------- Split.cpp - Split Op---------===//
 //
-// Copyright (c) 2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -15,6 +15,7 @@
 #include "src/Conversion/ONNXToTOSA/DialectBuilder.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
+#include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 
 using namespace mlir;
@@ -47,7 +48,7 @@ public:
     if (failed(shapeHelper.computeShape()))
       return rewriter.notifyMatchFailure(op, "could not compute shape.");
 
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
+    OnnxBuilder onnxBuilder(rewriter, op->getLoc());
     uint64_t outputNum = op.getNumResults();
     SmallVector<Value, 4> slices;
     slices.reserve(outputNum);
@@ -60,7 +61,7 @@ public:
       DimsExpr outputDim = shapeHelper.getOutputDims(i);
       IndexExpr::getShape(outputDim, size);
       starts[splitAxis] = start;
-      slices.push_back(tosaBuilder.slice(input, size, starts));
+      slices.push_back(onnxBuilder.slice(input, starts, size));
       start += size[splitAxis];
     }
     rewriter.replaceOp(op, slices);

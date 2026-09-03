@@ -34,8 +34,10 @@
 #include "mlir/IR/OpImplementation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
 
@@ -178,11 +180,28 @@ int64_t ArrayAttrIntVal(mlir::ArrayAttr a, int i);
 int64_t ArrayAttrIntVal(std::optional<mlir::ArrayAttr> a, int i);
 void ArrayAttrIntVals(mlir::ArrayAttr a, mlir::SmallVectorImpl<int64_t> &i);
 
+/// Explicit convolution geometry. `strides` and `dilations` hold one entry per
+/// spatial dim; `pads` holds two, laid out as
+/// [x1_begin, ..., xN_begin, x1_end, ..., xN_end].
+struct ConvGeometry {
+  llvm::SmallVector<int64_t> strides;
+  llvm::SmallVector<int64_t> dilations;
+  llvm::SmallVector<int64_t> pads;
+};
+
+/// Get the geometry of `convOp`, substituting the ONNX defaults for
+/// absent attributes and resolving auto_pad into explicit pads.
+mlir::FailureOr<ConvGeometry> getConvGeometry(mlir::ONNXConvOp convOp);
+
 mlir::ElementsAttr getElementAttributeFromONNXValue(mlir::Value value);
 
 // Get a ElementsAttr from a value that is defined by a ConstantLike op that
 // folds to an ElementsAttr
 mlir::ElementsAttr getElementAttributeFromConstLikeValue(mlir::Value value);
+
+// Returns Dense- or DisposableElementsAttr of any ConstantLike producer,
+// or nullptr if the value is not a dense/disposable constant.
+mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 
 [[nodiscard]] bool isConstLikeValue(mlir::Value value);
 
@@ -193,11 +212,65 @@ bool compareValueFromElementAttribute(
 
 mlir::ONNXConstantOp getONNXConstantOp(mlir::Value value);
 
-// Obtain an array of int64_t values stored in ONNXConstantOp and append it to
-// the given SmallVector iRes.
+// Obtain an array of int64_t values stored in a ConstantLike integer tensor and
+// append it to the given SmallVector iRes. Accepts any integer element type.
 // Return true if successfully obtaining the array. Otherwise, false.
 bool getI64ValuesFromONNXConstantOp(
     mlir::Value val, mlir::SmallVectorImpl<int64_t> &iRes);
+
+// Reads the integer values of any ConstantLike producer as int64_t, returning
+// an empty vector when the value is not a constant integer tensor.
+mlir::SmallVector<int64_t> valToVector(mlir::Value val);
+
+// Classifies operands that carry scalar axis or axes values. UnsqueezeAxes is
+// distinct because negative insertion axes are normalized against output rank.
+enum class ONNXAxisOperandKind { None, Scalar, Axes, UnsqueezeAxes };
+enum class ONNXAxisValueSource { Attribute, Operand };
+enum class ONNXAxisRankKind {
+  None,
+  FirstOperand,
+  FirstOperandMinusOne,
+  FirstOperandPlusOne,
+  ConcatFromSequence,
+  UnsqueezeOutput
+};
+
+struct ONNXAxisValueSpec {
+  ONNXAxisOperandKind kind;
+  ONNXAxisValueSource source;
+  llvm::StringRef attrName;
+  unsigned index;
+  bool canCanonicalize;
+  ONNXAxisRankKind rankKind;
+  bool includeRank;
+};
+
+// Returns the known axis/axes attribute or operand for an ONNX op.
+std::optional<ONNXAxisValueSpec> getONNXAxisValueSpec(mlir::Operation *op);
+
+// Reads axis values for a spec returned by getONNXAxisValueSpec().
+[[nodiscard]] bool getONNXAxisValues(mlir::Operation *op,
+    const ONNXAxisValueSpec &spec, mlir::SmallVectorImpl<int64_t> &values);
+
+// Returns the rank used to validate and normalize the axis values for `spec`.
+// `axesCount` is only used for Unsqueeze, where axes are normalized against the
+// output rank.
+[[nodiscard]] std::optional<int64_t> getONNXAxisNormalizationRank(
+    mlir::Operation *op, const ONNXAxisValueSpec &spec, int64_t axesCount);
+
+// Normalizes an axis to its non-negative equivalent. Returns std::nullopt when
+// the axis is out of range.
+[[nodiscard]] std::optional<int64_t> normalizeONNXAxisValue(
+    int64_t axis, int64_t rank, bool includeRank = false);
+
+// Normalizes a list of axes. The returned bool indicates whether any value
+// changed; failure means one of the axes was out of range.
+[[nodiscard]] mlir::FailureOr<bool> normalizeONNXAxisValues(
+    llvm::ArrayRef<int64_t> axes, int64_t rank, bool includeRank,
+    mlir::SmallVectorImpl<int64_t> &normalized);
+
+// Returns true if the op carries any known negative axis value.
+[[nodiscard]] bool hasNegativeONNXAxisValue(mlir::Operation *op);
 
 // Read a single-element i64 ONNX constant `v` into `out`. Returns false if
 // the value is not a 1-element i64 constant.
@@ -214,6 +287,23 @@ bool getI64ValuesFromONNXConstantOp(
 // optional result of some other op (e.g. ONNXDropoutOp mask result).
 // Note: It's ok to inline the isa<NoneType> test and not call this function.
 inline bool isNoneValue(mlir::Value value);
+
+/// Flatten a multi-dimensional index into a linear (row-major) offset.
+/// Given a tensor `shape` and a same-rank `index`, returns the position of that
+/// element in row-major (C-contiguous) memory, i.e.
+/// `((index[0] * shape[1] + index[1]) * shape[2] + ...)`.
+/// This is the inverse of `offsetToIndex`.
+/// Example: shape = [2, 3, 4], index = [1, 2, 3] -> ((1*3 + 2)*4 + 3) = 23.
+int64_t indexToOffset(
+    llvm::ArrayRef<int64_t> shape, llvm::ArrayRef<int64_t> index);
+
+/// Expand a linear (row-major) offset into a multi-dimensional index.
+/// Given a tensor `shape` and a flat `offset`, returns the coordinates of that
+/// element under row-major (C-contiguous) layout. The result has the same rank
+/// as `shape`. This is the inverse of `indexToOffset`.
+/// Example: shape = [2, 3, 4], offset = 23 -> [1, 2, 3].
+llvm::SmallVector<int64_t> offsetToIndex(
+    llvm::ArrayRef<int64_t> shape, int64_t offset);
 
 //===----------------------------------------------------------------------===//
 // Support for BatchNorm
@@ -244,6 +334,14 @@ bool isScalarConstantTensor(mlir::Value v);
 bool hasShapeAndRank(mlir::Value val);
 bool hasShapeAndRank(mlir::Operation *op);
 
+/// Returns true if `op` is in a quantization domain — i.e. either `result`
+/// already has a `!quant.uniform<...>` element type, or at least one of
+/// `op`'s operands does. Shape inference uses this to decide whether to
+/// preserve the result's element type verbatim (so an operand's quant type
+/// cannot leak onto a non-quant result, and vice versa) instead of copying
+/// the operand's element type onto the result.
+bool isInQuantizedDomain(mlir::Operation *op, mlir::Value result);
+
 /// Test if a value has only one use except ONNXDimOp.
 bool hasOneUseExceptDimOp(mlir::Value val);
 
@@ -271,6 +369,10 @@ mlir::DenseElementsAttr createDenseElementsAttrFromShapeAtIndex(
 mlir::DenseElementsAttr createDenseElementsAttrFromSize(
     mlir::PatternRewriter &rewriter, mlir::Value value);
 
+// Create a rank-1 DenseElementsAttr from an existing ArrayAttr.
+mlir::DenseElementsAttr createDenseArrayAttr(
+    mlir::PatternRewriter &rewriter, mlir::ArrayAttr origAttrs);
+
 // Create an ArrayAttr from a dense ConstantOp
 mlir::ArrayAttr createArrayAttrFromConstantOp(mlir::ONNXConstantOp constOp);
 
@@ -287,11 +389,22 @@ RESULT_TYPE getScalarValue(mlir::ElementsAttr denseAttr, mlir::Type type);
 template <typename RESULT_TYPE>
 RESULT_TYPE getScalarValue(mlir::ONNXConstantOp constantOp);
 
+// Read a scalar (single-element) constant Value into a double. getScalarValue
+// handles float (incl. f16/bf16) and integer storage. Fails if \p v is
+// absent/None or not a single-element constant.
+mlir::FailureOr<double> readScalarConstant(mlir::Value v);
+
 /// Return the wide type of a value.
 WideNum asWideNum(double n, mlir::Type elemType);
 
 /// Checks whether a constant tensor's elements are all equal to a given scalar.
 bool isConstOf(mlir::Value constValue, double n);
+
+/// Returns true when broadcasting `source` against `target` is guaranteed not
+/// to change the target shape. This is stricter than being broadcast
+/// compatible: a source dim may only be 1 or match the target dim exactly, so
+/// e.g. 2x1 against 1x3 is compatible but not shape preserving.
+bool isShapePreservingBroadcast(mlir::Value source, mlir::Value target);
 
 /// True if \p attr is non-null and its numeric value differs from \p expected
 /// by at most \p epsilon (using \p attr's value converted to double).
@@ -500,8 +613,18 @@ bool isIdentityReshape(
 bool isIdentityReshape(mlir::Value input, mlir::Value output,
     const DimAnalysis *dimAnalysis = nullptr);
 
-bool isDequantQuantSame(
-    mlir::ONNXDequantizeLinearOp dqOp, mlir::ONNXQuantizeLinearOp qOp);
+/// Returns true if the DequantizeLinear -> QuantizeLinear pair is redundant and
+/// can be bypassed. Only per-tensor (scalar scale/zero-point) pairs with an
+/// integer storage type are eligible; per-axis/blocked quantization and
+/// non-integer storage are never bypassed.
+///
+/// Scale and zero-point are judged jointly: the pair is redundant when the
+/// composite DQ->Q maps every storage integer back to within \p
+/// maxRoundTripDiff codes over the full range, using the same
+/// round-to-nearest-even semantics as the QuantizeLinear lowering.
+/// maxRoundTripDiff = 0 (the default) requires an exact round-trip identity.
+bool isDequantQuantSame(mlir::ONNXDequantizeLinearOp dqOp,
+    mlir::ONNXQuantizeLinearOp qOp, int64_t maxRoundTripDiff = 0);
 
 /// Return true if the (element) type carries a `quant::QuantizedType`.
 /// Convenient for guarding rewrite patterns that are not valid on quantized

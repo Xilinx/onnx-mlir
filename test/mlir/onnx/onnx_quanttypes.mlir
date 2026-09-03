@@ -34,7 +34,7 @@ func.func @matmul_add(%arg0: tensor<1x128x768xf32>) -> tensor<1x128x768xf32> {
 // CHECK-NEXT: onnx.MatMul
 // CHECK-SAME: (tensor<1x128x768x!quant.uniform<u16:f32, 2.1302925597410649E-4:35166>>, tensor<768x768x!quant.uniform<u8:f32, 0.0043040169402956963:137>>) -> tensor<1x128x768x!quant.uniform<u16:f32, 2.0635200780816376E-4:31929>>
 // CHECK-NEXT: onnx.Add
-// CHECK-SAME: (tensor<768x!quant.uniform<u16:f32, 6.7978078277519671E-7:41309>>, tensor<1x128x768x!quant.uniform<u16:f32, 2.0635200780816376E-4:31929>>) -> tensor<1x128x768x!quant.uniform<u16:f32, 2.0647853671107441E-4:31907>>
+// CHECK-SAME: (tensor<1x128x768x!quant.uniform<u16:f32, 2.0635200780816376E-4:31929>>, tensor<768x!quant.uniform<u16:f32, 6.7978078277519671E-7:41309>>) -> tensor<1x128x768x!quant.uniform<u16:f32, 2.0647853671107441E-4:31907>>
 // CHECK-NEXT: quant.scast
 // CHECK-SAME: tensor<1x128x768x!quant.uniform<u16:f32, 2.0647853671107441E-4:31907>> to tensor<1x128x768xui16>
 // CHECK-NEXT: onnx.DequantizeLinear
@@ -346,3 +346,28 @@ func.func @split_dq_mixed_users(%arg0: tensor<1x512x20x20xf32>) -> (tensor<1x512
 // CHECK-SAME: to tensor<1x512x20x20x!quant.uniform<u16:f32, 4.1181972483173013E-4:31519>>
 // CHECK: onnx.Transpose
 // CHECK-SAME: tensor<1x512x20x20x!quant.uniform<u16:f32, 4.1181972483173013E-4:31519>>
+
+// Test that QuantizeLinear with multi-use operand is not converted
+func.func @multiuse_quantizelinear(%arg0: tensor<1x199x63x256xf32>, %arg1: tensor<1x199x63x256xf32>) -> (tensor<1x199x63x256xf32>, tensor<1x199x63x256xf32>) {
+  %0 = onnx.Constant dense<26712> : tensor<ui16>
+  %1 = onnx.Constant dense<1.19830562E-4> : tensor<f32>
+  %2 = onnx.Constant dense<26110> : tensor<ui16>
+  %3 = onnx.Constant dense<1.20761768E-4> : tensor<f32>
+  %4 = onnx.Constant dense<102> : tensor<ui8>
+  %5 = onnx.Constant dense<0.0310357753> : tensor<f32>
+  %6 = "onnx.QuantizeLinear"(%arg1, %1, %0) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x199x63x256xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x199x63x256xui16>
+  %7 = "onnx.DequantizeLinear"(%6, %1, %0) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x199x63x256xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x199x63x256xf32>
+  %8 = "onnx.Relu"(%7) : (tensor<1x199x63x256xf32>) -> tensor<1x199x63x256xf32>
+  %9 = "onnx.QuantizeLinear"(%8, %3, %2) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x199x63x256xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x199x63x256xui16>
+  %10 = "onnx.DequantizeLinear"(%9, %3, %2) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x199x63x256xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x199x63x256xf32>
+  %11 = "onnx.QuantizeLinear"(%8, %5, %4) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x199x63x256xf32>, tensor<f32>, tensor<ui8>) -> tensor<1x199x63x256xui8>
+  %12 = "onnx.DequantizeLinear"(%11, %5, %4) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x199x63x256xui8>, tensor<f32>, tensor<ui8>) -> tensor<1x199x63x256xf32>
+  return %10, %12 : tensor<1x199x63x256xf32>, tensor<1x199x63x256xf32>
+}
+
+// CHECK-LABEL: @multiuse_quantizelinear
+// CHECK: [[RELU:%[0-9]+]] = "onnx.Relu"
+// CHECK-SAME: quant.uniform
+// CHECK-SAME: -> tensor<1x199x63x256xf32>
+// CHECK: "onnx.QuantizeLinear"([[RELU]], {{%[0-9]+}}, {{%[0-9]+}})
+// CHECK: "onnx.QuantizeLinear"([[RELU]], {{%[0-9]+}}, {{%[0-9]+}})

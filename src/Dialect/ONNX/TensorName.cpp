@@ -7,8 +7,10 @@
 #include <llvm/Support/ErrorHandling.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/TypeUtilities.h>
+#include <mlir/Interfaces/SideEffectInterfaces.h>
 
 #include "src/Dialect/ONNX/ONNXOps.hpp"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/TensorName.hpp"
 #include "src/Interface/TensorNameInference.hpp"
 
@@ -33,6 +35,8 @@ std::unique_ptr<Transform> fromAttr(ArrayAttr arrayAttr) {
         return std::make_unique<DequantizeTransform>(arrayAttr);
       else if (transType == "Quantize")
         return std::make_unique<QuantizeTransform>(arrayAttr);
+      else if (transType == "MultiUseConflict")
+        return std::make_unique<MultiUseConflict>();
     }
   }
   return {};
@@ -59,17 +63,6 @@ SmallVector<int64_t> denseToVector(DenseIntElementsAttr denseAttr) {
     return vector;
   }
   return SmallVector<int64_t>(denseAttr.getValues<int64_t>());
-}
-
-SmallVector<int64_t> valToVector(Value val) {
-  if (auto constOp = val.getDefiningOp<ONNXConstantOp>()) {
-    if (auto arrayAttr = dyn_cast<ArrayAttr>(constOp.getValueAttr()))
-      return arrayToVector(arrayAttr);
-    else if (auto denseAttr =
-                 dyn_cast<DenseIntElementsAttr>(constOp.getValueAttr()))
-      return denseToVector(denseAttr);
-  }
-  return {};
 }
 
 SmallVector<int64_t> axesToVector(Value val, size_t rank) {
@@ -323,6 +316,20 @@ std::unique_ptr<Transform> ListTransform::invert() const {
   return std::make_unique<ListTransform>(std::move(trans));
 }
 
+// == MultiUseConflict == //
+
+MultiUseConflict::MultiUseConflict()
+    : Transform(Kind::MultiUseConflict, {}, {}) {}
+
+Attribute MultiUseConflict::toAttr(MLIRContext *context) const {
+  return ArrayAttr::get(
+      context, {StringAttr::get(context, "MultiUseConflict")});
+}
+
+std::unique_ptr<Transform> MultiUseConflict::invert() const {
+  return std::make_unique<MultiUseConflict>();
+}
+
 // == TensorName == //
 
 TensorName::TensorName(std::string name) : name(std::move(name)) {}
@@ -362,10 +369,28 @@ TensorName TensorName::infer(Value value) {
 
 TensorName TensorName::inferWithUse(Value value) {
   TensorName tname(value);
-  if (tname || !value.hasOneUse() || value.use_begin()->getOperandNumber() != 0)
+  if (tname)
     return tname;
 
-  Operation *op = *value.user_begin();
+  Operation *op = nullptr;
+  if (value.hasOneUse()) {
+    op = *value.user_begin();
+  } else if (std::distance(value.use_begin(), value.use_end()) == 2) {
+    // When a chain of ops like: (Transpose -> Transpose)
+    // replaced with new op:     (Transpose) op
+    // In the middle of rewrite, there will be 2 uses for input
+    // We still want to infer TensorName based on the new op
+    for (Operation *user : value.getUsers()) {
+      if (isOpTriviallyDead(user)) {
+        op = user;
+        break;
+      }
+    }
+  }
+
+  if (!op || op->getOperand(0) != value)
+    return tname;
+
   if (auto transform = fromOp(op)) {
     tname = inferWithUse(op->getResult(0));
     if (tname) {

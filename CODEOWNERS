@@ -1,6 +1,7 @@
 * @jorickert @p-lanza
 
 # Files/Folders excluded from default ownership
+/src/Compiler/XmcMlirPasses.cpp
 /src/Dialect/ONNX/Transforms/xmc/
 /src/Dialect/ONNX/XCOMPILEROps.td
 /src/Dialect/ONNX/ONNXOps/Additional/XCOMPILER*
@@ -8,3 +9,11 @@
 /test/mlir/onnx/onnx_xcompiler_shape_inference.mlir
 /test/mlir/onnx/onnx_xcompiler_verify.mlir
 /utils/xcompiler_ops_schema.yaml
+src/Dialect/ONNX/Transforms/CMakeLists.txt
+src/Pass/Passes.hpp
+src/Tools/onnx-mlir-opt/RegisterPasses.cpp
+
+# Per file/folder ownership
+/src/Dialect/ONNX/Transforms/QDQCanonicalize.cpp @rachgupt-amd @jorickert @gerion-amd
+/src/Dialect/ONNX/ONNXOps/Canonicalize.cpp @rachgupt-amd @jorickert @gerion-amd
+/src/Dialect/ONNX/ONNXOps/Canonicalize.td @rachgupt-amd @jorickert @gerion-amd

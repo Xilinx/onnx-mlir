@@ -68,9 +68,12 @@ LogicalResult ONNXGatherElementsOp::verify() {
     axis += dataRank;
 
   // All index values in 'indices' are expected to be within bounds [-s, s-1]
-  // along axis of size s.
+  // along axis of size s. For unsigned index tensors the values are always
+  // non-negative, so only the upper bound [0, s-1] applies.
   ArrayRef<int64_t> dataShape = dataType.getShape();
   const int64_t dataDimAtAxis = dataShape[axis];
+  const bool indicesAreUnsigned =
+      indicesType.getElementType().isUnsignedInteger();
   if (dataDimAtAxis >= 0) {
     if (ElementsAttr valueAttribute =
             getElementAttributeFromONNXValue(indices)) {
@@ -79,7 +82,16 @@ LogicalResult ONNXGatherElementsOp::verify() {
                           // elided attributes
       }
       for (IntegerAttr value : valueAttribute.getValues<IntegerAttr>()) {
-        int64_t index = value.getInt();
+        if (indicesAreUnsigned) {
+          uint64_t index = value.getValue().getZExtValue();
+          if (index < (uint64_t)dataDimAtAxis)
+            continue;
+
+          return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
+              *this->getOperation(), "indices", (int64_t)index,
+              onnx_mlir::Diagnostic::Range<int64_t>(0, dataDimAtAxis - 1));
+        }
+        int64_t index = value.getValue().getSExtValue();
         if (index >= -dataDimAtAxis && index < dataDimAtAxis)
           continue;
 

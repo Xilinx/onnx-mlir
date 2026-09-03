@@ -31,6 +31,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/Passes.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -66,7 +67,16 @@ void configurePasses() {
   configureConstPropONNXToONNXPass(onnxConstPropRoundFPToInt,
       onnxConstPropExpansionBound, onnxConstPropDisablePatterns,
       disableConstantProp);
+  configureConstPropMaxTileFoldSize(onnxConstPropMaxTileFoldSize);
   configureUnsafeMathCanonicalization(enableUnsafeMathOptimizations);
+  configurePositiveAxisCanonicalization(enablePositiveAxisCanonicalization);
+  configureKeepdimsCanonicalization(enableKeepdimsCanonicalization);
+  configureExpandCanonicalization(enableExpandCanonicalization);
+  configureCastDataMovementPatterns(enableCastDataMovementPatterns);
+  configureGatherElementsTileCanonicalization(
+      enableGatherElementsTileCanonicalization);
+  configureQDQDataMovementCanonicalization(
+      enableQDQDataMovementCanonicalization);
 #ifdef ONNX_MLIR_ENABLE_KRNL
   configureOnnxToKrnlLoweringPass(optReport == OptReport::Parallel,
       enableParallel, parallelizeOps, optReport == OptReport::Simd,
@@ -234,15 +244,28 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
   //       the CPU specific transformations.
   if (inputIRLevel <= ONNXLevel && emissionTarget >= EmitONNXIR) {
     OnnxToMlirOptions opts;
-    opts.enableQuarkQuantizedLegalization = enableQuarkQuantizedLegalization;
-    opts.enableConvTransposeDecompose = enableConvTransposeDecomposeOption;
-    opts.enableConvTransposeDecomposeToPhasedConv =
-        enableConvTransposeDecomposeToPhasedConv;
-    opts.enableConvTranspose1dDecomposeToPhasedConv =
-        enableConvTranspose1dDecomposeToPhasedConv;
+    std::string error;
+    llvm::raw_string_ostream errorStream(error);
+    auto errorHandler = [&errorStream](const Twine &message) {
+      errorStream << message;
+      return failure();
+    };
+    if (auto parsed = parseONNXHybridTransformPassOptions(
+            onnxTransformOptions, errorHandler);
+        succeeded(parsed))
+      opts.hybrid = std::move(*parsed);
+    else {
+      llvm::report_fatal_error(
+          llvm::Twine("invalid --onnx-transform-options: ") +
+          errorStream.str());
+    }
+    opts.hybrid.quarkQuantizedOpsLegalization =
+        enableQuarkQuantizedLegalization;
+    opts.hybrid.recomposition &= !disableRecomposeOption;
     opts.disableBatchNormDecompose = disableBatchNormDecompose;
-    opts.disableRecomposeOption = disableRecomposeOption;
     opts.enableUnsafeMathOptimizations = enableUnsafeMathOptimizations;
+    opts.enableQDQDataMovementCanonicalization =
+        enableQDQDataMovementCanonicalization;
     opts.enableONNXHybridPass = enableONNXHybridPass;
     opts.enableConvOptPass = enableConvOptPass;
     opts.enableSimdDataLayout = enableSimdDataLayout;
@@ -258,10 +281,22 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.instrumentStage = instrumentStage;
     opts.enableXMCPasses = enableXMCPasses;
     opts.enableHoistGatherAboveLayerNorm = enableHoistGatherAboveLayerNorm;
+    opts.enableReshapeCanonicalization = enableReshapeCanonicalization;
+    opts.enablePositiveAxisCanonicalization =
+        enablePositiveAxisCanonicalization;
+    opts.enableExpandCanonicalization = enableExpandCanonicalization;
+    opts.enableKeepdimsCanonicalization = enableKeepdimsCanonicalization;
+    opts.enableCastDataMovementPatterns = enableCastDataMovementPatterns;
+    opts.enableGatherElementsTileCanonicalization =
+        enableGatherElementsTileCanonicalization;
+    opts.enableXFEONNXOpsetVerifier = enableXFEONNXOpsetVerifier;
+    opts.enableMatmulAddFusion = enableMatmulAddFusion;
+    opts.enableMatmulToConv = enableMatmulToConv;
     if (enableXMCPasses) {
-      opts.enableInstanceNormDecompose = false;
-      opts.enableGroupNormDecompose = false;
-      opts.enableConvTransposeDecomposeToPhasedConv = false;
+      opts.hybrid.enableInstanceNormDecompose = false;
+      opts.hybrid.enableGroupNormDecompose = false;
+      opts.hybrid.enableConvTransposeDecomposeToPhasedConv = false;
+      opts.hybrid.enableSplitToSliceDecompose = true;
     }
 
     addONNXToMLIRPasses(pm, /*target CPU*/ false,

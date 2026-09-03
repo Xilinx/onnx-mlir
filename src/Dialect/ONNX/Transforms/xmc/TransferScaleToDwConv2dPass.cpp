@@ -1,4 +1,4 @@
-// Copyright (C) 2022 - 2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2022-2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 // This pass converts Scale operations to DepthwiseConv2D operations when
 // applicable. The transformation:
@@ -201,6 +201,15 @@ struct ScaleToDwConv2dPattern : public OpRewritePattern<ONNXMulOp> {
     if (!inputType || !scaleType)
       return failure();
 
+    // Scale-fold to a depthwise XFEConv is only valid for float or quantized
+    // activations (covers f32 and QDQ models). Skip integer Muls such as i64
+    // NMS index arithmetic (e.g. /end2end/Mul_2 = gathered_index * stride):
+    // XFEConv's operand cannot be i64, so forming one there fails verification.
+    Type scaleFoldInEltType = inputType.getElementType();
+    if (!isa<FloatType>(scaleFoldInEltType) &&
+        !isa<quant::QuantizedType>(scaleFoldInEltType))
+      return failure();
+
     auto inputShape = inputType.getShape();
     auto scaleShape = scaleType.getShape();
     int64_t inputRank = inputShape.size();
@@ -246,18 +255,16 @@ struct ScaleToDwConv2dPattern : public OpRewritePattern<ONNXMulOp> {
     auto convOutputType = RankedTensorType::get(
         reshapedInputType.getShape(), outputType.getElementType());
 
-    auto autoPadAttr = rewriter.getStringAttr("NOTSET");
     auto dilationsAttr = rewriter.getI64ArrayAttr({1, 1});
     auto groupAttr =
         rewriter.getIntegerAttr(rewriter.getIntegerType(64, /*isSigned=*/true),
             APInt(64, numChannels, /*isSigned=*/true));
-    auto kernelShapeAttr = rewriter.getI64ArrayAttr({1, 1});
     auto padsAttr = rewriter.getI64ArrayAttr({0, 0, 0, 0});
     auto stridesAttr = rewriter.getI64ArrayAttr({1, 1});
 
     auto dwConvOp = rewriter.create<XFEConvOp>(loc, convOutputType,
         reshapedInput, reshapedWeight, bias, rewriter.getStringAttr("NONE"),
-        autoPadAttr, dilationsAttr, groupAttr, kernelShapeAttr,
+        dilationsAttr, groupAttr,
         /*leakyrelu_alpha=*/FloatAttr(), padsAttr,
         /*prelu_in=*/IntegerAttr(), /*prelu_shift=*/IntegerAttr(), stridesAttr);
 
@@ -316,10 +323,10 @@ struct TransferScaleToDwConv2dPass
     patterns.add<ScaleToDwConv2dPattern>(ctx);
 
     GreedyRewriteConfig config;
-    config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
+    config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps);
 
     ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(applyPatternsGreedily(
             getOperation(), std::move(patterns), config))) {
       signalPassFailure();

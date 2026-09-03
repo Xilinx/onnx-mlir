@@ -143,6 +143,10 @@ LogicalResult ONNXGatherNDOp::verify() {
 
   // All values in 'indices' are expected to satisfy the inequality:
   //   -data.shape[b + i] <= indices[...,i] <= (data.shape[b + i]-1)].
+  // For unsigned index tensors the values are always non-negative, so only the
+  // upper bound [0, data.shape[b + i]-1] applies.
+  const bool indicesAreUnsigned =
+      indicesType.getElementType().isUnsignedInteger();
   if (ElementsAttr valueAttribute = getElementAttributeFromONNXValue(indices)) {
     if (isElementAttrUninitializedDenseResource(valueAttribute)) {
       return success(); // Return success to allow the parsing of MLIR with
@@ -150,16 +154,26 @@ LogicalResult ONNXGatherNDOp::verify() {
     }
     int flatIndex = 0;
     for (IntegerAttr value : valueAttribute.getValues<IntegerAttr>()) {
-      int64_t indexValue = value.getInt();
       int64_t gatherAxis = b + (flatIndex % indicesLastDim);
       int64_t dataDimAtAxis = dataShape[gatherAxis];
       if (dataDimAtAxis >= 0) {
-        if (indexValue < -dataDimAtAxis || indexValue > dataDimAtAxis - 1)
-          return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
-              *this->getOperation(),
-              "indices[" + std::to_string(flatIndex) + "]", indexValue,
-              onnx_mlir::Diagnostic::Range<int64_t>(
-                  -dataDimAtAxis, dataDimAtAxis - 1));
+        if (indicesAreUnsigned) {
+          uint64_t indexValue = value.getValue().getZExtValue();
+          if (indexValue >= (uint64_t)dataDimAtAxis)
+            return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
+                *this->getOperation(),
+                "indices[" + std::to_string(flatIndex) + "]",
+                (int64_t)indexValue,
+                onnx_mlir::Diagnostic::Range<int64_t>(0, dataDimAtAxis - 1));
+        } else {
+          int64_t indexValue = value.getInt();
+          if (indexValue < -dataDimAtAxis || indexValue > dataDimAtAxis - 1)
+            return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
+                *this->getOperation(),
+                "indices[" + std::to_string(flatIndex) + "]", indexValue,
+                onnx_mlir::Diagnostic::Range<int64_t>(
+                    -dataDimAtAxis, dataDimAtAxis - 1));
+        }
       }
       flatIndex++;
     }

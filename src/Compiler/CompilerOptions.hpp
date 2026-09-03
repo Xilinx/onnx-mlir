@@ -75,6 +75,7 @@ extern std::string march;                                     // common for both
 extern InstrumentStages instrumentStage;                      // common for both
 extern bool onnxConstPropRoundFPToInt;                        // common for both
 extern int onnxConstPropExpansionBound;                       // common for both
+extern int64_t onnxConstPropMaxTileFoldSize;                  // common for both
 extern std::vector<std::string> onnxConstPropDisablePatterns; // common for both
 extern bool enableONNXHybridPass;                             // common for both
 extern std::vector<std::string> functionsToDecompose;         // common for both
@@ -82,13 +83,20 @@ extern std::string opsForCall;                                // common for both
 extern bool disableKrnlOpFusion;                              // common for both
 extern bool disableQuantZeroPoint;                            // common for both
 extern bool enableUnsafeMathOptimizations;                    // common for both
+extern bool enableQDQDataMovementCanonicalization;            // common for both
 extern bool enableKrnlBufferReuse;                            // common for both
 extern bool enableSafeCodeGen;                                // common for both
 extern bool disableMemRefPrefetch;                            // common for both
-extern bool enableConvTransposeDecomposeToPhasedConv;         // common for both
-extern bool enableConvTranspose1dDecomposeToPhasedConv;       // common for both
+extern std::string onnxTransformOptions;                      // onnx-mlir only
 extern bool enableQuarkQuantizerLegalization;                 // common for both
 extern bool disableBatchNormDecompose;                        // common for both
+extern bool enableReshapeCanonicalization;                    // common for both
+extern bool enablePositiveAxisCanonicalization;               // common for both
+extern bool enableExpandCanonicalization;                     // common for both
+extern bool enableCastDataMovementPatterns;                   // common for both
+extern bool enableKeepdimsCanonicalization;                   // common for both
+extern bool enableGatherElementsTileCanonicalization;         // common for both
+extern bool enableXFEONNXOpsetVerifier;                       // common for both
 extern uint64_t compilationNumThreads;                        // common for both
 // AMD: Decompose unconditionally
 // extern std::vector<std::string> decomposeOpsInONNX; // common for both
@@ -128,7 +136,6 @@ extern bool enableParallel;                       // onnx-mlir only
 extern bool disableSimdOption;                    // onnx-mlir only
 extern bool enableFastMathOption;                 // onnx-mlir only
 extern bool disableRecomposeOption;               // onnx-mlir only
-extern bool enableConvTransposeDecomposeOption;   // onnx-mlir only
 extern bool enableSimdDataLayout;                 // onnx-mlir only
 extern bool verifyInputTensors;                   // onnx-mlir only
 extern bool allowSorting;                         // onnx-mlir only
@@ -138,6 +145,8 @@ extern std::string modelTag;                      // onnx-mlir only
 extern bool enableConvOptPass;                    // onnx-mlir only
 extern bool enableXMCPasses;                      // onnx-mlir only
 extern bool enableHoistGatherAboveLayerNorm;      // onnx-mlir only
+extern bool enableMatmulAddFusion;                // onnx-mlir only
+extern bool enableMatmulToConv;                   // onnx-mlir only
 extern bool disableConstantProp;                  // onnx-mlir only
 extern std::vector<std::string> extraLibPaths;    // onnx-mlir only
 extern std::vector<std::string> extraLibs;        // onnx-mlir only

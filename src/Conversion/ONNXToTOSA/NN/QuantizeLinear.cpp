@@ -4,7 +4,7 @@
 
 //===------------- ONNXQuantizeLinearOp.cpp - ONNXQuantizeLinearOp---------===//
 //
-// Copyright (c) 2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -31,10 +31,15 @@ namespace {
 class ONNXQuantizeLinearOpLoweringToTOSA
     : public OpConversionPattern<ONNXQuantizeLinearOp> {
 public:
-  using OpConversionPattern::OpConversionPattern;
+  ONNXQuantizeLinearOpLoweringToTOSA(
+      TypeConverter &typeConverter, MLIRContext *ctx, bool castIsExcluded)
+      : OpConversionPattern(typeConverter, ctx),
+        castIsExcluded(castIsExcluded) {}
+
   LogicalResult matchAndRewrite(ONNXQuantizeLinearOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(rewriter, loc);
     auto resultType = dyn_cast_if_present<ShapedType>(
         getTypeConverter()->convertType(op.getResult().getType()));
     if (!resultType || !resultType.hasStaticShape()) {
@@ -107,16 +112,26 @@ public:
       // int16, int4, int8, uint16, uint4, uint8
       // Convert the scaled result to a safe bitwith (i32) that avoids
       // underflows/overflows
-      scaledResult = tosa::CreateOpAndInfer<mlir::tosa::CastOp>(rewriter, loc,
-          resultType.cloneWith({}, rewriter.getI32Type()), scaledResult)
-                         .getResult();
+      Type arithType = rewriter.getI32Type();
+      if (castIsExcluded) {
+        // onnx.Cast truncates towards zero, so the round-to-nearest-even
+        // required above has to be expressed on its own before narrowing.
+        Value rounded = create.tosa.roundEven(scaledResult);
+        scaledResult =
+            create.onnx.castToNewTensorElementType(rounded, arithType);
+      } else {
+        // tosa.cast rounds half-to-even, so it doesn't require an explicit
+        // rounding op.
+        scaledResult = tosa::CreateOpAndInfer<mlir::tosa::CastOp>(
+            rewriter, loc, resultType.cloneWith({}, arithType), scaledResult)
+                           .getResult();
+      }
     }
 
     // If there is no zero point, we are done
     if (isa<NoneType>(adaptor.getYZeroPoint().getType())) {
-      Value result = tosa::CreateOpAndInfer<mlir::tosa::CastOp>(
-          rewriter, loc, resultType, scaledResult)
-                         .getResult();
+      Value result = create.onnx.castToNewTensorElementType(
+          scaledResult, resultType.getElementType());
       rewriter.replaceOp(op, result);
       return success();
     }
@@ -128,17 +143,14 @@ public:
     // the scaledResult. tosa.add doesn't allow different ranks
     Value castedZp;
     if (quantizingToInt) {
-      castedZp = tosa::CreateOpAndInfer<mlir::tosa::CastOp>(rewriter, loc,
-          cast<ShapedType>(expandedZpConst.getType())
-              .cloneWith({}, rewriter.getI32Type()),
-          expandedZpConst)
-                     .getResult();
+      castedZp = create.onnx.castToNewTensorElementType(
+          expandedZpConst, rewriter.getI32Type());
     } else {
       // zpConst has the same type as the result of QLinear which is always
       // smaller than the input type. Cast it to the input type.
-      castedZp = tosa::CreateOpAndInfer<mlir::tosa::CastOp>(
-          rewriter, loc, expandedScaleFactorConst.getType(), expandedZpConst)
-                     .getResult();
+      auto castedZpType = cast<ShapedType>(expandedScaleFactorConst.getType());
+      castedZp = create.onnx.castToNewTensorElementType(
+          expandedZpConst, castedZpType.getElementType());
     }
 
     Value addOp = tosa::CreateOpAndInfer<mlir::tosa::AddOp>(
@@ -170,21 +182,29 @@ public:
     }
 
     // Cast into the result type
-    Value result = tosa::CreateOpAndInfer<mlir::tosa::CastOp>(
-        rewriter, loc, resultType, clampedRes)
-                       .getResult();
+    Value result = create.onnx.castToNewTensorElementType(
+        clampedRes, resultType.getElementType());
 
     rewriter.replaceOp(op, result);
     return success();
   }
+
+private:
+  /// Whether onnx.Cast is kept out of the TOSA conversion, in which case this
+  /// pattern must not create tosa.cast operations either.
+  bool castIsExcluded;
 };
 
 } // namespace
 
-void populateLoweringONNXQuantizeLinearOpToTOSAPattern(
-    ConversionTarget & /*target*/, RewritePatternSet &patterns,
-    TypeConverter &typeConverter, MLIRContext *ctx) {
-  patterns.insert<ONNXQuantizeLinearOpLoweringToTOSA>(typeConverter, ctx);
+void populateLoweringONNXQuantizeLinearOpToTOSAPattern(ConversionTarget &target,
+    RewritePatternSet &patterns, TypeConverter &typeConverter,
+    MLIRContext *ctx) {
+  const bool castIsExcluded =
+      target.getOpAction(OperationName(ONNXCastOp::getOperationName(), ctx)) ==
+      ConversionTarget::LegalizationAction::Legal;
+  patterns.insert<ONNXQuantizeLinearOpLoweringToTOSA>(
+      typeConverter, ctx, castIsExcluded);
 }
 
 } // namespace onnx_mlir

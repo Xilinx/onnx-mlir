@@ -2,6 +2,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 //
 // Pattern to convert ONNX operations to their ChannelLast variants.
@@ -34,6 +37,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Debug.h"
 
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
@@ -214,6 +218,13 @@ struct ConvToChannelLastPattern : public OpRewritePattern<ONNXConvOp> {
     if (inputType.getRank() < 3 || weightType.getRank() < 3)
       return failure();
 
+    // Create XFEConv operation
+    FailureOr<onnx_mlir::ConvGeometry> geometry =
+        onnx_mlir::getConvGeometry(convOp);
+    if (failed(geometry))
+      return rewriter.notifyMatchFailure(
+          convOp, "cannot resolve conv geometry into explicit attributes");
+
     int64_t rank = inputType.getRank();
 
     // Transpose input to channel-last
@@ -224,18 +235,17 @@ struct ConvToChannelLastPattern : public OpRewritePattern<ONNXConvOp> {
     Value weightChannelLast = createWeightTranspose(
         rewriter, loc, weight, rank, weightType.getElementType());
 
-    // Create XFEConv operation
     auto origOutputType = mlir::cast<ShapedType>(convOp.getType());
     Type outputElementType = origOutputType.getElementType();
     Type nhwcOutputElemType = remapQuantTypeNchw2Nhwc(outputElementType, rank);
     auto convChannelLastOp = rewriter.create<XFEConvOp>(loc,
         UnrankedTensorType::get(nhwcOutputElemType), inputChannelLast,
         weightChannelLast, bias, rewriter.getStringAttr("NONE"),
-        convOp.getAutoPadAttr(), convOp.getDilationsAttr(),
-        convOp.getGroupAttr(), convOp.getKernelShapeAttr(),
-        /*leakyrelu_alpha=*/FloatAttr(), convOp.getPadsAttr(),
+        rewriter.getI64ArrayAttr(geometry->dilations), convOp.getGroupAttr(),
+        /*leakyrelu_alpha=*/FloatAttr(),
+        rewriter.getI64ArrayAttr(geometry->pads),
         /*prelu_in=*/IntegerAttr(), /*prelu_shift=*/IntegerAttr(),
-        convOp.getStridesAttr());
+        rewriter.getI64ArrayAttr(geometry->strides));
 
     // Transfer onnx_node_name attribute from original Conv to XFEConv
     transferOnnxNodeName(convOp, convChannelLastOp);
@@ -395,8 +405,7 @@ struct MaxPoolToChannelLastPattern
         UnrankedTensorType::get(nhwcOutputElemType), inputChannelLast,
         poolOp.getAutoPadAttr(), poolOp.getCeilModeAttr(),
         poolOp.getDilationsAttr(), poolOp.getKernelShapeAttr(),
-        poolOp.getPadsAttr(), poolOp.getStorageOrderAttr(),
-        poolOp.getStridesAttr());
+        poolOp.getPadsAttr(), poolOp.getStridesAttr());
 
     transferOnnxNodeName(poolOp, poolChannelLastOp);
 
@@ -528,7 +537,7 @@ struct BatchNormToChannelLastPattern
     Type nhwcOutputElemType = remapQuantTypeNchw2Nhwc(outputElementType, rank);
     auto bnChannelLastOp = rewriter.create<XFEBatchNormalizationOp>(loc,
         UnrankedTensorType::get(nhwcOutputElemType), inputChannelLast, scale, B,
-        mean, var, bnOp.getEpsilonAttr(), bnOp.getMomentumAttr());
+        mean, var, bnOp.getEpsilonAttr());
 
     transferOnnxNodeName(bnOp, bnChannelLastOp);
 
@@ -1077,8 +1086,13 @@ struct GridSampleToChannelLastPattern
     Value grid = op.getGrid();
 
     auto xNhwcType = mlir::cast<RankedTensorType>(xNhwc.getType());
+
+    Type resultElemTy = xNhwcType.getElementType();
+    if (auto outRtt = mlir::dyn_cast<RankedTensorType>(op.getType()))
+      resultElemTy = remapQuantTypeNchw2Nhwc(outRtt.getElementType(), rank);
+
     auto xfeOp = rewriter.create<XFEGridSampleOp>(loc,
-        UnrankedTensorType::get(xNhwcType.getElementType()), xNhwc, grid,
+        UnrankedTensorType::get(resultElemTy), xNhwc, grid,
         op.getAlignCornersAttr(), op.getModeAttr(), op.getPaddingModeAttr());
 
     transferOnnxNodeName(op, xfeOp);
@@ -1099,11 +1113,25 @@ struct ConvertToChannelLastPass : public PassWrapper<ConvertToChannelLastPass,
                                       OperationPass<func::FuncOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ConvertToChannelLastPass)
 
+  ConvertToChannelLastPass() = default;
+
+  // Options are not copyable; Pass::clone() transfers their values separately.
+  ConvertToChannelLastPass(const ConvertToChannelLastPass &pass)
+      : PassWrapper(pass) {}
+
+  explicit ConvertToChannelLastPass(llvm::ArrayRef<std::string> whitelist) {
+    this->whitelist = whitelist;
+  }
+
   StringRef getArgument() const override { return "convert-to-channel-last"; }
 
   StringRef getDescription() const override {
     return "Convert ONNX operations to ChannelLast variants with transposes";
   }
+
+  ListOption<std::string> whitelist{*this, "whitelist",
+      llvm::cl::desc("ONNX operation names to convert, e.g. onnx.Conv. "
+                     "Converts every supported op when empty.")};
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<ONNXDialect>();
@@ -1114,24 +1142,53 @@ struct ConvertToChannelLastPass : public PassWrapper<ConvertToChannelLastPass,
     func::FuncOp function = getOperation();
     MLIRContext *context = &getContext();
 
+    llvm::StringSet<> enabledOps;
+    enabledOps.insert(whitelist.begin(), whitelist.end());
+
+    llvm::StringSet<> supportedOps;
+    auto isEnabled = [&](StringRef opName) {
+      supportedOps.insert(opName);
+      return enabledOps.empty() || enabledOps.contains(opName);
+    };
+
     RewritePatternSet patterns(context);
-    patterns.add<ConvToChannelLastPattern>(context);
-    patterns.add<ConvTransposeToChannelLastPattern>(context);
-    patterns.add<AveragePoolToChannelLastPattern>(context);
-    patterns.add<MaxPoolToChannelLastPattern>(context);
-    patterns.add<GlobalAveragePoolToChannelLastPattern>(context);
-    patterns.add<GlobalMaxPoolToChannelLastPattern>(context);
-    patterns.add<BatchNormToChannelLastPattern>(context);
-    patterns.add<InstanceNormToChannelLastPattern>(context);
-    patterns.add<GroupNormToChannelLastPattern>(context);
-    patterns.add<DepthToSpaceToChannelLastPattern>(context);
-    patterns.add<SpaceToDepthToChannelLastPattern>(context);
-    patterns.add<ResizeToChannelLastPattern>(context);
-    patterns.add<GridSampleToChannelLastPattern>(context);
+    if (isEnabled(ONNXConvOp::getOperationName()))
+      patterns.add<ConvToChannelLastPattern>(context);
+    if (isEnabled(ONNXConvTransposeOp::getOperationName()))
+      patterns.add<ConvTransposeToChannelLastPattern>(context);
+    if (isEnabled(ONNXAveragePoolOp::getOperationName()))
+      patterns.add<AveragePoolToChannelLastPattern>(context);
+    if (isEnabled(ONNXMaxPoolSingleOutOp::getOperationName()))
+      patterns.add<MaxPoolToChannelLastPattern>(context);
+    if (isEnabled(ONNXGlobalAveragePoolOp::getOperationName()))
+      patterns.add<GlobalAveragePoolToChannelLastPattern>(context);
+    if (isEnabled(ONNXGlobalMaxPoolOp::getOperationName()))
+      patterns.add<GlobalMaxPoolToChannelLastPattern>(context);
+    if (isEnabled(ONNXBatchNormalizationInferenceModeOp::getOperationName()))
+      patterns.add<BatchNormToChannelLastPattern>(context);
+    if (isEnabled(ONNXInstanceNormalizationOp::getOperationName()))
+      patterns.add<InstanceNormToChannelLastPattern>(context);
+    if (isEnabled(ONNXGroupNormalizationOp::getOperationName()))
+      patterns.add<GroupNormToChannelLastPattern>(context);
+    if (isEnabled(ONNXDepthToSpaceOp::getOperationName()))
+      patterns.add<DepthToSpaceToChannelLastPattern>(context);
+    if (isEnabled(ONNXSpaceToDepthOp::getOperationName()))
+      patterns.add<SpaceToDepthToChannelLastPattern>(context);
+    if (isEnabled(ONNXResizeOp::getOperationName()))
+      patterns.add<ResizeToChannelLastPattern>(context);
+    if (isEnabled(ONNXGridSampleOp::getOperationName()))
+      patterns.add<GridSampleToChannelLastPattern>(context);
+
+    for (const auto &entry : enabledOps)
+      if (!supportedOps.contains(entry.getKey())) {
+        function.emitError("convert-to-channel-last: unsupported op '")
+            << entry.getKey() << "'";
+        return signalPassFailure();
+      }
 
     GreedyRewriteConfig config;
     onnx_mlir::ResultNamesUpdater rnUpdater;
-    config.listener = &rnUpdater;
+    config.setListener(&rnUpdater);
     if (failed(applyPatternsGreedily(function, std::move(patterns), config))) {
       signalPassFailure();
     }
@@ -1144,6 +1201,11 @@ namespace onnx_mlir {
 
 std::unique_ptr<mlir::Pass> createConvertToChannelLastPass() {
   return std::make_unique<ConvertToChannelLastPass>();
+}
+
+std::unique_ptr<mlir::Pass> createConvertToChannelLastPass(
+    llvm::ArrayRef<std::string> whitelist) {
+  return std::make_unique<ConvertToChannelLastPass>(whitelist);
 }
 
 } // namespace onnx_mlir

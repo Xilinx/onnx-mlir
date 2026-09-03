@@ -13,6 +13,7 @@
 #define ONNX_MLIR_ONNX_TO_MLIR_PASSES_H
 
 #include "src/Compiler/CompilerOptionEnums.hpp"
+#include "src/Pass/Passes.hpp"
 #include <string>
 
 namespace mlir {
@@ -24,39 +25,33 @@ class PassManager;
 namespace onnx_mlir {
 
 struct OnnxToMlirOptions {
-  bool enableQuarkQuantizedLegalization = false;
-  bool enableConvTransposeDecompose = false;
-  bool enableConvTransposeDecomposeToPhasedConv = false;
-  bool enableConvTranspose1dDecomposeToPhasedConv = false;
-  bool enableInstanceNormDecompose = true;
-  bool enableGroupNormDecompose = true;
-  bool enableReduceL2Decompose = true;
-  bool enableMatmulNBitsDecompose = false;
-  bool enableGroupQueryAttentionDecompose = true;
-  bool enableConcatFuse = true;
-  bool enableGroupQueryAttentionCacheSlicing = true;
+  ONNXHybridTransformPassOptions hybrid;
   bool enableRemoveDqQAroundOp = false;
   bool enableRemoveBinary = false;
   bool enableFusePadIntoAvgpool = false;
   bool enableXMCPasses = false;
-  bool enableSplitToSliceDecompose = false;
-  bool enableLstmSeqDecompose = false;
-  bool enableGatherToSlice = true;
-  bool enableRotaryEmbeddingRecompose = false;
-  bool enableQDQConstProp = false;
-  bool enableHardSwishDecompose = true;
 
   bool disableBatchNormDecompose = false;
-  bool disableRecomposeOption = false;
+  // Reshape-family canonicalization (Flatten/Squeeze/Unsqueeze -> Reshape).
+  bool enableReshapeCanonicalization = true;
+  // Negative axis/axes canonicalization when rank is known.
+  bool enablePositiveAxisCanonicalization = true;
+  bool enableExpandCanonicalization = false;
+  bool enableCastDataMovementPatterns = true;
+  bool enableKeepdimsCanonicalization = false;
+  bool enableGatherElementsTileCanonicalization = true;
+  bool enableXFEONNXOpsetVerifier = true;
   bool enableUnsafeMathOptimizations = true;
+  bool enableQDQDataMovementCanonicalization = false;
   bool enableONNXHybridPass = true;
   bool enableConvOptPass = true;
   bool enableSimdDataLayout = false;
   bool disableSimdOption = false;
-  bool enableGAPToReduceMean = true;
 
   bool enableMatmulAddFusion = true;
   bool enableHoistGatherAboveLayerNorm = false;
+  bool enableMatmulToConv = false;
+  bool enableRemovePairsReshape = false;
 
   int onnxOpTransformThreshold = 3;
   bool onnxOpTransformReport = false;

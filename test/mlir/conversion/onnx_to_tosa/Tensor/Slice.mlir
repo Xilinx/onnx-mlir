@@ -1,5 +1,6 @@
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa -cse %s -split-input-file | FileCheck %s
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="convert-slice-only-when-step-one=true" -cse %s -split-input-file | FileCheck %s --check-prefix=ONLY-STEP1
+// RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="excluded-ops=Slice" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDE-SLICE
 
 
 func.func @test_slice_constant_default_steps(%arg0 : tensor<2x4xf32>) -> tensor<1x3xf32> {
@@ -11,6 +12,10 @@ func.func @test_slice_constant_default_steps(%arg0 : tensor<2x4xf32>) -> tensor<
   "func.return"(%1) : (tensor<1x3xf32>) -> ()
 // CHECK-LABEL: func @test_slice_constant_default_steps
 // CHECK: %0 = tosa.slice %arg0 {size = array<i64: 1, 3>, start = array<i64: 1, 0>} : (tensor<2x4xf32>) -> tensor<1x3xf32>
+// EXCLUDE-SLICE-LABEL: func @test_slice_constant_default_steps
+// EXCLUDE-SLICE-NOT: tosa.slice
+// EXCLUDE-SLICE: "onnx.Slice"
+// EXCLUDE-SLICE: return
 }
 
 func.func @test_slice_all_constant_negative(%arg0 : tensor<2x4xf32>) -> tensor<1x3xf32> {
@@ -74,6 +79,10 @@ func.func @slice_just_steps(%arg0: tensor<100x200xf32>) -> tensor<20x20xf32> {
 // CHECK: %1 = tosa.slice %0 {size = array<i64: 20, 1, 20, 1>, start = array<i64: 0, 0, 0, 0>} : (tensor<20x5x20x10xf32>) -> tensor<20x1x20x1xf32>
 // CHECK: %2 = tosa.reshape %1 {new_shape = array<i64: 20, 20>} : (tensor<20x1x20x1xf32>) -> tensor<20x20xf32>
 // CHECK: return %2 : tensor<20x20xf32>
+// EXCLUDE-SLICE-LABEL: func @slice_just_steps
+// EXCLUDE-SLICE-NOT: tosa.slice
+// EXCLUDE-SLICE: "onnx.Slice"
+// EXCLUDE-SLICE: return
 
 // ONLY-STEP1-LABEL: func @slice_just_steps
 // ONLY-STEP1: tosa.slice

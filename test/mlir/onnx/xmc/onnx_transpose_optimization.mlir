@@ -643,21 +643,13 @@ func.func @test_move_transpose_through_reshape_merge_dims(%arg0: tensor<2x4x8x16
   // Algorithm trace:
   //   transposeOutputShape = [2, 8, 16, 4]
   //   reshapeOutputShape = [2, 128, 4]
-  //   dimGroups: [2]→[2], [8,16]→[128,-1], [4]→[4]
-  //   invPerm = [0, 3, 1, 2]
-  //   Pre-transpose shape (in original dim order):
-  //     origDim 0 (N=2) at transposed pos 0 → [2]
-  //     origDim 1 (C=4) at transposed pos 3 → [4]
-  //     origDim 2 (H=8) at transposed pos 1 → [128] (merged with W)
-  //     origDim 3 (W=16) at transposed pos 2 → [-1] (skip, merged)
-  //   Result: [2, 4, 128] (N, C, H*W)
-  //   New perm: [0, 2, 1] to get (N, H*W, C) → [2, 128, 4]
+  //   8*16=128: two post-transpose dims merge into one reshape output dim.
+  //   Vaip golden's create_reshape_rule refuses N->1 merging via
+  //   guess_result[i].first.size() == 1, so we refuse it here too.
 
-  // CHECK: %[[SHAPE:.*]] = onnx.Constant dense<[2, 4, 128]>
-  // CHECK: %[[RESHAPE:.*]] = "onnx.Reshape"(%arg0, %[[SHAPE]])
-  // CHECK-SAME: (tensor<2x4x8x16xf32>, tensor<3xi64>) -> tensor<2x4x128xf32>
-  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[RESHAPE]]) {perm = [0, 2, 1]}
-  // CHECK-SAME: (tensor<2x4x128xf32>) -> tensor<2x128x4xf32>
+  // CHECK: onnx.Transpose
+  // CHECK: onnx.Reshape
+  // CHECK-NOT: onnx.Transpose
   %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<2x4x8x16xf32>) -> tensor<2x8x16x4xf32>
   %shape = "onnx.Constant"() {value = dense<[2, 128, 4]> : tensor<3xi64>} : () -> tensor<3xi64>
   %1 = "onnx.Reshape"(%0, %shape) {allowzero = 0 : si64} : (tensor<2x8x16x4xf32>, tensor<3xi64>) -> tensor<2x128x4xf32>
@@ -712,15 +704,19 @@ func.func @test_no_move_transpose_through_reshape_mixing(%arg0: tensor<2x4x8x16x
 }
 
 // -----
-// Test: Trailing singleton - NOT supported (doesn't factor cleanly)
-// CHECK-LABEL: func @test_no_move_transpose_through_reshape_add_singleton
-func.func @test_no_move_transpose_through_reshape_add_singleton(%arg0: tensor<1x3x224x224xf32>) -> tensor<1x224x224x3x1xf32> {
+// Test: Trailing singleton on reshape side - supported (trailing 1 absorbed)
+// CHECK-LABEL: func @test_move_transpose_through_reshape_add_singleton
+func.func @test_move_transpose_through_reshape_add_singleton(%arg0: tensor<1x3x224x224xf32>) -> tensor<1x224x224x3x1xf32> {
   // Original: [1,3,224,224] → Transpose[0,2,3,1] → [1,224,224,3]
   //           → Reshape[1,224,224,3,1] (adds trailing 1)
-  // Trailing singleton doesn't map cleanly to any transposed dim - NOT supported
-  // CHECK: onnx.Transpose
-  // CHECK: onnx.Reshape
-  // CHECK-NOT: onnx.Transpose
+  // Vaip golden's guess_reshape absorbs trailing 1s into the last group; we
+  // mirror that by appending an identity entry to the new transpose perm.
+
+  // CHECK: %[[SHAPE:.*]] = onnx.Constant dense<[1, 3, 224, 224, 1]>
+  // CHECK: %[[RESHAPE:.*]] = "onnx.Reshape"(%arg0, %[[SHAPE]])
+  // CHECK-SAME: (tensor<1x3x224x224xf32>, tensor<5xi64>) -> tensor<1x3x224x224x1xf32>
+  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[RESHAPE]]) {perm = [0, 2, 3, 1, 4]}
+  // CHECK-SAME: (tensor<1x3x224x224x1xf32>) -> tensor<1x224x224x3x1xf32>
   %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32>
   %shape = "onnx.Constant"() {value = dense<[1, 224, 224, 3, 1]> : tensor<5xi64>} : () -> tensor<5xi64>
   %1 = "onnx.Reshape"(%0, %shape) {allowzero = 0 : si64} : (tensor<1x224x224x3xf32>, tensor<5xi64>) -> tensor<1x224x224x3x1xf32>
@@ -780,28 +776,14 @@ func.func @test_move_transpose_through_reshape_merge_spatial(%arg0: tensor<2x64x
   // Original: [2,64,8,8] NCHW → Transpose[0,2,3,1] → [2,8,8,64] NHWC
   //           → Reshape[2,64,64] (merges H and W: 8*8=64)
   //
-  // Algorithm trace:
   //   transposeOutputShape = [2, 8, 8, 64]
   //   reshapeOutputShape = [2, 64, 64]
-  //   Iteration 1: 2==2 identity → dimGroups[0] = [2]
-  //   Iteration 2: 8<64 merge → accumulate 8*8=64 → dimGroups[1] = [64], dimGroups[2] = [-1]
-  //   Iteration 4: 64==64 identity → dimGroups[3] = [64]
-  //
-  // Pre-transpose reshape:
-  //   invPerm = [0, 3, 1, 2]
-  //   origDim 0 (N) → transposed pos 0 → [2]
-  //   origDim 1 (C) → transposed pos 3 → [64]
-  //   origDim 2 (H) → transposed pos 1 → [64] (merged with W)
-  //   origDim 3 (W) → transposed pos 2 → [-1] (skip)
-  //   Pre-transpose shape: [2, 64, 64] (N, C, H*W)
-  //
-  // New permutation: [0, 2, 1] to get (N, H*W, C)
+  //   8*8=64: two post-transpose dims merge into one reshape output dim.
+  //   Vaip golden refuses N->1 merging; refused here too.
 
-  // CHECK: %[[SHAPE:.*]] = onnx.Constant dense<[2, 64, 64]>
-  // CHECK: %[[RESHAPE:.*]] = "onnx.Reshape"(%arg0, %[[SHAPE]])
-  // CHECK-SAME: (tensor<2x64x8x8xf32>, tensor<3xi64>) -> tensor<2x64x64xf32>
-  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[RESHAPE]]) {perm = [0, 2, 1]}
-  // CHECK-SAME: (tensor<2x64x64xf32>) -> tensor<2x64x64xf32>
+  // CHECK: onnx.Transpose
+  // CHECK: onnx.Reshape
+  // CHECK-NOT: onnx.Transpose
   %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<2x64x8x8xf32>) -> tensor<2x8x8x64xf32>
   %shape = "onnx.Constant"() {value = dense<[2, 64, 64]> : tensor<3xi64>} : () -> tensor<3xi64>
   %1 = "onnx.Reshape"(%0, %shape) {allowzero = 0 : si64} : (tensor<2x8x8x64xf32>, tensor<3xi64>) -> tensor<2x64x64xf32>
@@ -829,26 +811,12 @@ func.func @test_transpose_through_hardsigmoid(%arg0: tensor<1x3x224x224xf32>) ->
 }
 
 // -----
-// CHECK-LABEL: func @test_where_both_transposed
-func.func @test_where_both_transposed(%arg0: tensor<1x3x224x224xi1>, %arg1: tensor<1x3x224x224xf32>, %arg2: tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32> {
-  // Pattern should push Where before transposes (condition also transposed)
-  // CHECK: %[[WHERE:.*]] = "onnx.Where"(%arg0, %arg1, %arg2)
-  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[WHERE]]) {perm = [0, 2, 3, 1]}
-  // CHECK: return %[[TRANS]]
-  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xi1>) -> tensor<1x224x224x3xi1>
-  %1 = "onnx.Transpose"(%arg1) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32>
-  %2 = "onnx.Transpose"(%arg2) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32>
-  %3 = "onnx.Where"(%0, %1, %2) : (tensor<1x224x224x3xi1>, tensor<1x224x224x3xf32>, tensor<1x224x224x3xf32>) -> tensor<1x224x224x3xf32>
-  return %3 : tensor<1x224x224x3xf32>
-}
 
-// -----
-// CHECK-LABEL: func @test_where_with_transposed_condition
-func.func @test_where_with_transposed_condition(%arg0: tensor<1x3x224x224xi1>, %arg1: tensor<1x3x224x224xf32>, %arg2: tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32> {
-  // All three inputs transposed - should fuse
-  // CHECK: %[[WHERE:.*]] = "onnx.Where"(%arg0, %arg1, %arg2)
-  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[WHERE]]) {perm = [0, 2, 3, 1]}
-  // CHECK: return %[[TRANS]]
+// CHECK-LABEL: func @test_where_both_transposed_unchanged
+func.func @test_where_both_transposed_unchanged(%arg0: tensor<1x3x224x224xi1>, %arg1: tensor<1x3x224x224xf32>, %arg2: tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32> {
+  // CHECK-COUNT-3: "onnx.Transpose"
+  // CHECK: "onnx.Where"
+  // CHECK-NOT: "onnx.Transpose"
   %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xi1>) -> tensor<1x224x224x3xi1>
   %1 = "onnx.Transpose"(%arg1) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32>
   %2 = "onnx.Transpose"(%arg2) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32>
@@ -972,13 +940,13 @@ func.func @test_min_max_clamp_pattern(%arg0: tensor<1x3x224x224xf32>) -> tensor<
 }
 
 // -----
-// CHECK-LABEL: func @test_where_add_pattern
-func.func @test_where_add_pattern(%arg0: tensor<1x3x224x224xi1>, %arg1: tensor<1x3x224x224xf32>, %arg2: tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32> {
-  // All inputs transposed including condition - should fuse
-  // CHECK: %[[WHERE:.*]] = "onnx.Where"(%arg0, %arg1, %arg2)
-  // CHECK: %[[RELU:.*]] = "onnx.Relu"(%[[WHERE]])
-  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[RELU]]) {perm = [0, 2, 3, 1]}
-  // CHECK: return %[[TRANS]]
+
+// CHECK-LABEL: func @test_where_add_pattern_where_blocks
+func.func @test_where_add_pattern_where_blocks(%arg0: tensor<1x3x224x224xi1>, %arg1: tensor<1x3x224x224xf32>, %arg2: tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32> {
+  // CHECK-COUNT-3: "onnx.Transpose"
+  // CHECK: "onnx.Where"
+  // CHECK: "onnx.Relu"
+  // CHECK-NOT: "onnx.Transpose"
   %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xi1>) -> tensor<1x224x224x3xi1>
   %1 = "onnx.Transpose"(%arg1) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32>
   %2 = "onnx.Transpose"(%arg2) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32>
@@ -1208,15 +1176,13 @@ func.func @test_multiuse_transpose_qdq_chain(%arg0: tensor<1x3x224x224xf32>, %sc
 
 // -----
 // CHECK-LABEL: func @test_multiuse_transpose_where_branches
-func.func @test_multiuse_transpose_where_branches(%cond: tensor<1x3x224x224xi1>, %arg0: tensor<1x3x224x224xf32>, %arg1: tensor<1x3x224x224xf32>) -> (tensor<1x224x224x3xf32>, tensor<1x224x224x3xf32>) {
-  // Where + Add pattern: operations pushed to original space, transposes after
-  // CHECK: "onnx.Where"
-  // CHECK: "onnx.Transpose"
-  // CHECK: "onnx.Add"
-  // CHECK: "onnx.Transpose"
-  %cond_t = "onnx.Transpose"(%cond) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xi1>) -> tensor<1x224x224x3xi1>
-  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32>
-  %1 = "onnx.Transpose"(%arg1) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32>
+func.func @test_multiuse_transpose_where_branches(%arg0: tensor<1x3x224x224xi1>, %arg1: tensor<1x3x224x224xf32>, %arg2: tensor<1x3x224x224xf32>) -> (tensor<1x224x224x3xf32>, tensor<1x224x224x3xf32>) {
+  // CHECK-DAG: "onnx.Where"
+  // CHECK-DAG: %[[ADD:.*]] = "onnx.Add"(%arg1, %arg2)
+  // CHECK-DAG: "onnx.Transpose"(%[[ADD]]) {perm = [0, 2, 3, 1]}
+  %cond_t = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xi1>) -> tensor<1x224x224x3xi1>
+  %0 = "onnx.Transpose"(%arg1) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32>
+  %1 = "onnx.Transpose"(%arg2) {perm = [0, 2, 3, 1]} : (tensor<1x3x224x224xf32>) -> tensor<1x224x224x3xf32>
   %2 = "onnx.Where"(%cond_t, %0, %1) : (tensor<1x224x224x3xi1>, tensor<1x224x224x3xf32>, tensor<1x224x224x3xf32>) -> tensor<1x224x224x3xf32>
   %3 = "onnx.Add"(%0, %1) : (tensor<1x224x224x3xf32>, tensor<1x224x224x3xf32>) -> tensor<1x224x224x3xf32>
   return %2, %3 : tensor<1x224x224x3xf32>, tensor<1x224x224x3xf32>
@@ -1347,19 +1313,56 @@ func.func @test_no_push_scast_without_transpose(%arg0: tensor<1x3x4x4x!quant.uni
 // -----
 
 // ============================================================================
-// SECTION: Push Transpose Through Softmax
+// SECTION: Push Transpose Through Softmax (LogSoftmax chain only)
 // ============================================================================
 
-// Test: Basic push transpose through softmax (NCHW -> NHWC, axis on channel dim)
-// Transpose [0,2,3,1] moves C from position 1 to 3.
-// Softmax on axis=3 (channel in NHWC) should become axis=1 (channel in NCHW)
-// after pushing the transpose through.
-// CHECK-LABEL: func @test_push_transpose_through_softmax_basic
-func.func @test_push_transpose_through_softmax_basic(%arg0: tensor<1x16x4x8400xf32>) -> tensor<1x4x8400x16xf32> {
+// CHECK-LABEL: func @test_push_transpose_through_softmax_log_basic
+func.func @test_push_transpose_through_softmax_log_basic(%arg0: tensor<1x16x4x8400xf32>) -> tensor<1x4x8400x16xf32> {
   // CHECK: %[[SOFTMAX:.*]] = "onnx.Softmax"(%arg0) {axis = 1 : si64}
   // CHECK-SAME: (tensor<1x16x4x8400xf32>) -> tensor<1x16x4x8400xf32>
-  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[SOFTMAX]]) {perm = [0, 2, 3, 1]}
+  // CHECK: %[[LOG:.*]] = "onnx.Log"(%[[SOFTMAX]])
+  // CHECK-SAME: (tensor<1x16x4x8400xf32>) -> tensor<1x16x4x8400xf32>
+  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[LOG]]) {perm = [0, 2, 3, 1]}
   // CHECK-SAME: (tensor<1x16x4x8400xf32>) -> tensor<1x4x8400x16xf32>
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x16x4x8400xf32>) -> tensor<1x4x8400x16xf32>
+  %1 = "onnx.Softmax"(%0) {axis = 3 : si64} : (tensor<1x4x8400x16xf32>) -> tensor<1x4x8400x16xf32>
+  %2 = "onnx.Log"(%1) : (tensor<1x4x8400x16xf32>) -> tensor<1x4x8400x16xf32>
+  return %2 : tensor<1x4x8400x16xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @test_push_transpose_through_softmax_log_3d
+func.func @test_push_transpose_through_softmax_log_3d(%arg0: tensor<1x8400x16xf32>) -> tensor<1x16x8400xf32> {
+  // CHECK: %[[SOFTMAX:.*]] = "onnx.Softmax"(%arg0) {axis = 1 : si64}
+  // CHECK: %[[LOG:.*]] = "onnx.Log"(%[[SOFTMAX]])
+  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[LOG]]) {perm = [0, 2, 1]}
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 1]} : (tensor<1x8400x16xf32>) -> tensor<1x16x8400xf32>
+  %1 = "onnx.Softmax"(%0) {axis = 2 : si64} : (tensor<1x16x8400xf32>) -> tensor<1x16x8400xf32>
+  %2 = "onnx.Log"(%1) : (tensor<1x16x8400xf32>) -> tensor<1x16x8400xf32>
+  return %2 : tensor<1x16x8400xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @test_push_transpose_through_softmax_log_neg_axis
+func.func @test_push_transpose_through_softmax_log_neg_axis(%arg0: tensor<2x16x8x8xf32>) -> tensor<2x8x8x16xf32> {
+  // CHECK: %[[SOFTMAX:.*]] = "onnx.Softmax"(%arg0) {axis = 1 : si64}
+  // CHECK: %[[LOG:.*]] = "onnx.Log"(%[[SOFTMAX]])
+  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[LOG]]) {perm = [0, 2, 3, 1]}
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<2x16x8x8xf32>) -> tensor<2x8x8x16xf32>
+  %1 = "onnx.Softmax"(%0) {axis = -1 : si64} : (tensor<2x8x8x16xf32>) -> tensor<2x8x8x16xf32>
+  %2 = "onnx.Log"(%1) : (tensor<2x8x8x16xf32>) -> tensor<2x8x8x16xf32>
+  return %2 : tensor<2x8x8x16xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @test_push_transpose_through_softmax_no_log_negative
+func.func @test_push_transpose_through_softmax_no_log_negative(%arg0: tensor<1x16x4x8400xf32>) -> tensor<1x4x8400x16xf32> {
+  // CHECK: %[[T:.*]] = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]}
+  // CHECK: %[[S:.*]] = "onnx.Softmax"(%[[T]]) {axis = 3 : si64}
+  // CHECK: return %[[S]]
   %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x16x4x8400xf32>) -> tensor<1x4x8400x16xf32>
   %1 = "onnx.Softmax"(%0) {axis = 3 : si64} : (tensor<1x4x8400x16xf32>) -> tensor<1x4x8400x16xf32>
   return %1 : tensor<1x4x8400x16xf32>
@@ -1367,64 +1370,144 @@ func.func @test_push_transpose_through_softmax_basic(%arg0: tensor<1x16x4x8400xf
 
 // -----
 
-// Test: Push transpose through softmax on last axis (no axis change needed)
-// Transpose [0,2,1] on 3D tensor. Softmax on axis=2 (last dim).
-// perm[2]=1, so new axis should be 1.
-// CHECK-LABEL: func @test_push_transpose_through_softmax_3d
-func.func @test_push_transpose_through_softmax_3d(%arg0: tensor<1x8400x16xf32>) -> tensor<1x16x8400xf32> {
-  // CHECK: %[[SOFTMAX:.*]] = "onnx.Softmax"(%arg0) {axis = 1 : si64}
-  // CHECK-SAME: (tensor<1x8400x16xf32>) -> tensor<1x8400x16xf32>
-  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[SOFTMAX]]) {perm = [0, 2, 1]}
-  // CHECK-SAME: (tensor<1x8400x16xf32>) -> tensor<1x16x8400xf32>
-  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 1]} : (tensor<1x8400x16xf32>) -> tensor<1x16x8400xf32>
-  %1 = "onnx.Softmax"(%0) {axis = 2 : si64} : (tensor<1x16x8400xf32>) -> tensor<1x16x8400xf32>
-  return %1 : tensor<1x16x8400xf32>
+// CHECK-LABEL: func @test_push_transpose_through_softmax_mixed_users_negative
+func.func @test_push_transpose_through_softmax_mixed_users_negative(%arg0: tensor<1x16x4x8400xf32>) -> (tensor<1x4x8400x16xf32>, tensor<1x4x8400x16xf32>) {
+  // CHECK: %[[T:.*]] = "onnx.Transpose"(%arg0)
+  // CHECK: %[[S:.*]] = "onnx.Softmax"(%[[T]])
+  // CHECK: %[[L:.*]] = "onnx.Log"(%[[S]])
+  // CHECK: return %[[S]], %[[L]]
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x16x4x8400xf32>) -> tensor<1x4x8400x16xf32>
+  %1 = "onnx.Softmax"(%0) {axis = 3 : si64} : (tensor<1x4x8400x16xf32>) -> tensor<1x4x8400x16xf32>
+  %2 = "onnx.Log"(%1) : (tensor<1x4x8400x16xf32>) -> tensor<1x4x8400x16xf32>
+  return %1, %2 : tensor<1x4x8400x16xf32>, tensor<1x4x8400x16xf32>
 }
 
 // -----
 
-// Test: Push transpose through softmax with negative axis
-// Softmax axis=-1 on rank-4 tensor -> axis=3, perm[3]=1 -> new axis=1
-// CHECK-LABEL: func @test_push_transpose_through_softmax_neg_axis
-func.func @test_push_transpose_through_softmax_neg_axis(%arg0: tensor<2x16x8x8xf32>) -> tensor<2x8x8x16xf32> {
-  // CHECK: %[[SOFTMAX:.*]] = "onnx.Softmax"(%arg0) {axis = 1 : si64}
-  // CHECK-SAME: (tensor<2x16x8x8xf32>) -> tensor<2x16x8x8xf32>
-  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[SOFTMAX]]) {perm = [0, 2, 3, 1]}
-  // CHECK-SAME: (tensor<2x16x8x8xf32>) -> tensor<2x8x8x16xf32>
-  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<2x16x8x8xf32>) -> tensor<2x8x8x16xf32>
-  %1 = "onnx.Softmax"(%0) {axis = -1 : si64} : (tensor<2x8x8x16xf32>) -> tensor<2x8x8x16xf32>
-  return %1 : tensor<2x8x8x16xf32>
-}
-
-// -----
-
-// Test: Push transpose through softmax with quantized types
-// CHECK-LABEL: func @test_push_transpose_through_softmax_quant
-func.func @test_push_transpose_through_softmax_quant(%arg0: tensor<1x8400x4x16x!quant.uniform<u16:f32, 3.105E-4:32768>>) -> tensor<1x16x4x8400x!quant.uniform<u16:f32, 3.105E-4:32768>> {
+// CHECK-LABEL: func @test_push_transpose_through_softmax_log_quant
+func.func @test_push_transpose_through_softmax_log_quant(%arg0: tensor<1x8400x4x16x!quant.uniform<u16:f32, 3.105E-4:32768>>) -> tensor<1x16x4x8400x!quant.uniform<u16:f32, 3.105E-4:32768>> {
   // CHECK: %[[SOFTMAX:.*]] = "onnx.Softmax"(%arg0) {axis = 3 : si64}
-  // CHECK-SAME: (tensor<1x8400x4x16x!quant.uniform<u16:f32, 3.105000e-04:32768>>) -> tensor<1x8400x4x16x!quant.uniform<u16:f32, 3.105000e-04:32768>>
-  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[SOFTMAX]]) {perm = [0, 3, 2, 1]}
-  // CHECK-SAME: (tensor<1x8400x4x16x!quant.uniform<u16:f32, 3.105000e-04:32768>>) -> tensor<1x16x4x8400x!quant.uniform<u16:f32, 3.105000e-04:32768>>
+  // CHECK: %[[LOG:.*]] = "onnx.Log"(%[[SOFTMAX]])
+  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[LOG]]) {perm = [0, 3, 2, 1]}
   %0 = "onnx.Transpose"(%arg0) {perm = [0, 3, 2, 1]} : (tensor<1x8400x4x16x!quant.uniform<u16:f32, 3.105E-4:32768>>) -> tensor<1x16x4x8400x!quant.uniform<u16:f32, 3.105E-4:32768>>
   %1 = "onnx.Softmax"(%0) {axis = 1 : si64} : (tensor<1x16x4x8400x!quant.uniform<u16:f32, 3.105E-4:32768>>) -> tensor<1x16x4x8400x!quant.uniform<u16:f32, 3.105E-4:32768>>
-  return %1 : tensor<1x16x4x8400x!quant.uniform<u16:f32, 3.105E-4:32768>>
+  %2 = "onnx.Log"(%1) : (tensor<1x16x4x8400x!quant.uniform<u16:f32, 3.105E-4:32768>>) -> tensor<1x16x4x8400x!quant.uniform<u16:f32, 3.105E-4:32768>>
+  return %2 : tensor<1x16x4x8400x!quant.uniform<u16:f32, 3.105E-4:32768>>
 }
 
 // -----
 
-// Test: Transpose + Softmax + Transpose should fuse into Softmax + single Transpose
-// After pushing Transpose_A through Softmax, two consecutive transposes fuse.
-// Transpose_A=[0,3,2,1] composed with Transpose_B=[0,2,3,1] = [0,2,1,3]
-// CHECK-LABEL: func @test_softmax_transpose_fusion_pattern
-func.func @test_softmax_transpose_fusion_pattern(%arg0: tensor<1x8400x4x16xf32>) -> tensor<1x4x8400x16xf32> {
+// CHECK-LABEL: func @test_softmax_log_transpose_fusion_pattern
+func.func @test_softmax_log_transpose_fusion_pattern(%arg0: tensor<1x8400x4x16xf32>) -> tensor<1x4x8400x16xf32> {
   // CHECK: %[[SOFTMAX:.*]] = "onnx.Softmax"(%arg0) {axis = 3 : si64}
-  // CHECK-SAME: (tensor<1x8400x4x16xf32>) -> tensor<1x8400x4x16xf32>
-  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[SOFTMAX]]) {perm = [0, 2, 1, 3]}
-  // CHECK-SAME: (tensor<1x8400x4x16xf32>) -> tensor<1x4x8400x16xf32>
+  // CHECK: %[[LOG:.*]] = "onnx.Log"(%[[SOFTMAX]])
+  // CHECK: %[[TRANS:.*]] = "onnx.Transpose"(%[[LOG]]) {perm = [0, 2, 1, 3]}
   %0 = "onnx.Transpose"(%arg0) {perm = [0, 3, 2, 1]} : (tensor<1x8400x4x16xf32>) -> tensor<1x16x4x8400xf32>
   %1 = "onnx.Softmax"(%0) {axis = 1 : si64} : (tensor<1x16x4x8400xf32>) -> tensor<1x16x4x8400xf32>
-  %2 = "onnx.Transpose"(%1) {perm = [0, 2, 3, 1]} : (tensor<1x16x4x8400xf32>) -> tensor<1x4x8400x16xf32>
-  return %2 : tensor<1x4x8400x16xf32>
+  %2 = "onnx.Log"(%1) : (tensor<1x16x4x8400xf32>) -> tensor<1x16x4x8400xf32>
+  %3 = "onnx.Transpose"(%2) {perm = [0, 2, 3, 1]} : (tensor<1x16x4x8400xf32>) -> tensor<1x4x8400x16xf32>
+  return %3 : tensor<1x4x8400x16xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @test_push_transpose_through_log_softmax
+func.func @test_push_transpose_through_log_softmax(%arg0: tensor<1x16x4x8400xf32>) -> tensor<1x4x8400x16xf32> {
+  // CHECK: %[[LS:.*]] = "onnx.LogSoftmax"(%arg0) {axis = 1 : si64}
+  // CHECK-SAME: (tensor<1x16x4x8400xf32>) -> tensor<1x16x4x8400xf32>
+  // CHECK: %[[T:.*]] = "onnx.Transpose"(%[[LS]]) {perm = [0, 2, 3, 1]}
+  // CHECK-SAME: (tensor<1x16x4x8400xf32>) -> tensor<1x4x8400x16xf32>
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x16x4x8400xf32>) -> tensor<1x4x8400x16xf32>
+  %1 = "onnx.LogSoftmax"(%0) {axis = 3 : si64} : (tensor<1x4x8400x16xf32>) -> tensor<1x4x8400x16xf32>
+  return %1 : tensor<1x4x8400x16xf32>
+}
+
+// -----
+
+// ============================================================================
+// SECTION: Push Transpose Through Softplus / Not / Erf
+// ============================================================================
+
+// CHECK-LABEL: func @test_push_transpose_through_softplus
+func.func @test_push_transpose_through_softplus(%arg0: tensor<1x16x4x8xf32>) -> tensor<1x4x8x16xf32> {
+  // CHECK: %[[SP:.*]] = "onnx.Softplus"(%arg0)
+  // CHECK-SAME: (tensor<1x16x4x8xf32>) -> tensor<1x16x4x8xf32>
+  // CHECK: %[[T:.*]] = "onnx.Transpose"(%[[SP]]) {perm = [0, 2, 3, 1]}
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x16x4x8xf32>) -> tensor<1x4x8x16xf32>
+  %1 = "onnx.Softplus"(%0) : (tensor<1x4x8x16xf32>) -> tensor<1x4x8x16xf32>
+  return %1 : tensor<1x4x8x16xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func @test_push_transpose_through_not
+func.func @test_push_transpose_through_not(%arg0: tensor<1x4x2x3xi1>) -> tensor<1x2x3x4xi1> {
+  // CHECK: %[[N:.*]] = "onnx.Not"(%arg0)
+  // CHECK-SAME: (tensor<1x4x2x3xi1>) -> tensor<1x4x2x3xi1>
+  // CHECK: %[[T:.*]] = "onnx.Transpose"(%[[N]]) {perm = [0, 2, 3, 1]}
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x4x2x3xi1>) -> tensor<1x2x3x4xi1>
+  %1 = "onnx.Not"(%0) : (tensor<1x2x3x4xi1>) -> tensor<1x2x3x4xi1>
+  return %1 : tensor<1x2x3x4xi1>
+}
+
+// -----
+
+// CHECK-LABEL: func @test_push_transpose_through_erf
+func.func @test_push_transpose_through_erf(%arg0: tensor<2x8x4x4xf32>) -> tensor<2x4x4x8xf32> {
+  // CHECK: %[[E:.*]] = "onnx.Erf"(%arg0)
+  // CHECK-SAME: (tensor<2x8x4x4xf32>) -> tensor<2x8x4x4xf32>
+  // CHECK: %[[T:.*]] = "onnx.Transpose"(%[[E]]) {perm = [0, 2, 3, 1]}
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<2x8x4x4xf32>) -> tensor<2x4x4x8xf32>
+  %1 = "onnx.Erf"(%0) : (tensor<2x4x4x8xf32>) -> tensor<2x4x4x8xf32>
+  return %1 : tensor<2x4x4x8xf32>
+}
+
+// -----
+
+// ============================================================================
+// SECTION: Push Transpose Through Mod (broadcast / immune / const flavors)
+// ============================================================================
+
+// CHECK-LABEL: func @test_fuse_mod_both_transposed
+func.func @test_fuse_mod_both_transposed(%arg0: tensor<1x16x4x8xi32>, %arg1: tensor<1x16x4x8xi32>) -> tensor<1x4x8x16xi32> {
+  // CHECK: %[[M:.*]] = "onnx.Mod"(%arg0, %arg1)
+  // CHECK-SAME: (tensor<1x16x4x8xi32>, tensor<1x16x4x8xi32>) -> tensor<1x16x4x8xi32>
+  // CHECK: %[[T:.*]] = "onnx.Transpose"(%[[M]]) {perm = [0, 2, 3, 1]}
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x16x4x8xi32>) -> tensor<1x4x8x16xi32>
+  %1 = "onnx.Transpose"(%arg1) {perm = [0, 2, 3, 1]} : (tensor<1x16x4x8xi32>) -> tensor<1x4x8x16xi32>
+  %2 = "onnx.Mod"(%0, %1) : (tensor<1x4x8x16xi32>, tensor<1x4x8x16xi32>) -> tensor<1x4x8x16xi32>
+  return %2 : tensor<1x4x8x16xi32>
+}
+
+// -----
+
+// CHECK-LABEL: func @test_fuse_mod_transpose_immune_scalar
+func.func @test_fuse_mod_transpose_immune_scalar(%arg0: tensor<1x16x4x8xi32>) -> tensor<1x4x8x16xi32> {
+  // CHECK: onnx.Constant
+  // CHECK: %[[R:.*]] = "onnx.Reshape"
+  // CHECK-SAME: -> tensor<1x1x1x1xi32>
+  // CHECK: %[[M:.*]] = "onnx.Mod"(%arg0, %[[R]])
+  // CHECK-SAME: -> tensor<1x16x4x8xi32>
+  // CHECK: "onnx.Transpose"(%[[M]]) {perm = [0, 2, 3, 1]}
+  %k = onnx.Constant dense<3> : tensor<1xi32>
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x16x4x8xi32>) -> tensor<1x4x8x16xi32>
+  %1 = "onnx.Mod"(%0, %k) : (tensor<1x4x8x16xi32>, tensor<1xi32>) -> tensor<1x4x8x16xi32>
+  return %1 : tensor<1x4x8x16xi32>
+}
+
+// -----
+
+// CHECK-LABEL: func @test_fuse_mod_const_per_channel
+func.func @test_fuse_mod_const_per_channel(%arg0: tensor<1x16x4x8xi32>) -> tensor<1x4x8x16xi32> {
+  // CHECK: %[[K:.*]] = onnx.Constant{{.*}}: tensor<1x16x1x1xi32>
+  // CHECK: %[[M:.*]] = "onnx.Mod"(%arg0, %[[K]])
+  // CHECK-SAME: -> tensor<1x16x4x8xi32>
+  // CHECK: %[[T:.*]] = "onnx.Transpose"(%[[M]]) {perm = [0, 2, 3, 1]}
+  %k = onnx.Constant dense<[[[[2]], [[3]], [[5]], [[7]], [[11]], [[13]], [[17]], [[19]], [[23]], [[29]], [[31]], [[37]], [[41]], [[43]], [[47]], [[53]]]]> : tensor<1x16x1x1xi32>
+  %kt = "onnx.Transpose"(%k) {perm = [0, 2, 3, 1]} : (tensor<1x16x1x1xi32>) -> tensor<1x1x1x16xi32>
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 3, 1]} : (tensor<1x16x4x8xi32>) -> tensor<1x4x8x16xi32>
+  %1 = "onnx.Mod"(%0, %kt) : (tensor<1x4x8x16xi32>, tensor<1x1x1x16xi32>) -> tensor<1x4x8x16xi32>
+  return %1 : tensor<1x4x8x16xi32>
 }
 
 // -----
@@ -1456,7 +1539,7 @@ func.func @transpose_removal_at_graph_exit(%858: tensor<1x1x480x2x!quant.uniform
     %222 = onnx.Constant dense<0.19466944> : tensor<f32>
     %264 = onnx.Constant {value = dense_resource<__elided__> : tensor<32xi32>} : tensor<32x!quant.uniform<i32:f32, 0.0017768796533346176>>
     %859 = "onnx.Transpose"(%220) {perm = [0, 2, 3, 1]} : (tensor<32x2x1x7x!quant.uniform<i8:f32, 0.051385276019573212>>) -> tensor<32x1x7x2x!quant.uniform<i8:f32, 0.051385276019573212>>
-    %860 = "onnx.XFEConv"(%858, %859, %264) {ResultNames = [["Conv_QuantizeLinear_Output", ["Transpose", [1, 32, 1, 120], [0, 2, 3, 1], [1, 1, 120, 32]]]], activation = "NONE", auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 7], pads = [0, 0, 0, 3], strides = [1, 4]} : (tensor<1x1x480x2x!quant.uniform<u8:f32, 0.034579548984766006:125>>, tensor<32x1x7x2x!quant.uniform<i8:f32, 0.051385276019573212>>, tensor<32x!quant.uniform<i32:f32, 0.0017768796533346176>>) -> tensor<1x1x120x32x!quant.uniform<u8:f32, 0.15860266983509064:133>>
+    %860 = "onnx.XFEConv"(%858, %859, %264) {ResultNames = [["Conv_QuantizeLinear_Output", ["Transpose", [1, 32, 1, 120], [0, 2, 3, 1], [1, 1, 120, 32]]]], activation = "NONE", dilations = [1, 1], group = 1 : si64, pads = [0, 0, 0, 3], strides = [1, 4]} : (tensor<1x1x480x2x!quant.uniform<u8:f32, 0.034579548984766006:125>>, tensor<32x1x7x2x!quant.uniform<i8:f32, 0.051385276019573212>>, tensor<32x!quant.uniform<i32:f32, 0.0017768796533346176>>) -> tensor<1x1x120x32x!quant.uniform<u8:f32, 0.15860266983509064:133>>
     %861 = "onnx.Transpose"(%860) {ResultNames = ["Conv_QuantizeLinear_Output"], perm = [0, 3, 1, 2]} : (tensor<1x1x120x32x!quant.uniform<u8:f32, 0.15860266983509064:133>>) -> tensor<1x32x1x120x!quant.uniform<u8:f32, 0.15860266983509064:133>>
   
     %862 = quant.scast %861 : tensor<1x32x1x120x!quant.uniform<u8:f32, 0.15860266983509064:133>> to tensor<1x32x1x120xui8>
@@ -1476,3 +1559,133 @@ func.func @transpose_removal_at_graph_exit(%858: tensor<1x1x480x2x!quant.uniform
 // CHECK-LABEL: @transpose_removal_at_graph_exit
 // CHECK: onnx.XFEConv
 // CHECK-SAME: ResultNames = ["output_QuantizeLinear_Output"]
+
+// -----
+// ============================================================================
+// SECTION: Tag Multi-Use Transposes
+// ============================================================================
+
+// Test: Multi-use transpose tags its operand with MultiUseConflict
+// CHECK-LABEL: func @test_tag_multiuse_transpose
+func.func @test_tag_multiuse_transpose(%arg0: tensor<1x3x8x8xf32> {onnx.name = "input"}) -> (tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // The Relu's ResultNames should get the MultiUseConflict tag since its
+  // result feeds a multi-use transpose.
+  // CHECK: "onnx.Relu"(%arg0)
+  // CHECK-SAME: ResultNames = [
+  // CHECK-SAME: ["relu_out", ["MultiUseConflict"]]]
+  // CHECK: "onnx.Sigmoid"
+  // CHECK: "onnx.Transpose"({{.*}}) {perm = [0, 2, 3, 1]}
+  // CHECK: "onnx.Tanh"
+  // CHECK: "onnx.Transpose"({{.*}}) {perm = [0, 2, 3, 1]}
+  %0 = "onnx.Relu"(%arg0) {ResultNames = ["relu_out"]} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Transpose"(%0) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %2 = "onnx.Sigmoid"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %3 = "onnx.Tanh"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %2, %3 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}
+
+// -----
+// Test: Single-use transpose does NOT get tagged
+// CHECK-LABEL: func @test_no_tag_single_use_transpose
+func.func @test_no_tag_single_use_transpose(%arg0: tensor<1x3x8x8xf32> {onnx.name = "input"}) -> tensor<1x8x8x3xf32> {
+  // Single use: no MultiUseConflict should appear
+  // CHECK: "onnx.Relu"(%arg0)
+  // CHECK-SAME: ResultNames = ["relu_out"]}
+  // CHECK-NOT: MultiUseConflict
+  // CHECK: "onnx.Sigmoid"
+  // CHECK: "onnx.Transpose"({{.*}}) {perm = [0, 2, 3, 1]}
+  %0 = "onnx.Relu"(%arg0) {ResultNames = ["relu_out"]} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Transpose"(%0) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %2 = "onnx.Sigmoid"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %2 : tensor<1x8x8x3xf32>
+}
+
+// -----
+// Test: Multi-use transpose with three branches tags operand
+// CHECK-LABEL: func @test_tag_multiuse_transpose_triple
+func.func @test_tag_multiuse_transpose_triple(%arg0: tensor<1x3x8x8xf32> {onnx.name = "input"}) -> (tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // CHECK: "onnx.Relu"(%arg0)
+  // CHECK-SAME: ResultNames = [
+  // CHECK-SAME: ["relu_out", ["MultiUseConflict"]]]
+  %0 = "onnx.Relu"(%arg0) {ResultNames = ["relu_out"]} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Transpose"(%0) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %2 = "onnx.Sigmoid"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %3 = "onnx.Tanh"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+   %4 = "onnx.Exp"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+   return %2, %3, %4 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}
+
+// -----
+// Test: Multi-use transpose operand is Chain of unnamed unary ops (Cast, Sigmoid)
+// whose definer is Identity with ResultNames. The chain should walk back to find
+// the Identity's name and tag it with MultiUseConflict.
+// CHECK-LABEL: func @test_multiuse_transpose_cast_chain
+func.func @test_multiuse_transpose_cast_chain(%arg0: tensor<1x3x8x8xf32> {onnx.name = "input"}) -> (tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // Identity sets ResultNames = ["base"], Cast and Sigmoid don't.
+  // The chain walks back: Transpose operand (Sigmoid result, no name)
+  // → Cast result (no name) → Identity result (has name "base") → tags "base".
+  // CHECK: "onnx.Identity"
+  // CHECK-SAME: ResultNames = [
+  // CHECK-SAME: ["base", ["MultiUseConflict"]]]
+  // CHECK: "onnx.Transpose"
+  %0 = "onnx.Identity"(%arg0) {ResultNames = ["base"]} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Cast"(%0) {to = i64} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xi64>
+  %2 = "onnx.Cast"(%1) {to = f32} : (tensor<1x3x8x8xi64>) -> tensor<1x3x8x8xf32>
+  %3 = "onnx.Transpose"(%2) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %4 = "onnx.Sigmoid"(%3) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %5 = "onnx.Tanh"(%3) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %4, %5 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}
+
+// -----
+// Test: Multi-use transpose operand is 2-hop chain of unnamed unary ops.
+// chain walking finds the Identity's name and tags it.
+// CHECK-LABEL: func @test_multiuse_transpose_double_chain
+func.func @test_multiuse_transpose_double_chain(%arg0: tensor<1x3x8x8xf32> {onnx.name = "input"}) -> (tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // Identity sets ResultNames = ["base"], then two Casts, then Transpose.
+  // The chain walks back: Transpose operand (Cast result, no name)
+  // → Cast result (no name) → Identity result (has name "base") → tags "base".
+  // CHECK: "onnx.Identity"
+  // CHECK-SAME: ResultNames = [
+  // CHECK-SAME: ["base", ["MultiUseConflict"]]]
+  // CHECK: "onnx.Cast"
+  // CHECK: "onnx.Cast"
+  // CHECK: "onnx.Transpose"
+  %0 = "onnx.Identity"(%arg0) {ResultNames = ["base"]} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Cast"(%0) {to = i64} : (tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xi64>
+  %2 = "onnx.Cast"(%1) {to = f32} : (tensor<1x3x8x8xi64>) -> tensor<1x3x8x8xf32>
+  %3 = "onnx.Transpose"(%2) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %4 = "onnx.Sigmoid"(%3) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %5 = "onnx.Tanh"(%3) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %4, %5 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}
+
+// -----
+// Test: Multi-use transpose operand is Add (>1 inputs) → chain walking stops
+// CHECK-LABEL: func @test_multiuse_transpose_add_operand
+func.func @test_multiuse_transpose_add_operand(%arg0: tensor<1x3x8x8xf32> {onnx.name = "in1"}, %arg1: tensor<1x3x8x8xf32> {onnx.name = "in2"}) -> (tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // Add has 2 operands, so getNumOperands() != 1 → chain stops, no tagging.
+  // CHECK-NOT: MultiUseConflict
+  // CHECK: "onnx.Add"
+  // CHECK: "onnx.Transpose"
+  %0 = "onnx.Add"(%arg0, %arg1) : (tensor<1x3x8x8xf32>, tensor<1x3x8x8xf32>) -> tensor<1x3x8x8xf32>
+  %1 = "onnx.Transpose"(%0) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %2 = "onnx.Sigmoid"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %3 = "onnx.Tanh"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %2, %3 : tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}
+
+// -----
+// Test: Multi-use transpose operand is Split result (>1 outputs) → chain walking stops
+// CHECK-LABEL: func @test_multiuse_transpose_split_operand
+func.func @test_multiuse_transpose_split_operand(%arg0: tensor<1x6x8x8xf32> {onnx.name = "input"}, %shape: tensor<1xi64>) -> (tensor<1x3x8x8xf32>, tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>) {
+  // Split has 2 results, so getNumResults() != 1 → chain stops, no tagging.
+  // CHECK-NOT: MultiUseConflict
+  // CHECK: "onnx.Split"
+  // CHECK: "onnx.Transpose"
+  %0:2 = "onnx.Split"(%arg0, %shape) {axis = 1: si64} : (tensor<1x6x8x8xf32>, tensor<1xi64>) -> (tensor<1x3x8x8xf32>, tensor<1x3x8x8xf32>)
+  %1 = "onnx.Transpose"(%0#0) {perm = [0, 2, 3, 1]} : (tensor<1x3x8x8xf32>) -> tensor<1x8x8x3xf32>
+  %2 = "onnx.Sigmoid"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  %3 = "onnx.Tanh"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
+  return %0#1, %2, %3 : tensor<1x3x8x8xf32>, tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
+}

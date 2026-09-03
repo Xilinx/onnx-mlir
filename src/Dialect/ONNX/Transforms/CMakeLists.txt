@@ -1,5 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
+set(LLVM_TARGET_DEFINITIONS Passes.td)
+mlir_tablegen(Passes.h.inc -gen-pass-decls -name ONNXTransforms
+              "-I${ONNX_MLIR_SRC_ROOT}")
+add_public_tablegen_target(OMONNXTransformsIncGen)
+add_dependencies(OMPublicPassIncGen OMONNXTransformsIncGen)
+
 add_onnx_mlir_rewriter(Decompose)
 add_onnx_mlir_rewriter(DecomposeConvTranspose)
 add_onnx_mlir_rewriter(DecomposeConvTransposePhased)
@@ -48,11 +54,13 @@ add_onnx_mlir_library(OMONNXRewrite
   FoldQuantizedBinary.cpp
   ConvOpt.cpp
   Decompose.cpp
+  DecomposeLSTM.cpp
   DecomposeEinsum.cpp
   ScrubDisposablePass.cpp
   SetONNXNodeName.cpp
   Recompose.cpp
   LegalizeQuarkQuantizedOps.cpp
+  DedupDQs.cpp
   ONNXCSE.cpp
   QuantTypes.cpp
   FixNegScale.cpp
@@ -64,9 +72,13 @@ add_onnx_mlir_library(OMONNXRewrite
   xmc/RemoveContinuousTransposeWithReshape.cpp
   xmc/RemoveUselessQLinearPoolPass.cpp
   xmc/ReplaceErfToGeluPass.cpp
+  xmc/ReplaceTanhToGeluPass.cpp
   xmc/ReplaceHsigmoidAndHswishPass.cpp
   xmc/ReplaceQDQSigmoidPass.cpp
+  xmc/TransferBatchXCompilerFusedEltwisePass.cpp
+  xmc/ReplaceQDQClipCastPass.cpp
   xmc/ReplaceQDQEltwisePass.cpp
+  xmc/ReplaceQDQResizePass.cpp
   xmc/ReplaceQuantizedTileToAddPass.cpp
   xmc/MergeStridedSliceConcatConvPass.cpp
   xmc/ConvertPoolLikeOpToPool2dPass.cpp
@@ -80,6 +92,7 @@ add_onnx_mlir_library(OMONNXRewrite
   xmc/TransferReduceHdimToReduceCdimPass.cpp
   xmc/ReplaceQDQReductionPass.cpp
   xmc/HoistGatherAboveLayerNormPass.cpp
+  xmc/ReplaceQDQReduceL2Pass.cpp
   xmc/ConvertMulToDepthwiseConv2dPass.cpp
   xmc/TransferOp3dToOp2dPass.cpp
   xmc/TransferPoolFixToDownsampleFixPass.cpp
@@ -97,10 +110,15 @@ add_onnx_mlir_library(OMONNXRewrite
   xmc/RemovePairsAndMoveDownReshapePass.cpp
   xmc/MergeBatchnormToConvPass.cpp
   xmc/BatchReductionToReshapeReductionPass.cpp
-  xmc/RemoveRedundantReluPass.cpp
+  xmc/RemoveRedundantReluLikeOpsPass.cpp
   xmc/OptimizeOnnxRequantizationPass.cpp
   xmc/ConvertSCastPairToRequantizePass.cpp
+  xmc/AddRequantForOutputConvPass.cpp
   xmc/ConvertQDQToRequantizePass.cpp
+  xmc/TransferScalarConstInputDivToRequantizePass.cpp
+  xmc/PropagateQuantTypeThroughDataFlowPass.cpp
+  xmc/XmcRequantizePass.cpp
+  xmc/RemoveNoOpRequantizePass.cpp
   xmc/SplitGroupConvPass.cpp
   xmc/ConvertMatMulToXFEConvPass.cpp
   xmc/ReplaceNDimTransposePass.cpp
@@ -109,16 +127,22 @@ add_onnx_mlir_library(OMONNXRewrite
   xmc/TransferScaleToDwConv2dPass.cpp
   xmc/ONNXTransposeOptimizationPass.cpp
   xmc/ONNXTransposeOptimizationAxisChangePatterns.cpp
+  xmc/QuantizeConcatConstInputPass.cpp
   xmc/ConvWithBiasPass.cpp
   xmc/FuseMatMulAddToXFEMatMulBiasPass.cpp
   xmc/RemoveRedundantReshapePass.cpp
   xmc/ConvertXFEConvToDepthwiseConvPass.cpp
   xmc/FuseConvActivationPass.cpp
   xmc/NormalizeConvActivationPass.cpp
+  xmc/DQBinaryQOptPass.cpp
+  xmc/RecomposeHardSigmoidPass.cpp
+  xmc/TransferSoftmaxAxisToLastPass.cpp
 
   DEPENDS
+  OMONNXTransformsIncGen
   OMONNXDecomposeIncGen
   OMONNXDecomposeConvTransposeIncGen
+  OMPublicPassIncGen
   OMONNXDecomposeConvTransposePhasedIncGen
   OMONNXDecomposeConvTranspose1dPhasedIncGen
   OMONNXConstPropIncGen
@@ -143,6 +167,10 @@ add_onnx_mlir_library(OMOpTransform
 add_onnx_mlir_library(OMHybridTransform
   ONNXHybridTransformPass.cpp
 
+  DEPENDS
+  OMONNXTransformsIncGen
+  OMPublicPassIncGen
+
   LINK_LIBS PUBLIC
   OMONNXOps
   OMShapeInferenceOpInterface
@@ -162,6 +190,19 @@ if (ONNX_MLIR_ENABLE_KRNL)
     OMSupport
     )
 endif()
+
+add_onnx_mlir_library(OMXFEONNXOpsetVerifier
+  XFEONNXOpsetVerifierPass.cpp
+
+  DEPENDS
+  OMONNXTransformsIncGen
+
+  LINK_LIBS PUBLIC
+  OMONNXOps
+  OMMlirUtilities
+  MLIRFuncDialect
+  MLIRPass
+  )
 
 add_onnx_mlir_library(OMONNXSimplifyShapeRelatedOps
   SimplifyShapeRelatedOps.cpp

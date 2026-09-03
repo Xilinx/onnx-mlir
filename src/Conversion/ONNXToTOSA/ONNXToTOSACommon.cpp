@@ -6,7 +6,7 @@
 //
 // Copyright 2020 The TensorFlow Authors. All Rights Reserved.
 // Copyright (c) 2021 Arm Limited.
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -49,7 +49,7 @@ std::optional<Value> convertGatherOp(PatternRewriter &rewriter, Location loc,
     Value resultValue, Value inputValue, Value indicesValue, int32_t batchDims,
     int32_t axis) {
 
-  TosaBuilder tosaBuilder(rewriter, loc);
+  MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(rewriter, loc);
 
   auto resultType = dyn_cast<ShapedType>(resultValue.getType());
   auto inputType = dyn_cast<RankedTensorType>(inputValue.getType());
@@ -134,13 +134,10 @@ std::optional<Value> convertGatherOp(PatternRewriter &rewriter, Location loc,
     return std::nullopt;
   }
 
-  // onnx allows i64 indices, but tosa does not.
-  if (indicesType.getElementType().isInteger(64)) {
-    indicesType =
-        dyn_cast<RankedTensorType>(indicesType.clone(rewriter.getI32Type()));
-    indicesValue = CreateOpAndInfer<mlir::tosa::CastOp>(
-        rewriter, loc, indicesType, indicesValue)
-                       .getResult();
+  // onnx allows i64 indices (specification extended by i16), but tosa does not.
+  if (!indicesType.getElementType().isInteger(32)) {
+    indicesValue = create.onnx.cast(indicesValue, rewriter.getI32Type());
+    indicesType = cast<RankedTensorType>(indicesValue.getType());
   }
 
   // Sizes for each of these fields.
@@ -241,7 +238,10 @@ std::optional<Value> convertGatherOp(PatternRewriter &rewriter, Location loc,
 
   // Begin of rewrite.
 
-  auto inputTransposeOp = tosaBuilder.transpose(inputValue, inputTransposePerm);
+  SmallVector<int64_t> inputTransposePermI64(
+      inputTransposePerm.begin(), inputTransposePerm.end());
+  auto inputTransposeOp =
+      create.onnx.transposeInt64(inputValue, inputTransposePermI64);
 
   if (countDynamicDims(tosaValuesShape) > 1) {
     return (void)rewriter.notifyMatchFailure(loc,
@@ -251,7 +251,7 @@ std::optional<Value> convertGatherOp(PatternRewriter &rewriter, Location loc,
   }
 
   auto tosaValuesReshapeOp =
-      tosaBuilder.reshape(inputTransposeOp, tosaValuesShape);
+      create.tosa.reshape(inputTransposeOp, tosaValuesShape);
 
   if (countDynamicDims(tosaIndicesShape) > 1) {
     return (void)rewriter.notifyMatchFailure(loc,
@@ -260,7 +260,7 @@ std::optional<Value> convertGatherOp(PatternRewriter &rewriter, Location loc,
   }
 
   auto tosaIndicesReshapeOp =
-      tosaBuilder.reshape(indicesValue, tosaIndicesShape);
+      create.tosa.reshape(indicesValue, tosaIndicesShape);
 
   Value tosaGatherOp = CreateOpAndInfer<mlir::tosa::GatherOp>(rewriter, loc,
       RankedTensorType::get(llvm::SmallVector<int64_t>(3, ShapedType::kDynamic),
@@ -274,9 +274,12 @@ std::optional<Value> convertGatherOp(PatternRewriter &rewriter, Location loc,
   }
 
   Value tosaResultReshapeOp =
-      tosaBuilder.reshape(tosaGatherOp, resultReshapeShape);
+      create.tosa.reshape(tosaGatherOp, resultReshapeShape);
 
-  return tosaBuilder.transpose(tosaResultReshapeOp, resultTransposePerm);
+  SmallVector<int64_t> resultTransposePermI64(
+      resultTransposePerm.begin(), resultTransposePerm.end());
+  return create.onnx.transposeInt64(
+      tosaResultReshapeOp, resultTransposePermI64);
 }
 
 // Lowers ReduceMean to a sequence of TOSA ops.

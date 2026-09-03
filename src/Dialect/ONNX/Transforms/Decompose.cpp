@@ -23,7 +23,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <numeric>
 #include <type_traits>
 
@@ -53,6 +56,9 @@
 #include "src/Pass/Passes.hpp"
 #include "src/Support/TypeUtilities.hpp"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/Sequence.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 
 #define DEBUG_TYPE "decompose"
@@ -61,40 +67,21 @@ using namespace mlir;
 
 namespace onnx_mlir {
 
-// Create an DenseElementsAttr of ArrayAttr.
-// This function is used to get Value Type of an EXISTING ArrayAttr for Scaler
-// function.
-DenseElementsAttr createDenseArrayAttr(
-    PatternRewriter &rewriter, ArrayAttr origAttrs) {
-  assert(origAttrs && "handle EXISTING ArrayAttr only");
+// Storage for the pass->pattern flag declared in Decompose.hpp. Owned by
+// OMONNXRewrite so the rewrite/transform libraries do not need to link
+// OMCompilerOptions (see Decompose.hpp for the rationale).
+bool separatePhasedConvsForConvTransposeActive = false;
 
-  if (mlir::dyn_cast<FloatAttr>(origAttrs.getValue()[0])) {
-    Type elementType = rewriter.getF32Type();
-    int nElements = origAttrs.getValue().size();
-    SmallVector<float, 4> wrapper(nElements, 0);
-    for (int i = 0; i < nElements; ++i)
-      wrapper[i] =
-          mlir::cast<FloatAttr>(origAttrs.getValue()[i]).getValueAsDouble();
+// Storage for the enable-convtranspose-depthtospace pass->pattern flag declared
+// in Decompose.hpp. When true, decomposeIntoPhasedConvs emits a DepthToSpace
+// (DCR) as its final interleave instead of Reshape/Transpose/Reshape.
+bool convTransposeDepthToSpaceActive = false;
 
-    return DenseElementsAttr::get(
-        RankedTensorType::get(wrapper.size(), elementType),
-        llvm::ArrayRef(wrapper));
-  }
-
-  if (mlir::dyn_cast<IntegerAttr>(origAttrs.getValue()[0])) {
-    Type elementType = rewriter.getIntegerType(64);
-    int nElements = origAttrs.getValue().size();
-    SmallVector<int64_t, 4> wrapper(nElements, 0);
-    for (int i = 0; i < nElements; ++i)
-      wrapper[i] = mlir::cast<IntegerAttr>(origAttrs.getValue()[i]).getInt();
-
-    return DenseElementsAttr::get(
-        RankedTensorType::get(wrapper.size(), elementType),
-        llvm::ArrayRef(wrapper));
-  }
-
-  llvm_unreachable("unexpected attribute type");
-}
+// Storage for the convert-convtranspose-to-resize pass->pattern flag declared
+// in Decompose.hpp. When true, a nearest-neighbor upsampling ConvTranspose is
+// kept out of the phased-Conv decomposition so it can be rewritten to
+// onnx.Resize.
+bool convTransposeToResizeActive = false;
 
 /// Create an Scalar DenseElementsAttr from FloatAttr or IntegerAttr.
 /// This is used to create an ONNXConstant of rank 0, e.g. tensor<f32>.
@@ -517,15 +504,19 @@ ArrayAttr getPadsConvTranspose(
   return rewriter.getI64ArrayAttr(newPads);
 }
 
+// True if `attr` is absent (i.e. the op's default applies) or every integer
+// element equals `value`. Shared by the stride/dilation/pad-style attribute
+// checks, which only differ in the value they test against.
+bool allArrayElementsEqual(ArrayAttr attr, int64_t value) {
+  if (attr == nullptr)
+    return true;
+  return llvm::all_of(attr.getAsRange<IntegerAttr>(),
+      [value](IntegerAttr elt) { return elt.getInt() == value; });
+}
+
 // Check if strides is unit strides.
 bool hasUnitStrides(ArrayAttr strides) {
-  // Default is unit strides
-  if (strides == nullptr)
-    return true;
-  SmallVector<int64_t, 3> vStrides;
-  for (unsigned int i = 0; i < ArrayAttrSize(strides); ++i)
-    vStrides.emplace_back(ArrayAttrIntVal(strides, i));
-  return llvm::all_of(vStrides, [](int64_t s) { return s == 1; });
+  return allArrayElementsEqual(strides, 1);
 }
 
 // Check if v's shape N x C x D1 x D2 ... x Dn has static dims D1 ... Dn.
@@ -668,11 +659,68 @@ Value replaceSequenceAt(
       sequenceAtResult.getType(), rawResult, create.constantInt64(axisInt));
 }
 
-bool shouldDecomposeConvTransposeOp(Value convTransposeResult) {
-  ONNXConvTransposeOp op =
-      mlir::cast<ONNXConvTransposeOp>(convTransposeResult.getDefiningOp());
-  return hasShapeAndRank(convTransposeResult) &&
-         hasStaticSpatialDims(op.getX()) && hasStaticSpatialDims(op.getW());
+// The underlying constant and per-tensor dequantization params obtained by
+// peeling an optional DequantizeLinear (scale=1, zeroPoint=0 when not
+// quantized).
+struct DequantInfo {
+  Value raw;
+  double scale;
+  double zeroPoint;
+};
+
+// Peel an optional per-tensor DequantizeLinear off `v`. Fails only if a
+// DequantizeLinear is present but its scale/zero-point are not usable
+// (non-scalar-constant or zero scale).
+static FailureOr<DequantInfo> peelDequantize(Value v) {
+  DequantInfo info{v, /*scale=*/1.0, /*zeroPoint=*/0.0};
+  auto dq = v.getDefiningOp<ONNXDequantizeLinearOp>();
+  if (!dq)
+    return info;
+  FailureOr<double> scale = readScalarConstant(dq.getXScale());
+  if (failed(scale) || *scale == 0.0)
+    return failure();
+  info.scale = *scale;
+  // Zero-point is optional; default 0.
+  if (dq.getXZeroPoint() &&
+      !mlir::isa<NoneType>(dq.getXZeroPoint().getType())) {
+    FailureOr<double> zp = readScalarConstant(dq.getXZeroPoint());
+    if (failed(zp))
+      return failure();
+    info.zeroPoint = *zp;
+  }
+  info.raw = dq.getX();
+  return info;
+}
+
+// True iff `v` (optionally behind a per-tensor DequantizeLinear) is a constant
+// tensor whose dequantized elements all equal `target`.
+static bool isDequantizedConstOf(Value v, double target) {
+  FailureOr<DequantInfo> dq = peelDequantize(v);
+  if (failed(dq))
+    return false;
+  const double rawTarget = target / dq->scale + dq->zeroPoint;
+  // isConstOf compares in the raw storage domain, and asWideNum narrows the
+  // target to the storage element type. For integer storage a value
+  // dequantizes to exactly `target` only if its stored integer equals
+  // `rawTarget`. That requires `rawTarget` to be an integer that is actually
+  // representable in the storage type; otherwise the narrowing wraps/truncates
+  // and can fabricate a false match (e.g. rawTarget=256 wrapping to 0 in i8
+  // would classify all-zero weights as all-ones). Reject such targets up front.
+  if (auto intTy = mlir::dyn_cast<IntegerType>(
+          getElementTypeOrSelf(dq->raw.getType()))) {
+    if (rawTarget != std::floor(rawTarget))
+      return false;
+    const unsigned bw = intTy.getWidth();
+    double lo = 0.0;                       // unsigned lower bound
+    double hi = std::ldexp(1.0, bw) - 1.0; // unsigned upper bound: 2^bw - 1
+    if (!intTy.isUnsigned()) {
+      lo = -std::ldexp(1.0, bw - 1);      // -2^(bw-1)
+      hi = std::ldexp(1.0, bw - 1) - 1.0; // 2^(bw-1) - 1
+    }
+    if (rawTarget < lo || rawTarget > hi)
+      return false;
+  }
+  return isConstOf(dq->raw, rawTarget);
 }
 
 SmallVector<int64_t> getIntVectorFromArrayAttr(ArrayAttr arrayAttr) {
@@ -684,11 +732,250 @@ SmallVector<int64_t> getIntVectorFromArrayAttr(ArrayAttr arrayAttr) {
   return elements;
 }
 
+// derive kernel shape from weight tensor. Returns std::nullopt for dynamic
+// weights.
+std::optional<SmallVector<int64_t>> getConvTransposeKernelShape(
+    ONNXConvTransposeOp op, ArrayAttr kernelShapeAttr) {
+  if (kernelShapeAttr)
+    return getIntVectorFromArrayAttr(kernelShapeAttr);
+  auto wType = mlir::dyn_cast<ShapedType>(op.getW().getType());
+  if (!wType || !wType.hasRank())
+    return std::nullopt;
+  ArrayRef<int64_t> spatialDims = wType.getShape().drop_front(2);
+  if (llvm::any_of(spatialDims, ShapedType::isDynamic))
+    return std::nullopt;
+  return SmallVector<int64_t>(spatialDims);
+}
+
 bool hasDefaultDilation(ArrayAttr dilation) {
-  if (dilation == nullptr)
-    return true;
-  SmallVector<int64_t, 3> vDilation = getIntVectorFromArrayAttr(dilation);
-  return llvm::all_of(vDilation, [](int64_t d) { return d == 1; });
+  return allArrayElementsEqual(dilation, 1);
+}
+
+// Returns true iff `op` is a nearest-neighbor spatial upsample that is exactly
+// expressible as onnx.Resize(mode="nearest"). Requirements:
+//   - 4D (2D spatial) input/result with static spatial dims,
+//   - dilations == 1, pads == 0, no output_padding / output_shape attr,
+//   - kernel_shape == strides, strides not both 1,
+//   - output channels == input channels, bias absent or all-zero,
+//   - (dequantized) weights replicate each channel: either group=1 with a
+//     block-diagonal [C,C,k,k] weight (diagonal blocks all-ones, off-diagonal
+//     all-zero) or a depthwise group=C [C,1,k,k] weight of all-ones.
+bool isNearestUpsampleConvTranspose(ONNXConvTransposeOp op) {
+  Value res = op.getY();
+  if (!hasShapeAndRank(res) || !hasStaticSpatialDims(op.getX()) ||
+      !hasStaticSpatialDims(op.getW()))
+    return false;
+  auto xType = mlir::dyn_cast<RankedTensorType>(op.getX().getType());
+  auto resType = mlir::dyn_cast<RankedTensorType>(res.getType());
+  auto wType = mlir::dyn_cast<RankedTensorType>(op.getW().getType());
+  if (!xType || !resType || !wType)
+    return false;
+  // Only 2D spatial (rank 4) supported.
+  if (xType.getRank() != 4 || resType.getRank() != 4 || wType.getRank() != 4)
+    return false;
+  // The channel dims (C_in, C_out/group) are read below to validate the
+  // block-diagonal / depthwise weight layout, so the weight must be fully
+  // static, not just in its spatial dims.
+  if (!wType.hasStaticShape())
+    return false;
+
+  // dilations must be default (1).
+  if (!hasDefaultDilation(op.getDilationsAttr()))
+    return false;
+  // output_shape (auto pad inference) unsupported.
+  if (op.getOutputShapeAttr())
+    return false;
+  // pads and output_padding must be absent or all zero.
+  if (!allArrayElementsEqual(op.getPadsAttr(), 0) ||
+      !allArrayElementsEqual(op.getOutputPaddingAttr(), 0))
+    return false;
+
+  // strides present, 2D, not all 1, and == kernel_shape. All-unit strides would
+  // be an identity/pointwise op, not an upsample.
+  ArrayAttr stridesAttr = op.getStridesAttr();
+  if (!stridesAttr)
+    return false;
+  SmallVector<int64_t> strides = getIntVectorFromArrayAttr(stridesAttr);
+  if (strides.size() != 2 || hasUnitStrides(stridesAttr))
+    return false;
+  auto kernelOpt = getConvTransposeKernelShape(op, op.getKernelShapeAttr());
+  if (!kernelOpt)
+    return false;
+  SmallVector<int64_t> kernel = *kernelOpt;
+  if (kernel.size() != 2 || kernel[0] != strides[0] || kernel[1] != strides[1])
+    return false;
+
+  // Weight layout is [C_in, C_out/group, kH, kW].
+  int64_t group = op.getGroup();
+  ArrayRef<int64_t> wShape = wType.getShape();
+  int64_t cIn = wShape[0];
+  int64_t coutPerGroup = wShape[1];
+  int64_t kH = wShape[2];
+  int64_t kW = wShape[3];
+  int64_t cOut = coutPerGroup * group;
+  // Channels must be preserved (a channel-changing ConvTranspose is out of
+  // scope).
+  if (cOut != cIn)
+    return false;
+
+  // Bias must be absent or (dequantized) all-zero. It may be a plain float
+  // constant or, in a quantized model, an int32 tensor behind a
+  // DequantizeLinear; isDequantizedConstOf handles both.
+  Value b = op.getB();
+  if (b && !mlir::isa<NoneType>(b.getType()) && !isDequantizedConstOf(b, 0.0))
+    return false;
+
+  // Only the two channel-preserving encodings of a nearest-neighbor upsample
+  // are supported:
+  //   - depthwise: group == C_in, weight [C_in, 1, kH, kW] all-ones.
+  //   - dense:     group == 1,    weight [C_in, C_in, kH, kW] block-diagonal.
+  // Depthwise is a whole-tensor all-ones check, handled by
+  // isDequantizedConstOf.
+  if (group == cIn)
+    return isDequantizedConstOf(op.getW(), 1.0);
+
+  // A general grouped ConvTranspose (1 < group < C_in) is not a per-channel
+  // replicator this pass recognizes.
+  if (group != 1)
+    return false;
+
+  // Dense (group == 1) weight is block-diagonal in [C_in, C_out, kH, kW] with
+  // C_out == C_in: diagonal channel blocks are all-ones and off-diagonal blocks
+  // all-zero. Walk the raw (pre-dequant) elements and compare against the raw
+  // values that dequantize to 1 and 0 (raw == target / scale + zero_point),
+  // keeping the match exact.
+  FailureOr<DequantInfo> wInfo = peelDequantize(op.getW());
+  if (failed(wInfo))
+    return false;
+  ElementsAttr wAttr = getElementAttributeFromONNXValue(wInfo->raw);
+  if (!wAttr)
+    return false;
+  Type et = wAttr.getElementType();
+  SmallVector<double> raw;
+  if (mlir::isa<FloatType>(et))
+    raw = llvm::to_vector(llvm::map_range(wAttr.getValues<APFloat>(),
+        [](const APFloat &f) { return f.convertToDouble(); }));
+  else if (auto intTy = mlir::dyn_cast<IntegerType>(et))
+    raw = llvm::to_vector(
+        llvm::map_range(wAttr.getValues<APInt>(), [&](const APInt &i) {
+          // Unsigned storage (e.g. ui8) must be zero-extended; signed/signless
+          // storage (ONNX int8/int32) is sign-extended.
+          return intTy.isUnsigned() ? static_cast<double>(i.getZExtValue())
+                                    : static_cast<double>(i.getSExtValue());
+        }));
+  else
+    return false;
+  const double rawOne = 1.0 / wInfo->scale + wInfo->zeroPoint;
+  const double rawZero = wInfo->zeroPoint;
+
+  // Weight is [C_in, C_out, kH, kW] with C_out == C_in (group=1), i.e. a grid
+  // of C_in x C_in blocks of kH*kW elements. A per-channel replicator has
+  // all-ones blocks on the channel diagonal (inCh == outCh) and all-zeros
+  // blocks everywhere else, so it upsamples each channel independently.
+  //
+  //   Example: C_in = C_out = 2, kH = kW = 2 (weight shape [2, 2, 2, 2]).
+  //   Rows = inCh, cols = outCh; each cell is one kH*kW kernel (dequantized),
+  //   shown as a 2x2 grid:
+  //
+  //                 outCh=0   outCh=1
+  //                 +-----+   +-----+
+  //         inCh=0  | 1 1 |   | 0 0 |
+  //                 | 1 1 |   | 0 0 |
+  //                 +-----+   +-----+
+  //         inCh=1  | 0 0 |   | 1 1 |
+  //                 | 0 0 |   | 1 1 |
+  //                 +-----+   +-----+
+  //
+  // isBlockAllEqualTo returns whether the block at grid position (row, col) is
+  // entirely `value`.
+  const int64_t blockSize = kH * kW;
+  auto isBlockAllEqualTo = [&](int64_t row, int64_t col, double value) {
+    const int64_t blockStart = (row * cIn + col) * blockSize;
+    ArrayRef<double> block = ArrayRef<double>(raw).slice(blockStart, blockSize);
+    return llvm::all_of(block, [&](double v) { return v == value; });
+  };
+
+  for (int64_t inCh = 0; inCh < cIn; ++inCh)
+    for (int64_t outCh = 0; outCh < cIn; ++outCh) {
+      double expected = (inCh == outCh) ? rawOne : rawZero;
+      if (!isBlockAllEqualTo(inCh, outCh, expected))
+        return false;
+    }
+  return true;
+}
+
+// Build an onnx.Resize(mode="nearest", coordinate_transformation_mode=
+// "asymmetric", nearest_mode="floor") equivalent to the nearest-upsample
+// `convTResult` ConvTranspose. Scales are [1, 1, strideH, strideW].
+//
+// Why this is equivalent:
+//   When kernel_shape == strides and there is no padding/overlap, each input
+//   element is written into a disjoint strideH x strideW output tile. If the
+//   kernel that maps a channel to itself is all-ones (and nothing bleeds across
+//   channels), that whole tile is filled with a copy of the element - which is
+//   exactly nearest-neighbor upsampling by (strideH, strideW). onnx.Resize(
+//   mode="nearest") expresses this directly, so the weights fall away and only
+//   the scale factors remain.
+//
+// This holds for both ConvTranspose groupings the matcher accepts:
+//   1. group == 1  (dense): weight shape [C, C, kH, kW], block-diagonal - the
+//      C diagonal [kH, kW] blocks are all-ones and every off-diagonal block is
+//      zero, so channel i is upsampled purely from channel i.
+//   2. group == C  (depthwise): weight shape [C, 1, kH, kW], all-ones - each
+//      channel already has its own all-ones kernel and cannot mix channels.
+// In either case the per-channel kernel is all-ones with no cross-channel
+// contribution, so both collapse to the same nearest-neighbor Resize.
+//
+// Example: one channel, input 2x2, all-ones 2x2 kernel, strides [2, 2]
+// (upsample 2x in H and W). Each input pixel is replicated into a 2x2 block:
+//
+//   input            ConvTranspose output == Resize(nearest, scales=[1,1,2,2])
+//   +-----+          +---------+
+//   | a b |          | a a b b |
+//   | c d |   --->   | a a b b |
+//   +-----+          | c c d d |
+//                    | c c d d |
+//                    +---------+
+Value createNearestResizeFromConvTranspose(
+    PatternRewriter &rewriter, Location loc, Value convTResult) {
+  auto op = mlir::cast<ONNXConvTransposeOp>(convTResult.getDefiningOp());
+  auto resType = mlir::cast<RankedTensorType>(convTResult.getType());
+  SmallVector<int64_t> strides =
+      op.getStridesAttr() ? getIntVectorFromArrayAttr(op.getStridesAttr())
+                          : SmallVector<int64_t>({1, 1});
+
+  SmallVector<float> scaleVals = {1.0f, 1.0f, static_cast<float>(strides[0]),
+      static_cast<float>(strides[1])};
+  auto scalesType = RankedTensorType::get({4}, rewriter.getF32Type());
+  Value scales = rewriter.create<ONNXConstantOp>(loc, Attribute(),
+      DenseElementsAttr::get(scalesType, llvm::ArrayRef<float>(scaleVals)));
+  Value none = rewriter.create<ONNXNoneOp>(loc).getResult();
+  Type si64 = rewriter.getIntegerType(64, /*isSigned=*/true);
+
+  auto resize = rewriter.create<ONNXResizeOp>(loc, resType,
+      /*X=*/op.getX(), /*roi=*/none, /*scales=*/scales, /*sizes=*/none,
+      /*antialias=*/IntegerAttr::get(si64, 0),
+      /*axes=*/ArrayAttr(),
+      /*coordinate_transformation_mode=*/rewriter.getStringAttr("asymmetric"),
+      // Unused for mode="nearest"; ONNX spec default (-0.75) as a placeholder.
+      /*cubic_coeff_a=*/rewriter.getF32FloatAttr(-0.75f),
+      /*exclude_outside=*/IntegerAttr::get(si64, 0),
+      /*extrapolation_value=*/rewriter.getF32FloatAttr(0.0f),
+      /*keep_aspect_ratio_policy=*/rewriter.getStringAttr("stretch"),
+      /*mode=*/rewriter.getStringAttr("nearest"),
+      /*nearest_mode=*/rewriter.getStringAttr("floor"));
+  return resize.getResult();
+}
+
+bool shouldDecomposeConvTransposeOp(Value convTransposeResult) {
+  ONNXConvTransposeOp op =
+      mlir::cast<ONNXConvTransposeOp>(convTransposeResult.getDefiningOp());
+  // When convert-convtranspose-to-resize is active, leave nearest-upsample
+  // ConvTransposes for the Resize rewrite instead of decomposing to Conv.
+  if (convTransposeToResizeActive && isNearestUpsampleConvTranspose(op))
+    return false;
+  return hasShapeAndRank(convTransposeResult) &&
+         hasStaticSpatialDims(op.getX()) && hasStaticSpatialDims(op.getW());
 }
 
 // Check if the result of ConvTranspose is not single use, OR if single use
@@ -736,14 +1023,16 @@ bool ShouldDecomposeConvTransposeOp1dToPhasedConvs(Value convTransposeResult,
                               hasStaticSpatialDims(op.getW());
   if (!areSpatialDimsStatic)
     return false;
-  // kernel shape is required for decomposition, Not supporting the case where
-  // kernel shape can be inferred. Not supporting the case where pad values are
-  // to be inferred automatically from outputShape.
-  if (!kernelShapeAttr || outputShapeAttr) {
+  // Not supporting the case where pad values are to be inferred automatically
+  // from outputShape.
+  if (outputShapeAttr) {
     return false;
   }
 
-  auto kernelShape = getIntVectorFromArrayAttr(kernelShapeAttr);
+  auto kernelShapeOpt = getConvTransposeKernelShape(op, kernelShapeAttr);
+  if (!kernelShapeOpt)
+    return false;
+  auto kernelShape = *kernelShapeOpt;
   auto padsShape = (padsShapeAttr) ? getIntVectorFromArrayAttr(padsShapeAttr)
                                    : SmallVector<int64_t>({0, 0});
   auto stridesShape = (stridesShapeAttr)
@@ -813,19 +1102,25 @@ bool ShouldDecomposeConvTransposeOpToPhasedConvs(Value convTransposeResult,
 
   ONNXConvTransposeOp op =
       mlir::cast<ONNXConvTransposeOp>(convTransposeResult.getDefiningOp());
+  // When convert-convtranspose-to-resize is active, leave nearest-upsample
+  // ConvTransposes for the Resize rewrite instead of the phased-Conv path.
+  if (convTransposeToResizeActive && isNearestUpsampleConvTranspose(op))
+    return false;
   bool areSpatialDimsStatic = hasShapeAndRank(convTransposeResult) &&
                               hasStaticSpatialDims(op.getX()) &&
                               hasStaticSpatialDims(op.getW());
   if (!areSpatialDimsStatic)
     return false;
-  // kernel shape is required for decomposition, Not supporting the case where
-  // kernel shape can be inferred. Not supporting the case where pad values are
-  // to be inferred automatically from outputShape.
-  if (!kernelShapeAttr || outputShapeAttr) {
+  // Not supporting the case where pad values are to be inferred automatically
+  // from outputShape.
+  if (outputShapeAttr) {
     return false;
   }
 
-  auto kernelShape = getIntVectorFromArrayAttr(kernelShapeAttr);
+  auto kernelShapeOpt = getConvTransposeKernelShape(op, kernelShapeAttr);
+  if (!kernelShapeOpt)
+    return false;
+  auto kernelShape = *kernelShapeOpt;
   auto padsShape = (padsShapeAttr) ? getIntVectorFromArrayAttr(padsShapeAttr)
                                    : SmallVector<int64_t>({0, 0, 0, 0});
   auto stridesShape = (stridesShapeAttr)
@@ -957,7 +1252,10 @@ Value decomposeConvT1dIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
   RankedTensorType outputType =
       mlir::cast<RankedTensorType>(convTransposeResult.getType());
   auto convTransposeOutputShape = outputType.getShape();
-  auto kernelShape = getIntVectorFromArrayAttr(inputKernelShape);
+  auto kernelShapeOpt = getConvTransposeKernelShape(op, inputKernelShape);
+  // dynamic input is checked in the constraint phase already
+  assert(kernelShapeOpt && "kernel shape must be derivable from the weights");
+  auto kernelShape = *kernelShapeOpt;
   auto padsShape =
       (pads) ? getIntVectorFromArrayAttr(pads) : SmallVector<int64_t>({0, 0});
   auto stridesShape = (strides) ? getIntVectorFromArrayAttr(strides)
@@ -1405,6 +1703,13 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
   RankedTensorType outputType =
       mlir::cast<RankedTensorType>(convTransposeResult.getType());
   auto convTransposeOutputShape = outputType.getShape();
+
+  if (!kernel_shape) {
+    auto kernelShapeOpt = getConvTransposeKernelShape(op, nullptr);
+    // dynamic input is checked in the constraint phase already
+    assert(kernelShapeOpt && "kernel shape must be derivable from the weights");
+    kernel_shape = rewriter.getI64ArrayAttr(*kernelShapeOpt);
+  }
   auto kernelShape = getIntVectorFromArrayAttr(kernel_shape);
   auto padsShape = (pads) ? getIntVectorFromArrayAttr(pads)
                           : SmallVector<int64_t>({0, 0, 0, 0});
@@ -1611,21 +1916,27 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
       convOutputShape[convOutputShape.size() - 2] / stridesShape[0];
   ShapedType convTransposeOutputType =
       mlir::cast<ShapedType>(op.getY().getType());
-  // In the case where weights are padded, we will get the extra output from
-  // conv.
   auto convOutputType = RankedTensorType::get(
-      (needWeightsPadding)
-          ? SmallVector<int64_t>({convOutputShape[0], convOutputShape[1],
-                convOutputShape[2] + 1, convOutputShape[3] + 1})
-          : convOutputShape,
-      convTransposeOutputType.getElementType());
+      convOutputShape, convTransposeOutputType.getElementType());
   if (numPhases == 4) {
     auto getPadsArrayAttr = [&](int64_t kernelSize, int64_t convSequence,
                                 bool weightsPadded) {
       // weights are padded for case, kernel[3,3], stride[2,2] and pads either
-      // [0,0,1,1] or [1,1,0,0]
+      // [0,0,1,1] or [1,1,0,0]. Use same non-uniform per-phase padding as k4x4
+      // so each conv directly produces the correct output size (no slicing).
       if (weightsPadded) {
-        return rewriter.getI64ArrayAttr({1, 1, 1, 1});
+        switch (convSequence) {
+        case 1:
+          return rewriter.getI64ArrayAttr({0, 0, 1, 1});
+        case 2:
+          return rewriter.getI64ArrayAttr({1, 1, 0, 0});
+        case 3:
+          return rewriter.getI64ArrayAttr({0, 1, 1, 0});
+        case 4:
+          return rewriter.getI64ArrayAttr({1, 0, 0, 1});
+        default:
+          llvm_unreachable("Invalid conv sequence.");
+        }
       }
       // for kernel [2,2], stride [2,2] and pads [0,0,0,0]
       if (kernelSize == 2)
@@ -1655,7 +1966,20 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     };
     auto stridesArrayAttr = rewriter.getI64ArrayAttr({1, 1});
     Value conv;
-    if (needWeightsPadding || (kernelShape[0] == 4)) {
+    // When conv output channels are not DMA aligned, the individual conv
+    // outputs contain padding garbage in the channel dimension, making
+    // channel-wise concat of 4 convs inefficient. For the
+    // enableSeparatePhasedConvsForConvTranspose path, only use the 4-conv
+    // decomposition when output channels are DMA-aligned.
+    const int64_t dmaWidthInBytes = 32;
+    const int64_t elementSizeInBytes =
+        convTransposeOutputType.getElementType().getIntOrFloatBitWidth() / 8;
+    const int64_t dmaAlignmentInChannels = dmaWidthInBytes / elementSizeInBytes;
+    const bool isConvOutChannelsDmaAligned =
+        (convOutputShape[1] % dmaAlignmentInChannels == 0);
+    if (needWeightsPadding || (kernelShape[0] == 4) ||
+        (separatePhasedConvsForConvTransposeActive &&
+            isConvOutChannelsDmaAligned)) {
       Value conv1 = getActivationAppliedToConv(
           addQDQNodesForActivationIfNeeded(rewriter.create<ONNXConvOp>(loc,
               convOutputType, input, addDequantizeNodeIfNeeded(weightSlices[3]),
@@ -1688,46 +2012,6 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
               getPadsArrayAttr(kernelShape[0], 4, needWeightsPadding),
               stridesArrayAttr)),
           convOutputType);
-      // Need to remove excess the ofm  when weights are padded.
-
-      if (needWeightsPadding) {
-        auto startOnnxConstant =
-            getONNXConstOpFromVector(rewriter, loc, {1, 1});
-        auto endOnnxConstant = getONNXConstOpFromVector(rewriter, loc,
-            {convOutputShape[convOutputShape.size() - 2] + 2,
-                convOutputShape[convOutputShape.size() - 1] + 2});
-        auto axisOnnxConstant = getONNXConstOpFromVector(rewriter, loc, {2, 3});
-        auto stepOnnxConstant = getONNXConstOpFromVector(rewriter, loc, {1, 1});
-        auto convSliceOutputType = RankedTensorType::get(
-            convOutputShape, convTransposeOutputType.getElementType());
-        conv1 = rewriter.create<ONNXSliceOp>(loc, convSliceOutputType, conv1,
-            startOnnxConstant, endOnnxConstant, axisOnnxConstant,
-            stepOnnxConstant);
-
-        startOnnxConstant = getONNXConstOpFromVector(rewriter, loc, {0, 0});
-        endOnnxConstant = getONNXConstOpFromVector(rewriter, loc,
-            {convOutputShape[convOutputShape.size() - 2],
-                convOutputShape[convOutputShape.size() - 1]});
-        conv2 = rewriter.create<ONNXSliceOp>(loc, convSliceOutputType, conv2,
-            startOnnxConstant, endOnnxConstant, axisOnnxConstant,
-            stepOnnxConstant);
-
-        startOnnxConstant = getONNXConstOpFromVector(rewriter, loc, {1, 0});
-        endOnnxConstant = getONNXConstOpFromVector(rewriter, loc,
-            {convOutputShape[convOutputShape.size() - 2] + 2,
-                convOutputShape[convOutputShape.size() - 1]});
-        conv3 = rewriter.create<ONNXSliceOp>(loc, convSliceOutputType, conv3,
-            startOnnxConstant, endOnnxConstant, axisOnnxConstant,
-            stepOnnxConstant);
-
-        startOnnxConstant = getONNXConstOpFromVector(rewriter, loc, {0, 1});
-        endOnnxConstant = getONNXConstOpFromVector(rewriter, loc,
-            {convOutputShape[convOutputShape.size() - 2],
-                convOutputShape[convOutputShape.size() - 1] + 2});
-        conv4 = rewriter.create<ONNXSliceOp>(loc, convSliceOutputType, conv4,
-            startOnnxConstant, endOnnxConstant, axisOnnxConstant,
-            stepOnnxConstant);
-      }
       // Four conv outputs are merged in channel dim
       SmallVector<int64_t> outputShapeOfConcat = {
           1, convOutputShape[1] * 4, convOutputShape[2], convOutputShape[3]};
@@ -1790,13 +2074,22 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
           combinedConvOutputType);
     }
 
-    // Here we are reshaping the concatenated conv channels of 4*Conv_channels
-    // into groups of 2x2 channels. This can be visualized as
-    // H_chan(2) * W_Chan(2) * C_real,  then doing the transpose into
-    // Conv_channels H H_chan W W_chan. The adjecent H and H_chan will be merged
+    SmallVector<int64_t> outputShapeForResult = {
+        1, convOutputShape[1], convOutputShape[2] * 2, convOutputShape[3] * 2};
+    auto finalOutputType =
+        RankedTensorType::get(outputShapeForResult, elementType);
+
+    if (convTransposeDepthToSpaceActive) {
+      return create.onnx.createOpAndInferShapes<ONNXDepthToSpaceOp>(
+          finalOutputType, conv, /*blocksize=*/stridesShape[0], /*mode=*/"DCR");
+    }
+
+    // Reshape the concatenated conv channels of 4*Conv_channels into groups
+    // of 2x2 channels. This can be visualized as
+    // H_chan(2) * W_Chan(2) * C_real, then doing the transpose into
+    // Conv_channels H H_chan W W_chan. Adjacent H and H_chan will be merged
     // into H, same way W and W_chan will be merged into W. This leads to
     // doubling of the H and W. Keeping the channels same.
-
     SmallVector<int64_t> outputShapeForDimAdjust = {
         2, 2, convOutputShape[1], convOutputShape[2], convOutputShape[3]};
 
@@ -1819,16 +2112,9 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     auto transpose = rewriter.create<ONNXTransposeOp>(
         loc, transposeOutputType, reshapeOutputDimAdjust, permArrayAttr);
 
-    SmallVector<int64_t> outputShapeForResult = {
-        1, convOutputShape[1], convOutputShape[2] * 2, convOutputShape[3] * 2};
-
     auto onnxConstForLastReshape =
         getONNXConstOpFromVector(rewriter, loc, outputShapeForResult);
 
-    auto finalOutputType =
-        RankedTensorType::get(outputShapeForResult, elementType);
-    // Result is reshaped back to match the original convtranspose output
-    // dimensions
     auto finalOutput = rewriter.create<ONNXReshapeOp>(
         loc, finalOutputType, transpose, onnxConstForLastReshape);
     return finalOutput;
@@ -1891,6 +2177,24 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
             bias, mlir::StringAttr(), dilations, group,
             convKernelShapeArrayAttr, padsArrayAttr, stridesArrayAttr)),
         convOutputType);
+
+    if (convTransposeDepthToSpaceActive) {
+      // concat over the channel
+      auto concatType =
+          RankedTensorType::get({convOutputShape[0], convOutputShape[1] * 9,
+                                    convOutputShape[2], convOutputShape[3]},
+              elementType);
+      Value channelConcat = rewriter.create<ONNXConcatOp>(loc, concatType,
+          ValueRange{
+              conv1, conv2, conv7, conv4, conv5, conv6, conv3, conv8, conv9},
+          /*axis=*/1);
+      auto d2sType = RankedTensorType::get(
+          {convOutputShape[0], convOutputShape[1], convOutputShape[2] * 3,
+              convOutputShape[3] * 3},
+          elementType);
+      return create.onnx.createOpAndInferShapes<ONNXDepthToSpaceOp>(d2sType,
+          channelConcat, /*blocksize=*/stridesShape[0], /*mode=*/"DCR");
+    }
 
     // The nine convOutputs are adjusted to add an extra dimension at the
     // innermost level.
@@ -2142,6 +2446,11 @@ Value normalizeConstantOp(
 
 } // namespace onnx_mlir
 
+namespace onnx_mlir {
+#define GEN_PASS_DEF_DECOMPOSEONNXTOONNXPASS
+#include "src/Dialect/ONNX/Transforms/Passes.h.inc"
+} // namespace onnx_mlir
+
 namespace {
 /// Include the patterns defined in the Declarative Rewrite framework.
 #include "src/Dialect/ONNX/Transforms/ONNXDecompose.inc"
@@ -2215,10 +2524,14 @@ struct SoftmaxPattern : public OpRewritePattern<ONNXSoftmaxOp> {
   }
 };
 
-void populateDecomposingONNXBeforeStablehloPatterns(
+} // namespace
+
+void onnx_mlir::populateDecomposingONNXBeforeStablehloPatterns(
     RewritePatternSet &patterns, MLIRContext *ctx) {
   patterns.add<SoftmaxPattern>(ctx);
 }
+
+namespace {
 
 #endif
 
@@ -2453,15 +2766,197 @@ public:
     }
   }
 
+  // Re-expresses the current counter position under a different shape.
+  //
+  // The counter is a multi-dimensional index into `currentShape`. This first
+  // flattens it to a single linear (row-major) offset, then re-expands that
+  // same offset into a multi-dimensional index for `newShape`. In other words
+  // it recalculates and returns the equivalent index once the underlying tensor
+  // is viewed with `newShape` instead of `currentShape` (both must describe the
+  // same number of elements for the mapping to be meaningful).
+  //
+  // Example: currentShape = [2, 3, 4], counter = [1, 2, 3].
+  //   linear offset = ((1 * 3) + 2) * 4 + 3 = 23
+  //   reshapedCounter([2, 3, 4], [6, 4]) -> offsetToIndex([6, 4], 23) = [5, 3]
+  //   (since 5 * 4 + 3 == 23, the same element in the [6, 4] view).
+  SmallVector<int64_t> reshapedCounter(
+      ArrayRef<int64_t> currentShape, ArrayRef<int64_t> newShape) {
+    auto idxToOffsetValue = onnx_mlir::indexToOffset(currentShape, counter);
+    return onnx_mlir::offsetToIndex(newShape, idxToOffsetValue);
+  }
+
 private:
   SmallVector<int64_t> counter;
   ArrayRef<int64_t> firstElem;
   ArrayRef<int64_t> shapeToCheck;
 };
 
+// Shared preconditions for the ScatterND contiguous-block rewrites
+// (DecomposeScatterNDPattern and CanonicalizeScatterNDWithMultiAxis):
+// reduction must be "none", all operands must have a static shape, and
+// rank(data) == rank(updates). On success the operand tensor types are written
+// to the out-parameters.
+LogicalResult checkScatterNDPreconditions(ONNXScatterNDOp scatterNDOp,
+    PatternRewriter &rewriter, RankedTensorType &dataType,
+    RankedTensorType &updatesType, RankedTensorType &indicesType) {
+  if (scatterNDOp.getReductionAttr().strref() != "none") {
+    return rewriter.notifyMatchFailure(
+        scatterNDOp, "Scatters with reduction are not supported");
+  }
+  const auto data = scatterNDOp.getData();
+  const auto indices = scatterNDOp.getIndices();
+  const auto updates = scatterNDOp.getUpdates();
+  if (!onnx_mlir::hasStaticShape(data.getType()) ||
+      !onnx_mlir::hasStaticShape(indices.getType()) ||
+      !onnx_mlir::hasStaticShape(updates.getType())) {
+    return rewriter.notifyMatchFailure(
+        scatterNDOp, "All operands need to have a static shape");
+  }
+  dataType = cast<RankedTensorType>(data.getType());
+  updatesType = cast<RankedTensorType>(updates.getType());
+  indicesType = cast<RankedTensorType>(indices.getType());
+  if (dataType.getRank() != updatesType.getRank()) {
+    return rewriter.notifyMatchFailure(scatterNDOp,
+        "Only the case where data and update have the same rank "
+        "is supported");
+  }
+  return success();
+}
+
+// Extracts the ScatterND indices operand as a flat constant array. Fails if the
+// indices are not a constant tensor or are empty.
+LogicalResult getScatterNDConstantIndices(ONNXScatterNDOp scatterNDOp,
+    PatternRewriter &rewriter, SmallVectorImpl<int64_t> &indicesAsFlatArray) {
+  if (!onnx_mlir::getI64ValuesFromONNXConstantOp(
+          scatterNDOp.getIndices(), indicesAsFlatArray)) {
+    return rewriter.notifyMatchFailure(
+        scatterNDOp, "The indices need to be constant");
+  }
+  if (indicesAsFlatArray.empty()) {
+    return rewriter.notifyMatchFailure(
+        scatterNDOp, "Empty indices are not supported"); // Skip the edge case
+                                                         // of empty indices
+  }
+  return success();
+}
+
+// Validates the first index vector: it must be 0 on every non-split axis (the
+// block starts at the origin there) and non-negative on the split axes (ONNX
+// negative wrap-around indexing is not supported by these rewrites).
+// `isSplitAxis` returns true when the given axis is a split axis.
+LogicalResult checkScatterNDFirstIndexShift(ONNXScatterNDOp scatterNDOp,
+    PatternRewriter &rewriter, ArrayRef<int64_t> firstIndex,
+    llvm::function_ref<bool(uint64_t)> isSplitAxis) {
+  for (auto [idx, firstIndexDim] : llvm::enumerate(firstIndex)) {
+    if (!isSplitAxis(idx) && firstIndexDim != 0) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, " Shifting is only supported on the split axis");
+    }
+    if (isSplitAxis(idx) && firstIndexDim < 0) {
+      return rewriter.notifyMatchFailure(scatterNDOp,
+          "Negative values with wrap around are not yet "
+          "supported"); // onnx allows negative values with
+                        // wrap-around, this decomposition does
+                        // not (for now)
+    }
+  }
+  return success();
+}
+
+// Checks that all indices are contiguous.
+// - The check for contiguity and covering works the following way:
+// -- Iterated over all idx in indices and compare the idx against the
+//    expected index, fail if it differs
+// -- The expected index is calculated the following way:
+// --- The expected index is initialized with the first index in indices and
+//     then always incremented by one.
+// --- The increment works like a manual addition, the least significant
+//     digit/subindex gets incremented by one. If a digit overflows, it
+//     gets reset to the first index and the addition carries to the next,
+//     more significant digit. The addition overflows, if the index for an
+//     axis is equal to the size of this axis in updates/indices. (By
+//     definition the shape for indices.shape().drop(-1) must match the
+//     first dimensions in updates). If the addition overflows , the
+//     overflowing digit is reset to its value in the first index. This is
+//     zero for all axes, except for 'a', where it can be a positive number
+//     if the split/concat is in the middle of the tensor
+// `onIndex`, when set, is invoked with the running counter for every index
+// (before its contiguity comparison), letting callers reuse the same walk to
+// perform extra per-index work such as coordinate remapping.
+LogicalResult checkScatterNDContiguousIndices(ONNXScatterNDOp scatterNDOp,
+    PatternRewriter &rewriter, ArrayRef<int64_t> firstIndex,
+    ArrayRef<int64_t> counterShape,
+    const SubArrayAccessHelper<int64_t> &indicesFlatAccessor,
+    llvm::function_ref<void(IndicesContiguousCounter &)> onIndex = {}) {
+  IndicesContiguousCounter counter(firstIndex, counterShape);
+  for (size_t i = 0; i < indicesFlatAccessor.size(); ++i) {
+    if (onIndex)
+      onIndex(counter);
+    if (counter.getCounter() != indicesFlatAccessor[i]) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "Indices are not contiguous");
+    }
+    counter.increment();
+  }
+  return success();
+}
+
+// Collects, in ascending order, the axes where data and updates differ in
+// size. These are the axes along which a contiguous-block ScatterND writes a
+// sub-range (and where the Split/Concat decomposition peels/rebuilds).
+SmallVector<uint64_t> getScatterNDSplitAxes(
+    ArrayRef<int64_t> dataShape, ArrayRef<int64_t> updateShape) {
+  SmallVector<uint64_t> splitAxes;
+  for (auto [idx, dimData, dimUpdates] :
+      llvm::enumerate(dataShape, updateShape)) {
+    if (dimData != dimUpdates)
+      splitAxes.push_back(idx);
+  }
+  return splitAxes;
+}
+
+// Returns true iff the axes are consecutive (a, a+1, ..., a+N-1).
+bool areAxesConsecutive(ArrayRef<uint64_t> axes) {
+  for (size_t i = 0; i + 1 < axes.size(); ++i)
+    if (axes[i] + 1 != axes[i + 1])
+      return false;
+  return true;
+}
+
+// The written block maps to a single contiguous run once the (consecutive)
+// split axes are merged (row-major flattened) iff, scanning them from outer to
+// inner, after the first axis that writes a partial range (updateSize > 1)
+// every more-inner split axis is full-width (updateSize == dataSize). Trailing
+// non-split (slice) axes are always full-width, so they never break
+// contiguity. When this holds, CanonicalizeScatterNDWithMultiAxis (reshape +
+// merge) is the cheaper lowering; otherwise the block is multi-interval and is
+// lowered by the nested Split+Concat in DecomposeScatterNDPattern.
+//
+// Example (single interval): data [6,4,4], updates [6,2,4], splitAxes {1,2}.
+//   axis 1 is partial (2 < 4) but axis 2 (the inner one) is full-width (4 ==
+//   4). Flattening axes 1,2 into 16, rows [0,1] cover merged offsets [0..7] --
+//   one contiguous run per batch -> returns true (reshape/merge path).
+//
+// Counter-example (multi-interval): data [6,4,4], updates [6,2,3], splitAxes
+//   {1,2}. axis 1 is partial (2 < 4) and the inner axis 2 is also partial
+//   (3 < 4). Flattening into 16, row 0 covers offsets [0..2] and row 1 covers
+//   [4..6] -- two separate runs with a gap at offset 3 -> returns false (nested
+//   Split+Concat path).
+bool isSingleMergedInterval(ArrayRef<int64_t> dataShape,
+    ArrayRef<int64_t> updateShape, ArrayRef<uint64_t> splitAxes) {
+  bool seenPartial = false;
+  for (uint64_t ax : splitAxes) {
+    if (seenPartial && updateShape[ax] != dataShape[ax])
+      return false;
+    if (updateShape[ax] > 1)
+      seenPartial = true;
+  }
+  return true;
+}
+
 } // namespace
 
-// Decomposes ScatterNDs into a single Split and Concat.
+// Decomposes contiguous-block ScatterNDs into Split and Concat operations.
 // We can always split ScatterNDs by splitting the input tensor together with
 // the indices and their updates belonging to that part of the input tensor,
 // performing the ScatterNDs on each split, and the concatenating the result.
@@ -2470,6 +2965,17 @@ private:
 // affect their parts of the input tensor), and the middle ScatterND overwrites
 // the full input with sequential indices (i.e. can be replaced by a copy of its
 // update).
+//
+// The write region must be a hyper-rectangular block over one or more
+// *consecutive* differing axes. A single differing axis lowers to one
+// Split + Concat. When several consecutive axes differ, the block is peeled one
+// axis at a time (innermost to outermost) with a Split and re-stitched with a
+// Concat per axis, so a rank-r ScatterND spanning N differing axes lowers to N
+// Split/Concat pairs. The special case where merging the differing axes yields
+// a single contiguous run is left to CanonicalizeScatterNDWithMultiAxis, which
+// produces a cheaper reshape-based single-axis Split + Concat; this pattern
+// therefore only handles the multi-interval multi-axis case (and all
+// single-axis cases).
 //
 // Example:
 // ` %indices = onnx.Constant dense<[[[[0, 1, 0], [0, 1, 1], [0, 1, 2],
@@ -2504,8 +3010,8 @@ private:
 // To ensure that this decomposition to split and concat is
 // valid, the following constraints need to hold:
 // - r == rank(updates)
-// - The shape of data and updates differs only in one dimension 'a'
-// -- 'a' is the dimension where the split and concat will happen
+// - The shape of data and updates differs only in consecutive dimensions
+// -- Those are the dimensions where the (nested) split and concat will happen
 // - The update indices need to be contiguous
 // -- The update indices are the last dim in indices
 // -- We call them contiguous, if each idx in indices is indexing the element
@@ -2521,145 +3027,358 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
   LogicalResult matchAndRewrite(
       ONNXScatterNDOp scatterNDOp, PatternRewriter &rewriter) const final {
     // Check preconditions
-    if (scatterNDOp.getReductionAttr().strref() != "none") {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "Scatters with reduction are not supported");
+    RankedTensorType dataType;
+    RankedTensorType updatesType;
+    RankedTensorType indicesType;
+    if (failed(checkScatterNDPreconditions(
+            scatterNDOp, rewriter, dataType, updatesType, indicesType))) {
+      return failure();
     }
-    const auto data = scatterNDOp.getData();
-    const auto indices = scatterNDOp.getIndices();
-    const auto updates = scatterNDOp.getUpdates();
-    if (!onnx_mlir::hasStaticShape(data.getType()) ||
-        !onnx_mlir::hasStaticShape(indices.getType()) ||
-        !onnx_mlir::hasStaticShape(updates.getType())) {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "All operands need to have a static shape");
-    }
-    const auto dataType = cast<RankedTensorType>(data.getType());
     const auto dataShape = dataType.getShape();
-    const auto updatesType = cast<RankedTensorType>(updates.getType());
     const auto updateShape = updatesType.getShape();
-    const auto indicesType = cast<RankedTensorType>(indices.getType());
     const auto indicesShape = indicesType.getShape();
-    if (dataType.getRank() != updatesType.getRank()) {
-      return rewriter.notifyMatchFailure(scatterNDOp,
-          "Only the case where data and update have the same rank "
-          "is supported");
+
+    // Collect the axes where data and updates differ. These are the axes along
+    // which the scatter writes a sub-range and where we peel/rebuild.
+    SmallVector<uint64_t> splitAxes =
+        getScatterNDSplitAxes(dataShape, updateShape);
+    if (splitAxes.empty()) {
+      // Edge case: data and updates have the same shape (the whole tensor is
+      // overwritten); split on the last dim.
+      splitAxes.push_back(dataType.getRank() - 1);
     }
 
-    const auto splitAxis = [&]() -> uint64_t {
-      // Split at the dim where the update and original data have a
-      // different size
-      for (auto [idx, dimData, dimUpdates] :
-          llvm::enumerate(dataShape, updateShape)) {
-        if (dimData != dimUpdates) {
-          return idx;
-        }
-      }
-      return dataType.getRank() -
-             1; // Edge case, all elements get updated, split on the last dim
-    }();
-
-    for (auto [idx, dimData, dimUpdates] :
-        llvm::enumerate(dataShape, updateShape)) {
-      if (idx != splitAxis && dimData != dimUpdates) {
-        return rewriter.notifyMatchFailure(
-            scatterNDOp, "Only a single differing dimension is supported");
-      }
+    if (!areAxesConsecutive(splitAxes)) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "Only consecutive differing axes are supported");
     }
 
     SmallVector<int64_t> indicesAsFlatArray;
-    if (!onnx_mlir::getI64ValuesFromONNXConstantOp(
-            indices, indicesAsFlatArray)) {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "The indices need to be constant");
-    }
-    if (indicesAsFlatArray.empty()) {
-      return rewriter.notifyMatchFailure(
-          scatterNDOp, "Empty indices are not supported"); // Skip the edge case
-                                                           // of empty indices
+    if (failed(getScatterNDConstantIndices(
+            scatterNDOp, rewriter, indicesAsFlatArray))) {
+      return failure();
     }
     const auto indicesLastDimSize = indicesShape.back();
     SubArrayAccessHelper<int64_t> indicesFlatAccessor(
         indicesAsFlatArray, indicesLastDimSize);
-    const auto firstIndex =
-        indicesFlatAccessor[0]; // Safe, we have checked the length before
-    for (auto [idx, firstIndexDim] : llvm::enumerate(firstIndex)) {
-      if (idx != splitAxis && firstIndexDim != 0) {
-        return rewriter.notifyMatchFailure(
-            scatterNDOp, " Shifting is only supported on the split axis");
-      }
-      if (idx == splitAxis && firstIndexDim < 0) {
-        return rewriter.notifyMatchFailure(scatterNDOp,
-            "Negative values with wrap around are not yet "
-            "supported"); // onnx allows negative values with
-                          // wrap-around, this decomposition does
-                          // not (for now)
-      }
+
+    // Real differing axes always lie within the indexed prefix (the trailing
+    // r-k slice axes agree between data and updates), so no explicit prefix
+    // guard is needed here; the empty-splitAxes fallback deliberately splits
+    // the full slice axis (whole-tensor overwrite) and must be allowed through.
+
+    // For two or more differing axes that collapse to a single contiguous run,
+    // the reshape-based merge (CanonicalizeScatterNDWithMultiAxis) is the
+    // cheaper lowering; defer to it. Single-axis scatters are always handled
+    // here.
+    if (splitAxes.size() >= 2 &&
+        isSingleMergedInterval(dataShape, updateShape, splitAxes)) {
+      return rewriter.notifyMatchFailure(scatterNDOp,
+          "Single-interval multi-axis block is handled by "
+          "CanonicalizeScatterNDWithMultiAxis");
     }
 
-    // Check that all indices are contiguous.
-    // - The check for contiguity and covering works the following way:
-    // -- Iterated over all idx in indices and compare the idx against the
-    //    expected index, fail if it differs
-    // -- The expected index is calculated the following way:
-    // --- The expected index is initialized with the first index in indices and
-    //     then always incremented by one.
-    // --- The increment works like a manual addition, the least significant
-    //     digit/subindex gets incremented by one. If a digit overflows, it
-    //     gets reset to the first index and the addition carries to the next,
-    //     more significant digit. The addition overflows, if the index for an
-    //     axis is equal to the size of this axis in updates/indices. (By
-    //     definition the shape for indices.shape().drop(-1) must match the
-    //     first dimensions in updates). If the addition overflows , the
-    //     overflowing digit is reset to its value in the first index. This is
-    //     zero for all axes, except for 'a', where it can be a positive number
-    //     if the split/concat is in the middle of the tensor
+    const auto firstIndex =
+        indicesFlatAccessor[0]; // Safe, we have checked the length before
+    if (failed(checkScatterNDFirstIndexShift(
+            scatterNDOp, rewriter, firstIndex, [&](uint64_t idx) {
+              return llvm::is_contained(splitAxes, idx);
+            }))) {
+      return failure();
+    }
+
     assert(
         updateShape.drop_back(updateShape.size() - (indicesShape.size() - 1)) ==
             indicesShape.drop_back(1) &&
         "Update and indicesShape should partially match for scatterNd");
-    {
-      IndicesContiguousCounter counter(firstIndex, indicesShape.drop_back(1));
-      for (size_t i = 0; i < indicesFlatAccessor.size(); ++i) {
-        if (counter.getCounter() != indicesFlatAccessor[i]) {
-          return rewriter.notifyMatchFailure(
-              scatterNDOp, "Indices are not contiguous");
-        }
-        counter.increment();
-      }
+    if (failed(checkScatterNDContiguousIndices(scatterNDOp, rewriter,
+            firstIndex, indicesShape.drop_back(1), indicesFlatAccessor))) {
+      return failure();
+    }
+
+    // Strategy for the decomposition (nested peel/rebuild):
+    // Isolate the hyper-rectangular block one split axis at a time with a
+    // 3-way Split into [before, band, after]; the band is carried into the next
+    // peel and the surrounding before/after slabs are kept. The innermost band
+    // is the block region and is discarded. Then stitch the updates back in
+    // with a Concat(before, result, after) per axis. For a single differing
+    // axis this reduces exactly to the classic
+    // `before, band, after = split(data, [s, b, D-s-b]); concat(before,
+    // updates, after)` (before/after may be zero-sized, matching prior
+    // behavior).
+    //
+    // Example: data<4x4x8>, updates<2x2x8> writing a 2x2 block at offset [1,1]
+    // (splitAxes = {0, 1}). Peel inner->outer, i.e. axis 1 then axis 0:
+    //   axis 1: split<4x4x8> -> before<4x1x8>, band<4x2x8>, after<4x1x8>
+    //           keep before/after; descend into band<4x2x8>.
+    //   axis 0: split<4x2x8> -> before<1x2x8>, band<2x2x8>, after<1x2x8>
+    //           keep before/after; band<2x2x8> is the block (discarded).
+    // Rebuild outer->inner starting from updates<2x2x8>:
+    //   axis 0: concat(before<1x2x8>, updates<2x2x8>, after<1x2x8>) -> <4x2x8>
+    //   axis 1: concat(before<4x1x8>,        <4x2x8>, after<4x1x8>) -> <4x4x8>
+    // yielding the original data with the 2x2 block replaced by the updates.
+    //
+    // The number of split axes drives the cost: N split axes produce exactly N
+    // (3-way) Splits during the peel and N Concats during the rebuild.
+    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+        rewriter, scatterNDOp->getLoc());
+    const Type elemTy = dataType.getElementType();
+
+    // firstIndex holds the block start on the indexed axes; 0 elsewhere.
+    auto blockStart = [&](uint64_t axis) -> int64_t {
+      return (axis < firstIndex.size()) ? firstIndex[axis] : 0;
+    };
+
+    // Peel innermost split axis to outermost. `kept` records the surrounding
+    // slabs (in inner->outer order) to be re-stitched during rebuild.
+    struct KeptPieces {
+      uint64_t axis;
+      Value before;
+      Value after;
+    };
+    SmallVector<KeptPieces> kept;
+    Value current = scatterNDOp.getData();
+    SmallVector<int64_t> currentShape(dataShape);
+    for (uint64_t axis : llvm::reverse(splitAxes)) {
+      // Split this axis into three contiguous slabs: the leading "before" slab
+      // [0, start), the "band" [start, start + bandSize) that holds the block
+      // region, and the trailing "after" slab [start + bandSize, dim). The
+      // before/after slabs are kept as-is; the band descends into the next
+      // peel. Either surrounding slab may be zero-sized when the block touches
+      // an axis boundary.
+      const int64_t before = blockStart(axis);    // length of the before slab
+      const int64_t bandSize = updateShape[axis]; // block extent on this axis
+      const int64_t after =
+          currentShape[axis] - before - bandSize; // after slab
+
+      auto pieceTy = [&](int64_t size) {
+        SmallVector<int64_t> shape(currentShape);
+        shape[axis] = size;
+        return RankedTensorType::get(shape, elemTy);
+      };
+      ValueRange parts = create.onnx.split(
+          {pieceTy(before), pieceTy(bandSize), pieceTy(after)}, current,
+          create.onnx.constantInt64({before, bandSize, after}), axis);
+
+      kept.push_back({axis, parts[0], parts[2]});
+      current = parts[1]; // descend into the block band
+      currentShape[axis] = bandSize;
+    }
+
+    // Rebuild outermost split axis to innermost (reverse of the peel order),
+    // starting from the updates.
+    Value result = scatterNDOp.getUpdates();
+    SmallVector<int64_t> resultShape(updateShape);
+    for (const KeptPieces &kp : llvm::reverse(kept)) {
+      resultShape[kp.axis] = dataShape[kp.axis];
+      result = create.onnx.concat(RankedTensorType::get(resultShape, elemTy),
+          {kp.before, result, kp.after}, kp.axis);
+    }
+
+    rewriter.replaceOp(scatterNDOp, result);
+    return success();
+  }
+};
+
+// Canonicalizes an ONNXScatterND that writes a contiguous block spanning two or
+// more *consecutive* axes into an equivalent ScatterND that writes along a
+// *single* axis, by merging those axes into one.
+//
+// Motivation: the contiguous-block ScatterND decomposition (Split + Concat, see
+// DecomposeScatterNDPattern) only handles the case where data and updates
+// differ in a single dimension. When the update region spans several adjacent
+// axes (e.g. it replaces a full [H, W] plane per batch), the scatter has
+// multiple differing axes and that pattern cannot apply. This canonicalization
+// folds the N differing axes together so the single-axis decomposition can take
+// over.
+//
+// It matches only when (all preconditions must hold, otherwise it bails):
+//   - reduction == "none",
+//   - data, indices and updates all have static shapes,
+//   - rank(data) == rank(updates),
+//   - at least two axes differ in size between data and updates, and they are
+//     all consecutive (splitAxes = {a, a+1, ..., a+N-1}),
+//   - indices is a constant, non-empty tensor,
+//   - the first index is 0 on every non-split axis (the block starts at the
+//     origin there) and non-negative on the split axes (no ONNX wrap-around),
+//   - the indices are contiguous and cover the whole merged block.
+//
+// The rewrite reshapes data, updates and indices so the N split axes become one
+// axis of size prod(data[a..a+N-1]), rebuilds the (constant) indices as linear
+// coordinates into the merged shape, emits a new ScatterND, and reshapes the
+// result back to the original data shape.
+//
+// Partial indexing (k = indices.shape[-1] < rank(data)) is supported: each
+// index then addresses a data.shape[k:] slice rather than a scalar. Merging N
+// indexed axes drops the index depth by N-1 (k -> k-N+1) and the coordinate
+// remap runs over the indexed prefix (the first k axes) only; the trailing r-k
+// slice axes ride along unchanged. For full indexing (k == rank(data)) the new
+// index depth equals the new data rank, matching the original behavior.
+//
+// Example: data:[6,4,4], updates:[6,1,1], indices:[6,1,1,3] holding [b,0,0].
+//   splitAxes = {1, 2} (4 != 1 on both) -> merge axes 1 and 2 (4*4 = 16):
+//     newDataShape    = [6, 16]
+//     newUpdateShape  = [6, 1]
+//     newIndicesShape = [6, 1, 2]   // last dim = new index depth k-1 = 2
+//   each index [b,0,0] (offset b*16 into [6,4,4]) becomes [b, 0] into [6,16].
+//   The resulting ScatterND now differs from data only on axis 1, so the
+//   Split+Concat decomposition can lower it. Reshapes wrap it back to [6,4,4].
+//
+// Partial-indexing example: data:[2,6,10,12], updates:[1,1,10,12],
+//   indices:[1,1,10,3] (k=3 < r=4). splitAxes = {0, 1} -> merge axes 0,1
+//   (2*6 = 12): newDataShape=[12,10,12], newUpdateShape=[1,10,12],
+//   newIndicesShape=[1,10,2] (index depth 3 -> 2). Index [1,1,l] becomes
+//   [7, l] into [12,10,12] (still a slice scatter over the last axis).
+struct CanonicalizeScatterNDWithMultiAxis
+    : public OpRewritePattern<ONNXScatterNDOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXScatterNDOp scatterNDOp, PatternRewriter &rewriter) const final {
+    // Check preconditions
+    RankedTensorType dataType;
+    RankedTensorType updatesType;
+    RankedTensorType indicesType;
+    if (failed(checkScatterNDPreconditions(
+            scatterNDOp, rewriter, dataType, updatesType, indicesType))) {
+      return failure();
+    }
+    const auto dataShape = dataType.getShape();
+    const auto updateShape = updatesType.getShape();
+    const auto indicesShape = indicesType.getShape();
+
+    // Split at the dims where the update and original data have a
+    // different size.
+    SmallVector<uint64_t> splitAxes =
+        getScatterNDSplitAxes(dataShape, updateShape);
+
+    if (splitAxes.size() < 2) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "This pattern needs at least two split axes");
+    }
+
+    if (!areAxesConsecutive(splitAxes)) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "This pattern needs consecutive split axes");
+    }
+
+    // Merging the axes only yields a valid single-axis scatter when the block
+    // maps to one contiguous run. Multi-interval blocks are left to
+    // DecomposeScatterNDPattern's nested Split+Concat lowering.
+    if (!isSingleMergedInterval(dataShape, updateShape, splitAxes)) {
+      return rewriter.notifyMatchFailure(scatterNDOp,
+          "Merged block is multi-interval; handled by "
+          "DecomposeScatterNDPattern");
+    }
+
+    SmallVector<int64_t> indicesAsFlatArray;
+    if (failed(getScatterNDConstantIndices(
+            scatterNDOp, rewriter, indicesAsFlatArray))) {
+      return failure();
+    }
+    const auto indicesLastDimSize = indicesShape.back();
+    SubArrayAccessHelper<int64_t> indicesFlatAccessor(
+        indicesAsFlatArray, indicesLastDimSize);
+
+    // The index depth k = indices.shape[-1] may be smaller than rank(data)
+    // (partial / slice indexing, where each index addresses a data.shape[k:]
+    // sub-tensor rather than a scalar). ScatterND guarantees data and updates
+    // agree on the trailing r-k slice axes, so any differing axis is always an
+    // indexed one; both merged axes must therefore lie within the first k axes.
+    // Guard defensively so the coordinate remap below never reads past the end
+    // of a length-k index vector.
+    if (splitAxes.back() >= static_cast<uint64_t>(indicesLastDimSize)) {
+      return rewriter.notifyMatchFailure(
+          scatterNDOp, "Split axes must lie within the indexed prefix");
+    }
+
+    const auto firstIndex =
+        indicesFlatAccessor[0]; // Safe, we have checked the length before
+    if (failed(checkScatterNDFirstIndexShift(
+            scatterNDOp, rewriter, firstIndex, [&](uint64_t idx) {
+              return llvm::is_contained(splitAxes, idx);
+            }))) {
+      return failure();
+    }
+
+    // Collapse the two adjacent axes firstSplitAxis and firstSplitAxis+1 into a
+    // single axis of their product, keeping the surrounding dims unchanged.
+    const auto firstSplitAxis = splitAxes.front();
+    auto collapseAdjacentSplitAxes =
+        [firstSplitAxis, splitAxes](
+            ArrayRef<int64_t> shape) -> SmallVector<int64_t> {
+      auto splitAxisSize = splitAxes.size();
+      SmallVector<int64_t> newShape =
+          llvm::to_vector(shape.take_front(firstSplitAxis));
+      auto collapsedShape = shape.slice(firstSplitAxis, splitAxisSize);
+      auto collapsedSize = std::accumulate(collapsedShape.begin(),
+          collapsedShape.end(), 1LL, std::multiplies<int64_t>());
+      newShape.push_back(collapsedSize);
+      newShape.append(llvm::to_vector(
+          shape.take_back(shape.size() - firstSplitAxis - splitAxisSize)));
+      return newShape;
+    };
+
+    SmallVector<int64_t> newDataShape = collapseAdjacentSplitAxes(dataShape);
+    SmallVector<int64_t> newUpdateShape =
+        collapseAdjacentSplitAxes(updateShape);
+    SmallVector<int64_t> newIndicesShape =
+        collapseAdjacentSplitAxes(indicesShape.drop_back(1));
+    auto newIndicesShapeDroppedLastDim = newIndicesShape;
+    // Merging N consecutive indexed axes into one reduces the index depth by
+    // N-1. For full indexing (k == rank(data)) this equals the new data rank
+    // (newDataShape.size()); for partial indexing (k < rank(data)) it is
+    // strictly smaller and the scatter stays a slice scatter.
+    const int64_t newIndexDepth =
+        indicesLastDimSize - (static_cast<int64_t>(splitAxes.size()) - 1);
+    newIndicesShape.push_back(newIndexDepth);
+
+    SmallVector<int64_t> newIndicesAsFlatArray;
+
+    assert(
+        updateShape.drop_back(updateShape.size() - (indicesShape.size() - 1)) ==
+            indicesShape.drop_back(1) &&
+        "Update and indicesShape should partially match for scatterNd");
+    if (failed(checkScatterNDContiguousIndices(scatterNDOp, rewriter,
+            firstIndex, indicesShape.drop_back(1), indicesFlatAccessor,
+            [&](IndicesContiguousCounter &counter) {
+              // Remap each length-k index coordinate through the axis merge,
+              // working only over the indexed prefix (the first k axes). Using
+              // the full data shape here would read past the end of the
+              // k-length coordinate when k < rank(data).
+              newIndicesAsFlatArray.append(counter.reshapedCounter(
+                  dataShape.take_front(indicesLastDimSize),
+                  ArrayRef<int64_t>(newDataShape).take_front(newIndexDepth)));
+            }))) {
+      return failure();
     }
 
     onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
         rewriter, scatterNDOp->getLoc());
-    // Strategy for the decomposition:
-    // Split at the split axis, concat the update and part of the split
-    // a, b = split(input)
-    // a1, a2 = split(a)
-    // concat(a1, update, b)
-    // In onnx this split can be done in one:
-    // a1, a2, b = split(input)
-    const auto firstSplitPosition =
-        (splitAxis < firstIndex.size()) ? firstIndex[splitAxis] : 0;
-    const auto secondSplitPosition =
-        updateShape[splitAxis] + firstSplitPosition;
-    SmallVector<int64_t> splitTyFirstQuarter(dataShape);
-    splitTyFirstQuarter[splitAxis] = firstSplitPosition;
-    SmallVector<int64_t> splitTySecondQuarter(dataShape);
-    splitTySecondQuarter[splitAxis] = updateShape[splitAxis];
-    SmallVector<int64_t> splitTySecondHalf(dataShape);
-    splitTySecondHalf[splitAxis] -= secondSplitPosition;
-    Value splitSize = create.onnx.constantInt64({firstSplitPosition,
-        updateShape[splitAxis], splitTySecondHalf[splitAxis]});
-    const Type dataElementType = dataType.getElementType();
-    ValueRange split = create.onnx.split(
-        {RankedTensorType::get(splitTyFirstQuarter, dataElementType),
-            RankedTensorType::get(splitTySecondQuarter, dataElementType),
-            RankedTensorType::get(splitTySecondHalf, dataElementType)},
-        scatterNDOp.getData(), splitSize, splitAxis);
 
-    Value concat = create.onnx.concat(
-        dataType, {split[0], scatterNDOp.getUpdates(), split[2]}, splitAxis);
-    rewriter.replaceOp(scatterNDOp, concat);
+    auto newDataTy =
+        RankedTensorType::get(newDataShape, dataType.getElementType());
+
+    auto reshapedScatterNDData = create.onnx.reshape(newDataTy,
+        scatterNDOp.getData(), create.onnx.constantInt64(newDataShape));
+
+    // New Indices
+    Value newIndices = create.onnx.constant(DenseElementsAttr::get(
+        RankedTensorType::get(newIndicesShape, indicesType.getElementType()),
+        ArrayRef<int64_t>(newIndicesAsFlatArray)));
+
+    auto reshapedScatterNDUpdates = create.onnx.reshape(
+        RankedTensorType::get(newUpdateShape, updatesType.getElementType()),
+        scatterNDOp.getUpdates(), create.onnx.constantInt64(newUpdateShape));
+
+    auto newScatterNDOp =
+        rewriter.create<ONNXScatterNDOp>(scatterNDOp->getLoc(), newDataTy,
+            reshapedScatterNDData, newIndices, reshapedScatterNDUpdates);
+
+    auto reshapedNewScatterND = create.onnx.reshape(dataType,
+        newScatterNDOp.getResult(), create.onnx.constantInt64(dataShape));
+
+    rewriter.replaceOp(scatterNDOp, reshapedNewScatterND);
     return success();
   }
 };
@@ -2705,7 +3424,8 @@ struct CustomOpFuseMatMulPattern : public OpRewritePattern<ONNXCustomOp> {
     Value A = customOp.getOperands()[0];
     Value B = customOp.getOperands()[1];
 
-    MultiDialectBuilder<OnnxBuilder> create(rewriter, loc);
+    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+        rewriter, loc);
     Type resType = customOp.getResult(0).getType();
     Type elementType = onnx_mlir::getElementType(resType);
     UnrankedTensorType unrankedType = UnrankedTensorType::get(elementType);
@@ -3287,11 +4007,605 @@ struct MicrosoftSkipSimplifiedLayerNorm : public CustomOpToOnnxOps {
 
 struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   MicrosoftGroupQueryAttention(
-      MLIRContext *ctx, bool enableCacheSlicing = true, PatternBenefit b = 1)
+      MLIRContext *ctx, bool enableUint16CacheSlotRewrite, PatternBenefit b = 1)
       : CustomOpToOnnxOps(ctx, MicrosoftDomainName, "GroupQueryAttention", b),
-        enableCacheSlicing(enableCacheSlicing) {}
+        enableUint16CacheSlotRewrite(enableUint16CacheSlotRewrite) {}
 
-  bool enableCacheSlicing;
+  const bool enableUint16CacheSlotRewrite;
+
+  using AttributeValidator = LogicalResult (*)(
+      ONNXCustomOp, PatternRewriter &, Attribute);
+
+  // We support two cases:
+  // - -1: no window
+  // - a number so big that it is provable to never hide a key, so it is
+  // equivalent as if no window would be there
+  // The latter needs extra context so it is checked in
+  // validateWindowNeverBinds.
+  static LogicalResult validateLocalWindowSize(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
+    auto localWindowSize = dyn_cast<IntegerAttr>(attr);
+    if (!localWindowSize ||
+        (localWindowSize.getSInt() != -1 && localWindowSize.getSInt() <= 0))
+      return rewriter.notifyMatchFailure(customOp,
+          "attribute 'local_window_size' is only supported when -1 or "
+          "positive");
+    return success();
+  }
+
+  // A key j is hidden by the sliding window when j <= t - W, for a query at
+  // absolute position t. Causality already bounds t by maskSeqLen - 1 and keys
+  // start at 0, so a window spanning at least maskSeqLen keys can never hide
+  // one and the decomposition is the same as for local_window_size = -1. The
+  // bound holds under both readings of local_window_size (j > t - W and
+  // j >= t - W) and in preallocated-cache mode, where maskSeqLen is the cache
+  // capacity and the true position stays below it.
+  static LogicalResult validateWindowNeverBinds(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, int64_t maskSeqLen) {
+    auto localWindowSize =
+        customOp->getAttrOfType<IntegerAttr>("local_window_size");
+    if (!localWindowSize || localWindowSize.getSInt() == -1 ||
+        localWindowSize.getSInt() >= maskSeqLen)
+      return success();
+    return rewriter.notifyMatchFailure(customOp,
+        "attribute 'local_window_size' = " +
+            std::to_string(localWindowSize.getSInt()) +
+            " restricts attention over " + std::to_string(maskSeqLen) +
+            " keys; sliding-window attention is not supported");
+  }
+
+  // smooth_softmax changes the softmax denominator. Only disabled/default
+  // values can be passed through this decomposition.
+  static LogicalResult validateSmoothSoftmax(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
+    auto smoothSoftmax = dyn_cast<IntegerAttr>(attr);
+    if (!smoothSoftmax)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'smooth_softmax' attribute to be an integer");
+    if (smoothSoftmax.getSInt() == 1)
+      return rewriter.notifyMatchFailure(customOp,
+          "attribute 'smooth_softmax' not supported by onnx.Attention");
+    return success();
+  }
+
+  // Quantized cache attrs are recognized for diagnostics, but this lowering
+  // only handles the non-quantized mode.
+  static LogicalResult validateQuantType(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
+    auto quantType = dyn_cast<StringAttr>(attr);
+    if (!quantType)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected quantization type attribute to be a string");
+    if (!quantType.getValue().equals_insensitive("NONE"))
+      return rewriter.notifyMatchFailure(customOp,
+          "quantized KV-cache GroupQueryAttention variants are not supported");
+    return success();
+  }
+
+  // kv_cache_bit_width is only meaningful for quantized cache modes. Its
+  // presence is enough to reject this decomposition.
+  static LogicalResult validateKVCacheBitWidth(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute) {
+    return rewriter.notifyMatchFailure(customOp,
+        "quantized KV-cache GroupQueryAttention variants are not supported");
+  }
+
+  // qk_norm_epsilon is harmless by itself; q_norm/k_norm inputs below decide
+  // whether Q/K norm is requested. Validate only the attribute type here.
+  static LogicalResult validateQKNormEpsilon(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
+    if (!isa<FloatAttr>(attr))
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'qk_norm_epsilon' attribute to be a float");
+    return success();
+  }
+
+  // MicrosoftGroupQueryAttention defines these semantic attributes. A
+  // null validator means the attribute is recognized and has no attr-only
+  // restriction here; non-null validators enforce accepted no-op values or
+  // reject variants this decomposition cannot preserve.
+  inline static const llvm::StringMap<AttributeValidator>
+      groupQueryAttentionAttributeValidators{{"do_rotary", nullptr},
+          {"k_quant_type", validateQuantType},
+          {"kv_cache_bit_width", validateKVCacheBitWidth},
+          {"kv_num_heads", nullptr},
+          {"local_window_size", validateLocalWindowSize},
+          {"num_heads", nullptr}, {"qk_norm_epsilon", validateQKNormEpsilon},
+          {"qk_output", nullptr}, {"rotary_interleaved", nullptr},
+          {"scale", nullptr}, {"smooth_softmax", validateSmoothSoftmax},
+          {"softcap", nullptr}, {"v_quant_type", validateQuantType}};
+
+  // Reject unsupported semantic attrs so the rewrite does not silently drop
+  // behavior, then run value validators for recognized attrs that need local
+  // checks. onnx.Custom carrier attrs are filtered by getFilteredAttrs; the
+  // additional list covers importer/debug metadata.
+  static LogicalResult validateRecognizedAttributes(
+      ONNXCustomOp customOp, PatternRewriter &rewriter) {
+    const SmallVector<NamedAttribute> semanticAttrs = getFilteredAttrs(
+        customOp->getAttrs(), {"onnx_node_name", "ResultNames", "layout"});
+    for (NamedAttribute attr : semanticAttrs) {
+      StringRef attrName = attr.getName().getValue();
+
+      auto validatorIt = groupQueryAttentionAttributeValidators.find(attrName);
+      if (validatorIt == groupQueryAttentionAttributeValidators.end())
+        return rewriter.notifyMatchFailure(
+            customOp, "unsupported GroupQueryAttention attribute '" +
+                          attrName.str() + "'");
+
+      AttributeValidator validator = validatorIt->second;
+      if (!validator)
+        continue;
+      if (failed(validator(customOp, rewriter, attr.getValue())))
+        return failure();
+    }
+    return success();
+  }
+
+  static FailureOr<Type> getAttentionBiasMaskType(ONNXCustomOp customOp,
+      PatternRewriter &rewriter, Value attentionBias, Value additiveMask,
+      Type elementType) {
+    auto attentionBiasType = dyn_cast<ShapedType>(attentionBias.getType());
+    if (!attentionBiasType || !attentionBiasType.hasRank() ||
+        attentionBiasType.getRank() != 4)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'attention_bias' input to have rank-4 type");
+
+    auto additiveMaskType = dyn_cast<ShapedType>(additiveMask.getType());
+    if (!additiveMaskType || !additiveMaskType.hasRank())
+      return UnrankedTensorType::get(elementType);
+
+    if (!attentionBiasType.hasStaticShape() ||
+        !additiveMaskType.hasStaticShape())
+      return UnrankedTensorType::get(elementType);
+
+    SmallVector<int64_t, 4> broadcastShape;
+    if (!OpTrait::util::getBroadcastedShape(attentionBiasType.getShape(),
+            additiveMaskType.getShape(), broadcastShape))
+      return rewriter.notifyMatchFailure(customOp,
+          "expected 'attention_bias' to broadcast with explicit mask");
+    return RankedTensorType::get(broadcastShape, elementType);
+  }
+
+  static bool hasPresentOptionalInput(ONNXCustomOp customOp, int64_t index) {
+    return customOp.getNumOperands() > index &&
+           !onnx_mlir::isNoneValue(customOp.getOperand(index));
+  }
+
+  // Fallback: cache tensor types can reveal quantized KV cache even when attrs
+  // are absent. ORT packs 4-bit cache in uint8.
+  static bool hasQuantizedCacheElementType(Type type) {
+    auto shapedType = dyn_cast<ShapedType>(type);
+    if (!shapedType)
+      return false;
+
+    Type elementType = shapedType.getElementType();
+    if (auto intType = dyn_cast<IntegerType>(elementType))
+      return intType.getWidth() == 8;
+
+    return isa<Float8E4M3FNType>(elementType);
+  }
+
+  static bool hasUnsupportedQuantizedCacheInputsOrTypes(ONNXCustomOp customOp) {
+    // Inputs 12/13 are k_scale/v_scale for quantized KV cache.
+    if (hasPresentOptionalInput(customOp, 12) ||
+        hasPresentOptionalInput(customOp, 13))
+      return true;
+
+    // Check both past (inputs 3/4) and present (results 1/2) KV cache types.
+    return hasQuantizedCacheElementType(customOp.getOperand(3).getType()) ||
+           hasQuantizedCacheElementType(customOp.getOperand(4).getType()) ||
+           (customOp.getNumResults() > 1 &&
+               hasQuantizedCacheElementType(customOp.getResult(1).getType())) ||
+           (customOp.getNumResults() > 2 &&
+               hasQuantizedCacheElementType(customOp.getResult(2).getType()));
+  }
+
+  static bool hasUnsupportedQKNormInputs(ONNXCustomOp customOp) {
+    // Inputs 14/15 are q_norm_weight/k_norm_weight.
+    return hasPresentOptionalInput(customOp, 14) ||
+           hasPresentOptionalInput(customOp, 15);
+  }
+
+  static FailureOr<int64_t> getStaticPastSequenceLength(
+      Value pastKey, PatternRewriter &rewriter, ONNXCustomOp customOp) {
+    if (onnx_mlir::isNoneValue(pastKey))
+      return 0;
+    auto pastKeyType = dyn_cast<ShapedType>(pastKey.getType());
+    if (!pastKeyType || !pastKeyType.hasStaticShape() ||
+        pastKeyType.getRank() != 4)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'past_ks' input to have static rank-4 type");
+    return pastKeyType.getShape()[2];
+  }
+
+  // Returns true for buffer-sharing/preallocated cache, where present keeps
+  // cache capacity and GQA writes current K/V into the runtime seqlens_k slot.
+  static FailureOr<bool> hasPreallocatedCacheMode(ONNXCustomOp customOp,
+      PatternRewriter &rewriter, Value pastKey, int64_t pastSeqLen,
+      int64_t kvSeqLen) {
+    if (onnx_mlir::isNoneValue(pastKey))
+      return false;
+    if (customOp.getNumResults() < 3)
+      return false;
+    Type presentKeyType = customOp.getResult(1).getType();
+    if (isa<NoneType>(presentKeyType))
+      return false;
+
+    auto presentKeyShapedType = dyn_cast<ShapedType>(presentKeyType);
+    if (!presentKeyShapedType || !presentKeyShapedType.hasStaticShape() ||
+        presentKeyShapedType.getRank() != 4)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'present_key' output to have static rank-4 type");
+
+    const int64_t expectedAppendSeqLen = pastSeqLen + kvSeqLen;
+    const int64_t presentSeqLen = presentKeyShapedType.getShape()[2];
+    if (presentSeqLen == expectedAppendSeqLen)
+      return false;
+
+    if (presentSeqLen == pastSeqLen) {
+      if (kvSeqLen != 1)
+        return rewriter.notifyMatchFailure(customOp,
+            "preallocated KV cache is only supported for decode "
+            "GroupQueryAttention");
+      return true;
+    }
+
+    return rewriter.notifyMatchFailure(customOp,
+        "expected append-style or preallocated KV cache output shape for "
+        "GroupQueryAttention decomposition");
+  }
+
+  static FailureOr<int64_t> getStaticKVSequenceLength(
+      ONNXCustomOp customOp, PatternRewriter &rewriter, Value key) {
+    auto keyType = dyn_cast<ShapedType>(key.getType());
+    if (!keyType || !keyType.hasStaticShape() || keyType.getRank() != 3)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'key' input to have static rank-3 type");
+    return keyType.getShape()[1];
+  }
+
+  static LogicalResult validateCurrentKVForCacheLayout(ONNXCustomOp customOp,
+      PatternRewriter &rewriter, Value kv, int64_t kvNumHeads) {
+    auto kvType = dyn_cast<ShapedType>(kv.getType());
+    if (!kvType || !kvType.hasStaticShape() || kvType.getRank() != 3)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected current K/V to have static rank-3 type");
+    if (kvType.getShape()[2] % kvNumHeads != 0)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected current K/V hidden size divisible by heads");
+    return success();
+  }
+
+  // Convert current K/V from GQA's 3D layout [B,S,H*D] to cache layout
+  // [B,H,S,D]. Both onnx.Attention present outputs and preallocated-cache
+  // slot writes use this rank-4 cache layout.
+  static FailureOr<Value> createCurrentKV4D(PatternRewriter &rewriter,
+      Location loc, ONNXCustomOp customOp, Value kv, int64_t batchSize,
+      int64_t kvSeqLen, int64_t kvNumHeads, Type kv4dType,
+      SmallVector<Value> &toCheck) {
+    if (failed(validateCurrentKVForCacheLayout(
+            customOp, rewriter, kv, kvNumHeads)))
+      return failure();
+    auto kvType = cast<ShapedType>(kv.getType());
+
+    const int64_t headSize = kvType.getShape()[2] / kvNumHeads;
+    auto reshapeShape = onnx_mlir::getONNXConstOpFromVector(
+        rewriter, loc, {batchSize, kvSeqLen, kvNumHeads, headSize});
+    auto reshapeType = RankedTensorType::get(
+        {batchSize, kvSeqLen, kvNumHeads, headSize}, kvType.getElementType());
+    Value reshaped = rewriter.create<ONNXReshapeOp>(
+        loc, reshapeType, kv, reshapeShape, nullptr);
+    Value kv4d = rewriter.create<ONNXTransposeOp>(
+        loc, kv4dType, reshaped, rewriter.getI64ArrayAttr({0, 2, 1, 3}));
+    toCheck.append({reshapeShape, reshaped, kv4d});
+    return kv4d;
+  }
+
+  static Value createScalarFloatConstant(
+      PatternRewriter &rewriter, Location loc, Type elementType, double value) {
+    auto tensorType = RankedTensorType::get({}, elementType);
+    auto attr =
+        DenseElementsAttr::get(tensorType, FloatAttr::get(elementType, value));
+    return rewriter.create<ONNXConstantOp>(loc, Attribute(), attr);
+  }
+
+  static Value createI64Range(PatternRewriter &rewriter, Location loc,
+      SmallVector<Value> &toCheck, int64_t start, int64_t limit) {
+    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+        rewriter, loc);
+    auto rangeType = RankedTensorType::get(
+        {std::max<int64_t>(limit - start, 0)}, rewriter.getIntegerType(64));
+    Value startConst = create.onnx.constantInt64({start});
+    Value limitConst = create.onnx.constantInt64({limit});
+    Value deltaConst = create.onnx.constantInt64({1});
+    Value range = rewriter.create<ONNXRangeOp>(
+        loc, rangeType, startConst, limitConst, deltaConst);
+    toCheck.append({startConst, limitConst, deltaConst, range});
+    return range;
+  }
+
+  static Value castToI64(PatternRewriter &rewriter, Location loc, Value value,
+      SmallVector<Value> &toCheck) {
+    auto valueType = cast<ShapedType>(value.getType());
+    auto i64Type =
+        valueType.clone(valueType.getShape(), rewriter.getIntegerType(64));
+    Value castValue = rewriter.create<ONNXCastOp>(loc, i64Type, value, nullptr,
+        TypeAttr::get(rewriter.getIntegerType(64)));
+    toCheck.push_back(castValue);
+    return castValue;
+  }
+
+  static Value reshapeI64(PatternRewriter &rewriter, Location loc, Value value,
+      ArrayRef<int64_t> shape, SmallVector<Value> &toCheck) {
+    auto reshapeShape =
+        onnx_mlir::getONNXConstOpFromVector(rewriter, loc, shape);
+    auto reshapedType =
+        RankedTensorType::get(shape, rewriter.getIntegerType(64));
+    Value reshaped = rewriter.create<ONNXReshapeOp>(
+        loc, reshapedType, value, reshapeShape, nullptr);
+    toCheck.append({reshapeShape, reshaped});
+    return reshaped;
+  }
+
+  // Generate RoPE position_ids from runtime seqlens_k instead of past_key
+  // shape, which may be cache capacity. Builds:
+  //   start = max((seqlens_k + 1) - seqLen, 0)
+  //   position_ids = start + range(0, seqLen)
+  static FailureOr<Value> createRuntimePositionIds(PatternRewriter &rewriter,
+      Location loc, ONNXCustomOp customOp, Value seqlensK, int64_t batchSize,
+      int64_t seqLen, SmallVector<Value> &toCheck) {
+    auto seqlensType = dyn_cast<ShapedType>(seqlensK.getType());
+    if (!seqlensType || !seqlensType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'seqlens_k' input to have static shape");
+    const int64_t seqlensBatch = seqlensType.getNumElements();
+    if (seqlensBatch != batchSize)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'seqlens_k' to have one value per batch");
+
+    Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
+    Value seqlens2d =
+        reshapeI64(rewriter, loc, seqlensI64, {seqlensBatch, 1}, toCheck);
+    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+        rewriter, loc);
+    Value one = create.onnx.constantInt64({1});
+    Value validKvLen =
+        rewriter.create<ONNXAddOp>(loc, seqlens2d.getType(), seqlens2d, one);
+    Value seqLenConst = create.onnx.constantInt64({seqLen});
+    Value rawStart = rewriter.create<ONNXSubOp>(
+        loc, seqlens2d.getType(), validKvLen, seqLenConst);
+    Value zero = create.onnx.constantInt64({0});
+    Value start = rewriter.create<ONNXMaxOp>(
+        loc, seqlens2d.getType(), ValueRange{rawStart, zero});
+    Value qRange = createI64Range(rewriter, loc, toCheck, 0, seqLen);
+    Value qRange2d = reshapeI64(rewriter, loc, qRange, {1, seqLen}, toCheck);
+    auto positionIdsType =
+        RankedTensorType::get({batchSize, seqLen}, rewriter.getIntegerType(64));
+    Value positionIds =
+        rewriter.create<ONNXAddOp>(loc, positionIdsType, start, qRange2d);
+    toCheck.append(
+        {one, validKvLen, seqLenConst, rawStart, zero, start, positionIds});
+    return positionIds;
+  }
+
+  // Builds ONNX Cast/Reshape/Range/Less/And/Where ops to materialize
+  // GQA's seqlens_k and causal visibility as an additive Attention mask.
+  static FailureOr<Value> createAdditiveAttentionMask(PatternRewriter &rewriter,
+      Location loc, ONNXCustomOp customOp, Value seqlensK, int64_t batchSize,
+      int64_t qSeqLen, int64_t maskSeqLen, int64_t pastSeqLen, Type elementType,
+      SmallVector<Value> &toCheck) {
+    auto seqlensType = dyn_cast<ShapedType>(seqlensK.getType());
+    if (!seqlensType || !seqlensType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'seqlens_k' input to have static shape");
+    const int64_t seqlensBatch = seqlensType.getNumElements();
+    if (seqlensBatch != batchSize)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'seqlens_k' to have one value per batch");
+
+    // Cast/Reshape/Add: valid KV length = seqlens_k + 1, broadcast as
+    // [B,1,1,1].
+    Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
+    Value seqlens4d =
+        reshapeI64(rewriter, loc, seqlensI64, {seqlensBatch, 1, 1, 1}, toCheck);
+    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+        rewriter, loc);
+    Value one = create.onnx.constantInt64({1});
+    Value validKvLen =
+        rewriter.create<ONNXAddOp>(loc, seqlens4d.getType(), seqlens4d, one);
+
+    // keyValid applies GQA's per-batch seqlens_k limit so keys past the
+    // valid KV length are masked out for that batch.
+    // Range/Reshape/Less: key_index < valid_kv_length.
+    Value keyRange = createI64Range(rewriter, loc, toCheck, 0, maskSeqLen);
+    Value keyRange4d =
+        reshapeI64(rewriter, loc, keyRange, {1, 1, 1, maskSeqLen}, toCheck);
+    Value keyValid = rewriter.create<ONNXLessOp>(loc, keyRange4d, validKvLen);
+
+    // causalValid preserves causal attention: query i can only see keys up to
+    // past_seq_len + i, even if seqlens_k is larger.
+    // Range/Add/Reshape/Less: key_index < past_seq_len + query_index + 1.
+    Value qRange = createI64Range(rewriter, loc, toCheck, 0, qSeqLen);
+    Value pastLimit = create.onnx.constantInt64({pastSeqLen + 1});
+    Value qLimit =
+        rewriter.create<ONNXAddOp>(loc, qRange.getType(), qRange, pastLimit);
+    Value qLimit4d =
+        reshapeI64(rewriter, loc, qLimit, {1, 1, qSeqLen, 1}, toCheck);
+    Value causalValid = rewriter.create<ONNXLessOp>(loc, keyRange4d, qLimit4d);
+    auto visibleType = RankedTensorType::get(
+        {batchSize, 1, qSeqLen, maskSeqLen}, rewriter.getI1Type());
+    Value visible =
+        rewriter.create<ONNXAndOp>(loc, visibleType, keyValid, causalValid);
+
+    // And/Where: combine visibility checks, then emit 0.0 or -inf.
+    Value zero = createScalarFloatConstant(rewriter, loc, elementType, 0.0);
+    Value negInf = createScalarFloatConstant(
+        rewriter, loc, elementType, -std::numeric_limits<double>::infinity());
+    auto maskType =
+        RankedTensorType::get({batchSize, 1, qSeqLen, maskSeqLen}, elementType);
+    Value additiveMask =
+        rewriter.create<ONNXWhereOp>(loc, maskType, visible, zero, negInf);
+    toCheck.append({one, validKvLen, keyValid, pastLimit, qLimit, causalValid,
+        visible, zero, negInf, additiveMask});
+    return additiveMask;
+  }
+
+  static LogicalResult validatePresentKVFromCurrentKV(ONNXCustomOp customOp,
+      PatternRewriter &rewriter, Value key, Value value, int64_t kvNumHeads) {
+    if (failed(validateCurrentKVForCacheLayout(
+            customOp, rewriter, key, kvNumHeads)))
+      return failure();
+    return validateCurrentKVForCacheLayout(
+        customOp, rewriter, value, kvNumHeads);
+  }
+
+  static FailureOr<Value> createPresentKVFromCurrentKV(
+      PatternRewriter &rewriter, Location loc, ONNXCustomOp customOp, Value kv,
+      Type presentType, int64_t batchSize, int64_t kvSeqLen, int64_t kvNumHeads,
+      SmallVector<Value> &toCheck) {
+    return createCurrentKV4D(rewriter, loc, customOp, kv, batchSize, kvSeqLen,
+        kvNumHeads, presentType, toCheck);
+  }
+
+  static LogicalResult validatePresentKVSlotWrite(ONNXCustomOp customOp,
+      PatternRewriter &rewriter, Value pastKV, Value currentKV,
+      Type presentType, int64_t kvSeqLen, int64_t kvNumHeads) {
+    auto pastType = dyn_cast<ShapedType>(pastKV.getType());
+    auto presentShapedType = dyn_cast<ShapedType>(presentType);
+    if (!pastType || !pastType.hasStaticShape() || pastType.getRank() != 4 ||
+        !presentShapedType || !presentShapedType.hasStaticShape() ||
+        presentShapedType.getRank() != 4)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected past/present K/V to have static rank-4 type");
+    if (kvSeqLen != 1)
+      return rewriter.notifyMatchFailure(customOp,
+          "preallocated KV cache is only supported for decode "
+          "GroupQueryAttention");
+    if (failed(validateCurrentKVForCacheLayout(
+            customOp, rewriter, currentKV, kvNumHeads)))
+      return failure();
+    auto currentType = cast<ShapedType>(currentKV.getType());
+    if (currentType.getElementType() != pastType.getElementType())
+      return rewriter.notifyMatchFailure(
+          customOp, "expected current and past K/V element types to match");
+    if (currentType.getShape()[2] / kvNumHeads != pastType.getShape()[3])
+      return rewriter.notifyMatchFailure(
+          customOp, "expected current and past K/V head sizes to match");
+    return success();
+  }
+
+  // Build preallocated-cache present K/V. GQA updates one runtime slot:
+  //   present[:, :, seqlens_k, :] = current K/V
+  // Both paths convert current K/V from [B,1,H*D] to [B,H,1,D].
+  // The uint16 rewrite builds one shared selector for K and V, then uses:
+  //   present = past + (current - past) * selector
+  // whereas the default path expands seqlens_k to i64 indices and uses
+  // ScatterElements.
+  static FailureOr<SmallVector<Value, 2>> createPresentKVSlotWrite(
+      PatternRewriter &rewriter, Location loc, ONNXCustomOp customOp,
+      Value pastKey, Value key, Type presentKeyType, Value pastValue,
+      Value value, Type presentValueType, Value seqlensK, int64_t batchSize,
+      int64_t cacheSeqLen, int64_t kvSeqLen, int64_t kvNumHeads,
+      bool enableUint16CacheSlotRewrite, SmallVector<Value> &toCheck) {
+    const int64_t maxUint16CacheCapacity =
+        static_cast<int64_t>(std::numeric_limits<uint16_t>::max()) + 1;
+    const bool useUint16CacheSlotRewrite =
+        enableUint16CacheSlotRewrite && cacheSeqLen <= maxUint16CacheCapacity;
+
+    Value slotSelector;
+    if (useUint16CacheSlotRewrite) {
+      // Build a broadcastable selector for the runtime cache slot:
+      //   positions_ui16 = Constant [1, 1, T, 1] = 0..T-1
+      //   seqlens_ui16   = Cast(seqlens_k -> ui16)
+      //   selected_i1    = Equal(positions_ui16, reshape(seqlens_ui16))
+      //   selector       = Cast(selected_i1 -> K/V element type)
+      Type ui16Type = rewriter.getIntegerType(16, false);
+      auto seqlensType = cast<ShapedType>(seqlensK.getType());
+      auto seqlensUI16Type =
+          seqlensType.clone(seqlensType.getShape(), ui16Type);
+      Value seqlensUI16 = rewriter.create<ONNXCastOp>(
+          loc, seqlensUI16Type, seqlensK, nullptr, TypeAttr::get(ui16Type));
+
+      Value seqlens4dShape = onnx_mlir::getONNXConstOpFromVector(
+          rewriter, loc, {batchSize, 1, 1, 1});
+      auto seqlens4dType =
+          RankedTensorType::get({batchSize, 1, 1, 1}, ui16Type);
+      Value seqlens4d = rewriter.create<ONNXReshapeOp>(
+          loc, seqlens4dType, seqlensUI16, seqlens4dShape, nullptr);
+
+      SmallVector<Attribute> positionAttrs = llvm::map_to_vector(
+          llvm::seq<int64_t>(cacheSeqLen), [&](int64_t i) -> Attribute {
+            return rewriter.getIntegerAttr(ui16Type, i);
+          });
+      auto positionsType =
+          RankedTensorType::get({1, 1, cacheSeqLen, 1}, ui16Type);
+      Value positions = rewriter.create<ONNXConstantOp>(loc, Attribute(),
+          DenseElementsAttr::get(positionsType, ArrayRef(positionAttrs)));
+
+      Value selectedSlot =
+          rewriter.create<ONNXEqualOp>(loc, positions, seqlens4d);
+      Type cacheElementType =
+          cast<ShapedType>(pastKey.getType()).getElementType();
+      auto selectorType = RankedTensorType::get(
+          {batchSize, 1, cacheSeqLen, 1}, cacheElementType);
+      slotSelector = rewriter.create<ONNXCastOp>(loc, selectorType,
+          selectedSlot, nullptr, TypeAttr::get(cacheElementType));
+      toCheck.append({seqlensUI16, seqlens4dShape, seqlens4d, positions,
+          selectedSlot, slotSelector});
+    }
+
+    auto createOneSlotWrite = [&](Value pastKV, Value currentKV,
+                                  Type presentType) -> FailureOr<Value> {
+      auto pastType = cast<ShapedType>(pastKV.getType());
+      const int64_t headSize = pastType.getShape()[3];
+      auto current4dType =
+          RankedTensorType::get({batchSize, kvNumHeads, kvSeqLen, headSize},
+              pastType.getElementType());
+      FailureOr<Value> current4dOr = createCurrentKV4D(rewriter, loc, customOp,
+          currentKV, batchSize, kvSeqLen, kvNumHeads, current4dType, toCheck);
+      if (failed(current4dOr))
+        return failure();
+      Value current4d = *current4dOr;
+
+      if (useUint16CacheSlotRewrite) {
+        Value delta =
+            rewriter.create<ONNXSubOp>(loc, presentType, current4d, pastKV);
+        Value selectedDelta =
+            rewriter.create<ONNXMulOp>(loc, presentType, delta, slotSelector);
+        Value present =
+            rewriter.create<ONNXAddOp>(loc, presentType, pastKV, selectedDelta);
+        toCheck.append({delta, selectedDelta, present});
+        return present;
+      } else {
+        Value seqlensI64 = castToI64(rewriter, loc, seqlensK, toCheck);
+        Value seqlens4d = reshapeI64(
+            rewriter, loc, seqlensI64, {batchSize, 1, 1, 1}, toCheck);
+        Value indexShape = onnx_mlir::getONNXConstOpFromVector(
+            rewriter, loc, {batchSize, kvNumHeads, 1, headSize});
+        auto indexType = RankedTensorType::get(
+            {batchSize, kvNumHeads, 1, headSize}, rewriter.getIntegerType(64));
+        Value indices = rewriter.create<ONNXExpandOp>(
+            loc, indexType, seqlens4d, indexShape);
+
+        Value present = rewriter.create<ONNXScatterElementsOp>(loc, presentType,
+            pastKV, indices, current4d,
+            rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), 2),
+            rewriter.getStringAttr("none"));
+        toCheck.append({indexShape, indices, present});
+        return present;
+      }
+    };
+
+    FailureOr<Value> presentKeyOr =
+        createOneSlotWrite(pastKey, key, presentKeyType);
+    if (failed(presentKeyOr))
+      return failure();
+    FailureOr<Value> presentValueOr =
+        createOneSlotWrite(pastValue, value, presentValueType);
+    if (failed(presentValueOr))
+      return failure();
+    return SmallVector<Value, 2>{*presentKeyOr, *presentValueOr};
+  }
 
   LogicalResult matchAndRewriteImpl(
       ONNXCustomOp customOp, PatternRewriter &rewriter) const final {
@@ -3299,19 +4613,24 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     using namespace onnx_mlir;
     const Location loc = customOp.getLoc();
     const int64_t numIn = customOp.getNumOperands();
-    assert((numIn >= 7 && numIn <= 12) && "expects 7..12 inputs");
+    if (numIn < 7 || numIn > 16 || numIn == 8)
+      return rewriter.notifyMatchFailure(
+          customOp, "GroupQueryAttention expects 7, 9, or 10..16 inputs");
     const int64_t numOut = customOp.getNumResults();
-    assert((numOut >= 3 && numOut <= 4) && "expects 3..4 outputs");
+    if (numOut == 1)
+      return rewriter.notifyMatchFailure(
+          customOp, "single-output GroupQueryAttention is not decomposed");
+    if (numOut < 3 || numOut > 4)
+      return rewriter.notifyMatchFailure(
+          customOp, "GroupQueryAttention expects 1, 3, or 4 outputs");
 
     Value query = customOp.getOperand(0);
     Value key = customOp.getOperand(1);
     Value value = customOp.getOperand(2);
     Value pastKey = customOp.getOperand(3);
     Value pastValue = customOp.getOperand(4);
-
-    // These inputs are not needed for onnx.Attention:
-    // Value seqlens_k = customOp.getOperand(5);
-    // Value total_sequence_length = customOp.getOperand(6);
+    Value seqlensK = customOp.getOperand(5);
+    Value totalSequenceLength = customOp.getOperand(6);
 
     Value cosCache;
     Value sinCache;
@@ -3332,15 +4651,36 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       return rewriter.notifyMatchFailure(
           customOp, "input 'head_sink' not supported by onnx.Attention");
 
-    auto smoothSoftmax = customOp->getAttrOfType<IntegerAttr>("smooth_softmax");
-    if (smoothSoftmax && smoothSoftmax.getSInt() == 1)
-      return rewriter.notifyMatchFailure(customOp,
-          "attribute 'smooth_softmax' not supported by onnx.Attention");
+    if (failed(validateRecognizedAttributes(customOp, rewriter)))
+      return failure();
 
-    auto qNumHeads = customOp->getAttrOfType<IntegerAttr>("num_heads");
-    assert(qNumHeads && "Expected number of attention heads for q");
-    auto kvNumHeads = customOp->getAttrOfType<IntegerAttr>("kv_num_heads");
-    assert(kvNumHeads && "Expected number of attention heads for k and v");
+    if (hasUnsupportedQuantizedCacheInputsOrTypes(customOp))
+      return rewriter.notifyMatchFailure(customOp,
+          "quantized KV-cache GroupQueryAttention variants are not supported");
+
+    // TODO: Support q_norm_weight/k_norm_weight by applying per-head Q/K RMS
+    // norm before RoPE/Attention.
+    if (hasUnsupportedQKNormInputs(customOp))
+      return rewriter.notifyMatchFailure(customOp,
+          "Q/K-normalized GroupQueryAttention variants are not supported");
+
+    if (!isa<ShapedType>(seqlensK.getType()))
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'seqlens_k' input to have shaped type");
+
+    if (!isa<ShapedType>(totalSequenceLength.getType()))
+      return rewriter.notifyMatchFailure(customOp,
+          "expected 'total_sequence_length' input to have shaped type");
+
+    const auto qNumHeads = customOp->getAttrOfType<IntegerAttr>("num_heads");
+    if (!qNumHeads)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'num_heads' attribute");
+    const auto kvNumHeads =
+        customOp->getAttrOfType<IntegerAttr>("kv_num_heads");
+    if (!kvNumHeads)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'kv_num_heads' attribute");
 
     if (!isa<ShapedType>(query.getType()))
       return rewriter.notifyMatchFailure(
@@ -3349,26 +4689,41 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     if (!queryType.hasStaticShape())
       return rewriter.notifyMatchFailure(
           customOp, "expected 'query' input to have static type");
-    assert(queryType.getRank() == 3 && "Query input must have rank 3");
-    // Check pastKey shape requirements early, before any IR modifications.
-    auto doRotary = customOp->getAttrOfType<IntegerAttr>("do_rotary");
-    if (doRotary && doRotary.getSInt() > 0 &&
-        (numIn < 10 || isNoneValue(positionIds))) {
-      // We need to know the past sequence length to find the total sequence
-      // length (or vice versa). We could get the total sequence length from
-      // seqlens_k, but only if this input is a constant that we can read.
-      if (isNoneValue(pastKey))
-        return rewriter.notifyMatchFailure(
-            customOp, "expected 'past_ks' input to be provided");
-      auto pastKeyType = cast<ShapedType>(pastKey.getType());
-      if (!pastKeyType.hasStaticShape())
-        return rewriter.notifyMatchFailure(
-            customOp, "expected 'past_ks' input to have static type");
-    }
+    if (queryType.getRank() != 3)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected 'query' input to have rank 3");
+    if (isNoneValue(key) != isNoneValue(value))
+      return rewriter.notifyMatchFailure(customOp,
+          "expected 'key' and 'value' inputs to both be present or both be "
+          "none");
+    const auto doRotary = customOp->getAttrOfType<IntegerAttr>("do_rotary");
+    const auto pastSeqLenOr =
+        getStaticPastSequenceLength(pastKey, rewriter, customOp);
+    if (failed(pastSeqLenOr))
+      return failure();
+    const int64_t pastSeqLen = *pastSeqLenOr;
+
+    const bool packedQKV = isNoneValue(key) && isNoneValue(value);
+    // Packed QKV is split below into q/k/v of the query's sequence length.
+    const auto kvSeqLenOr =
+        packedQKV ? FailureOr<int64_t>(queryType.getShape()[1])
+                  : getStaticKVSequenceLength(customOp, rewriter, key);
+    if (failed(kvSeqLenOr))
+      return failure();
+    const int64_t kvSeqLen = *kvSeqLenOr;
+    const FailureOr<bool> preallocated = hasPreallocatedCacheMode(
+        customOp, rewriter, pastKey, pastSeqLen, kvSeqLen);
+    if (failed(preallocated))
+      return failure();
+    const bool preallocatedCacheMode = *preallocated;
+    if (failed(validateWindowNeverBinds(customOp, rewriter,
+            preallocatedCacheMode ? pastSeqLen : pastSeqLen + kvSeqLen)))
+      return failure();
 
     auto none = rewriter.create<ONNXNoneOp>(loc);
     auto si64Type = rewriter.getIntegerType(64, true);
 
+    // Values created by this rewrite are verified before replacing customOp.
     SmallVector<Value, 6> toCheck = {none};
 
     // query, key and value inputs may be packed in the same input (query). We
@@ -3376,7 +4731,7 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     ONNXConstantOp splitLens;
     ONNXSplitOp split;
     int64_t headSize;
-    if (isNoneValue(key) && isNoneValue(value)) {
+    if (packedQKV) {
       int64_t totalNumHeads = qNumHeads.getSInt() + 2 * kvNumHeads.getSInt();
       // microsoft.GroupQueryAttention assumes the head_size is the same for q,
       // k and v
@@ -3412,109 +4767,47 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
 
     // If do_rotary = 1, query and key need to be passed through a rotary
     // embedding op
-    ONNXRotaryEmbeddingOp ropeQuery;
-    ONNXRotaryEmbeddingOp ropeKey;
     if (doRotary && doRotary.getSInt() > 0) {
       assert(numIn >= 9 && !isNoneValue(cosCache) && !isNoneValue(sinCache));
-      // If do_rotary = 1 and no position ids are provided, we need to slice
-      // and transform the cos and sin caches to have shape:
-      // [batch_size, sequence_length, head_size / 2]. When
-      // enableCacheSlicing is false, skip the slice/reshape/expand and pass
-      // the original cos/sin caches through unchanged.
       if (numIn < 10 || isNoneValue(positionIds)) {
-        positionIds = none;
-
-        if (enableCacheSlicing) {
-          auto pastKeyType = cast<ShapedType>(pastKey.getType());
-
-          // Assuming the sequence length is the same kv_sequence_length
-          const int64_t seqLen = queryType.getShape()[1];
-          const int64_t pastSeqLen = pastKeyType.getShape()[2];
-          const int64_t totalSeqLen = pastSeqLen + seqLen;
-
-          // The slice mimics indexing the cos/sin caches using the default
-          // pos_ids: [past_seq_len..total_seq_len].
-          onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
-              rewriter, loc);
-          Value startsConst = create.onnx.constantInt64({pastSeqLen});
-          Value endsConst = create.onnx.constantInt64({totalSeqLen});
-          Value axesConst = create.onnx.constantInt64({0});
-          Value stepsConst = create.onnx.constantInt64({1});
-          toCheck.append({startsConst, endsConst, axesConst, stepsConst});
-
-          auto elementType = getElementTypeOrSelf(cosCache.getType());
-          auto cacheSlicedType =
-              RankedTensorType::get({seqLen, headSize / 2}, elementType);
-          auto cosCacheSliced =
-              rewriter.create<ONNXSliceOp>(loc, cacheSlicedType, cosCache,
-                  startsConst, endsConst, axesConst, stepsConst);
-          auto sinCacheSliced =
-              rewriter.create<ONNXSliceOp>(loc, cacheSlicedType, sinCache,
-                  startsConst, endsConst, axesConst, stepsConst);
-          toCheck.append({cosCacheSliced, sinCacheSliced});
-
-          // reshape to [1, sequence_length, head_size / 2]
-          auto cache3dType =
-              RankedTensorType::get({1, seqLen, headSize / 2}, elementType);
-          auto reshapeShapeConst =
-              create.onnx.constantInt64({1, seqLen, headSize / 2});
-          cosCache = create.onnx.reshape(
-              cache3dType, cosCacheSliced, reshapeShapeConst);
-          sinCache = create.onnx.reshape(
-              cache3dType, sinCacheSliced, reshapeShapeConst);
-          toCheck.append({reshapeShapeConst, cosCache, sinCache});
-
-          // Assume total/past sequence length is the same for every batch
-          // and broadcast the default pos_ids to get cos/sin caches with
-          // shape: [batch_size, sequence_length, head_size / 2]
-          int64_t batchSize = queryType.getShape()[0];
-          if (batchSize != 1) {
-            auto cacheBroadcastType = RankedTensorType::get(
-                {batchSize, seqLen, headSize / 2}, elementType);
-            auto broadcastShapeConst =
-                create.onnx.constantInt64({batchSize, seqLen, headSize / 2});
-            cosCache = create.onnx.expand(
-                cacheBroadcastType, cosCache, broadcastShapeConst);
-            sinCache = create.onnx.expand(
-                cacheBroadcastType, sinCache, broadcastShapeConst);
-            toCheck.append({broadcastShapeConst, cosCache, sinCache});
-          }
-        } else {
-          // Synthesize position_ids = [pastSeqLen, .., totalSeqLen-1]
-          // broadcast to [batch_size, seq_len]. Same semantics as the
-          // original slicing, but the cos/sin caches are passed through
-          // unchanged so the cache stays complete.
-          auto pastKeyType = cast<ShapedType>(pastKey.getType());
-          const int64_t seqLen = queryType.getShape()[1];
-          const int64_t pastSeqLen = pastKeyType.getShape()[2];
-          const int64_t totalSeqLen = pastSeqLen + seqLen;
-          const int64_t batchSize = queryType.getShape()[0];
-
-          SmallVector<Attribute> elements;
-          elements.reserve(batchSize * seqLen);
-          for (int64_t b = 0; b < batchSize; ++b)
-            for (int64_t i = pastSeqLen; i < totalSeqLen; ++i)
-              elements.push_back(rewriter.getI64IntegerAttr(i));
-
-          auto positionIdsType = RankedTensorType::get(
-              {batchSize, seqLen}, rewriter.getIntegerType(64));
-          positionIds = rewriter.create<ONNXConstantOp>(loc, Attribute(),
-              DenseElementsAttr::get(
-                  positionIdsType, ArrayRef<Attribute>(elements)));
-          toCheck.push_back(positionIds);
-        }
+        const int64_t seqLen = queryType.getShape()[1];
+        const int64_t batchSize = queryType.getShape()[0];
+        FailureOr<Value> runtimePositionIds = createRuntimePositionIds(
+            rewriter, loc, customOp, seqlensK, batchSize, seqLen, toCheck);
+        if (failed(runtimePositionIds))
+          return failure();
+        positionIds = *runtimePositionIds;
+        toCheck.push_back(positionIds);
       }
 
       int64_t rotaryInterleaved = 0;
-      if (customOp->hasAttrOfType<IntegerAttr>("rotary_interleaved"))
-        rotaryInterleaved =
-            customOp->getAttrOfType<IntegerAttr>("rotary_interleaved")
-                .getSInt();
+      if (customOp->hasAttrOfType<IntegerAttr>("rotary_interleaved")) {
+        const auto rotaryInterleavedAttr =
+            customOp->getAttrOfType<IntegerAttr>("rotary_interleaved");
+        rotaryInterleaved = rotaryInterleavedAttr.getSInt();
+      }
 
-      ropeQuery = rewriter.create<ONNXRotaryEmbeddingOp>(loc, query.getType(),
-          query, cosCache, sinCache, positionIds, rotaryInterleaved, qNumHeads);
-      ropeKey = rewriter.create<ONNXRotaryEmbeddingOp>(loc, key.getType(), key,
-          cosCache, sinCache, positionIds, rotaryInterleaved, kvNumHeads);
+      // derive rotary_embedding_dim from the cos cache width
+      const auto cosCacheType = dyn_cast<RankedTensorType>(cosCache.getType());
+      if (!cosCacheType || cosCacheType.getRank() == 0 ||
+          cosCacheType.isDynamicDim(cosCacheType.getRank() - 1))
+        return rewriter.notifyMatchFailure(customOp,
+            "the rotary dimension is unknown because the cos cache has no "
+            "static width");
+      const int64_t rotaryDim = 2 * cosCacheType.getShape().back();
+      if (rotaryDim > headSize)
+        return rewriter.notifyMatchFailure(
+            customOp, "the cos cache is too wide to rotate a single head");
+      // encode head_size as 0
+      const int64_t rotaryEmbeddingDim = rotaryDim == headSize ? 0 : rotaryDim;
+
+      OnnxBuilder create(rewriter, loc);
+      Value ropeQuery =
+          create.rotaryEmbedding(query.getType(), query, cosCache, sinCache,
+              positionIds, rotaryInterleaved, qNumHeads, rotaryEmbeddingDim);
+      Value ropeKey =
+          create.rotaryEmbedding(key.getType(), key, cosCache, sinCache,
+              positionIds, rotaryInterleaved, kvNumHeads, rotaryEmbeddingDim);
 
       toCheck.push_back(ropeQuery);
       toCheck.push_back(ropeKey);
@@ -3523,20 +4816,126 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       key = ropeKey;
     }
 
-    // Create the onnx.Attention op
+    // GQA present K/V semantics do not always match Attention's append-cache
+    // outputs. No-past prefill needs current K/V reshaped to cache layout;
+    // preallocated decode needs a slot write at seqlens_k, so materialize
+    // those replacements here.
+    Value presentKeyReplacement;
+    Value presentValueReplacement;
+    if (numOut >= 3 && !isa<NoneType>(customOp.getResult(1).getType())) {
+      if (isNoneValue(pastKey)) {
+        if (failed(validatePresentKVFromCurrentKV(
+                customOp, rewriter, key, value, kvNumHeads.getSInt())))
+          return failure();
+        auto presentKeyOr = createPresentKVFromCurrentKV(rewriter, loc,
+            customOp, key, customOp.getResult(1).getType(),
+            queryType.getShape()[0], kvSeqLen, kvNumHeads.getSInt(), toCheck);
+        if (failed(presentKeyOr))
+          return failure();
+        auto presentValueOr = createPresentKVFromCurrentKV(rewriter, loc,
+            customOp, value, customOp.getResult(2).getType(),
+            queryType.getShape()[0], kvSeqLen, kvNumHeads.getSInt(), toCheck);
+        if (failed(presentValueOr))
+          return failure();
+        presentKeyReplacement = *presentKeyOr;
+        presentValueReplacement = *presentValueOr;
+      } else if (preallocatedCacheMode) {
+        if (failed(validatePresentKVSlotWrite(customOp, rewriter, pastKey, key,
+                customOp.getResult(1).getType(), kvSeqLen,
+                kvNumHeads.getSInt())) ||
+            failed(validatePresentKVSlotWrite(customOp, rewriter, pastValue,
+                value, customOp.getResult(2).getType(), kvSeqLen,
+                kvNumHeads.getSInt())))
+          return failure();
+        FailureOr<SmallVector<Value, 2>> presentKVOr =
+            createPresentKVSlotWrite(rewriter, loc, customOp, pastKey, key,
+                customOp.getResult(1).getType(), pastValue, value,
+                customOp.getResult(2).getType(), seqlensK,
+                queryType.getShape()[0], pastSeqLen, kvSeqLen,
+                kvNumHeads.getSInt(), enableUint16CacheSlotRewrite, toCheck);
+        if (failed(presentKVOr))
+          return failure();
+        presentKeyReplacement = (*presentKVOr)[0];
+        presentValueReplacement = (*presentKVOr)[1];
+      }
+    }
+
+    // Build one explicit Attention mask for seqlens_k and causal visibility.
     if (numIn < 11 || isNoneValue(attentionBias))
       attentionBias = none;
 
+    auto queryElementType = getElementTypeOrSelf(query.getType());
+    if (!isa<FloatType>(queryElementType))
+      return rewriter.notifyMatchFailure(
+          customOp, "expected floating-point query type");
+    const int64_t batchSize = queryType.getShape()[0];
+    const int64_t qSeqLen = queryType.getShape()[1];
+    const int64_t attentionSeqLen =
+        preallocatedCacheMode ? pastSeqLen : pastSeqLen + kvSeqLen;
+    // onnx.Attention requires attn_mask to be broadcastable to
+    // [B, q_num_heads, q_sequence_length, total_sequence_length], and GQA
+    // defines attention_bias's last dim as total_sequence_length. So the mask
+    // spans the full attentionSeqLen; any static attention_bias must be
+    // broadcast-compatible with that target rather than resizing the mask.
+    const int64_t maskSeqLen = attentionSeqLen;
+    if (!isNoneValue(attentionBias)) {
+      if (auto attentionBiasType =
+              dyn_cast<ShapedType>(attentionBias.getType());
+          attentionBiasType && attentionBiasType.hasStaticShape()) {
+        const SmallVector<int64_t, 4> targetShape = {
+            batchSize, qNumHeads.getSInt(), qSeqLen, attentionSeqLen};
+        ArrayRef<int64_t> biasShape = attentionBiasType.getShape();
+        if (biasShape.size() != targetShape.size())
+          return rewriter.notifyMatchFailure(customOp,
+              "expected 'attention_bias' to be rank-4 and broadcast-compatible "
+              "with [B, q_num_heads, q_sequence_length, "
+              "total_sequence_length]");
+        for (auto [biasDim, targetDim] : llvm::zip(biasShape, targetShape))
+          if (biasDim != 1 && biasDim != targetDim)
+            return rewriter.notifyMatchFailure(customOp,
+                "expected 'attention_bias' to be broadcast-compatible with "
+                "[B, q_num_heads, q_sequence_length, total_sequence_length]");
+      }
+    }
+    FailureOr<Value> additiveMaskOr = createAdditiveAttentionMask(rewriter, loc,
+        customOp, seqlensK, batchSize, qSeqLen, maskSeqLen, pastSeqLen,
+        queryElementType, toCheck);
+    if (failed(additiveMaskOr))
+      return failure();
+    Value additiveMask = *additiveMaskOr;
+    if (!isNoneValue(attentionBias)) {
+      // Attention's mask input also carries additive score bias. The bias may
+      // already be per-head, so preserve the broadcasted Add result shape.
+      auto combinedMaskType = getAttentionBiasMaskType(
+          customOp, rewriter, attentionBias, additiveMask, queryElementType);
+      if (failed(combinedMaskType))
+        return failure();
+      additiveMask = rewriter.create<ONNXAddOp>(
+          loc, *combinedMaskType, attentionBias, additiveMask);
+      toCheck.push_back(additiveMask);
+    }
+
     SmallVector<Type, 4> attentionResultTypes(customOp.getResultTypes());
+    if (presentKeyReplacement) {
+      attentionResultTypes[1] = rewriter.getNoneType();
+      attentionResultTypes[2] = rewriter.getNoneType();
+    }
     if (numOut < 4)
       attentionResultTypes.push_back(rewriter.getNoneType());
 
+    Value attentionKey = preallocatedCacheMode ? presentKeyReplacement : key;
+    Value attentionValue =
+        preallocatedCacheMode ? presentValueReplacement : value;
+    Value attentionPastKey = preallocatedCacheMode ? none : pastKey;
+    Value attentionPastValue = preallocatedCacheMode ? none : pastValue;
     auto attention = rewriter.create<ONNXAttentionOp>(loc, attentionResultTypes,
-        ValueRange{query, key, value, attentionBias, pastKey, pastValue});
+        ValueRange{query, attentionKey, attentionValue, additiveMask,
+            attentionPastKey, attentionPastValue});
 
     attention.setQNumHeadsAttr(qNumHeads);
     attention.setKvNumHeadsAttr(kvNumHeads);
-    attention.setIsCausal(1);
+    // Causal visibility is already encoded in additiveMask.
+    attention.setIsCausal(0);
 
     if (customOp->hasAttrOfType<IntegerAttr>("qk_output")) {
       auto qkOutput = customOp->getAttrOfType<IntegerAttr>("qk_output");
@@ -3557,8 +4956,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     SmallVector<Value, 4> replace;
     replace.push_back(attention.getResult(0));
     if (numOut >= 3) {
-      replace.push_back(attention.getResult(1)); // present_k
-      replace.push_back(attention.getResult(2)); // present_v
+      replace.push_back(presentKeyReplacement ? presentKeyReplacement
+                                              : attention.getResult(1));
+      replace.push_back(presentValueReplacement ? presentValueReplacement
+                                                : attention.getResult(2));
     }
     if (numOut == 4)
       replace.push_back(attention.getResult(3)); // qk_output
@@ -4310,6 +5711,85 @@ struct DecomposeReduceL2Pattern : public OpRewritePattern<ONNXReduceL2Op> {
 };
 
 // =============================================================================
+// Rewrite a nearest-neighbor upsampling ConvTranspose into onnx.Resize
+// (mode="nearest").
+// =============================================================================
+struct ConvTransposeToResizePattern
+    : public OpRewritePattern<ONNXConvTransposeOp> {
+  using OpRewritePattern<ONNXConvTransposeOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXConvTransposeOp op, PatternRewriter &rewriter) const final {
+    if (!onnx_mlir::isNearestUpsampleConvTranspose(op))
+      return rewriter.notifyMatchFailure(
+          op, "not a nearest-neighbor upsample ConvTranspose");
+    rewriter.replaceOp(op, onnx_mlir::createNearestResizeFromConvTranspose(
+                               rewriter, op.getLoc(), op.getResult()));
+    return success();
+  }
+};
+
+// =============================================================================
+// Decompose DepthToSpace into Reshape -> Transpose -> Reshape
+// =============================================================================
+// onnx.DepthToSpace rearranges [N, C*bs*bs, H, W] into [N, C, H*bs, W*bs].
+struct DecomposeDepthToSpacePattern
+    : public OpRewritePattern<ONNXDepthToSpaceOp> {
+  using OpRewritePattern<ONNXDepthToSpaceOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXDepthToSpaceOp op, PatternRewriter &rewriter) const final {
+    Value input = op.getInput();
+    auto inputType = mlir::dyn_cast<ShapedType>(input.getType());
+    auto outputType = mlir::dyn_cast<ShapedType>(op.getResult().getType());
+    if (!inputType || !inputType.hasStaticShape() || inputType.getRank() != 4 ||
+        !outputType || !outputType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          op, "expected static 4D input and output");
+
+    const int64_t bs = op.getBlocksize();
+    if (bs < 1)
+      return rewriter.notifyMatchFailure(op, "blocksize must be >= 1");
+
+    const ArrayRef<int64_t> inShape = inputType.getShape();
+    const int64_t N = inShape[0];
+    const int64_t C = inShape[1];
+    const int64_t H = inShape[2];
+    const int64_t W = inShape[3];
+    if (C % (bs * bs) != 0)
+      return rewriter.notifyMatchFailure(
+          op, "channel dim not divisible by blocksize^2");
+    const int64_t cOut = C / (bs * bs);
+
+    const Type elemType = inputType.getElementType();
+    const bool isDCR = op.getMode() == "DCR";
+
+    // Split the channel dim into block dims, transpose each block dim next to
+    // its spatial dim, then collapse. Both modes land on [N, C, H, bs, W, bs]
+    // after the transpose, before the final merge to [N, C, H*bs, W*bs].
+    const SmallVector<int64_t> splitShape =
+        isDCR ? SmallVector<int64_t>{N, bs, bs, cOut, H, W}
+              : SmallVector<int64_t>{N, cOut, bs, bs, H, W};
+    const SmallVector<int64_t> perm =
+        isDCR ? SmallVector<int64_t>{0, 3, 4, 1, 5, 2}
+              : SmallVector<int64_t>{0, 1, 4, 2, 5, 3};
+    const SmallVector<int64_t> permShape{N, cOut, H, bs, W, bs};
+
+    onnx_mlir::OnnxBuilder create(rewriter, op.getLoc());
+    Value reshaped = create.reshape(RankedTensorType::get(splitShape, elemType),
+        input, create.constantInt64(splitShape));
+    Value transposed =
+        create.transpose(RankedTensorType::get(permShape, elemType), reshaped,
+            rewriter.getI64ArrayAttr(perm));
+    Value result = create.reshape(op.getResult().getType(), transposed,
+        create.constantInt64(SmallVector<int64_t>{N, cOut, H * bs, W * bs}));
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+// =============================================================================
 // Decompose InstanceNormalization to LayerNormalization
 // =============================================================================
 struct DecomposeInstanceNormPattern
@@ -4725,161 +6205,21 @@ public:
 };
 
 struct DecomposeONNXToONNXPass
-    : public PassWrapper<DecomposeONNXToONNXPass, OperationPass<func::FuncOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(DecomposeONNXToONNXPass)
-
-  DecomposeONNXToONNXPass(const std::string &target,
-      bool enableConvTransposeDecompose = false,
-      bool enableConvTransposeDecomposeToPhasedConv = false,
-      bool enableConvTranspose1dDecomposeToPhasedConv = false,
-      bool enableInstanceNormDecompose = true,
-      bool enableGroupNormDecompose = true,
-      bool enableMatmulNBitsDecompose = false,
-      bool enableGroupQueryAttentionDecompose = true,
-      bool enableSplitToSliceDecompose = false, bool enableConcatFuse = true,
-      bool enableLstmSeqDecompose = false, bool enableReduceL2Decompose = true,
-      bool enableGatherToSlice = true, bool enableHardSwishDecompose = true,
-      bool enableGroupQueryAttentionCacheSlicing = true) {
-    this->target = target;
-    this->enableConvTransposeDecompose = enableConvTransposeDecompose;
-    this->enableConvTransposeDecomposeToPhasedConv =
-        enableConvTransposeDecomposeToPhasedConv;
-    this->enableConvTranspose1dDecomposeToPhasedConv =
-        enableConvTranspose1dDecomposeToPhasedConv;
-    this->enableInstanceNormDecompose = enableInstanceNormDecompose;
-    this->enableGroupNormDecompose = enableGroupNormDecompose;
-    this->enableMatmulNBitsDecompose = enableMatmulNBitsDecompose;
-    this->enableGroupQueryAttentionDecompose =
-        enableGroupQueryAttentionDecompose;
-    this->enableSplitToSliceDecompose = enableSplitToSliceDecompose;
-    this->enableConcatFuse = enableConcatFuse;
-    this->enableLstmSeqDecompose = enableLstmSeqDecompose;
-    this->enableReduceL2Decompose = enableReduceL2Decompose;
-    this->enableGatherToSlice = enableGatherToSlice;
-    this->enableHardSwishDecompose = enableHardSwishDecompose;
-    this->enableGroupQueryAttentionCacheSlicing =
-        enableGroupQueryAttentionCacheSlicing;
-  }
-
-  DecomposeONNXToONNXPass(const DecomposeONNXToONNXPass &pass)
-      : mlir::PassWrapper<DecomposeONNXToONNXPass,
-            OperationPass<func::FuncOp>>() {
-    this->target = pass.target.getValue();
-    this->enableConvTransposeDecompose =
-        pass.enableConvTransposeDecompose.getValue();
-    this->enableConvTransposeDecomposeToPhasedConv =
-        pass.enableConvTransposeDecomposeToPhasedConv.getValue();
-    this->enableInstanceNormDecompose =
-        pass.enableInstanceNormDecompose.getValue();
-    this->enableGroupNormDecompose = pass.enableGroupNormDecompose.getValue();
-    this->enableMatmulNBitsDecompose =
-        pass.enableMatmulNBitsDecompose.getValue();
-    this->enableGroupQueryAttentionDecompose =
-        pass.enableGroupQueryAttentionDecompose.getValue();
-    this->enableSplitToSliceDecompose =
-        pass.enableSplitToSliceDecompose.getValue();
-    this->enableConcatFuse = pass.enableConcatFuse.getValue();
-    this->enableLstmSeqDecompose = pass.enableLstmSeqDecompose.getValue();
-    this->enableReduceL2Decompose = pass.enableReduceL2Decompose.getValue();
-    this->enableGatherToSlice = pass.enableGatherToSlice.getValue();
-    this->enableHardSwishDecompose = pass.enableHardSwishDecompose.getValue();
-    this->enableGroupQueryAttentionCacheSlicing =
-        pass.enableGroupQueryAttentionCacheSlicing.getValue();
-  }
-
-  StringRef getArgument() const override { return "decompose-onnx"; }
-
-  StringRef getDescription() const override {
-    return "Decompose ONNX operations into composition of other ONNX "
-           "operations.";
-  }
-
-  Option<std::string> target{*this, "target",
-      llvm::cl::desc("Target Dialect to decompose into"), ::llvm::cl::init("")};
-
-  Option<bool> enableConvTransposeDecompose{*this, "enable-convtranspose",
-      llvm::cl::desc("Enable decomposition of ConvTranspose"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableConvTransposeDecomposeToPhasedConv{*this,
-      "enable-convtranspose-phased",
-      llvm::cl::desc("Enable decomposition of ONNX ConvTranspose operator to 4 "
-                     "phased Conv"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableConvTranspose1dDecomposeToPhasedConv{*this,
-      "enable-convtranspose-1d-phased",
-      llvm::cl::desc(
-          "Enable decomposition of ONNX ConvTranspose 1D operator to "
-          "phased Conv"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableInstanceNormDecompose{*this,
-      "enable-instancenorm-decompose",
-      llvm::cl::desc("Enable decomposition of InstanceNormalization to "
-                     "LayerNormalization"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableGroupNormDecompose{*this, "enable-groupnorm-decompose",
-      llvm::cl::desc("Enable decomposition of GroupNormalization to "
-                     "LayerNormalization"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableMatmulNBitsDecompose{*this, "enable-matmulnbits-decompose",
-      llvm::cl::desc("Enable decomposition of Microsoft MatmulNBits to "
-                     "dequantize linear and matmul ops"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableGroupQueryAttentionDecompose{*this,
-      "enable-groupqueryattention-decompose",
-      llvm::cl::desc("Enable decomposition of Microsoft GroupQueryAttention to "
-                     "onnx.Attention and onnx.RotaryEmbedding ops"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableSplitToSliceDecompose{*this, "enable-split-to-slice",
-      llvm::cl::desc("Enable decomposition of Split to Slice operations"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableConcatFuse{*this, "enable-concat-fuse",
-      llvm::cl::desc("Enable ConcatFusePattern rewriter"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableLstmSeqDecompose{*this, "enable-lstm-seq-decomposition",
-      llvm::cl::desc("Enable sequence-length decomposition of LSTM (unroll a "
-                     "seq_len>1 LSTM into a chain of seq_len=1 LSTMs)"),
-      ::llvm::cl::init(false)};
-
-  Option<bool> enableReduceL2Decompose{*this, "enable-reducel2-decompose",
-      llvm::cl::desc("Enable decomposition of ReduceL2 to "
-                     "Sqrt(ReduceSumSquare(x))"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableGatherToSlice{*this, "enable-gather-to-slice",
-      llvm::cl::desc(
-          "Enable decomposition of Gather with scalar index to Slice+Reshape"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableHardSwishDecompose{*this, "enable-hardswish-decompose",
-      llvm::cl::desc("Enable decomposition of HardSwish into "
-                     "x * HardSigmoid(x) (alpha=1/6, beta=0.5)"),
-      ::llvm::cl::init(true)};
-
-  Option<bool> enableGroupQueryAttentionCacheSlicing{*this,
-      "enable-groupqueryattention-cache-slicing",
-      llvm::cl::desc("Enable slicing of cos/sin caches during decomposing "
-                     "GroupQueryAttention. Set to false for keeping cache "
-                     "and synthesize position_ids instead."),
-      ::llvm::cl::init(true)};
-
+    : public onnx_mlir::impl::DecomposeONNXToONNXPassBase<
+          DecomposeONNXToONNXPass> {
+  using Base::Base;
   void runOnOperation() final;
-
-  typedef PassWrapper<DecomposeONNXToONNXPass, OperationPass<func::FuncOp>>
-      BaseType;
 };
 
 void DecomposeONNXToONNXPass::runOnOperation() {
   func::FuncOp function = getOperation();
   MLIRContext *context = &getContext();
+  onnx_mlir::separatePhasedConvsForConvTransposeActive =
+      this->enableSeparatePhasedConvsForConvTranspose.getValue();
+  onnx_mlir::convTransposeDepthToSpaceActive =
+      this->enableConvTransposeDecomposeToDepthToSpace.getValue();
+  onnx_mlir::convTransposeToResizeActive =
+      this->enableConvTransposeToResize.getValue();
   RewritePatternSet patterns(context);
   onnx_mlir::getDecomposeONNXToONNXPatterns(patterns,
       enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
@@ -4888,8 +6228,9 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       enableGroupQueryAttentionDecompose, enableSplitToSliceDecompose,
       enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
       /*disableGenericDecompositions=*/false, enableGatherToSlice,
-      enableHardSwishDecompose, enableGroupQueryAttentionCacheSlicing);
-  patterns.insert<ReplaceCastLikeByCastPattern>(context);
+      enableHardSwishDecompose, enableDepthToSpaceDecompose,
+      enableGQAUint16CacheSlotRewrite, enableConvTransposeToResize,
+      enableLstmDecompose);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
   if (this->target == "stablehlo") {
@@ -4899,7 +6240,7 @@ void DecomposeONNXToONNXPass::runOnOperation() {
 
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
-          GreedyRewriteConfig{.listener = &rnUpdater})))
+          GreedyRewriteConfig().setListener(&rnUpdater))))
     signalPassFailure();
 }
 
@@ -4914,7 +6255,10 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool enableSplitToSliceDecompose, bool enableConcatFuse,
     bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
     bool disableGenericDecompositions, bool enableGatherToSlice,
-    bool enableHardSwishDecompose, bool enableGroupQueryAttentionCacheSlicing) {
+    bool enableHardSwishDecompose, bool enableDepthToSpaceDecompose,
+    bool enableGQAUint16CacheSlotRewrite, bool enableConvTransposeToResize,
+    bool enableLstmDecompose,
+    LSTMDecompositionPredicate lstmDecompositionPredicate) {
   MLIRContext *context = patterns.getContext();
   if (!disableGenericDecompositions)
     populateWithGenerated(patterns);
@@ -4924,6 +6268,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     convtranspose_phased::populateWithGenerated(patterns);
   if (enableConvTranspose1dDecomposeToPhasedConv)
     convtranspose_1d_phased::populateWithGenerated(patterns);
+  if (enableConvTransposeToResize)
+    patterns.insert<ConvTransposeToResizePattern>(context, /*benefit=*/10);
   if (enableReduceL2Decompose)
     patterns.insert<DecomposeReduceL2Pattern>(context);
   if (enableInstanceNormDecompose)
@@ -4958,7 +6304,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   }
   if (enableGroupQueryAttentionDecompose)
     patterns.insert<MicrosoftGroupQueryAttention>(
-        context, enableGroupQueryAttentionCacheSlicing);
+        context, enableGQAUint16CacheSlotRewrite);
   if (!disableGenericDecompositions)
     patterns.insert<MicrosoftRotaryEmbedding>(context);
   if (enableMatmulNBitsDecompose)
@@ -4966,6 +6312,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   if (!disableGenericDecompositions) {
     patterns.insert<DecomposeSlicePadPattern>(context);
     patterns.insert<DecomposeScatterNDPattern>(context);
+    patterns.insert<CanonicalizeScatterNDWithMultiAxis>(context);
     patterns.insert<SoftmaxCrossEntropyPattern>(context);
     patterns.insert<SumToAddPattern>(context);
   }
@@ -4973,6 +6320,9 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     patterns.insert<SplitToSlicePattern>(context);
   if (enableLstmSeqDecompose)
     patterns.insert<DecomposeLSTMSeqUnrollPattern>(context, PatternBenefit(0));
+  if (enableLstmDecompose)
+    populateDecomposeLSTMPatterns(
+        patterns, PatternBenefit(1), std::move(lstmDecompositionPredicate));
 
   //   for (const auto &op : onnx_mlir::decomposeOpsInONNX) {
   //     if (op == "HardSwish") {
@@ -4984,28 +6334,27 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
   if (enableGatherToSlice)
     patterns.insert<DecomposeGatherToSlicePattern>(context);
 
+  if (enableDepthToSpaceDecompose)
+    populateDecomposeDepthToSpacePattern(patterns);
+
+  patterns.insert<ReplaceCastLikeByCastPattern>(context);
+
   // TODO: consider whether to include SoftmaxPattern here
 }
 
-/*!
- * Create a DecomposeONNX pass.
- */
-std::unique_ptr<mlir::Pass> onnx_mlir::createDecomposeONNXToONNXPass(
-    const std::string &target, bool enableConvTransposeDecompose,
-    bool enableConvTransposeDecomposeToPhasedConv,
-    bool enableConvTranspose1dDecomposeToPhasedConv,
-    bool enableInstanceNormDecompose, bool enableGroupNormDecompose,
-    bool enableMatmulNBitsDecompose, bool enableGroupQueryAttentionDecompose,
-    bool enableSplitToSliceDecompose, bool enableConcatFuse,
-    bool enableLstmSeqDecompose, bool enableReduceL2Decompose,
-    bool enableGatherToSlice, bool enableHardSwishDecompose,
-    bool enableGroupQueryAttentionCacheSlicing) {
-  return std::make_unique<DecomposeONNXToONNXPass>(target,
-      enableConvTransposeDecompose, enableConvTransposeDecomposeToPhasedConv,
-      enableConvTranspose1dDecomposeToPhasedConv, enableInstanceNormDecompose,
-      enableGroupNormDecompose, enableMatmulNBitsDecompose,
-      enableGroupQueryAttentionDecompose, enableSplitToSliceDecompose,
-      enableConcatFuse, enableLstmSeqDecompose, enableReduceL2Decompose,
-      enableGatherToSlice, enableHardSwishDecompose,
-      enableGroupQueryAttentionCacheSlicing);
+void onnx_mlir::populateDecomposeDepthToSpacePattern(
+    mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit) {
+  patterns.insert<DecomposeDepthToSpacePattern>(patterns.getContext(), benefit);
 }
+
+void onnx_mlir::populateConvTransposeToConvDepthToSpacePatterns(
+    mlir::RewritePatternSet &patterns) {
+  // set the global flag of this file since we have no communication over
+  // tablegen, setting benefit does no work with tablegen generated patterns
+  convTransposeDepthToSpaceActive = true;
+  convtranspose_phased::populateWithGenerated(patterns);
+}
+
+// createDecomposeONNXToONNXPass() and createDecomposeONNXToONNXPass(options)
+// are auto-generated by GEN_PASS_DEF_DECOMPOSEONNXTOONNXPASS above; no
+// manual definition is needed here.
