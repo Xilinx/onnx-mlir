@@ -52,8 +52,10 @@
 #include "src/Support/TypeUtilities.hpp"
 
 #include <algorithm>
+#include <compare>
 #include <cstdint>
 #include <string>
+#include <variant>
 
 namespace onnx_mlir {
 
@@ -393,6 +395,47 @@ RESULT_TYPE getScalarValue(mlir::ONNXConstantOp constantOp);
 // handles float (incl. f16/bf16) and integer storage. Fails if \p v is
 // absent/None or not a single-element constant.
 mlir::FailureOr<double> readScalarConstant(mlir::Value v);
+
+// Exact scalar value read from a single-element ONNX constant. Unlike
+// readScalarConstant (which returns a double), this preserves the
+// integer/float distinction so ordering and finiteness are exact for both --
+// e.g. an int64 outside +/-2^53 is not rounded.
+class ScalarConstant {
+public:
+  static ScalarConstant getFloat(llvm::APFloat v) {
+    return ScalarConstant(std::move(v));
+  }
+  static ScalarConstant getInt(llvm::APSInt v) {
+    return ScalarConstant(std::move(v));
+  }
+
+  [[nodiscard]] bool isFloat() const {
+    return std::holds_alternative<llvm::APFloat>(value);
+  }
+  [[nodiscard]] bool isInteger() const {
+    return std::holds_alternative<llvm::APSInt>(value);
+  }
+
+  // Finite for floats (not +/-inf or NaN); always true for integers.
+  [[nodiscard]] bool isFinite() const;
+
+  // Three-way ordering.
+  std::partial_ordering operator<=>(const ScalarConstant &o) const;
+
+  // Lossy conversion to double; explicit so callers opt in to the rounding.
+  [[nodiscard]] double toDouble() const;
+
+private:
+  explicit ScalarConstant(llvm::APFloat v) : value(std::move(v)) {}
+  explicit ScalarConstant(llvm::APSInt v) : value(std::move(v)) {}
+  std::variant<llvm::APFloat, llvm::APSInt> value;
+};
+
+// Read a single-element ONNX constant Value preserving its exact integer/float
+// value (see ScalarConstant). Fails if \p v is absent/None or not a
+// single-element constant. Quantized storage is expressed as a float, matching
+// getScalarValue.
+mlir::FailureOr<ScalarConstant> readScalarConstantExact(mlir::Value v);
 
 /// Return the wide type of a value.
 WideNum asWideNum(double n, mlir::Type elemType);
