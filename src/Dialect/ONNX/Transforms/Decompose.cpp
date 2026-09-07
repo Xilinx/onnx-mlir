@@ -5962,6 +5962,15 @@ struct SplitToSlicePattern : public OpRewritePattern<ONNXSplitOp> {
       currentStart = ends[axis];
     }
 
+    // The slices all read the same input value, so the producer of that value
+    // goes from a single (Split) consumer to `outputNum` consumers. Tag it so
+    // downstream passes can see the newly introduced multi-user fan-out.
+    if (Operation *parentOp = input.getDefiningOp())
+      if (!parentOp->hasAttr("MultiUserConflict"))
+        rewriter.modifyOpInPlace(parentOp, [&] {
+          parentOp->setAttr("MultiUserConflict", rewriter.getUnitAttr());
+        });
+
     // Replace the split operation with the slice operations
     rewriter.replaceOp(splitOp, slices);
     return success();
