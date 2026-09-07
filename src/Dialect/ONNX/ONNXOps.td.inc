@@ -10339,6 +10339,7 @@ def ONNXTileOp:ONNX_Op<"Tile",
       return sh;
     }
   }];
+  let hasVerifier = 1;
 }
 
 def ONNXTopKOp:ONNX_Op<"TopK",
