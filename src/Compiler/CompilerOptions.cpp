@@ -109,6 +109,7 @@ std::vector<std::string> reportHeapAfter;  // onnx-mlir only
 std::string modelTag;                      // onnx-mlir only
 bool enableConvOptPass;                    // onnx-mlir only
 bool enableXMCPasses;                      // onnx-mlir only
+bool enableHoistGatherAboveLayerNorm;      // onnx-mlir only
 bool enableMatmulAddFusion;                // onnx-mlir only
 bool enableMatmulToConv;                   // onnx-mlir only
 bool disableConstantProp;                  // onnx-mlir only
@@ -873,6 +874,12 @@ static llvm::cl::opt<bool, true> enableXMCPassesOpt("enable-xmc-passes",
     llvm::cl::location(enableXMCPasses), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirOptions));
 
+static llvm::cl::opt<bool, true> enableHoistGatherAboveLayerNormOpt(
+    "enable-hoist-gather-above-layernorm",
+    llvm::cl::desc(
+        "Enable hoist-gather-above-layernorm in the XMC pipeline. Default is "
+        "false."),
+    llvm::cl::location(enableHoistGatherAboveLayerNorm), llvm::cl::init(false),
 static llvm::cl::opt<bool, true> enableMatmulAddFusionOpt(
     "enable-matmul-add-fusion",
     llvm::cl::desc(
