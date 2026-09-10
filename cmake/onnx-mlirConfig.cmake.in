@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Config package for onnx-mlir. Lets downstream components consume onnx-mlir
+# through find_package(onnx-mlir CONFIG) and namespaced onnx-mlir::* targets
+# instead of reaching into the onnx-mlir build tree.
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# The exported interfaces name MLIR/LLVM targets, which are IMPORTED in the
+# standalone onnx-mlir build and have to be re-resolved here.
+if(NOT TARGET MLIRIR)
+  find_dependency(MLIR)
+endif()
+
+# onnx/onnx_proto carry protobuf (and, from protobuf 4.22 on, Abseil) in their
+# public link interface.
+if(NOT TARGET protobuf::libprotobuf AND NOT TARGET protobuf::libprotobuf-lite)
+  find_dependency(Protobuf)
+endif()
+
+set(ONNX_MLIR_PACKAGE_NEEDS_ABSL @ONNX_MLIR_PACKAGE_NEEDS_ABSL@)
+if(ONNX_MLIR_PACKAGE_NEEDS_ABSL)
+  if(NOT TARGET absl::base)
+    find_dependency(absl)
+  endif()
+  if(NOT TARGET utf8_range::utf8_range)
+    find_package(utf8_range QUIET)
+  endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/onnx-mlirTargets.cmake")
+
+set_and_check(ONNX_MLIR_INCLUDE_DIR "@PACKAGE_ONNX_MLIR_INSTALL_INCLUDEDIR@")
+set(ONNX_MLIR_INCLUDE_DIRS
+    "${ONNX_MLIR_INCLUDE_DIR}"
+    "${ONNX_MLIR_INCLUDE_DIR}/include")
+
+# The compiler libraries, namespaced -- what a downstream compiler frontend
+# needs, and the same set onnx-mlir's own drivers link. Each target carries its
+# own dependencies, so this is a starting point for the link, not a closure a
+# consumer has to maintain.
+set(ONNX_MLIR_LIBRARIES @ONNX_MLIR_COMPILER_TARGETS@)
+
+# Every exported library, namespaced -- the compiler set plus the runtime,
+# execution-session, JNI and model-build libraries. Consumers that only compile
+# models want ONNX_MLIR_LIBRARIES instead.
+set(ONNX_MLIR_ALL_LIBRARIES @ONNX_MLIR_EXPORTED_TARGETS@)
+
+set(ONNX_MLIR_ONNX_LIBRARIES onnx-mlir::onnx onnx-mlir::onnx_proto)
+
+check_required_components(onnx-mlir)
