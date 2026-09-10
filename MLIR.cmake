@@ -224,13 +224,6 @@ function(add_onnx_mlir_library name)
 
   if (NOT ARG_NO_INSTALL AND ONNX_MLIR_INSTALL_LIBS)
     if (ONNX_MLIR_INSTALL_PACKAGE)
-      # install(EXPORT) refuses an exported include interface that contains a
-      # bare absolute path, and nearly every add_onnx_mlir_library() call site
-      # feeds it one (${ONNX_MLIR_SRC_ROOT}/include and friends), on top of the
-      # two roots added above. Rewrite the interface here, at the single choke
-      # point, instead of at the ~80 call sites: anything that is not already a
-      # generator expression becomes build-tree only, and the installed header
-      # roots are appended for consumers of the config package.
       get_target_property(om_interface_includes ${name} INTERFACE_INCLUDE_DIRECTORIES)
       set(om_relocatable_includes)
       if (om_interface_includes)

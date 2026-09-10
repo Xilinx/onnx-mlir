@@ -104,10 +104,6 @@ endif()
 set(ONNX_MLIR_SRC_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 set(ONNX_MLIR_BIN_ROOT ${CMAKE_CURRENT_BINARY_DIR})
 
-# Root of the installed header tree. Consumers of the config package include
-# both "src/..." and "onnx-mlir/...", so the repository layout is mirrored
-# under a single self-contained directory rather than being merged into the
-# (shared) top-level include prefix.
 set(ONNX_MLIR_INSTALL_INCLUDEDIR include/onnx-mlir-src)
 set(ONNX_MLIR_INSTALL_PACKAGEDIR lib/cmake/onnx-mlir)
 
@@ -273,14 +269,6 @@ else()
   endif()
 endif()
 
-# ----------------------------------------------------------------------------
-# Relocatable CMake config package
-#
-# Without this, every downstream component has to reach into this build tree
-# (ONNX_MLIR_BINARY_DIR, link_directories(), and on Windows a hard-coded
-# ${CMAKE_BUILD_TYPE}/lib/onnx.lib). With it they use find_package(onnx-mlir
-# CONFIG) and link namespaced onnx-mlir::* targets instead.
-# ----------------------------------------------------------------------------
 if (ONNX_MLIR_INSTALL_PACKAGE)
   include(CMakePackageConfigHelpers)
 
@@ -290,11 +278,6 @@ if (ONNX_MLIR_INSTALL_PACKAGE)
       "exported targets point at archives that are never installed.")
   endif()
 
-  # The vendored ONNX libraries are part of OMBuilder's exported link interface,
-  # so they have to travel in the same export set: install(EXPORT) refuses to
-  # export a target whose interface names a target that is not exported
-  # anywhere. add_onnx_compile_options() already gives them a relocatable
-  # include interface, so they only need installing, not rewriting.
   if (TARGET onnx AND TARGET onnx_proto)
     install(TARGETS onnx onnx_proto
       EXPORT onnx-mlirTargets
@@ -317,9 +300,6 @@ if (ONNX_MLIR_INSTALL_PACKAGE)
       )
   endif()
 
-  # Mirror the repository layout so that the "src/..." and "onnx-mlir/..."
-  # spellings both keep working, with the TableGen output overlaid on top of
-  # the checked-in headers.
   foreach(om_header_root ${ONNX_MLIR_SRC_ROOT} ${ONNX_MLIR_BIN_ROOT})
     foreach(om_header_dir src include)
       install(DIRECTORY ${om_header_root}/${om_header_dir}
@@ -340,20 +320,6 @@ if (ONNX_MLIR_INSTALL_PACKAGE)
     list(APPEND ONNX_MLIR_EXPORTED_TARGETS onnx-mlir::${om_exported_lib})
   endforeach()
 
-  # The compiler library set, spelled the way onnx-mlir's own drivers spell it:
-  # everything registered in the ONNX_MLIR_LIBS property, plus the entry points
-  # deliberately kept out of that property with EXCLUDE_FROM_OM_LIBS and
-  # therefore named by hand -- compare src/Tools/onnx-mlir-opt/CMakeLists.txt.
-  #
-  # Publishing it means a downstream compiler links ${ONNX_MLIR_LIBRARIES} and
-  # never maintains a library list of its own; the exported targets carry their
-  # own dependencies, so the transitive closure follows automatically.
-  #
-  # Computed here, at the end of configuration, and not snapshotted mid-tree the
-  # way the in-tree drivers do it: get_property() returns only what has been
-  # registered so far, so a snapshot taken in src/Tools or src/Compiler silently
-  # misses every library added after it -- which is why onnx-mlir-opt has to
-  # name OMCompilerDialects by hand on top of its own ${OMLibs}.
   get_property(om_compiler_libs GLOBAL PROPERTY ONNX_MLIR_LIBS)
   list(APPEND om_compiler_libs
     OMAccelerator
@@ -366,17 +332,11 @@ if (ONNX_MLIR_INSTALL_PACKAGE)
   list(REMOVE_DUPLICATES om_compiler_libs)
   set(ONNX_MLIR_COMPILER_TARGETS)
   foreach(om_compiler_lib IN LISTS om_compiler_libs)
-    # Only what actually reached the export set: the property is populated by
-    # configuration-dependent subdirectories (NNPA, Stablehlo, the accelerators)
-    # and the hand-named entry points do not all exist in every configuration.
     if(om_compiler_lib IN_LIST ONNX_MLIR_EXPORTED_LIBS)
       list(APPEND ONNX_MLIR_COMPILER_TARGETS onnx-mlir::${om_compiler_lib})
     endif()
   endforeach()
 
-  # protobuf >= 4.22 pulls Abseil into the ONNX link interface, so the config
-  # file has to re-find it. Detect it from the interface itself rather than
-  # duplicating third_party/onnx's version logic.
   set(ONNX_MLIR_PACKAGE_NEEDS_ABSL OFF)
   if (TARGET onnx)
     get_target_property(om_onnx_link_interface onnx INTERFACE_LINK_LIBRARIES)
