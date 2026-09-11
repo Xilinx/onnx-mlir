@@ -134,7 +134,18 @@ struct ONNXHybridTransformPass
           /*disableGenericDecompositions=*/false, enableGatherToSlice,
           enableHardSwishDecompose, enableDepthToSpaceDecompose,
           enableGQAUint16CacheSlotRewrite, enableConvTransposeToResize,
-          enableLstmDecompose);
+          enableLstmDecompose, /*lstmDecompositionPredicate=*/{},
+          // Hold the decomposition back on a cache that is already at full
+          // depth: that is the shape a whole-node GroupQueryAttention graph
+          // claims. A cache that starts empty is the prefill graph, which no
+          // such graph matches, so it is decomposed here rather than left for
+          // a later stage where onnx.Attention can no longer be lowered.
+          holdBackPreallocatedGQADecompose
+              ? onnx_mlir::GQADecompositionPredicate(
+                    [](mlir::Operation *op) {
+                      return !onnx_mlir::hasFullDepthGQACache(op);
+                    })
+              : onnx_mlir::GQADecompositionPredicate{});
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
       if (target == "stablehlo") {

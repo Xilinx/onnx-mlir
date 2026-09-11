@@ -4006,12 +4006,18 @@ struct MicrosoftSkipSimplifiedLayerNorm : public CustomOpToOnnxOps {
 };
 
 struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
-  MicrosoftGroupQueryAttention(
-      MLIRContext *ctx, bool enableUint16CacheSlotRewrite, PatternBenefit b = 1)
+  MicrosoftGroupQueryAttention(MLIRContext *ctx,
+      bool enableUint16CacheSlotRewrite, PatternBenefit b = 1,
+      onnx_mlir::GQADecompositionPredicate predicate = {})
       : CustomOpToOnnxOps(ctx, MicrosoftDomainName, "GroupQueryAttention", b),
-        enableUint16CacheSlotRewrite(enableUint16CacheSlotRewrite) {}
+        enableUint16CacheSlotRewrite(enableUint16CacheSlotRewrite),
+        predicate(std::move(predicate)) {}
 
   const bool enableUint16CacheSlotRewrite;
+  // Optional per-node veto. A caller that also matches GroupQueryAttention with
+  // a whole-node templated graph uses this to hold the decomposition back on
+  // exactly the nodes that graph will claim, while still decomposing the rest.
+  const onnx_mlir::GQADecompositionPredicate predicate;
 
   using AttributeValidator = LogicalResult (*)(
       ONNXCustomOp, PatternRewriter &, Attribute);
@@ -4121,8 +4127,18 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // additional list covers importer/debug metadata.
   static LogicalResult validateRecognizedAttributes(
       ONNXCustomOp customOp, PatternRewriter &rewriter) {
-    const SmallVector<NamedAttribute> semanticAttrs = getFilteredAttrs(
-        customOp->getAttrs(), {"onnx_node_name", "ResultNames", "layout"});
+    // LayerName/OutputName and their PartOf* forms are FlexML provenance
+    // bookkeeping, not GroupQueryAttention semantics: they name the source
+    // layer an op came from so diagnostics can point back at it. They are
+    // attached to ops the rewrite is expected to handle, so treating them as
+    // an unrecognized -- and therefore unsupported -- variant declines every
+    // annotated node. A node this rewrite declines is left as a bare
+    // onnx.Custom for the benefit(0) CpuBecause rule, which is how an entire
+    // GQA model ends up on the CPU with zero operators offloaded.
+    const SmallVector<NamedAttribute> semanticAttrs =
+        getFilteredAttrs(customOp->getAttrs(),
+            {"onnx_node_name", "ResultNames", "layout", "LayerName",
+                "OutputName", "PartOfLayerName", "PartOfOutputName"});
     for (NamedAttribute attr : semanticAttrs) {
       StringRef attrName = attr.getName().getValue();
 
@@ -4609,6 +4625,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
 
   LogicalResult matchAndRewriteImpl(
       ONNXCustomOp customOp, PatternRewriter &rewriter) const final {
+
+    if (predicate && !predicate(customOp))
+      return rewriter.notifyMatchFailure(
+          customOp, "held back for a whole-node GroupQueryAttention match");
 
     using namespace onnx_mlir;
     const Location loc = customOp.getLoc();
@@ -6246,6 +6266,28 @@ void DecomposeONNXToONNXPass::runOnOperation() {
 
 } // namespace
 
+bool onnx_mlir::hasFullDepthGQACache(mlir::Operation *op) {
+  auto customOp = mlir::dyn_cast_or_null<ONNXCustomOp>(op);
+  if (!customOp)
+    return false;
+  auto domain = customOp->getAttrOfType<StringAttr>("domain_name");
+  auto fn = customOp->getAttrOfType<StringAttr>("function_name");
+  if (!domain || !fn || domain.getValue() != MicrosoftDomainName ||
+      fn.getValue() != "GroupQueryAttention")
+    return false;
+  // past_key is input 3; its dim 2 is the cache depth.
+  if (customOp.getNumOperands() <= 3)
+    return false;
+  Value pastKey = customOp.getOperand(3);
+  if (onnx_mlir::isNoneValue(pastKey))
+    return false;
+  auto pastKeyType = mlir::dyn_cast<ShapedType>(pastKey.getType());
+  if (!pastKeyType || !pastKeyType.hasStaticShape() ||
+      pastKeyType.getRank() != 4)
+    return false;
+  return pastKeyType.getShape()[2] > 0;
+}
+
 void onnx_mlir::getDecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns, bool enableConvTransposeDecompose,
     bool enableConvTransposeDecomposeToPhasedConv,
@@ -6258,7 +6300,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool enableHardSwishDecompose, bool enableDepthToSpaceDecompose,
     bool enableGQAUint16CacheSlotRewrite, bool enableConvTransposeToResize,
     bool enableLstmDecompose,
-    LSTMDecompositionPredicate lstmDecompositionPredicate) {
+    LSTMDecompositionPredicate lstmDecompositionPredicate,
+    GQADecompositionPredicate gqaDecompositionPredicate) {
   MLIRContext *context = patterns.getContext();
   if (!disableGenericDecompositions)
     populateWithGenerated(patterns);
@@ -6303,8 +6346,9 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     patterns.insert<MicrosoftSkipSimplifiedLayerNorm>(context);
   }
   if (enableGroupQueryAttentionDecompose)
-    patterns.insert<MicrosoftGroupQueryAttention>(
-        context, enableGQAUint16CacheSlotRewrite);
+    patterns.insert<MicrosoftGroupQueryAttention>(context,
+        enableGQAUint16CacheSlotRewrite, PatternBenefit(1),
+        std::move(gqaDecompositionPredicate));
   if (!disableGenericDecompositions)
     patterns.insert<MicrosoftRotaryEmbedding>(context);
   if (enableMatmulNBitsDecompose)
