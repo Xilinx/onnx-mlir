@@ -224,3 +224,88 @@ func.func @test_split_unranked_output(%arg0: tensor<*xf32>) -> (tensor<*xf32>, t
 // DISABLED-LABEL:  func.func @test_split_unranked_output
 // DISABLED:        "onnx.Split"
 }
+
+// -----
+
+// The Split's single consumer of %producer becomes N Slice consumers of the
+// same value, so the producer's shared name is marked with MultiUseConflict.
+// Without the marker, ResultNames propagation moves the name onto whichever
+// slice happens to be rewritten while only one live use is left.
+func.func @test_split_tags_producer(%arg0: tensor<8x4xf32>) -> (tensor<4x4xf32>, tensor<2x4xf32>, tensor<2x4xf32>) {
+  %producer = "onnx.Relu"(%arg0) {ResultNames = ["producer"]} : (tensor<8x4xf32>) -> tensor<8x4xf32>
+  %split_sizes = onnx.Constant dense<[4, 2, 2]> : tensor<3xi64>
+  %0:3 = "onnx.Split"(%producer, %split_sizes) {axis = 0 : si64} : (tensor<8x4xf32>, tensor<3xi64>) -> (tensor<4x4xf32>, tensor<2x4xf32>, tensor<2x4xf32>) loc("Split8")
+  return %0#0, %0#1, %0#2 : tensor<4x4xf32>, tensor<2x4xf32>, tensor<2x4xf32>
+
+// CHECK-LABEL:  func.func @test_split_tags_producer
+// CHECK:           [[PRODUCER:%.+]] = "onnx.Relu"(%arg0)
+// CHECK-SAME:      ResultNames = [
+// CHECK-SAME:      ["producer", ["MultiUseConflict"]]]
+// CHECK-COUNT-3:   "onnx.Slice"([[PRODUCER]],
+// CHECK:           return
+
+// DISABLED-LABEL:  func.func @test_split_tags_producer
+// DISABLED:        "onnx.Split"
+}
+
+// -----
+
+// The immediate producer (an unnamed Identity) has no name to mark, so the
+// marker lands on the nearest named ancestor reached by walking back through
+// single-operand, single-result ops.
+func.func @test_split_tags_named_ancestor(%arg0: tensor<8x4xf32>) -> (tensor<4x4xf32>, tensor<4x4xf32>) {
+  %base = "onnx.Relu"(%arg0) {ResultNames = ["base"]} : (tensor<8x4xf32>) -> tensor<8x4xf32>
+  %id = "onnx.Identity"(%base) : (tensor<8x4xf32>) -> tensor<8x4xf32>
+  %split_sizes = onnx.Constant dense<[4, 4]> : tensor<2xi64>
+  %0:2 = "onnx.Split"(%id, %split_sizes) {axis = 0 : si64} : (tensor<8x4xf32>, tensor<2xi64>) -> (tensor<4x4xf32>, tensor<4x4xf32>) loc("Split9")
+  return %0#0, %0#1 : tensor<4x4xf32>, tensor<4x4xf32>
+
+// CHECK-LABEL:  func.func @test_split_tags_named_ancestor
+// CHECK:           [[BASE:%.+]] = "onnx.Relu"(%arg0)
+// CHECK-SAME:      ResultNames = [
+// CHECK-SAME:      ["base", ["MultiUseConflict"]]]
+// CHECK:           [[ID:%.+]] = "onnx.Identity"([[BASE]])
+// CHECK-COUNT-2:   "onnx.Slice"([[ID]],
+// CHECK:           return
+
+// DISABLED-LABEL:  func.func @test_split_tags_named_ancestor
+// DISABLED:        "onnx.Split"
+}
+
+// -----
+
+// Splitting an unnamed block argument leaves nothing to mark: the walk back
+// stops at the argument, and no marker is emitted.
+func.func @test_split_unnamed_producer_no_tag(%arg0: tensor<8x4xf32>) -> (tensor<4x4xf32>, tensor<4x4xf32>) {
+  %split_sizes = onnx.Constant dense<[4, 4]> : tensor<2xi64>
+  %0:2 = "onnx.Split"(%arg0, %split_sizes) {axis = 0 : si64} : (tensor<8x4xf32>, tensor<2xi64>) -> (tensor<4x4xf32>, tensor<4x4xf32>) loc("Split10")
+  return %0#0, %0#1 : tensor<4x4xf32>, tensor<4x4xf32>
+
+// CHECK-LABEL:  func.func @test_split_unnamed_producer_no_tag
+// CHECK-NOT:       MultiUseConflict
+
+// DISABLED-LABEL:  func.func @test_split_unnamed_producer_no_tag
+// DISABLED:        "onnx.Split"
+}
+
+// -----
+
+// An already-marked producer is left alone: the marker is not appended twice.
+// The trailing brackets anchor MultiUseConflict as the last transform, so a
+// duplicate would fail to match.
+func.func @test_split_producer_already_tagged(%arg0: tensor<8x4xf32>) -> (tensor<4x4xf32>, tensor<4x4xf32>) {
+  %producer = "onnx.Relu"(%arg0) {ResultNames = [["producer", ["MultiUseConflict"]]]} : (tensor<8x4xf32>) -> tensor<8x4xf32>
+  %split_sizes = onnx.Constant dense<[4, 4]> : tensor<2xi64>
+  %0:2 = "onnx.Split"(%producer, %split_sizes) {axis = 0 : si64} : (tensor<8x4xf32>, tensor<2xi64>) -> (tensor<4x4xf32>, tensor<4x4xf32>) loc("Split11")
+  return %0#0, %0#1 : tensor<4x4xf32>, tensor<4x4xf32>
+
+// CHECK-LABEL:  func.func @test_split_producer_already_tagged
+// CHECK:           [[PRODUCER:%.+]] = "onnx.Relu"(%arg0)
+// CHECK-SAME:      ResultNames = [
+// CHECK-SAME:      ["producer", ["MultiUseConflict"]]]
+// CHECK-COUNT-2:   "onnx.Slice"([[PRODUCER]],
+// CHECK:           return
+
+// DISABLED-LABEL:  func.func @test_split_producer_already_tagged
+// DISABLED:        "onnx.Split"
+}
