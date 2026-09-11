@@ -141,10 +141,9 @@ struct ONNXHybridTransformPass
           // such graph matches, so it is decomposed here rather than left for
           // a later stage where onnx.Attention can no longer be lowered.
           holdBackPreallocatedGQADecompose
-              ? onnx_mlir::GQADecompositionPredicate(
-                    [](mlir::Operation *op) {
-                      return !onnx_mlir::hasFullDepthGQACache(op);
-                    })
+              ? onnx_mlir::GQADecompositionPredicate([](mlir::Operation *op) {
+                  return !onnx_mlir::hasFullDepthGQACache(op);
+                })
               : onnx_mlir::GQADecompositionPredicate{});
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
