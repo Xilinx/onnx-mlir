@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <type_traits>
 
@@ -50,6 +51,7 @@
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
+#include "src/Dialect/ONNX/TensorName.hpp"
 #include "src/Dialect/ONNX/Transforms/Decompose.hpp"
 #include "src/Dialect/ONNX/Transforms/DecomposeEinsum.hpp"
 #include "src/Dialect/ONNX/Transforms/ResultNamesUpdater.hpp"
@@ -5963,13 +5965,28 @@ struct SplitToSlicePattern : public OpRewritePattern<ONNXSplitOp> {
     }
 
     // The slices all read the same input value, so the producer of that value
-    // goes from a single (Split) consumer to `outputNum` consumers. Tag it so
-    // downstream passes can see the newly introduced multi-user fan-out.
-    if (Operation *parentOp = input.getDefiningOp())
-      if (!parentOp->hasAttr("MultiUserConflict"))
-        rewriter.modifyOpInPlace(parentOp, [&] {
-          parentOp->setAttr("MultiUserConflict", rewriter.getUnitAttr());
-        });
+    // goes from one (Split) consumer to `outputNum` consumers. Tag that
+    // producer's name with MultiUseConflict so later ResultName propagation
+    // does not clobber a name that is now shared by all the slices.
+    if (outputNum > 1) {
+      Value conflictVal = input;
+      auto conflictName = onnx_mlir::TensorName(conflictVal);
+      while (!conflictName) {
+        Operation *defOp = conflictVal.getDefiningOp();
+        if (!defOp || defOp->getNumResults() != 1 ||
+            defOp->getNumOperands() != 1)
+          break;
+        conflictVal = defOp->getOperand(0);
+        conflictName = onnx_mlir::TensorName(conflictVal);
+      }
+      if (conflictName && llvm::none_of(conflictName.getTransforms(),
+                              [](onnx_mlir::Transform *trans) {
+                                return isa<onnx_mlir::MultiUseConflict>(trans);
+                              })) {
+        conflictName.push_back(std::make_unique<onnx_mlir::MultiUseConflict>());
+        (void)conflictName.setTo(conflictVal);
+      }
+    }
 
     // Replace the split operation with the slice operations
     rewriter.replaceOp(splitOp, slices);
