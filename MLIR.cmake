@@ -223,11 +223,40 @@ function(add_onnx_mlir_library name)
   endif()
 
   if (NOT ARG_NO_INSTALL AND ONNX_MLIR_INSTALL_LIBS)
-    install(TARGETS ${name}
-      ARCHIVE DESTINATION lib
-      LIBRARY DESTINATION lib
-      RUNTIME DESTINATION bin
-      )
+    if (ONNX_MLIR_INSTALL_PACKAGE)
+      get_target_property(om_interface_includes ${name} INTERFACE_INCLUDE_DIRECTORIES)
+      set(om_relocatable_includes)
+      if (om_interface_includes)
+        foreach(om_include IN LISTS om_interface_includes)
+          if (om_include MATCHES "^\\$<")
+            list(APPEND om_relocatable_includes "${om_include}")
+          else()
+            list(APPEND om_relocatable_includes "$<BUILD_INTERFACE:${om_include}>")
+          endif()
+        endforeach()
+      endif()
+      list(APPEND om_relocatable_includes
+        "$<INSTALL_INTERFACE:${ONNX_MLIR_INSTALL_INCLUDEDIR}>"
+        "$<INSTALL_INTERFACE:${ONNX_MLIR_INSTALL_INCLUDEDIR}/include>"
+        )
+      set_target_properties(${name} PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${om_relocatable_includes}"
+        )
+
+      set_property(GLOBAL APPEND PROPERTY ONNX_MLIR_EXPORTED_LIBS ${name})
+      install(TARGETS ${name}
+        EXPORT onnx-mlirTargets
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+        )
+    else()
+      install(TARGETS ${name}
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+        )
+    endif()
   endif()
 endfunction(add_onnx_mlir_library)
 

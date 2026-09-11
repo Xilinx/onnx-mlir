@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+if(NOT TARGET MLIRIR)
+  find_dependency(MLIR)
+endif()
+
+if(NOT TARGET protobuf::libprotobuf AND NOT TARGET protobuf::libprotobuf-lite)
+  find_dependency(Protobuf)
+endif()
+
+set(ONNX_MLIR_PACKAGE_NEEDS_ABSL @ONNX_MLIR_PACKAGE_NEEDS_ABSL@)
+if(ONNX_MLIR_PACKAGE_NEEDS_ABSL)
+  if(NOT TARGET absl::base)
+    find_dependency(absl)
+  endif()
+  if(NOT TARGET utf8_range::utf8_range)
+    find_package(utf8_range QUIET)
+  endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/onnx-mlirTargets.cmake")
+
+set_and_check(ONNX_MLIR_INCLUDE_DIR "@PACKAGE_ONNX_MLIR_INSTALL_INCLUDEDIR@")
+set(ONNX_MLIR_INCLUDE_DIRS
+    "${ONNX_MLIR_INCLUDE_DIR}"
+    "${ONNX_MLIR_INCLUDE_DIR}/include")
+
+set(ONNX_MLIR_LIBRARIES @ONNX_MLIR_COMPILER_TARGETS@)
+
+set(ONNX_MLIR_ALL_LIBRARIES @ONNX_MLIR_EXPORTED_TARGETS@)
+
+set(ONNX_MLIR_ONNX_LIBRARIES onnx-mlir::onnx onnx-mlir::onnx_proto)
+
+check_required_components(onnx-mlir)
