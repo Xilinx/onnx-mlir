@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "ONNXOps.hpp"
+#include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "mlir/IR/BuiltinTypes.h"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 
