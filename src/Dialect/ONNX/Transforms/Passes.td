@@ -67,6 +67,14 @@ def ONNXDecomposePatternOptions {
            "Enable decomposition of Microsoft GroupQueryAttention to "
            "onnx.Attention and onnx.RotaryEmbedding ops.">,
 
+    Option<"holdBackPreallocatedGQADecompose",
+           "hold-back-preallocated-gqa-decompose",
+           "bool", /*default=*/"false",
+           "Skip GroupQueryAttention decomposition on preallocated full-RoPE "
+           "nodes, leaving them intact for a whole-node match. "
+           "Empty-cache prefill and partial-RoPE nodes are still decomposed "
+           "here, where the resulting ONNX ops can still be lowered.">,
+
     Option<"enableGQAUint16CacheSlotRewrite",
            "enable-gqa-uint16-cache-slot-rewrite",
            "bool", /*default=*/"false",

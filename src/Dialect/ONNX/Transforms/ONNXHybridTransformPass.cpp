@@ -134,7 +134,15 @@ struct ONNXHybridTransformPass
           /*disableGenericDecompositions=*/false, enableGatherToSlice,
           enableHardSwishDecompose, enableDepthToSpaceDecompose,
           enableGQAUint16CacheSlotRewrite, enableConvTransposeToResize,
-          enableLstmDecompose);
+          enableLstmDecompose, /*lstmDecompositionPredicate=*/{},
+          // Hold back only preallocated full-RoPE nodes claimed by the
+          // whole-node graph. Prefill and partial-RoPE nodes must decompose
+          // here, while the resulting ONNX ops can still be lowered.
+          holdBackPreallocatedGQADecompose
+              ? onnx_mlir::GQADecompositionPredicate([](mlir::Operation *op) {
+                  return !onnx_mlir::hasFullDepthFullRotaryGQACache(op);
+                })
+              : onnx_mlir::GQADecompositionPredicate{});
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
       if (target == "stablehlo") {
