@@ -81,6 +81,7 @@ void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   pm.addNestedPass<func::FuncOp>(
       onnx_mlir::createTransferScaleToDwConv2dPass());
   pm.addNestedPass<func::FuncOp>(createCanonicalizeWithResultNamesPass());
+  pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createConvertToChannelLastPass());
   if (opts.enableMatmulAddFusion)
     pm.addNestedPass<func::FuncOp>(
