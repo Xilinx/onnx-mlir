@@ -71,7 +71,7 @@ def ONNXDecomposePatternOptions {
            "hold-back-preallocated-gqa-decompose",
            "bool", /*default=*/"false",
            "Skip GroupQueryAttention decomposition on preallocated full-RoPE "
-           "nodes, leaving them intact for a whole-node templated-graph match. "
+           "nodes, leaving them intact for a whole-node match. "
            "Empty-cache prefill and partial-RoPE nodes are still decomposed "
            "here, where the resulting ONNX ops can still be lowered.">,
 

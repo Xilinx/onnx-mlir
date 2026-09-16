@@ -49,13 +49,12 @@ extern bool convTransposeDepthToSpaceActive;
 extern bool convTransposeToResizeActive;
 
 // Per-node veto for the GroupQueryAttention decomposition. Returning false
-// holds the decomposition back on that node, leaving it intact for a
-// whole-node match (a templated graph) to claim. An empty predicate decomposes
-// every node, which is the behaviour when no such graph is in play.
+// holds the decomposition back for a whole-node match to claim. An empty
+// predicate decomposes every node.
 using GQADecompositionPredicate = std::function<bool(mlir::Operation *)>;
 
 // True for a preallocated com.microsoft.GroupQueryAttention whose rotary
-// width covers the full cache head, i.e. the form the whole-node graph claims.
+// width covers the full cache head.
 bool hasFullDepthFullRotaryGQACache(mlir::Operation *op);
 
 // Exports the DecomposeONNXToONNXPass patterns. They are all plain rewrite
