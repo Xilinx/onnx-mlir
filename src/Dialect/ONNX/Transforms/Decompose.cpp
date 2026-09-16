@@ -6266,7 +6266,7 @@ void DecomposeONNXToONNXPass::runOnOperation() {
 
 } // namespace
 
-bool onnx_mlir::hasFullDepthGQACache(mlir::Operation *op) {
+bool onnx_mlir::hasFullDepthFullRotaryGQACache(mlir::Operation *op) {
   auto customOp = mlir::dyn_cast_or_null<ONNXCustomOp>(op);
   if (!customOp)
     return false;
@@ -6275,17 +6275,22 @@ bool onnx_mlir::hasFullDepthGQACache(mlir::Operation *op) {
   if (!domain || !fn || domain.getValue() != MicrosoftDomainName ||
       fn.getValue() != "GroupQueryAttention")
     return false;
-  // past_key is input 3; its dim 2 is the cache depth.
-  if (customOp.getNumOperands() <= 3)
+  // past_key is input 3; its dim 2 is the cache depth and dim 3 the head width.
+  // cos_cache is input 7; twice its width is the rotary width.
+  if (customOp.getNumOperands() <= 7)
     return false;
   Value pastKey = customOp.getOperand(3);
-  if (onnx_mlir::isNoneValue(pastKey))
+  Value cosCache = customOp.getOperand(7);
+  if (onnx_mlir::isNoneValue(pastKey) || onnx_mlir::isNoneValue(cosCache))
     return false;
   auto pastKeyType = mlir::dyn_cast<ShapedType>(pastKey.getType());
+  auto cosCacheType = mlir::dyn_cast<ShapedType>(cosCache.getType());
   if (!pastKeyType || !pastKeyType.hasStaticShape() ||
-      pastKeyType.getRank() != 4)
+      pastKeyType.getRank() != 4 || !cosCacheType ||
+      !cosCacheType.hasStaticShape() || cosCacheType.getRank() != 2)
     return false;
-  return pastKeyType.getShape()[2] > 0;
+  return pastKeyType.getShape()[2] > 0 &&
+         2 * cosCacheType.getShape()[1] == pastKeyType.getShape()[3];
 }
 
 void onnx_mlir::getDecomposeONNXToONNXPatterns(

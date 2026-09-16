@@ -70,11 +70,10 @@ def ONNXDecomposePatternOptions {
     Option<"holdBackPreallocatedGQADecompose",
            "hold-back-preallocated-gqa-decompose",
            "bool", /*default=*/"false",
-           "Skip the GroupQueryAttention decomposition on nodes whose KV cache "
-           "is already at its full depth, leaving them intact for a whole-node "
-           "templated-graph match. Nodes that start from an empty cache (the "
-           "prefill graph) are still decomposed here, where the resulting "
-           "onnx.Attention and onnx.RotaryEmbedding ops can still be lowered.">,
+           "Skip GroupQueryAttention decomposition on preallocated full-RoPE "
+           "nodes, leaving them intact for a whole-node templated-graph match. "
+           "Empty-cache prefill and partial-RoPE nodes are still decomposed "
+           "here, where the resulting ONNX ops can still be lowered.">,
 
     Option<"enableGQAUint16CacheSlotRewrite",
            "enable-gqa-uint16-cache-slot-rewrite",
