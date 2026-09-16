@@ -4016,9 +4016,8 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
         predicate(std::move(predicate)) {}
 
   const bool enableUint16CacheSlotRewrite;
-  // Optional per-node veto. A caller that also matches GroupQueryAttention with
-  // a whole-node templated graph uses this to hold the decomposition back on
-  // exactly the nodes that graph will claim, while still decomposing the rest.
+  // Optional per-node veto. The rewrite is only triggered if predicate returns
+  // true.
   const onnx_mlir::GQADecompositionPredicate predicate;
 
   using AttributeValidator = LogicalResult (*)(
@@ -4129,18 +4128,8 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // additional list covers importer/debug metadata.
   static LogicalResult validateRecognizedAttributes(
       ONNXCustomOp customOp, PatternRewriter &rewriter) {
-    // LayerName/OutputName and their PartOf* forms are FlexML provenance
-    // bookkeeping, not GroupQueryAttention semantics: they name the source
-    // layer an op came from so diagnostics can point back at it. They are
-    // attached to ops the rewrite is expected to handle, so treating them as
-    // an unrecognized -- and therefore unsupported -- variant declines every
-    // annotated node. A node this rewrite declines is left as a bare
-    // onnx.Custom for the benefit(0) CpuBecause rule, which is how an entire
-    // GQA model ends up on the CPU with zero operators offloaded.
-    const SmallVector<NamedAttribute> semanticAttrs =
-        getFilteredAttrs(customOp->getAttrs(),
-            {"onnx_node_name", "ResultNames", "layout", "LayerName",
-                "OutputName", "PartOfLayerName", "PartOfOutputName"});
+    const SmallVector<NamedAttribute> semanticAttrs = getFilteredAttrs(
+        customOp->getAttrs(), {"onnx_node_name", "ResultNames", "layout"});
     for (NamedAttribute attr : semanticAttrs) {
       StringRef attrName = attr.getName().getValue();
 
@@ -6300,12 +6289,8 @@ void DecomposeONNXToONNXPass::runOnOperation() {
 
 bool onnx_mlir::hasFullDepthFullRotaryGQACache(mlir::Operation *op) {
   auto customOp = mlir::dyn_cast_or_null<ONNXCustomOp>(op);
-  if (!customOp)
-    return false;
-  auto domain = customOp->getAttrOfType<StringAttr>("domain_name");
-  auto fn = customOp->getAttrOfType<StringAttr>("function_name");
-  if (!domain || !fn || domain.getValue() != MicrosoftDomainName ||
-      fn.getValue() != "GroupQueryAttention")
+  if (!customOp || !isCustomOpWithNameAndDialect(
+                       customOp, "GroupQueryAttention", MicrosoftDomainName))
     return false;
   // past_key is input 3; its dim 2 is the cache depth and dim 3 the head width.
   // present_key is result 1; equal past/present depths identify preallocation.

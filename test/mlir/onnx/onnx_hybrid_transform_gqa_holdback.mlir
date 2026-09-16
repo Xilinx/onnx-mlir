@@ -1,5 +1,6 @@
 // RUN: onnx-mlir-opt --onnx-hybrid-transform="shape-inference=false canonicalization=false constant-propagation=false recomposition=false decomposition=true enable-groupqueryattention-decompose=true hold-back-preallocated-gqa-decompose=true" %s -split-input-file | FileCheck %s
 // RUN: onnx-mlir-opt --decompose-onnx="enable-groupqueryattention-decompose=true hold-back-preallocated-gqa-decompose=true" %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --onnx-hybrid-transform="shape-inference=false canonicalization=false constant-propagation=false recomposition=false decomposition=true enable-groupqueryattention-decompose=true hold-back-preallocated-gqa-decompose=false" %s -split-input-file | FileCheck %s --check-prefix=NO-HOLDBACK
 
 func.func @full_rope_decode(
   %qkv: tensor<1x1x6144xf32>,
@@ -21,6 +22,10 @@ func.func @full_rope_decode(
 // CHECK-LABEL: func.func @full_rope_decode
 // CHECK-NOT: "onnx.Attention"
 // CHECK: "onnx.Custom"{{.*}}function_name = "GroupQueryAttention"
+// NO-HOLDBACK-LABEL: func.func @full_rope_decode
+// NO-HOLDBACK-NOT: function_name = "GroupQueryAttention"
+// NO-HOLDBACK: "onnx.RotaryEmbedding"
+// NO-HOLDBACK: "onnx.Attention"
 
 // -----
 
