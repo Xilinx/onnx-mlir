@@ -6250,7 +6250,12 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       /*disableGenericDecompositions=*/false, enableGatherToSlice,
       enableHardSwishDecompose, enableDepthToSpaceDecompose,
       enableGQAUint16CacheSlotRewrite, enableConvTransposeToResize,
-      enableLstmDecompose);
+      enableLstmDecompose, /*lstmDecompositionPredicate=*/{},
+      holdBackPreallocatedGQADecompose
+          ? onnx_mlir::GQADecompositionPredicate([](mlir::Operation *op) {
+              return !onnx_mlir::hasFullDepthFullRotaryGQACache(op);
+            })
+          : onnx_mlir::GQADecompositionPredicate{});
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
   if (this->target == "stablehlo") {
@@ -6276,20 +6281,26 @@ bool onnx_mlir::hasFullDepthFullRotaryGQACache(mlir::Operation *op) {
       fn.getValue() != "GroupQueryAttention")
     return false;
   // past_key is input 3; its dim 2 is the cache depth and dim 3 the head width.
+  // present_key is result 1; equal past/present depths identify preallocation.
   // cos_cache is input 7; twice its width is the rotary width.
-  if (customOp.getNumOperands() <= 7)
+  if (customOp.getNumOperands() <= 7 || customOp.getNumResults() <= 1)
     return false;
   Value pastKey = customOp.getOperand(3);
   Value cosCache = customOp.getOperand(7);
   if (onnx_mlir::isNoneValue(pastKey) || onnx_mlir::isNoneValue(cosCache))
     return false;
   auto pastKeyType = mlir::dyn_cast<ShapedType>(pastKey.getType());
+  auto presentKeyType =
+      mlir::dyn_cast<ShapedType>(customOp.getResult(1).getType());
   auto cosCacheType = mlir::dyn_cast<ShapedType>(cosCache.getType());
   if (!pastKeyType || !pastKeyType.hasStaticShape() ||
-      pastKeyType.getRank() != 4 || !cosCacheType ||
-      !cosCacheType.hasStaticShape() || cosCacheType.getRank() != 2)
+      pastKeyType.getRank() != 4 || !presentKeyType ||
+      !presentKeyType.hasStaticShape() || presentKeyType.getRank() != 4 ||
+      !cosCacheType || !cosCacheType.hasStaticShape() ||
+      cosCacheType.getRank() != 2)
     return false;
   return pastKeyType.getShape()[2] > 0 &&
+         presentKeyType.getShape()[2] == pastKeyType.getShape()[2] &&
          2 * cosCacheType.getShape()[1] == pastKeyType.getShape()[3];
 }
 
