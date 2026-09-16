@@ -763,20 +763,138 @@ private:
 //
 // Assumes the Add/Mul constant is on operand 1 (mul(x, a), add(x, b));
 // ConstProp's Add/MulConstCommutative1 normalize this before the pass runs.
+// Scalar (single-element) constant match, shared by all HardSigmoid
+// recompose patterns below.
+static bool matchScalarConstant(Value v, double &out) {
+  using namespace onnx_mlir;
+  if (!isDenseONNXConstant(v))
+    return false;
+  ElementsAttr attr = getElementAttributeFromONNXValue(v);
+  if (!attr || attr.getNumElements() != 1)
+    return false;
+  out = getScalarValue<double>(attr, attr.getElementType());
+  return true;
+}
+
+// Scalar constant match that additionally sees through
+// `DequantizeLinear(int_const, scale_const, zp_const)`, i.e. the shape a
+// scalar coefficient (Add's beta, Mul's/Min's alpha or bound, ...) takes in
+// a fully-quantized graph where every value -- including per-op scalar
+// constants -- is itself int8-quantized rather than stored as a plain
+// float. `matchScalarConstant` alone would never succeed on such a graph.
+static bool matchQuantAwareScalarConstant(Value v, double &out) {
+  if (matchScalarConstant(v, out))
+    return true;
+  auto dq = v.getDefiningOp<ONNXDequantizeLinearOp>();
+  if (!dq)
+    return false;
+  double raw, scale;
+  if (!matchScalarConstant(dq.getX(), raw) ||
+      !matchScalarConstant(dq.getXScale(), scale))
+    return false;
+  double zeroPoint = 0.0;
+  Value zp = dq.getXZeroPoint();
+  if (!onnx_mlir::isNoneValue(zp) && !matchScalarConstant(zp, zeroPoint))
+    return false;
+  out = (raw - zeroPoint) * scale;
+  return true;
+}
+
+// Scale/zero-point/representable-max of a QuantizeLinear op, used by the
+// bare-Relu HardSigmoid pattern below to prove that a missing explicit upper
+// clamp is unobservable because quantization saturation already enforces it.
+struct QuantInfo {
+  double scale;
+  double zeroPoint;
+  double typeMax;
+};
+
+static std::optional<QuantInfo> extractQuantInfo(ONNXQuantizeLinearOp q) {
+  double scale;
+  if (!matchScalarConstant(q.getYScale(), scale))
+    return std::nullopt;
+  double zeroPoint = 0.0;
+  Value zp = q.getYZeroPoint();
+  if (!onnx_mlir::isNoneValue(zp) && !matchScalarConstant(zp, zeroPoint))
+    return std::nullopt;
+  auto intTy = dyn_cast<IntegerType>(
+      cast<ShapedType>(q.getY().getType()).getElementType());
+  if (!intTy)
+    return std::nullopt;
+  unsigned width = intTy.getWidth();
+  double typeMax = intTy.isUnsignedInteger()
+                        ? static_cast<double>((int64_t{1} << width) - 1)
+                        : static_cast<double>((int64_t{1} << (width - 1)) - 1);
+  return QuantInfo{scale, zeroPoint, typeMax};
+}
+
+// Sees through one QuantizeLinear->DequantizeLinear requantization pair
+// feeding `v` (i.e. `v` is a DequantizeLinear whose input is produced by a
+// single-use QuantizeLinear), returning the value on the far side of the
+// pair. This is the shape emitted when a QAT-quantized graph gives every op
+// its own scale/zero-point, rather than a single Q/DQ pair bracketing the
+// whole Add/Relu/Mul chain. Returns `v` unchanged, and appends nothing, if
+// the shape doesn't match.
+static Value skipRequant(Value v, SmallVectorImpl<Operation *> &qdqOps) {
+  auto dq = v.getDefiningOp<ONNXDequantizeLinearOp>();
+  if (!dq || !dq->hasOneUse())
+    return v;
+  auto q = dq.getX().getDefiningOp<ONNXQuantizeLinearOp>();
+  if (!q || !q->hasOneUse())
+    return v;
+  // Record consumer before producer so callers can erase in this order once
+  // the ops feeding them are already gone.
+  qdqOps.push_back(dq);
+  qdqOps.push_back(q);
+  return q.getX();
+}
+
+// Forward counterpart of skipRequant: if `v`'s only use is a QuantizeLinear
+// whose result's only use is a DequantizeLinear, returns that
+// DequantizeLinear's result. If `quantInfoOut` is non-null and the pair is
+// found, it is populated with the QuantizeLinear's scale/zero
+// point/representable-max -- the quantization saturation that the bare-Relu
+// HardSigmoid pattern leans on to prove safety in lieu of an explicit upper
+// clamp.
+static Value skipRequantForward(Value v, SmallVectorImpl<Operation *> &qdqOps,
+    std::optional<QuantInfo> *quantInfoOut = nullptr) {
+  if (!v.hasOneUse())
+    return v;
+  auto q = dyn_cast<ONNXQuantizeLinearOp>(*v.getUsers().begin());
+  if (!q || !q.getY().hasOneUse())
+    return v;
+  auto dq = dyn_cast<ONNXDequantizeLinearOp>(*q.getY().getUsers().begin());
+  if (!dq)
+    return v;
+  if (quantInfoOut)
+    *quantInfoOut = extractQuantInfo(q);
+  qdqOps.push_back(dq);
+  qdqOps.push_back(q);
+  return dq.getY();
+}
+
+// Erases every op in `ops` that has become dead, repeating until a full pass
+// makes no further progress -- a single ordered pass isn't enough since,
+// e.g., an Add is only dead once the forward Q->DQ pair feeding the Relu is
+// erased, while that pair is only dead once the Relu itself is erased.
+static void eraseDeadOps(
+    PatternRewriter &rewriter, SmallVectorImpl<Operation *> &ops) {
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (Operation *&op : ops) {
+      if (op && op->use_empty()) {
+        rewriter.eraseOp(op);
+        op = nullptr;
+        changed = true;
+      }
+    }
+  }
+}
+
 struct RecomposeHardSigmoidFromMulClipPattern
     : public OpRewritePattern<ONNXClipOp> {
   using OpRewritePattern<ONNXClipOp>::OpRewritePattern;
-
-  static bool matchScalarConstant(Value v, double &out) {
-    using namespace onnx_mlir;
-    if (!isDenseONNXConstant(v))
-      return false;
-    ElementsAttr attr = getElementAttributeFromONNXValue(v);
-    if (!attr || attr.getNumElements() != 1)
-      return false;
-    out = getScalarValue<double>(attr, attr.getElementType());
-    return true;
-  }
 
   static LogicalResult replaceWithHardSigmoid(PatternRewriter &rewriter,
       ONNXClipOp clipOp, ArrayRef<Location> fusedLocs, Value x, double alpha,
@@ -846,6 +964,305 @@ struct RecomposeHardSigmoidFromMulClipPattern
     }
 
     return failure();
+  }
+};
+
+// If `v` (optionally reached backward through one QuantizeLinear-
+// >DequantizeLinear requantization pair) is the result of an Add against a
+// scalar constant, returns the Add's other operand and that constant as
+// `betaOut`, recording the Add (and any skipped QDQ pair) in `deadOps` so
+// the caller can erase them once the rewrite commits. Otherwise returns `v`
+// unchanged with `betaOut` set to 0.
+//
+// The zero-beta fallback matters because in a fully-quantized graph the
+// "+beta'" term of a TF-style HardSigmoid decomposition is frequently not
+// its own Add node at all: constant-folding routinely absorbs an Add-by-
+// constant into the bias of whatever Conv/Gemm produced its input, leaving
+// nothing for a pattern anchored on ONNXAddOp to ever match. From the
+// recomposed HardSigmoid's point of view this is indistinguishable from
+// beta'=0 -- the "+beta'" already happened upstream, outside what this
+// pattern can (or needs to) see.
+static Value matchOptionalPrecedingAdd(Value v, double &betaOut,
+    SmallVectorImpl<Operation *> &deadOps) {
+  SmallVector<Operation *> qdqOps;
+  Value afterSkip = skipRequant(v, qdqOps);
+  if (auto addOp = afterSkip.getDefiningOp<ONNXAddOp>()) {
+    if (addOp->hasOneUse()) {
+      double beta;
+      if (matchQuantAwareScalarConstant(addOp.getOperand(1), beta)) {
+        deadOps.push_back(addOp);
+        deadOps.append(qdqOps.begin(), qdqOps.end());
+        betaOut = beta;
+        return addOp.getOperand(0);
+      }
+      if (matchQuantAwareScalarConstant(addOp.getOperand(0), beta)) {
+        deadOps.push_back(addOp);
+        deadOps.append(qdqOps.begin(), qdqOps.end());
+        betaOut = beta;
+        return addOp.getOperand(1);
+      }
+    }
+  }
+  betaOut = 0.0;
+  return v;
+}
+
+// TF/Keras Relu6-style chain where the outer clamp is a bare Relu instead of
+// an explicit Clip: [optional Add(x, ~b')] -> Relu -> [optional Min(.,
+// ~c)] -> Mul(., ~a'). Tolerates a QuantizeLinear->DequantizeLinear
+// requantization pair sandwiched between any two of these ops, which is the
+// shape a QAT-quantized graph gives every op its own scale/zero-point in.
+// The leading Add is optional (see matchOptionalPrecedingAdd) since it is
+// often folded into a preceding op's bias rather than present as its own
+// node.
+//
+// A bare Relu only enforces `max(x, 0)`, i.e. a one-sided clamp -- it is
+// *not* algebraically equivalent to HardSigmoid's two-sided clip in general.
+// This pattern therefore requires one of two independently checkable
+// constraints before accepting a bare-Relu match:
+//
+//   (A) Explicit two-sided clamp: Relu is immediately followed (modulo one
+//       requantization pair) by Min(., ~c). Relu+Min together are exactly
+//       Clip(0, c), so this is unconditionally safe.
+//
+//   (B) Quantization-proven-safe bare Relu: no Min is present, but Relu's
+//       result is immediately quantized (QuantizeLinear -> DequantizeLinear)
+//       with a known scale/zero-point/type. The quantizer's own saturation
+//       already enforces an upper bound of `representable_max = (typeMax -
+//       zeroPoint) * scale`. If that bound is already <= 1/alpha', the
+//       missing explicit clamp is dead code -- Relu and Clip(0, 1/alpha')
+//       are bit-identical in the deployed int8 graph even though they differ
+//       in raw float. This is exactly the shape TensorFlow/Keras lowers
+//       Relu6 to under int8 quantization when the calibrated scale happens
+//       to leave no headroom above the bound.
+//
+// If neither (A) nor (B) holds -- e.g. a bare Relu in a pure-float graph
+// with no quantization info at all -- the match is rejected, since safety
+// cannot be proven either algebraically or via quantization saturation.
+struct RecomposeHardSigmoidFromReluPattern
+    : public OpRewritePattern<ONNXReluOp> {
+  using OpRewritePattern<ONNXReluOp>::OpRewritePattern;
+
+  static LogicalResult finish(PatternRewriter &rewriter, ONNXReluOp reluOp,
+      Operation *explicitMinOp /* or nullptr */, ONNXMulOp mulOp, Value xVal,
+      double betaPrime, double alphaPrime,
+      ArrayRef<Operation *> deadCandidatesIn) {
+    double alpha = alphaPrime;
+    double beta = betaPrime * alphaPrime;
+
+    Location loc = mlir::FusedLoc::get(rewriter.getContext(),
+        {mulOp.getLoc(), reluOp.getLoc()});
+    auto hsigOp = rewriter.create<ONNXHardSigmoidOp>(loc,
+        mulOp.getResult().getType(), xVal, rewriter.getF32FloatAttr(alpha),
+        rewriter.getF32FloatAttr(beta));
+
+    rewriter.replaceOp(mulOp, hsigOp.getResult());
+    SmallVector<Operation *> deadCandidates(
+        deadCandidatesIn.begin(), deadCandidatesIn.end());
+    deadCandidates.push_back(reluOp);
+    if (explicitMinOp)
+      deadCandidates.push_back(explicitMinOp);
+    eraseDeadOps(rewriter, deadCandidates);
+    return success();
+  }
+
+  LogicalResult matchAndRewrite(
+      ONNXReluOp reluOp, PatternRewriter &rewriter) const final {
+    using namespace onnx_mlir;
+
+    auto elementType = getElementTypeOrSelf(reluOp.getType());
+    if (!isa<Float32Type, BFloat16Type, Float16Type>(elementType))
+      return failure();
+    if (!reluOp->hasOneUse())
+      return rewriter.notifyMatchFailure(reluOp, "Relu has more than one use");
+
+    SmallVector<Operation *> deadCandidates;
+    double betaPrime;
+    Value xVal = matchOptionalPrecedingAdd(
+        reluOp.getOperand(), betaPrime, deadCandidates);
+
+    SmallVector<Operation *> qdqOpsFwd;
+    std::optional<QuantInfo> reluQuantInfo;
+    Value afterRelu =
+        skipRequantForward(reluOp.getResult(), qdqOpsFwd, &reluQuantInfo);
+    if (!afterRelu.hasOneUse())
+      return rewriter.notifyMatchFailure(
+          reluOp, "Relu result has more than one use");
+    Operation *afterReluUser = *afterRelu.getUsers().begin();
+    deadCandidates.append(qdqOpsFwd.begin(), qdqOpsFwd.end());
+
+    // Path A: Relu -> Min(., ~c) -> Mul(., ~a'), an explicit two-sided
+    // clamp -- unconditionally safe, no quantization proof needed.
+    if (auto minOp = dyn_cast<ONNXMinOp>(afterReluUser)) {
+      if (!minOp->hasOneUse())
+        return rewriter.notifyMatchFailure(minOp, "Min has more than one use");
+      auto minOperands = minOp.getData_0();
+      if (minOperands.size() != 2)
+        return rewriter.notifyMatchFailure(
+            minOp, "Min does not have exactly two operands");
+      Value minOther = minOperands[0];
+      double cVal;
+      bool haveC = matchQuantAwareScalarConstant(minOperands[1], cVal);
+      if (minOperands[0] != afterRelu) {
+        minOther = minOperands[1];
+        haveC = matchQuantAwareScalarConstant(minOperands[0], cVal);
+      }
+      if (minOther != afterRelu || !haveC)
+        return rewriter.notifyMatchFailure(minOp,
+            "Min does not clamp Relu's output against a scalar constant");
+
+      SmallVector<Operation *> qdqOpsAfterMin;
+      Value afterMin = skipRequantForward(minOp.getResult(), qdqOpsAfterMin);
+      if (!afterMin.hasOneUse())
+        return rewriter.notifyMatchFailure(
+            minOp, "Min result has more than one use");
+      auto mulOp = dyn_cast<ONNXMulOp>(*afterMin.getUsers().begin());
+      if (!mulOp)
+        return rewriter.notifyMatchFailure(
+            minOp, "Min output is not consumed by an ONNXMulOp");
+
+      double alphaPrime;
+      if (afterMin == mulOp.getOperand(0)) {
+        if (!matchQuantAwareScalarConstant(mulOp.getOperand(1), alphaPrime))
+          return rewriter.notifyMatchFailure(
+              mulOp, "Mul's alpha' operand is not a scalar constant");
+      } else if (afterMin == mulOp.getOperand(1)) {
+        if (!matchQuantAwareScalarConstant(mulOp.getOperand(0), alphaPrime))
+          return rewriter.notifyMatchFailure(
+              mulOp, "Mul's alpha' operand is not a scalar constant");
+      } else {
+        return failure();
+      }
+
+      // Relu(x) already covers the lower side (max(x,0)); Min(., c) must
+      // supply the upper side at exactly c == 1/alpha' for the pair to be
+      // equal to Clip(0, 1/alpha').
+      if (alphaPrime <= 0.0 || std::fabs(cVal - 1.0 / alphaPrime) > 1e-2)
+        return rewriter.notifyMatchFailure(
+            minOp, "Min bound is not ~1/alpha' consistent with Mul");
+
+      deadCandidates.append(qdqOpsAfterMin.begin(), qdqOpsAfterMin.end());
+      return finish(rewriter, reluOp, minOp, mulOp, xVal, betaPrime,
+          alphaPrime, deadCandidates);
+    }
+
+    // Path B: Relu -> Mul(., ~a') directly, no explicit upper clamp.
+    auto mulOp = dyn_cast<ONNXMulOp>(afterReluUser);
+    if (!mulOp)
+      return rewriter.notifyMatchFailure(reluOp,
+          "Relu output is not consumed by an ONNXMinOp or ONNXMulOp");
+
+    double alphaPrime;
+    if (afterRelu == mulOp.getOperand(0)) {
+      if (!matchQuantAwareScalarConstant(mulOp.getOperand(1), alphaPrime))
+        return rewriter.notifyMatchFailure(
+            mulOp, "Mul's alpha' operand is not a scalar constant");
+    } else if (afterRelu == mulOp.getOperand(1)) {
+      if (!matchQuantAwareScalarConstant(mulOp.getOperand(0), alphaPrime))
+        return rewriter.notifyMatchFailure(
+            mulOp, "Mul's alpha' operand is not a scalar constant");
+    } else {
+      return failure();
+    }
+    if (alphaPrime <= 0.0)
+      return rewriter.notifyMatchFailure(
+          mulOp, "Mul's alpha' operand is not a positive scalar constant");
+
+    // Constraint B: prove the missing upper clamp is unobservable because
+    // quantization saturation immediately after Relu already enforces it.
+    if (!reluQuantInfo)
+      return rewriter.notifyMatchFailure(reluOp,
+          "bare Relu has no adjoining Quantize/Dequantize pair to prove "
+          "saturation safety, and no explicit Min upper-bound");
+
+    double representableMax =
+        (reluQuantInfo->typeMax - reluQuantInfo->zeroPoint) *
+        reluQuantInfo->scale;
+    if (representableMax > 1.0 / alphaPrime + 1e-2)
+      return rewriter.notifyMatchFailure(reluOp,
+          "quantization scale after bare Relu does not guarantee saturation "
+          "at ~1/alpha'; representable max exceeds the algebraic bound");
+
+    return finish(rewriter, reluOp, /*explicitMinOp=*/nullptr, mulOp, xVal,
+        betaPrime, alphaPrime, deadCandidates);
+  }
+};
+
+// TF-style reordering of the canonical explicit-Clip HardSigmoid where the
+// scale (Mul by alpha') is applied *after* the clip rather than before it:
+// [optional Add(x, ~b')] -> Clip(0, ~c) -> Mul(., ~a'). Clip's own bounds
+// already supply the two-sided clamp directly, so (unlike the bare-Relu
+// pattern above) no quantization safety proof is required here. Tolerates a
+// QuantizeLinear->DequantizeLinear requantization pair between any two ops,
+// and the leading Add is optional for the same reason as in
+// RecomposeHardSigmoidFromReluPattern (often folded into a preceding op's
+// bias).
+struct RecomposeHardSigmoidFromClipMulPattern
+    : public OpRewritePattern<ONNXClipOp> {
+  using OpRewritePattern<ONNXClipOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXClipOp clipOp, PatternRewriter &rewriter) const final {
+    using namespace onnx_mlir;
+
+    auto elementType = getElementTypeOrSelf(clipOp.getType());
+    if (!isa<Float32Type, BFloat16Type, Float16Type>(elementType))
+      return failure();
+    if (!clipOp->hasOneUse())
+      return rewriter.notifyMatchFailure(clipOp, "Clip has more than one use");
+
+    double clipMin, clipMax;
+    if (isNoneValue(clipOp.getMin()) || isNoneValue(clipOp.getMax()) ||
+        !matchQuantAwareScalarConstant(clipOp.getMin(), clipMin) ||
+        !matchQuantAwareScalarConstant(clipOp.getMax(), clipMax) ||
+        std::fabs(clipMin) > 1e-2)
+      return rewriter.notifyMatchFailure(
+          clipOp, "Clip lower bound is not ~0, or bounds are non-constant");
+
+    SmallVector<Operation *> qdqOpsFwd;
+    Value afterClip = skipRequantForward(clipOp.getResult(), qdqOpsFwd);
+    if (!afterClip.hasOneUse())
+      return rewriter.notifyMatchFailure(
+          clipOp, "Clip result has more than one use");
+    auto mulOp = dyn_cast<ONNXMulOp>(*afterClip.getUsers().begin());
+    if (!mulOp)
+      return rewriter.notifyMatchFailure(
+          clipOp, "Clip output is not consumed by an ONNXMulOp");
+
+    double alphaPrime;
+    if (afterClip == mulOp.getOperand(0)) {
+      if (!matchQuantAwareScalarConstant(mulOp.getOperand(1), alphaPrime))
+        return rewriter.notifyMatchFailure(
+            mulOp, "Mul's alpha' operand is not a scalar constant");
+    } else if (afterClip == mulOp.getOperand(1)) {
+      if (!matchQuantAwareScalarConstant(mulOp.getOperand(0), alphaPrime))
+        return rewriter.notifyMatchFailure(
+            mulOp, "Mul's alpha' operand is not a scalar constant");
+    } else {
+      return failure();
+    }
+    if (alphaPrime <= 0.0 || std::fabs(clipMax - 1.0 / alphaPrime) > 1e-2)
+      return rewriter.notifyMatchFailure(
+          clipOp, "Clip upper bound is not ~1/alpha' consistent with Mul");
+
+    SmallVector<Operation *> deadCandidates;
+    double betaPrime;
+    Value xVal = matchOptionalPrecedingAdd(
+        clipOp.getInput(), betaPrime, deadCandidates);
+
+    double alpha = alphaPrime;
+    double beta = betaPrime * alphaPrime;
+    Location loc = mlir::FusedLoc::get(
+        rewriter.getContext(), {mulOp.getLoc(), clipOp.getLoc()});
+    auto hsigOp = rewriter.create<ONNXHardSigmoidOp>(loc,
+        mulOp.getResult().getType(), xVal, rewriter.getF32FloatAttr(alpha),
+        rewriter.getF32FloatAttr(beta));
+
+    rewriter.replaceOp(mulOp, hsigOp.getResult());
+    deadCandidates.push_back(clipOp);
+    deadCandidates.append(qdqOpsFwd.begin(), qdqOpsFwd.end());
+    eraseDeadOps(rewriter, deadCandidates);
+    return success();
   }
 };
 
@@ -2128,6 +2545,8 @@ void onnx_mlir::getRecomposeONNXToONNXPatterns(
   MLIRContext *context = patterns.getContext();
   patterns.insert<RecomposeHardSwishFromMulPattern>(context);
   patterns.insert<RecomposeHardSigmoidFromMulClipPattern>(context);
+  patterns.insert<RecomposeHardSigmoidFromReluPattern>(context);
+  patterns.insert<RecomposeHardSigmoidFromClipMulPattern>(context);
   patterns.insert<RecomposeGeluFromMulPattern>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, false>>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXMulOp, false>>(context);
