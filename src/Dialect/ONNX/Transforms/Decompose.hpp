@@ -54,11 +54,9 @@ extern bool convTransposeToResizeActive;
 // every node, which is the behaviour when no such graph is in play.
 using GQADecompositionPredicate = std::function<bool(mlir::Operation *)>;
 
-// True when this is a com.microsoft.GroupQueryAttention whose past_key is
-// already at its full cache depth, i.e. the preallocated form a whole-node
-// templated graph claims. False for any other op, and for the prefill shape
-// whose cache starts empty (past_key depth 0).
-bool hasFullDepthGQACache(mlir::Operation *op);
+// True for a preallocated com.microsoft.GroupQueryAttention whose rotary
+// width covers the full cache head, i.e. the form the whole-node graph claims.
+bool hasFullDepthFullRotaryGQACache(mlir::Operation *op);
 
 // Exports the DecomposeONNXToONNXPass patterns. They are all plain rewrite
 // patterns that can be used with any PatternRewriter, not conversion patterns.
