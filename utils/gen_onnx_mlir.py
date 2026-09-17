@@ -476,6 +476,12 @@ def load_custom_ops_from_yaml(yaml_paths: List[str]) -> List[CustomOpSchema]:
 # Keyed by op name. Value is a dict of type_param -> extra allowed type strings:
 #   "*" applies to all type params, named keys (e.g. "T4") target one param.
 special_type_constraints = {
+    "ArgMax": {
+        "*": ["tensor(uint16)", "tensor(uint32)"],
+    },
+    "ArgMin": {
+        "*": ["tensor(uint16)", "tensor(uint32)"],
+    },
     "QLinearConv": {
         "*": ["tensor(uint16)"],
         "T4": ["tensor(int16)", "tensor(int8)"],
