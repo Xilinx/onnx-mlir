@@ -252,8 +252,10 @@ public:
 
     // Compute integer indices.
     SmallVector<int64_t, 4> indicesI64;
-    for (auto element : indicesAttr.getValues<IntegerAttr>()) {
-      int64_t index = element.getInt();
+    // Iterate the raw APInt values instead of materializing (and uniquing)
+    // an IntegerAttr per element to reduce processing time.
+    for (const APInt &element : indicesAttr.getValues<APInt>()) {
+      int64_t index = element.getSExtValue();
       index = (index < 0) ? (index + inputType.getShape()[axis]) : index;
       indicesI64.emplace_back(index);
     }

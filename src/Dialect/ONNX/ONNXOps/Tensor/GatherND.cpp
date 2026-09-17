@@ -153,12 +153,14 @@ LogicalResult ONNXGatherNDOp::verify() {
                         // elided attributes
     }
     int flatIndex = 0;
-    for (IntegerAttr value : valueAttribute.getValues<IntegerAttr>()) {
+    // Iterate the raw APInt values instead of materializing (and uniquing)
+    // an IntegerAttr per element to reduce processing time.
+    for (const APInt &value : valueAttribute.getValues<APInt>()) {
       int64_t gatherAxis = b + (flatIndex % indicesLastDim);
       int64_t dataDimAtAxis = dataShape[gatherAxis];
       if (dataDimAtAxis >= 0) {
         if (indicesAreUnsigned) {
-          uint64_t indexValue = value.getValue().getZExtValue();
+          uint64_t indexValue = value.getZExtValue();
           if (indexValue >= (uint64_t)dataDimAtAxis)
             return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
                 *this->getOperation(),
@@ -166,7 +168,7 @@ LogicalResult ONNXGatherNDOp::verify() {
                 (int64_t)indexValue,
                 onnx_mlir::Diagnostic::Range<int64_t>(0, dataDimAtAxis - 1));
         } else {
-          int64_t indexValue = value.getInt();
+          int64_t indexValue = value.getSExtValue();
           if (indexValue < -dataDimAtAxis || indexValue > dataDimAtAxis - 1)
             return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
                 *this->getOperation(),

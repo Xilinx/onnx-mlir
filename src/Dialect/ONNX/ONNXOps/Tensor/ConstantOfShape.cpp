@@ -74,16 +74,18 @@ LogicalResult ONNXConstantOfShapeOp::verify() {
       return success(); // Return success to allow the parsing of MLIR with
                         // elided attributes
     }
-    // Get repeat values from valueAttribute.
-    auto valueIt = valueAttribute.getValues<IntegerAttr>().begin();
+    // Get repeat values from valueAttribute. Iterate the raw APInt values
+    // instead of materializing (and uniquing) an IntegerAttr per element.
+    auto valueRange = valueAttribute.getValues<APInt>();
+    auto valueIt = valueRange.begin();
     for (int i = 0; i < inputShape[0]; ++i) {
-      auto dim = mlir::cast<IntegerAttr>((*valueIt++)).getInt();
+      int64_t dim = (*valueIt++).getSExtValue();
       if (dim < 0)
         return emitOpError("All values of the input tensor must be >=0");
     }
     // Unreachable error: Type error will trigger before this occurs
     // No test needed for this error -----
-    if (valueIt != valueAttribute.getValues<IntegerAttr>().end())
+    if (valueIt != valueRange.end())
       return emitOpError(
           "Constant value must have same length as output's rank");
   }
