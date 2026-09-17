@@ -149,8 +149,10 @@ LogicalResult ONNXGatherNDOp::verify() {
                         // elided attributes
     }
     int flatIndex = 0;
-    for (IntegerAttr value : valueAttribute.getValues<IntegerAttr>()) {
-      int64_t indexValue = value.getInt();
+    // Iterate the raw APInt values instead of materializing (and uniquing)
+    // an IntegerAttr per element to reduce processing time.
+    for (const APInt &value : valueAttribute.getValues<APInt>()) {
+      int64_t indexValue = value.getSExtValue();
       int64_t gatherAxis = b + (flatIndex % indicesLastDim);
       int64_t dataDimAtAxis = dataShape[gatherAxis];
       if (dataDimAtAxis >= 0) {

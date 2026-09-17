@@ -82,8 +82,10 @@ LogicalResult ONNXSplitToSequenceOp::verify() {
         return emitOpError() << ": split scalar " << scalar << " <= 0";
     } else {
       int64_t sum = 0;
-      for (auto entry : entries.getValues<IntegerAttr>()) {
-        int64_t i = entry.getInt();
+      // Iterate the raw APInt values instead of materializing (and uniquing)
+      // an IntegerAttr per element to reduce processing time.
+      for (const APInt &entry : entries.getValues<APInt>()) {
+        int64_t i = entry.getSExtValue();
         if (i < 0)
           return emitOpError() << ": split tensor has entry " << i << " < 0";
         sum += i;
@@ -152,15 +154,17 @@ LogicalResult ONNXSplitToSequenceOp::inferShapes(
             dims[axisIndex] = scalar;
         }
       } else {
-        auto values = entries.getValues<IntegerAttr>();
+        // Iterate the raw APInt values instead of materializing (and uniquing)
+        // an IntegerAttr per element to reduce processing time.
+        auto values = entries.getValues<APInt>();
         length = values.size();
         if (length > 0) {
           // in the (unlikely?) case that all entries are the same, we infer
           // that's the dimension size for axis
-          int64_t first = values[0].getInt();
+          int64_t first = (*values.begin()).getSExtValue();
           assert(first >= 0 && "invalid split tensor entry");
-          if (llvm::all_of(values, [first](IntegerAttr value) {
-                return value.getInt() == first;
+          if (llvm::all_of(values, [first](const APInt &value) {
+                return value.getSExtValue() == first;
               }))
             dims[axisIndex] = first;
         }

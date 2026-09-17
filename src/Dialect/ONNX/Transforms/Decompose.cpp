@@ -4509,9 +4509,10 @@ struct SplitToSlicePattern : public OpRewritePattern<ONNXSplitOp> {
     // Determine split sizes
     SmallVector<int64_t, 4> splitSizes;
     if (auto splitAttr = onnx_mlir::getElementAttributeFromONNXValue(split)) {
-      // Split sizes are specified as a constant
-      for (IntegerAttr value : splitAttr.getValues<IntegerAttr>()) {
-        int64_t splitSize = mlir::cast<IntegerAttr>(value).getInt();
+      // Split sizes are specified as a constant. Iterate the raw APInt values
+      // instead of materializing (and uniquing) an IntegerAttr per element.
+      for (const APInt &value : splitAttr.getValues<APInt>()) {
+        int64_t splitSize = value.getSExtValue();
         splitSizes.push_back(splitSize);
       }
     } else if (mlir::isa<NoneType>(split.getType())) {

@@ -88,8 +88,11 @@ std::optional<T> getScalarTensorValue(ONNXConstantOp constOp) {
     }
   } else if (auto intType = mlir::dyn_cast<IntegerType>(elementType)) {
     if constexpr (std::is_integral_v<T>) {
-      for (auto a : elementsAttr.getValues<IntegerAttr>())
-        flattenedInt.insert(intType.isUnsigned() ? a.getUInt() : a.getInt());
+      // Iterate the raw APInt values instead of materializing (and uniquing)
+      // an IntegerAttr per element to reduce processing time.
+      for (const APInt &a : elementsAttr.getValues<APInt>())
+        flattenedInt.insert(
+            intType.isUnsigned() ? a.getZExtValue() : a.getSExtValue());
       if (flattenedInt.size() == 1)
         return static_cast<T>(*flattenedInt.begin());
     }
