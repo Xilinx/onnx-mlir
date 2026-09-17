@@ -81,9 +81,11 @@ LogicalResult ONNXGatherElementsOp::verify() {
         return success(); // Return success to allow the parsing of MLIR with
                           // elided attributes
       }
-      for (IntegerAttr value : valueAttribute.getValues<IntegerAttr>()) {
+      // Iterate the raw APInt values instead of materializing (and uniquing)
+      // an IntegerAttr per element to reduce processing time.
+      for (const APInt &value : valueAttribute.getValues<APInt>()) {
         if (indicesAreUnsigned) {
-          uint64_t index = value.getValue().getZExtValue();
+          uint64_t index = value.getZExtValue();
           if (index < (uint64_t)dataDimAtAxis)
             continue;
 
@@ -91,7 +93,7 @@ LogicalResult ONNXGatherElementsOp::verify() {
               *this->getOperation(), "indices", (int64_t)index,
               onnx_mlir::Diagnostic::Range<int64_t>(0, dataDimAtAxis - 1));
         }
-        int64_t index = value.getValue().getSExtValue();
+        int64_t index = value.getSExtValue();
         if (index >= -dataDimAtAxis && index < dataDimAtAxis)
           continue;
 
