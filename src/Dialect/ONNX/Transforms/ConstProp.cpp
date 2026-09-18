@@ -2079,9 +2079,10 @@ static bool onlyFeedsConstantIsland(Value value, bool sawCompute = false) {
 }
 
 // Fold DequantizeLinear on constants to `(x - x_zero_point) * x_scale`, the
-// inverse of ConstFoldQuantizeLinearOnConst, gated by enable-dequant-const-fold.
-// Per-tensor and per-axis are handled; blocked quantization is out of scope.
-// Confined to constant islands so quantized weights are not dequantized.
+// inverse of ConstFoldQuantizeLinearOnConst, gated by
+// enable-dequant-const-fold. Per-tensor and per-axis are handled; blocked
+// quantization is out of scope. Confined to constant islands so quantized
+// weights are not dequantized.
 class ConstFoldDequantizeLinearOnConst
     : public OpRewritePattern<ONNXDequantizeLinearOp> {
 public:
