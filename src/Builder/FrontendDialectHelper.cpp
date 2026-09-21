@@ -170,11 +170,6 @@ ElementsAttr createElmAttrFromArray(RankedTensorType tensorType,
     const Range &array, const Transformation &transformation) {
   MLIRContext *ctx = tensorType.getContext();
   assert(tensorType.getElementType() == toMlirType<T>(ctx));
-  // Hoist the element count out of the loop condition: cast<ShapedType> is an
-  // interface cast (an interface lookup) and getNumElements() re-multiplies the
-  // shape dims, so re-evaluating it per element dominates the cost of importing
-  // large initializers that take this eager path (notably packed int4/uint4,
-  // which cannot use the zero-copy fromMemoryBuffer path).
   const int64_t numElements = cast<ShapedType>(tensorType).getNumElements();
   return OnnxElementsAttrBuilder(ctx).fromArray<T>(tensorType,
       [array, &transformation, numElements](MutableArrayRef<T> copy) {
