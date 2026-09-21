@@ -170,10 +170,10 @@ ElementsAttr createElmAttrFromArray(RankedTensorType tensorType,
     const Range &array, const Transformation &transformation) {
   MLIRContext *ctx = tensorType.getContext();
   assert(tensorType.getElementType() == toMlirType<T>(ctx));
+  const int64_t numElements = cast<ShapedType>(tensorType).getNumElements();
   return OnnxElementsAttrBuilder(ctx).fromArray<T>(tensorType,
-      [array, &transformation, tensorType](MutableArrayRef<T> copy) {
-        for (int64_t idx = 0;
-            idx < cast<ShapedType>(tensorType).getNumElements(); ++idx)
+      [array, &transformation, numElements](MutableArrayRef<T> copy) {
+        for (int64_t idx = 0; idx < numElements; ++idx)
           transformation(array, copy, idx);
       });
 }
