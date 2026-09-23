@@ -16,6 +16,9 @@
 // In particular the --O flag value is passed as a function argument optLevel
 // so we can avoid reading the OptimizationLevel command-line option here.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "RegisterPasses.hpp"
@@ -423,6 +426,10 @@ void registerOMPasses(int optLevel) {
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createConvertONNXToTOSAPass();
+  });
+
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createConvertONNXResizeToLinalgPass();
   });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
