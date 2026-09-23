@@ -303,6 +303,9 @@ std::unique_ptr<mlir::Pass> createOptimizeSiblingConcatPass();
 /// Pass for removing paired reshapes across small qlinear chains.
 std::unique_ptr<mlir::Pass> createRemovePairsAndMoveDownReshapePass();
 
+/// Pass for dropping consecutive reshape-like ops that cancel out.
+std::unique_ptr<mlir::Pass> createFuseReshapePairsPass();
+
 /// Pass for merging BatchNormalization parameters into Conv.
 std::unique_ptr<mlir::Pass> createMergeBatchnormToConvPass();
 

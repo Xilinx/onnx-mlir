@@ -113,5 +113,21 @@ module {
   // CHECK: %[[TRANSPOSE:.*]] = "onnx.Transpose"(%[[RESHAPE1]]) {perm = [0, 2, 1, 3]} : (tensor<6x4x3x5x!quant.uniform<i8:f32, 2.500000e-01:5>>) -> tensor<6x3x4x5x!quant.uniform<i8:f32, 2.500000e-01:5>>
   // CHECK: %[[RESHAPE2:.*]] = "onnx.Reshape"(%[[TRANSPOSE]], %[[OUT_SHAPE]]) {{.*}} : (tensor<6x3x4x5x!quant.uniform<i8:f32, 2.500000e-01:5>>, tensor<6xi64>) -> tensor<1x2x3x3x4x5x!quant.uniform<i8:f32, 2.500000e-01:5>>
   // CHECK: return %[[RESHAPE2]]
+
+  // Test 10: identity dims merged in the middle, with a smaller perm value after
+  // them. Input: [1,5,1,3,7], Order: [3,1,2,0,4]
+  // Dims 1,2 are consecutive identity -> merge: [1,5,3,7]
+  // New order: [2,1,0,3]
+  func.func @test_transpose_5d_identity_merge_middle(%arg0: tensor<1x5x1x3x7xf32>) -> tensor<3x5x1x1x7xf32> {
+    %0 = "onnx.Transpose"(%arg0) {perm = [3, 1, 2, 0, 4]} : (tensor<1x5x1x3x7xf32>) -> tensor<3x5x1x1x7xf32>
+    return %0 : tensor<3x5x1x1x7xf32>
+  }
+  // CHECK-LABEL: func.func @test_transpose_5d_identity_merge_middle
+  // CHECK-DAG: %[[OUT_SHAPE:.*]] = onnx.Constant dense<[3, 5, 1, 1, 7]> : tensor<5xi64>
+  // CHECK-DAG: %[[IN_SHAPE:.*]] = onnx.Constant dense<[1, 5, 3, 7]> : tensor<4xi64>
+  // CHECK: %[[RESHAPE1:.*]] = "onnx.Reshape"(%arg0, %[[IN_SHAPE]]) {{.*}} : (tensor<1x5x1x3x7xf32>, tensor<4xi64>) -> tensor<1x5x3x7xf32>
+  // CHECK: %[[TRANSPOSE:.*]] = "onnx.Transpose"(%[[RESHAPE1]]) {perm = [2, 1, 0, 3]} : (tensor<1x5x3x7xf32>) -> tensor<3x5x1x7xf32>
+  // CHECK: %[[RESHAPE2:.*]] = "onnx.Reshape"(%[[TRANSPOSE]], %[[OUT_SHAPE]]) {{.*}} : (tensor<3x5x1x7xf32>, tensor<5xi64>) -> tensor<3x5x1x1x7xf32>
+  // CHECK: return %[[RESHAPE2]]
 }
 
