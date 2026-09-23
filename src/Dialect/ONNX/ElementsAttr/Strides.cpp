@@ -13,6 +13,8 @@
 #include "src/Dialect/ONNX/ElementsAttr/StridesRange.hpp"
 #include "src/Support/Arrays.hpp"
 
+#include <algorithm>
+
 using namespace mlir;
 
 namespace onnx_mlir {
@@ -185,6 +187,40 @@ SmallVector<uint64_t, 4> unflattenIndex(
 }
 
 namespace {
+bool restrideByteMatrixTranspose(ArrayRef<int64_t> shape,
+    ArrayRef<int64_t> srcStrides, ArrayRef<char> src,
+    MutableArrayRef<char> dst) {
+  int64_t rows = 0;
+  int64_t columns = 0;
+  for (size_t axis = 0; axis < shape.size(); ++axis) {
+    if (shape[axis] == 1)
+      continue;
+    if (shape[axis] <= 0)
+      return false;
+    if (rows == 0 && srcStrides[axis] == 1)
+      rows = shape[axis];
+    else if (rows != 0 && columns == 0 && srcStrides[axis] == rows)
+      columns = shape[axis];
+    else
+      return false;
+  }
+  if (columns == 0 || src.size() != static_cast<uint64_t>(rows) * columns ||
+      dst.size() != src.size())
+    return false;
+
+  constexpr int64_t tileSize = 32;
+  for (int64_t rowBase = 0; rowBase < rows; rowBase += tileSize) {
+    const int64_t rowEnd = std::min(rowBase + tileSize, rows);
+    for (int64_t columnBase = 0; columnBase < columns; columnBase += tileSize) {
+      const int64_t columnEnd = std::min(columnBase + tileSize, columns);
+      for (int64_t row = rowBase; row < rowEnd; ++row)
+        for (int64_t column = columnBase; column < columnEnd; ++column)
+          dst[row * columns + column] = src[column * rows + row];
+    }
+  }
+  return true;
+}
+
 template <typename T>
 void restrideArrayImpl(unsigned elementBytewidth, ArrayRef<int64_t> shape,
     ArrayRef<int64_t> srcStrides, ArrayRef<char> src,
@@ -201,6 +237,9 @@ void restrideArray(unsigned elementBytewidth, ArrayRef<int64_t> shape,
     ArrayRef<int64_t> srcStrides, ArrayRef<char> src,
     MutableArrayRef<char> dst) {
   auto xpSrcStrides = expandStrides(srcStrides, shape);
+  if (elementBytewidth == 1 &&
+      restrideByteMatrixTranspose(shape, xpSrcStrides, src, dst))
+    return;
   // clang-format off
   switch (elementBytewidth) {
   case 1: return restrideArrayImpl<uint8_t> (1, shape, xpSrcStrides, src, dst);
