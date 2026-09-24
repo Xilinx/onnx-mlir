@@ -75,26 +75,35 @@ std::optional<T> getScalarTensorValue(ONNXConstantOp constOp) {
     return std::nullopt;
   }
 
-  // Case: rank >= 1 → flatten & check all the same
-  std::set<double> flattenedFP;
-  std::set<int64_t> flattenedInt;
-
+  // Case: rank >= 1 → scalar iff every element equals the first. Stop at the
+  // first mismatch instead of collecting all elements into a set (and
+  // materializing a uniqued FloatAttr per float element).
   if (mlir::isa<FloatType>(elementType)) {
     if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
-      for (auto a : elementsAttr.getValues<FloatAttr>())
-        flattenedFP.insert(a.getValueAsDouble());
-      if (flattenedFP.size() == 1)
-        return static_cast<T>(*flattenedFP.begin());
+      auto values = elementsAttr.getValues<APFloat>();
+      auto it = values.begin(), end = values.end();
+      if (it == end)
+        return std::nullopt;
+      const double first = FloatAttr::getValueAsDouble(*it);
+      for (++it; it != end; ++it)
+        if (FloatAttr::getValueAsDouble(*it) != first)
+          return std::nullopt;
+      return static_cast<T>(first);
     }
   } else if (auto intType = mlir::dyn_cast<IntegerType>(elementType)) {
     if constexpr (std::is_integral_v<T>) {
-      // Iterate the raw APInt values instead of materializing (and uniquing)
-      // an IntegerAttr per element to reduce processing time.
-      for (const APInt &a : elementsAttr.getValues<APInt>())
-        flattenedInt.insert(
-            intType.isUnsigned() ? a.getZExtValue() : a.getSExtValue());
-      if (flattenedInt.size() == 1)
-        return static_cast<T>(*flattenedInt.begin());
+      auto toInt = [&](const APInt &a) -> int64_t {
+        return intType.isUnsigned() ? a.getZExtValue() : a.getSExtValue();
+      };
+      auto values = elementsAttr.getValues<APInt>();
+      auto it = values.begin(), end = values.end();
+      if (it == end)
+        return std::nullopt;
+      const int64_t first = toInt(*it);
+      for (++it; it != end; ++it)
+        if (toInt(*it) != first)
+          return std::nullopt;
+      return static_cast<T>(first);
     }
   }
   return std::nullopt;
