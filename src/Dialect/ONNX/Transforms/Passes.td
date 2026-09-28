@@ -113,6 +113,13 @@ def ONNXDecomposePatternOptions {
            "Enable decomposition of HardSwish into "
            "x * HardSigmoid(x) (alpha=1/6, beta=0.5).">,
 
+    Option<"enableGridSample5DDecompose",
+           "enable-gridsample-5d-decompose",
+           "bool", /*default=*/"false",
+           "Enable decomposition of static f32 5-D linear GridSample "
+           "with zeros padding and align_corners=0 into 2-D GridSample "
+           "operations and depth interpolation.">,
+
     Option<"enableSeparatePhasedConvsForConvTranspose",
            "enable-separate-phased-convs-for-convtranspose",
            "bool", /*default=*/"false",
