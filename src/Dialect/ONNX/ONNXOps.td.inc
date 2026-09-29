@@ -502,9 +502,9 @@ def ONNXAttentionOp:ONNX_Op<"Attention",
         |          |          |
         ---MatMul---          |
               |               |
-   at_mask---Add              |
-              |               |
     softcap (if provided)     |
+              |               |
+   at_mask---Add              |
               |               |
            Softmax            |
               |               |
@@ -5721,7 +5721,7 @@ def ONNXPadOp:ONNX_Op<"Pad",
   Given a tensor containing the data to be padded (`data`), a tensor containing the number of start and end pad values for axis (`pads`), (optionally) a `mode`, and (optionally) `constant_value`,
   a padded tensor (`output`) is generated.
   
-  The three supported `modes` are (similar to corresponding modes supported by `numpy.pad`):
+  The four supported `modes` are (similar to corresponding modes supported by `numpy.pad`):
   
   1) `constant`(default) - pads with a given constant value as specified by `constant_value` (which defaults to 0, empty string, or False)
   
@@ -6677,28 +6677,21 @@ def ONNXRangeOp:ONNX_Op<"Range",
   up to `limit` (exclusive).
   
   The number of elements in the output of range is computed as below:
-  
   ```
   number_of_elements = max( ceil( (limit - start) / delta ) , 0 )
   ```
-  
   The pseudocode determining the contents of the output is shown below:
-  
   ```
   for(int i=0; i<number_of_elements; ++i) {
     output[i] =  start + (i * delta);
   }
   ```
-  
-  Example 1
-  
+  Example 1:
   ```
   Inputs: start = 3, limit = 9, delta = 3
   Output: [3, 6]
   ```
-  
-  Example 2
-  
+  Example 2:
   ```
   Inputs: start = 10, limit = 4, delta = -2
   Output: [10, 8, 6]

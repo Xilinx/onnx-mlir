@@ -108,6 +108,7 @@ add_onnx_mlir_library(OMONNXRewrite
   xmc/ReplaceContainedConcatPass.cpp
   xmc/OptimizeSiblingConcatPass.cpp
   xmc/RemovePairsAndMoveDownReshapePass.cpp
+  xmc/FuseReshapePairsPass.cpp
   xmc/MergeBatchnormToConvPass.cpp
   xmc/BatchReductionToReshapeReductionPass.cpp
   xmc/RemoveRedundantReluLikeOpsPass.cpp

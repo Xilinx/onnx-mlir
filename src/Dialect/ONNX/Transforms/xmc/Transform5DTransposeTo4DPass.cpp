@@ -98,26 +98,29 @@ std::pair<SmallVector<int64_t>, SmallVector<int64_t>> computeReducedTranspose(
     order.push_back(cast<IntegerAttr>(attr).getInt());
   }
 
-  SmallVector<int64_t> reshapedOrder;
   SmallVector<int64_t> reshapedInputShape;
-  int64_t reducedDimNum = 0;
+  // Index of each original dimension in the merged shape. Perm values are
+  // dimension indices, so they must be remapped through this rather than
+  // offset by the number of merges seen so far.
+  SmallVector<int64_t> reducedDim(order.size(), 0);
   bool isPreDimOrg = false;
 
   for (size_t i = 0; i < order.size(); ++i) {
-    if (static_cast<int64_t>(i) == order[i]) {
-      if (isPreDimOrg) {
-        reshapedInputShape.back() *= inputShape[i];
-        reducedDimNum++;
-      } else {
-        reshapedInputShape.push_back(inputShape[i]);
-        reshapedOrder.push_back(order[i] - reducedDimNum);
-      }
-      isPreDimOrg = true;
+    bool isDimOrg = static_cast<int64_t>(i) == order[i];
+    if (isDimOrg && isPreDimOrg) {
+      reshapedInputShape.back() *= inputShape[i];
     } else {
       reshapedInputShape.push_back(inputShape[i]);
-      reshapedOrder.push_back(order[i] - reducedDimNum);
-      isPreDimOrg = false;
     }
+    reducedDim[i] = static_cast<int64_t>(reshapedInputShape.size()) - 1;
+    isPreDimOrg = isDimOrg;
+  }
+
+  SmallVector<int64_t> reshapedOrder;
+  for (int64_t dim : order) {
+    int64_t reduced = reducedDim[dim];
+    if (reshapedOrder.empty() || reshapedOrder.back() != reduced)
+      reshapedOrder.push_back(reduced);
   }
 
   return {reshapedOrder, reshapedInputShape};
