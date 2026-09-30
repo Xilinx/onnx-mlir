@@ -1039,6 +1039,29 @@ static Value matchOptionalPrecedingAdd(
 // If neither (A) nor (B) holds -- e.g. a bare Relu in a pure-float graph
 // with no quantization info at all -- the match is rejected, since safety
 // cannot be proven either algebraically or via quantization saturation.
+//
+// Path A (explicit Min, unconditionally safe):
+//
+//   x --> [Add b'] --> Relu --> Min(c) --> Mul(a') --> y
+//          (optional)
+//
+//                       rewrites to
+//
+//   x --> HardSigmoid(alpha = a', beta = b' * a') --> y
+//
+//   provided c ~= 1/a' (Min's bound must be consistent with Mul's scale).
+//
+// Path B (bare Relu, safe only via quantization-saturation proof):
+//
+//   x --> [Add b'] --> Relu --> QuantizeLinear --> DequantizeLinear --> Mul(a')
+//   --> y
+//          (optional)
+//
+//                       rewrites to
+//
+//   x --> HardSigmoid(alpha = a', beta = b' * a') --> y
+//
+//   provided representable_max = (typeMax - zeroPoint) * scale <= 1/a'.
 struct RecomposeHardSigmoidFromReluPattern
     : public OpRewritePattern<ONNXReluOp> {
   using OpRewritePattern<ONNXReluOp>::OpRewritePattern;
@@ -1120,6 +1143,8 @@ struct RecomposeHardSigmoidFromReluPattern
       if (!mulOp)
         return rewriter.notifyMatchFailure(
             minOp, "Min output is not consumed by an ONNXMulOp");
+      if (!mulOp->hasOneUse())
+        return rewriter.notifyMatchFailure(mulOp, "Mul has more than one use");
 
       double alphaPrime;
       if (afterMin == mulOp.getOperand(0)) {
@@ -1131,7 +1156,8 @@ struct RecomposeHardSigmoidFromReluPattern
           return rewriter.notifyMatchFailure(
               mulOp, "Mul's alpha' operand is not a scalar constant");
       } else {
-        return failure();
+        return rewriter.notifyMatchFailure(
+            mulOp, "Mul does not consume Min's result on either operand");
       }
 
       // Relu(x) already covers the lower side (max(x,0)); Min(., c) must
@@ -1151,6 +1177,8 @@ struct RecomposeHardSigmoidFromReluPattern
     if (!mulOp)
       return rewriter.notifyMatchFailure(
           reluOp, "Relu output is not consumed by an ONNXMinOp or ONNXMulOp");
+    if (!mulOp->hasOneUse())
+      return rewriter.notifyMatchFailure(mulOp, "Mul has more than one use");
 
     double alphaPrime;
     if (afterRelu == mulOp.getOperand(0)) {
@@ -1162,7 +1190,8 @@ struct RecomposeHardSigmoidFromReluPattern
         return rewriter.notifyMatchFailure(
             mulOp, "Mul's alpha' operand is not a scalar constant");
     } else {
-      return failure();
+      return rewriter.notifyMatchFailure(
+          mulOp, "Mul does not consume Relu's result on either operand");
     }
     if (alphaPrime <= 0.0)
       return rewriter.notifyMatchFailure(
@@ -1197,6 +1226,16 @@ struct RecomposeHardSigmoidFromReluPattern
 // and the leading Add is optional for the same reason as in
 // RecomposeHardSigmoidFromReluPattern (often folded into a preceding op's
 // bias).
+//
+//   x --> [Add b'] --> Clip(0, c) --> Mul(a') --> y
+//          (optional)
+//
+//                       rewrites to
+//
+//   x --> HardSigmoid(alpha = a', beta = b' * a') --> y
+//
+// provided c ~= 1/a' (Clip's upper bound must be consistent with Mul's
+// scale for the two forms to be algebraically equal).
 struct RecomposeHardSigmoidFromClipMulPattern
     : public OpRewritePattern<ONNXClipOp> {
   using OpRewritePattern<ONNXClipOp>::OpRewritePattern;
@@ -1228,6 +1267,8 @@ struct RecomposeHardSigmoidFromClipMulPattern
     if (!mulOp)
       return rewriter.notifyMatchFailure(
           clipOp, "Clip output is not consumed by an ONNXMulOp");
+    if (!mulOp->hasOneUse())
+      return rewriter.notifyMatchFailure(mulOp, "Mul has more than one use");
 
     double alphaPrime;
     if (afterClip == mulOp.getOperand(0)) {
@@ -1239,7 +1280,8 @@ struct RecomposeHardSigmoidFromClipMulPattern
         return rewriter.notifyMatchFailure(
             mulOp, "Mul's alpha' operand is not a scalar constant");
     } else {
-      return failure();
+      return rewriter.notifyMatchFailure(
+          mulOp, "Mul does not consume Clip's result on either operand");
     }
     if (alphaPrime <= 0.0 || std::fabs(clipMax - 1.0 / alphaPrime) > 1e-2)
       return rewriter.notifyMatchFailure(
