@@ -981,6 +981,194 @@ func.func @test_hardsigmoid_clip_mul_add_default_alpha_beta(%arg0 : tensor<?x?x3
 
 // -----
 
+// ============================================================================
+// RecomposeHardSigmoidFromReluPattern / RecomposeHardSigmoidFromClipMulPattern
+//
+// TF/Keras Relu6-style decompositions of HardSigmoid: [optional Add(x, ~b')]
+// -> [Relu | Clip(0, ~c)] -> [optional Min(., ~c)] -> Mul(., ~a'), which is
+// algebraically equivalent to canonical HardSigmoid with alpha=a',
+// beta=b'*a' (pulling the scale out of the clip: clip(a*z+b,0,1) ==
+// a*clip(z+b/a,0,1/a) for a>0).
+// ============================================================================
+
+// Add(x, 3) -> Relu -> Min(., 6) -> Mul(., 1/6): Relu+Min together are
+// exactly Clip(0, 6), so this is unconditionally safe (Constraint A).
+// CHECK-LABEL: @test_hardsigmoid_relu_min_pass
+func.func @test_hardsigmoid_relu_min_pass(%arg0 : tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+  %b = onnx.Constant dense<3.000000e+00> : tensor<f32>
+  %c = onnx.Constant dense<6.000000e+00> : tensor<f32>
+  %a = onnx.Constant dense<0.166666672> : tensor<f32>
+  %0 = "onnx.Add"(%arg0, %b) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  %1 = "onnx.Relu"(%0) : (tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32>
+  %2 = "onnx.Min"(%1, %c) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  %3 = "onnx.Mul"(%2, %a) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  return %3 : tensor<?x?x3072xf32>
+
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+// CHECK:           [[VAR_0_:%.+]] = "onnx.HardSigmoid"([[PARAM_0_]]) {alpha = 0.166666672 : f32, beta = 5.000000e-01 : f32} : (tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32>
+// CHECK:           return [[VAR_0_]] : tensor<?x?x3072xf32>
+// CHECK:         }
+}
+
+// -----
+
+// Relu -> Min(., 4) -> Mul(., 0.25), with no leading Add at all: the "+beta"
+// term is not present as its own node (e.g. folded into a preceding op's
+// bias upstream), so beta defaults to 0. Also proves alpha/beta are derived
+// generically rather than restricted to the canonical 1/6, 0.5 pair.
+// CHECK-LABEL: @test_hardsigmoid_relu_min_no_add_pass
+func.func @test_hardsigmoid_relu_min_no_add_pass(%arg0 : tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+  %c = onnx.Constant dense<4.000000e+00> : tensor<f32>
+  %a = onnx.Constant dense<2.500000e-01> : tensor<f32>
+  %0 = "onnx.Relu"(%arg0) : (tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32>
+  %1 = "onnx.Min"(%0, %c) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  %2 = "onnx.Mul"(%1, %a) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  return %2 : tensor<?x?x3072xf32>
+
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+// CHECK:           [[VAR_0_:%.+]] = "onnx.HardSigmoid"([[PARAM_0_]]) {alpha = 2.500000e-01 : f32, beta = 0.000000e+00 : f32} : (tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32>
+// CHECK:           return [[VAR_0_]] : tensor<?x?x3072xf32>
+// CHECK:         }
+}
+
+// -----
+
+// Add(x, 3) -> Relu -> QuantizeLinear -> DequantizeLinear -> Mul(., 1/6), no
+// explicit Min. The quantizer's own saturation (scale chosen so
+// representable_max == 127*6/127 == 6) already enforces the missing upper
+// clamp, so the bare Relu is provably safe (Constraint B) even though it
+// only implements a one-sided clamp on its own.
+// CHECK-LABEL: @test_hardsigmoid_relu_quant_safe_pass
+func.func @test_hardsigmoid_relu_quant_safe_pass(%arg0 : tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+  %b = onnx.Constant dense<3.000000e+00> : tensor<f32>
+  %a = onnx.Constant dense<0.166666672> : tensor<f32>
+  %scale = onnx.Constant dense<0.0472440943> : tensor<f32>
+  %zp = onnx.Constant dense<0> : tensor<i8>
+  %0 = "onnx.Add"(%arg0, %b) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  %1 = "onnx.Relu"(%0) : (tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32>
+  %2 = "onnx.QuantizeLinear"(%1, %scale, %zp) : (tensor<?x?x3072xf32>, tensor<f32>, tensor<i8>) -> tensor<?x?x3072xi8>
+  %3 = "onnx.DequantizeLinear"(%2, %scale, %zp) : (tensor<?x?x3072xi8>, tensor<f32>, tensor<i8>) -> tensor<?x?x3072xf32>
+  %4 = "onnx.Mul"(%3, %a) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  return %4 : tensor<?x?x3072xf32>
+
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+// CHECK:           [[VAR_0_:%.+]] = "onnx.HardSigmoid"([[PARAM_0_]]) {alpha = 0.166666672 : f32, beta = 5.000000e-01 : f32} : (tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32>
+// CHECK:           return [[VAR_0_]] : tensor<?x?x3072xf32>
+// CHECK:         }
+}
+
+// -----
+
+// Same shape as test_hardsigmoid_relu_quant_safe_pass, but the quantization
+// scale is too loose: representable_max (127*0.06 ~= 7.62) exceeds the
+// algebraic bound 1/alpha' (6), so the quantizer's saturation does not
+// prove the missing upper clamp is dead code. Must be rejected.
+func.func @test_hardsigmoid_relu_quant_unsafe_reject(%arg0 : tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+  %b = onnx.Constant dense<3.000000e+00> : tensor<f32>
+  %a = onnx.Constant dense<0.166666672> : tensor<f32>
+  %scale = onnx.Constant dense<6.000000e-02> : tensor<f32>
+  %zp = onnx.Constant dense<0> : tensor<i8>
+  %0 = "onnx.Add"(%arg0, %b) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  %1 = "onnx.Relu"(%0) : (tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32>
+  %2 = "onnx.QuantizeLinear"(%1, %scale, %zp) : (tensor<?x?x3072xf32>, tensor<f32>, tensor<i8>) -> tensor<?x?x3072xi8>
+  %3 = "onnx.DequantizeLinear"(%2, %scale, %zp) : (tensor<?x?x3072xi8>, tensor<f32>, tensor<i8>) -> tensor<?x?x3072xf32>
+  %4 = "onnx.Mul"(%3, %a) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  return %4 : tensor<?x?x3072xf32>
+
+// CHECK-LABEL:  func.func @test_hardsigmoid_relu_quant_unsafe_reject
+// CHECK-NOT:       "onnx.HardSigmoid"
+// CHECK:           "onnx.Relu"
+// CHECK:           "onnx.QuantizeLinear"
+// CHECK:           "onnx.DequantizeLinear"
+// CHECK:           "onnx.Mul"
+}
+
+// -----
+
+// Bare Relu(x) -> Mul(., 1/6), pure float graph: no explicit Min and no
+// adjoining Quantize/Dequantize pair, so neither Constraint A nor B can
+// prove the missing upper clamp is safe. Must be rejected.
+func.func @test_hardsigmoid_relu_no_proof_reject(%arg0 : tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+  %a = onnx.Constant dense<0.166666672> : tensor<f32>
+  %0 = "onnx.Relu"(%arg0) : (tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32>
+  %1 = "onnx.Mul"(%0, %a) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  return %1 : tensor<?x?x3072xf32>
+
+// CHECK-LABEL:  func.func @test_hardsigmoid_relu_no_proof_reject
+// CHECK-NOT:       "onnx.HardSigmoid"
+// CHECK:           "onnx.Relu"
+// CHECK:           "onnx.Mul"
+}
+
+// -----
+
+// Add(x, 3) -> Clip(0, 6) -> Mul(., 1/6): TF-style reordering of the
+// canonical explicit-Clip HardSigmoid, where the scale is applied *after*
+// the clip rather than before it. Clip's own bounds already supply the
+// two-sided clamp, so no quantization safety proof is needed here.
+// CHECK-LABEL: @test_hardsigmoid_clip_mul_tf_style_pass
+func.func @test_hardsigmoid_clip_mul_tf_style_pass(%arg0 : tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+  %b = onnx.Constant dense<3.000000e+00> : tensor<f32>
+  %zero = onnx.Constant dense<0.000000e+00> : tensor<f32>
+  %c = onnx.Constant dense<6.000000e+00> : tensor<f32>
+  %a = onnx.Constant dense<0.166666672> : tensor<f32>
+  %0 = "onnx.Add"(%arg0, %b) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  %1 = "onnx.Clip"(%0, %zero, %c) : (tensor<?x?x3072xf32>, tensor<f32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  %2 = "onnx.Mul"(%1, %a) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  return %2 : tensor<?x?x3072xf32>
+
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+// CHECK:           [[VAR_0_:%.+]] = "onnx.HardSigmoid"([[PARAM_0_]]) {alpha = 0.166666672 : f32, beta = 5.000000e-01 : f32} : (tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32>
+// CHECK:           return [[VAR_0_]] : tensor<?x?x3072xf32>
+// CHECK:         }
+}
+
+// -----
+
+// Clip(0, 4) -> Mul(., 0.25), with no leading Add: same "+beta absorbed
+// upstream" case as test_hardsigmoid_relu_min_no_add_pass, but through the
+// Clip-anchored (RecomposeHardSigmoidFromClipMulPattern) path instead of
+// the Relu-anchored one.
+// CHECK-LABEL: @test_hardsigmoid_clip_mul_tf_style_no_add_pass
+func.func @test_hardsigmoid_clip_mul_tf_style_no_add_pass(%arg0 : tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+  %zero = onnx.Constant dense<0.000000e+00> : tensor<f32>
+  %c = onnx.Constant dense<4.000000e+00> : tensor<f32>
+  %a = onnx.Constant dense<2.500000e-01> : tensor<f32>
+  %0 = "onnx.Clip"(%arg0, %zero, %c) : (tensor<?x?x3072xf32>, tensor<f32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  %1 = "onnx.Mul"(%0, %a) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  return %1 : tensor<?x?x3072xf32>
+
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+// CHECK:           [[VAR_0_:%.+]] = "onnx.HardSigmoid"([[PARAM_0_]]) {alpha = 2.500000e-01 : f32, beta = 0.000000e+00 : f32} : (tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32>
+// CHECK:           return [[VAR_0_]] : tensor<?x?x3072xf32>
+// CHECK:         }
+}
+
+// -----
+
+// Add(x, 3) -> Clip(0, 5) -> Mul(., 1/6): Clip's upper bound (5) is not
+// ~1/alpha' (6) as required for Clip(0,c) to equal clip(a'*z, 0, 1) once the
+// scale is pulled back out, so this must be rejected rather than silently
+// recomposed into an incorrect HardSigmoid.
+func.func @test_hardsigmoid_clip_mul_tf_style_bound_mismatch_reject(%arg0 : tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
+  %b = onnx.Constant dense<3.000000e+00> : tensor<f32>
+  %zero = onnx.Constant dense<0.000000e+00> : tensor<f32>
+  %c = onnx.Constant dense<5.000000e+00> : tensor<f32>
+  %a = onnx.Constant dense<0.166666672> : tensor<f32>
+  %0 = "onnx.Add"(%arg0, %b) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  %1 = "onnx.Clip"(%0, %zero, %c) : (tensor<?x?x3072xf32>, tensor<f32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  %2 = "onnx.Mul"(%1, %a) : (tensor<?x?x3072xf32>, tensor<f32>) -> tensor<?x?x3072xf32>
+  return %2 : tensor<?x?x3072xf32>
+
+// CHECK-LABEL:  func.func @test_hardsigmoid_clip_mul_tf_style_bound_mismatch_reject
+// CHECK-NOT:       "onnx.HardSigmoid"
+// CHECK:           "onnx.Add"
+// CHECK:           "onnx.Clip"
+// CHECK:           "onnx.Mul"
+}
+
+// -----
+
 // HardSwish(x) = x * HardSigmoid(x) with alpha=1/6, beta=0.5
 func.func @test_hardswish_from_mul_hardsigmoid(%arg0 : tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32> {
   %0 = "onnx.HardSigmoid"(%arg0) {alpha = 0.166666672 : f32, beta = 5.000000e-01 : f32} : (tensor<?x?x3072xf32>) -> tensor<?x?x3072xf32>
