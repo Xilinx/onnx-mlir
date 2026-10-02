@@ -2607,6 +2607,298 @@ struct DecomposeHardSwishPattern : public OpRewritePattern<ONNXHardSwishOp> {
   }
 };
 
+struct DecomposeGridSample5DPattern
+    : public OpRewritePattern<ONNXGridSampleOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXGridSampleOp gridSampleOp, PatternRewriter &rewriter) const final {
+    auto inputType =
+        mlir::dyn_cast<RankedTensorType>(gridSampleOp.getX().getType());
+    auto gridType =
+        mlir::dyn_cast<RankedTensorType>(gridSampleOp.getGrid().getType());
+    auto outputType =
+        mlir::dyn_cast<RankedTensorType>(gridSampleOp.getY().getType());
+
+    // Only look for the 3-D linear case.
+    if (!inputType || !gridType || !outputType || inputType.getRank() != 5 ||
+        gridType.getRank() != 5 || outputType.getRank() != 5 ||
+        !inputType.hasStaticShape() || !gridType.hasStaticShape() ||
+        !outputType.hasStaticShape())
+      return failure();
+
+    if (gridSampleOp.getMode() != "linear" ||
+        gridSampleOp.getPaddingMode() != "zeros" ||
+        gridSampleOp.getAlignCorners() != 0)
+      return failure();
+
+    if (!inputType.getElementType().isF32() ||
+        !gridType.getElementType().isF32() ||
+        !outputType.getElementType().isF32())
+      return failure();
+
+    ArrayRef<int64_t> inputShape = inputType.getShape();
+    ArrayRef<int64_t> gridShape = gridType.getShape();
+
+    int64_t N = inputShape[0];
+    int64_t C = inputShape[1];
+    int64_t D = inputShape[2];
+    int64_t H = inputShape[3];
+    int64_t W = inputShape[4];
+    int64_t DOut = gridShape[1];
+    int64_t HOut = gridShape[2];
+    int64_t WOut = gridShape[3];
+
+    SmallVector<int64_t> expectedOutputShape{N, C, DOut, HOut, WOut};
+
+    if (gridShape[0] != N || gridShape[4] != 3 || D <= 0 || DOut <= 0 ||
+        outputType.getShape() != ArrayRef<int64_t>(expectedOutputShape))
+      return failure();
+
+    Location loc = gridSampleOp.getLoc();
+    Value input = gridSampleOp.getX();
+    Value grid = gridSampleOp.getGrid();
+
+    onnx_mlir::MultiDialectBuilder<onnx_mlir::OnnxBuilder> create(
+        rewriter, loc);
+
+    // For output pixel P=(hOut,wOut) in output-depth slice O0,
+    // grid[n,O0,P] = [xP,yP,gridZP].
+    // Slice extracts [xP,yP] for every pixel P. Each pixel's own XY coordinate
+    // is applied to every input-depth plane, z0/z1 later select two candidates
+    // we need.
+
+    // gridXY = Slice(grid, starts=[0], ends=[2], axes=[4], steps=[1])
+    //       : [N, D_out, H_out, W_out, 2]
+    SmallVector<int64_t> gridXYShape(gridType.getShape());
+    gridXYShape[4] = 2;
+    auto gridXYType = gridType.clone(gridXYShape);
+
+    auto xyStarts = onnx_mlir::createConstantOp(
+        rewriter, loc, rewriter.getI64ArrayAttr({0}));
+    auto xyEnds = onnx_mlir::createConstantOp(
+        rewriter, loc, rewriter.getI64ArrayAttr({2}));
+    auto coordAxis = onnx_mlir::createConstantOp(
+        rewriter, loc, rewriter.getI64ArrayAttr({4}));
+    auto unitStep = onnx_mlir::createConstantOp(
+        rewriter, loc, rewriter.getI64ArrayAttr({1}));
+    Value gridXY = rewriter.create<ONNXSliceOp>(
+        loc, gridXYType, grid, xyStarts, xyEnds, coordAxis, unitStep);
+
+    // gridZ = Slice(grid, starts=[2], ends=[3], axes=[4], steps=[1])
+    //       : [N, D_out, H_out, W_out, 1]
+    SmallVector<int64_t> gridZShape(gridType.getShape());
+    gridZShape[4] = 1;
+    auto gridZType = gridType.clone(gridZShape);
+
+    auto zStarts = onnx_mlir::createConstantOp(
+        rewriter, loc, rewriter.getI64ArrayAttr({2}));
+    auto zEnds = onnx_mlir::createConstantOp(
+        rewriter, loc, rewriter.getI64ArrayAttr({3}));
+    Value gridZ = rewriter.create<ONNXSliceOp>(
+        loc, gridZType, grid, zStarts, zEnds, coordAxis, unitStep);
+
+    // Convert normalized gridZ to the continuous input-depth coordinate, for
+    // the puropose of later interpolration. z = ((gridZ + 1) * D - 1) / 2
+    Value zero = create.onnx.constantFloat32({0.0f});
+    Value one = create.onnx.constantFloat32({1.0f});
+    Value depth = create.onnx.constantFloat32({static_cast<float>(D)});
+    Value maxDepth = create.onnx.constantFloat32({static_cast<float>(D - 1)});
+    Value two = create.onnx.constantFloat32({2.0f});
+
+    Value gridZPlusOne = rewriter.create<ONNXAddOp>(loc, gridZType, gridZ, one);
+    Value scaledDepth =
+        rewriter.create<ONNXMulOp>(loc, gridZType, gridZPlusOne, depth);
+    Value shiftedDepth =
+        rewriter.create<ONNXSubOp>(loc, gridZType, scaledDepth, one);
+    Value z = rewriter.create<ONNXDivOp>(loc, gridZType, shiftedDepth, two);
+
+    // Get the index of the image below and after Z then calcualte the
+    // fractional weight between them
+    // z0 = floor(z)       // The integer index of the image ABOVE/BEFORE you
+    // z1 = z0 + 1         // The integer index of the image BELOW/AFTER you
+    // alpha = z - z0      // The fractional distance (weight) between them
+    Value z0 = rewriter.create<ONNXFloorOp>(loc, gridZType, z);
+    Value z1 = rewriter.create<ONNXAddOp>(loc, gridZType, z0, one);
+    Value alpha = rewriter.create<ONNXSubOp>(loc, gridZType, z, z0);
+    Value oneMinusAlpha =
+        rewriter.create<ONNXSubOp>(loc, gridZType, one, alpha);
+
+    // The idea is to split the grid into XY and Z, use the same XY coordinate
+    // to sample neighboring H/W images, and use Z to blend those samples:
+    //
+    //   D0  H/W image -- sample0
+    //   D1  H/W image -- sample1 at XY = lower
+    //                                        \         
+    //                                          z = 1.25 (z0 = 1, z1 = 2)
+    //                                        /
+    //   D2  H/W image -- sample2 at XY = upper
+    //   D3  H/W image -- sample3
+    //
+    //   output = lower * 0.75 + upper * 0.25
+    //
+    // Treat the input depth planes as a batched input for 2-D GridSample.
+    // A 2-D GridSample accepts a batch of H/W images.
+    //
+    // flatten D abd N together for the 2-D GridSample
+    // [N, C, D, H, W] -> [N, D, C, H, W] -> [N*D, C, H, W].
+    // [1, C, 3, H, W] -> [1, 3, C, H, W] -> [3, C, H, W]
+    auto transposedInputType =
+        RankedTensorType::get({N, D, C, H, W}, rewriter.getF32Type());
+    Value transposedInput = rewriter.create<ONNXTransposeOp>(loc,
+        transposedInputType, input, rewriter.getI64ArrayAttr({0, 2, 1, 3, 4}));
+    auto batchedInputType =
+        RankedTensorType::get({N * D, C, H, W}, rewriter.getF32Type());
+    Value batchedInput = create.onnx.reshape(batchedInputType, transposedInput,
+        create.onnx.constantInt64({N * D, C, H, W}));
+
+    auto depthSliceType =
+        RankedTensorType::get({N, 1, HOut, WOut, 1}, rewriter.getF32Type());
+    auto xySliceType =
+        RankedTensorType::get({N, 1, HOut, WOut, 2}, rewriter.getF32Type());
+    auto depthMapType =
+        RankedTensorType::get({N, 1, 1, HOut, WOut}, rewriter.getF32Type());
+    auto depthMapBoolType =
+        RankedTensorType::get({N, 1, 1, HOut, WOut}, rewriter.getI1Type());
+    auto depthMapI64Type =
+        RankedTensorType::get({N, 1, 1, HOut, WOut}, rewriter.getI64Type());
+    auto expandedIndexType =
+        RankedTensorType::get({N, C, 1, HOut, WOut}, rewriter.getI64Type());
+    auto expandedValidType =
+        RankedTensorType::get({N, C, 1, HOut, WOut}, rewriter.getI1Type());
+    auto outputSliceType =
+        RankedTensorType::get({N, C, 1, HOut, WOut}, rewriter.getF32Type());
+
+    Value outputDepthAxis = create.onnx.constantInt64({1});
+    Value sliceStep = create.onnx.constantInt64({1});
+    Value depthMapShape = create.onnx.constantInt64({N, 1, 1, HOut, WOut});
+    Value expandedIndexShape = create.onnx.constantInt64({N, C, 1, HOut, WOut});
+    auto gatherAxis =
+        rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), 2);
+
+    SmallVector<Value> outputSlices;
+    outputSlices.reserve(DOut);
+    for (int64_t outputDepth = 0; outputDepth < DOut; ++outputDepth) {
+      Value sliceStart = create.onnx.constantInt64({outputDepth});
+      Value sliceEnd = create.onnx.constantInt64({outputDepth + 1});
+
+      // gridXY contains one H_out x W_out XY map for every output-depth
+      // slice. Select the current map:
+      //   [N, D_out, H_out, W_out, 2]
+      //       -> [N, 1, H_out, W_out, 2].
+      //
+      // The z coordinate may choose any two input-depth planes at each output
+      // pixel. First sample this same XY map from every input plane, then use
+      // z0/z1 to select the two samples that each pixel needs. Expand
+      // pairs the current XY map with D0, D1, ..., D(D-1):
+      //   [N, 1, H_out, W_out, 2]
+      //       -> [N, D, H_out, W_out, 2]
+      //       -> [N*D, H_out, W_out, 2].
+      // GridSample(D0, XY map).
+      Value xySlice = rewriter.create<ONNXSliceOp>(loc, xySliceType, gridXY,
+          sliceStart, sliceEnd, outputDepthAxis, sliceStep);
+      auto expandedGridType =
+          RankedTensorType::get({N, D, HOut, WOut, 2}, rewriter.getF32Type());
+      Value expandedGrid = create.onnx.expand(expandedGridType, xySlice,
+          create.onnx.constantInt64({N, D, HOut, WOut, 2}));
+      auto batchedGridType =
+          RankedTensorType::get({N * D, HOut, WOut, 2}, rewriter.getF32Type());
+      Value batchedGrid = create.onnx.reshape(batchedGridType, expandedGrid,
+          create.onnx.constantInt64({N * D, HOut, WOut, 2}));
+
+      auto sampledType =
+          RankedTensorType::get({N * D, C, HOut, WOut}, rewriter.getF32Type());
+      Value sampled = rewriter.create<ONNXGridSampleOp>(loc, sampledType,
+          batchedInput, batchedGrid, gridSampleOp.getAlignCornersAttr(),
+          gridSampleOp.getModeAttr(), gridSampleOp.getPaddingModeAttr());
+
+      // For output pixel P, this produces all candidates:
+      //   S0[P] = D0 sampled at [xP,yP]
+      //   S1[P] = D1 sampled at [xP,yP], and so on.
+      // de-flattne and put D on axis 2, where GatherElements can
+      // select a different input-depth sample for every output pixel:
+      // [N*D, C, H_out, W_out] -> [N, D, C, H_out, W_out]
+      //     -> [N, C, D, H_out, W_out].
+      auto sampledNDCType =
+          RankedTensorType::get({N, D, C, HOut, WOut}, rewriter.getF32Type());
+      Value sampledNDC = create.onnx.reshape(sampledNDCType, sampled,
+          create.onnx.constantInt64({N, D, C, HOut, WOut}));
+      auto sampledNCDType =
+          RankedTensorType::get({N, C, D, HOut, WOut}, rewriter.getF32Type());
+      Value sampledNCD = rewriter.create<ONNXTransposeOp>(loc, sampledNCDType,
+          sampledNDC, rewriter.getI64ArrayAttr({0, 2, 1, 3, 4}));
+
+      // Gather one neighboring depth sample (z0 or z1).
+      //
+      // Indices begin as [N, 1, H_out, W_out, 1]. Reshape the singleton
+      // dimensions around H_out/W_out, then expand across C so indices have
+      // the same rank as [N, C, D, H_out, W_out]:
+      //   [N, 1, H_out, W_out, 1] -> [N, 1, 1, H_out, W_out]
+      //       -> [N, C, 1, H_out, W_out].
+      auto gatherDepth = [&](Value depthIndices) -> Value {
+        Value depthSlice = rewriter.create<ONNXSliceOp>(loc, depthSliceType,
+            depthIndices, sliceStart, sliceEnd, outputDepthAxis, sliceStep);
+        Value validLow =
+            rewriter.create<ONNXGreaterOrEqualOp>(loc, depthSlice, zero);
+        Value validHigh = rewriter.create<ONNXLessOp>(loc, depthSlice, depth);
+        auto validSliceType =
+            RankedTensorType::get({N, 1, HOut, WOut, 1}, rewriter.getI1Type());
+        Value validSlice = rewriter.create<ONNXAndOp>(
+            loc, validSliceType, validLow, validHigh);
+
+        Value safeDepth = rewriter.create<ONNXClipOp>(
+            loc, depthSliceType, depthSlice, zero, maxDepth);
+        Value safeDepthMap =
+            create.onnx.reshape(depthMapType, safeDepth, depthMapShape);
+        Value safeDepthI64 = rewriter.create<ONNXCastOp>(loc, depthMapI64Type,
+            safeDepthMap, nullptr, TypeAttr::get(rewriter.getI64Type()));
+        Value expandedIndices = create.onnx.expand(
+            expandedIndexType, safeDepthI64, expandedIndexShape);
+        Value gathered = rewriter.create<ONNXGatherElementsOp>(
+            loc, outputSliceType, sampledNCD, expandedIndices, gatherAxis);
+
+        Value validMap =
+            create.onnx.reshape(depthMapBoolType, validSlice, depthMapShape);
+        Value expandedValid =
+            create.onnx.expand(expandedValidType, validMap, expandedIndexShape);
+        return rewriter.create<ONNXWhereOp>(
+            loc, outputSliceType, expandedValid, gathered, zero);
+      };
+
+      Value lower = gatherDepth(z0);
+      Value upper = gatherDepth(z1);
+
+      // z selects from the sampled candidates. For z=1.25, lower is S1[P]
+      // and upper is S2[P].
+
+      // The blend weights need the same singleton placement as the gathered
+      // slices so ONNX broadcasting repeats each weight over C:
+      //   z = 1.25 -> z0 = 1, z1 = 2, alpha = 0.25
+      //   output = sample(D1) * 0.75 + sample(D2) * 0.25.
+      auto sliceWeight = [&](Value weights) -> Value {
+        Value weightSlice = rewriter.create<ONNXSliceOp>(loc, depthSliceType,
+            weights, sliceStart, sliceEnd, outputDepthAxis, sliceStep);
+        return create.onnx.reshape(depthMapType, weightSlice, depthMapShape);
+      };
+      Value lowerWeight = sliceWeight(oneMinusAlpha);
+      Value upperWeight = sliceWeight(alpha);
+      Value weightedLower =
+          rewriter.create<ONNXMulOp>(loc, outputSliceType, lower, lowerWeight);
+      Value weightedUpper =
+          rewriter.create<ONNXMulOp>(loc, outputSliceType, upper, upperWeight);
+      outputSlices.push_back(rewriter.create<ONNXAddOp>(
+          loc, outputSliceType, weightedLower, weightedUpper));
+    }
+
+    Value output = outputSlices.front();
+    if (DOut > 1)
+      output = rewriter.create<ONNXConcatOp>(
+          loc, outputType, outputSlices, /*axis=*/2);
+    rewriter.replaceOp(gridSampleOp, output);
+    return success();
+  }
+};
+
 // Decompose a pad with negative padding size to slice + pad
 // Only supports static shapes
 struct DecomposeSlicePadPattern : public OpRewritePattern<ONNXPadOp> {
@@ -6297,7 +6589,8 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       /*disableGenericDecompositions=*/false, enableGatherToSlice,
       enableHardSwishDecompose, enableDepthToSpaceDecompose,
       enableGQAUint16CacheSlotRewrite, enableConvTransposeToResize,
-      enableLstmDecompose, /*lstmDecompositionPredicate=*/{},
+      enableLstmDecompose, enableGridSample5DDecompose,
+      /*lstmDecompositionPredicate=*/{},
       holdBackPreallocatedGQADecompose
           ? onnx_mlir::GQADecompositionPredicate([](mlir::Operation *op) {
               return !onnx_mlir::hasFullDepthFullRotaryGQACache(op);
@@ -6358,7 +6651,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool disableGenericDecompositions, bool enableGatherToSlice,
     bool enableHardSwishDecompose, bool enableDepthToSpaceDecompose,
     bool enableGQAUint16CacheSlotRewrite, bool enableConvTransposeToResize,
-    bool enableLstmDecompose,
+    bool enableLstmDecompose, bool enableGridSample5DDecompose,
     LSTMDecompositionPredicate lstmDecompositionPredicate,
     GQADecompositionPredicate gqaDecompositionPredicate) {
   MLIRContext *context = patterns.getContext();
@@ -6442,6 +6735,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
 
   patterns.insert<ReplaceCastLikeByCastPattern>(context);
 
+  if (enableGridSample5DDecompose)
+    patterns.insert<DecomposeGridSample5DPattern>(context);
   // TODO: consider whether to include SoftmaxPattern here
 }
 
