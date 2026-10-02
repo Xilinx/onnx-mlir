@@ -943,6 +943,28 @@ ElementsAttr ElementsAttrBuilder::slice(ElementsAttr elms,
     ArrayRef<int64_t> shape, ArrayRef<int64_t> starts,
     ArrayRef<int64_t> steps) {
   ShapedType outType = elms.getShapedType().clone(shape);
+
+  // Like reshape(): absent an element-wise transform, copy the selected
+  // elements straight from the buffer bytes instead of first widening the
+  // whole source tensor to WideNums, which dominated ConstPropSlice on models
+  // that take many small slices of large constants.
+  auto disp = mlir::dyn_cast<DisposableElementsAttr>(elms);
+  if (disp && !disp.isTransformed() &&
+      llvm::all_of(steps, [](int64_t step) { return step > 0; })) {
+    return fromRawBytes(
+        outType, disp.getBufferBType(), [&](MutableArrayRef<char> dst) {
+          const unsigned bytewidth = disp.getBufferElementBytewidth();
+          SmallVector<int64_t> strides(disp.getStrides());
+          int64_t startOffset = 0;
+          for (size_t axis = 0; axis < shape.size(); ++axis) {
+            startOffset += starts[axis] * strides[axis];
+            strides[axis] *= steps[axis];
+          }
+          restrideArray(bytewidth, shape, strides,
+              disp.getBufferBytes().drop_front(startOffset * bytewidth), dst);
+        });
+  }
+
   return fromWideNums(outType, [&](MutableArrayRef<WideNum> dst) {
     SmallVector<int64_t> strides;
     ArrayBuffer<WideNum> src = getWideNumsAndStrides(elms, strides);
