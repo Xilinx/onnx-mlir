@@ -79,17 +79,11 @@ void DisposablePool::garbageCollectUnreachable(
 void DisposablePool::scrub(ModuleOp moduleOp, OpAttrDictionary opsAttrs) {
   using Translation = std::pair<DisposableElementsAttr, DenseElementsAttr>;
   std::unordered_map<size_t, Translation> translations;
-  // Packed int4/uint4 disposables that are intentionally left un-scrubbed;
-  // tracked separately so eraseUnreachable() below doesn't free their buffers
-  // out from under the (still live, still Disposable) op attributes that
-  // reference them.
-  //
-  // AIESW-46865: materializing these to Dense here would defeat the whole
-  // point of importing them lazily/packed (see fromPackedInt4MemoryBuffer),
-  // since scrub runs unconditionally and early in the pipeline, right after
-  // import. getBufferBType() is private to DisposableElementsAttr (only
-  // DisposablePool and ElementsAttrBuilder are friends), hence this check is
-  // inlined here rather than factored into a free function.
+  // Packed int4/uint4 attributes are left as DisposableElementsAttr: converting
+  // them to Dense here would expand them right after import. They are tracked
+  // separately so eraseUnreachable() below keeps their buffers alive.
+  // getBufferBType() is private to DisposableElementsAttr, and DisposablePool
+  // is a friend, hence the check is inlined here.
   Pool preserved;
   walkOpsAttrs(moduleOp, opsAttrs,
       [&translations, &preserved](Operation *op, StringRef attrName,
@@ -154,9 +148,8 @@ void DisposablePool::scrub(ModuleOp moduleOp, OpAttrDictionary opsAttrs) {
   walkOpsAttrs(moduleOp, opsAttrs,
       [&translations](Operation *op, StringRef attrName,
           DisposableElementsAttr disposable) {
-        // Preserved (packed int4/uint4) disposables aren't in translations --
-        // leave the op's attribute as-is, still pointing at the (still live)
-        // DisposableElementsAttr.
+        // Preserved packed attributes have no translation; keep them as they
+        // are.
         auto it = translations.find(disposable.getId());
         if (it == translations.end())
           return;

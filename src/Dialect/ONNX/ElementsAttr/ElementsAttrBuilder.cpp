@@ -83,7 +83,7 @@ ElementsAttr ElementsAttrBuilder::fromPackedInt4MemoryBuffer(ShapedType type,
          "fromPackedInt4MemoryBuffer requires a packed int4/uint4 bufferBType");
   assert((btypeOfMlirType(type.getElementType()) ==
              (packedBufferBType == BType::PACKED_INT4 ? BType::INT4
-                                                       : BType::UINT4)) &&
+                                                      : BType::UINT4)) &&
          "type's element type must match packedBufferBType's unpacked form");
   return createWithDefaultStrides(type, packedBufferBType, std::move(membuf));
 }
@@ -829,11 +829,8 @@ ElementsAttr ElementsAttrBuilder::reshape(
   assert(disp && "reshapeStrides() always succeeds for non-Disposable "
                  "ElementsAttr as strides are always default or splat");
 
-  // AIESW-46865: packed int4/uint4 buffers can't go through the raw-bytes
-  // restride below -- it assumes a fixed per-element bytewidth, which isn't
-  // meaningful for a buffer with two elements packed per byte -- so route
-  // them through the WideNums path like the has-a-transformer case, even
-  // though there's no transformer here.
+  // The raw-bytes path assumes a fixed per-element bytewidth, which packed
+  // int4/uint4 buffers do not have; take the WideNums path for them.
   bool bufferIsPacked = disp.getBufferBType() == BType::PACKED_INT4 ||
                         disp.getBufferBType() == BType::PACKED_UINT4;
   if (!disp.isTransformed() &&

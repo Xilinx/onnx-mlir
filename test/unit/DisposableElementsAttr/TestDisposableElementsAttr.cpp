@@ -40,15 +40,11 @@ bool eq(CPPTY a, CPPTY b) {
 
 bool forAllBTypes(std::function<bool(BType)> predicate) {
   bool result = true;
-  // AIESW-46865: iterate only up to INT4, not BType::MAX_BTYPE -- MAX_BTYPE
-  // now extends to 127 to make room for storage-only PACKED_INT4/PACKED_UINT4
-  // markers placed far from onnx's own DataType range (see BType.hpp), which
-  // opened up a wide gap of unused ordinary values between INT4 and the
-  // markers. dispatchByBType() (used by the predicates below) was never meant
-  // to handle those gap values or the markers themselves -- see
-  // test_packed_int4() for the latter.
+  // Only iterate up to INT4: dispatchByBType(), used by the predicates below,
+  // does not handle the packed markers (see test_packed_int4()) or the unused
+  // values between INT4 and them.
   for (BType d = static_cast<BType>(0); d <= BType::INT4;
-       d = static_cast<BType>(static_cast<int>(d) + 1)) {
+      d = static_cast<BType>(static_cast<int>(d) + 1)) {
     if (d == BType::UNDEFINED || d == BType::STRING || d == BType::COMPLEX64 ||
         d == BType::COMPLEX128)
       continue;
@@ -205,10 +201,8 @@ public:
     return 0;
   }
 
-  // AIESW-46865: DisposableElementsAttr can be backed by a buffer holding
-  // packed int4/uint4 bytes (two values per byte, same layout as onnx
-  // TensorProto's packed external/raw data) instead of the usual one
-  // (unpacked) byte per element, unpacking lazily on read.
+  // A DisposableElementsAttr can be backed by packed int4/uint4 bytes (two
+  // values per byte, as in ONNX's packed data) and unpack them on read.
   int test_packed_int4() {
     std::cout << "test_packed_int4:" << std::endl;
 
@@ -218,8 +212,8 @@ public:
     std::vector<uint8_t> packedBytes = {0xE1, 0x83, 0x07};
     std::vector<int_4> expectedI4 = {
         int_4(1), int_4(-2), int_4(3), int_4(-8), int_4(7), int_4(0)};
-    std::vector<uint_4> expectedU4 = {uint_4(1), uint_4(14), uint_4(3),
-        uint_4(8), uint_4(7), uint_4(0)};
+    std::vector<uint_4> expectedU4 = {
+        uint_4(1), uint_4(14), uint_4(3), uint_4(8), uint_4(7), uint_4(0)};
 
     ShapedType typeI4 = RankedTensorType::get({6}, I4);
     ShapedType typeU4 = RankedTensorType::get({6}, U4);
@@ -242,13 +236,13 @@ public:
 
     // Iteration (value_begin / getValues) unpacks correctly.
     {
-      auto b = mlir::cast<DisposableElementsAttr>(packedI4).value_begin<int_4>();
+      auto b =
+          mlir::cast<DisposableElementsAttr>(packedI4).value_begin<int_4>();
       for (size_t i = 0; i < 6; ++i, ++b)
         assert(eq<int_4>(*b, expectedI4[i]));
     }
 
-    // toDenseElementsAttr() -- the one real materialization point -- unpacks
-    // correctly.
+    // toDenseElementsAttr() unpacks correctly.
     {
       // Dense's generic getValues<T>() requires sizeof(T)*8 to match the
       // element type's declared bit width exactly, which int_4 (a 1-byte
@@ -262,9 +256,8 @@ public:
       assert(i == 6);
     }
 
-    // Bit-for-bit cross-check against today's eager fromArray path (built
-    // from the already-unpacked equivalent) -- proves the lazy packed path
-    // is equivalent to the existing eager path, not just plausible.
+    // Bit-for-bit cross-check against the eager fromArray path, built from the
+    // already-unpacked equivalent.
     {
       ElementsAttr eagerI4 = elmsBuilder.fromArray<int_4>(
           typeI4, [&expectedI4](MutableArrayRef<int_4> dst) {
@@ -288,9 +281,10 @@ public:
       auto reshaped = elmsBuilder.reshape(packedI4, {2, 3});
       auto transposed = elmsBuilder.transpose(reshaped, {1, 0});
       // transposed[i][j] == reshaped[j][i] == packedI4[j*3 + i]
-      std::vector<int_4> expectedTransposed = {int_4(1), int_4(-8), int_4(-2),
-          int_4(7), int_4(3), int_4(0)};
-      auto tv = mlir::cast<DisposableElementsAttr>(transposed).getValues<int_4>();
+      std::vector<int_4> expectedTransposed = {
+          int_4(1), int_4(-8), int_4(-2), int_4(7), int_4(3), int_4(0)};
+      auto tv =
+          mlir::cast<DisposableElementsAttr>(transposed).getValues<int_4>();
       for (size_t i = 0; i < 6; ++i)
         assert(eq<int_4>(tv[i], expectedTransposed[i]));
     }
