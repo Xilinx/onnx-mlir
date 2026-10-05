@@ -1145,16 +1145,92 @@ RESULT_TYPE getScalarValue(ONNXConstantOp constantOp) {
 template double getScalarValue<double>(ONNXConstantOp constantOp);
 template int64_t getScalarValue<int64_t>(ONNXConstantOp constantOp);
 
-// Read a scalar (single-element) constant Value into a double. getScalarValue
-// handles float (incl. f16/bf16) and integer storage. Fails if `v` is
-// absent/None or not a single-element constant.
-FailureOr<double> readScalarConstant(Value v) {
+bool ScalarConstant::isFinite() const {
+  if (const auto *f = std::get_if<llvm::APFloat>(&value))
+    return f->isFinite();
+  return true;
+}
+
+std::partial_ordering ScalarConstant::operator<=>(
+    const ScalarConstant &o) const {
+  if (const auto *lf = std::get_if<llvm::APFloat>(&value)) {
+    const auto *rf = std::get_if<llvm::APFloat>(&o.value);
+    assert(rf && "cannot compare a float and an integer ScalarConstant");
+    switch (lf->compare(*rf)) {
+    case llvm::APFloat::cmpLessThan:
+      return std::partial_ordering::less;
+    case llvm::APFloat::cmpEqual:
+      return std::partial_ordering::equivalent;
+    case llvm::APFloat::cmpGreaterThan:
+      return std::partial_ordering::greater;
+    case llvm::APFloat::cmpUnordered:
+      return std::partial_ordering::unordered;
+    }
+    llvm_unreachable("unexpected APFloat comparison result");
+  }
+  const auto *li = std::get_if<llvm::APSInt>(&value);
+  const auto *ri = std::get_if<llvm::APSInt>(&o.value);
+  assert(li && ri && "cannot compare an integer and a float ScalarConstant");
+  const int c = llvm::APSInt::compareValues(*li, *ri);
+  return c < 0    ? std::partial_ordering::less
+         : c == 0 ? std::partial_ordering::equivalent
+                  : std::partial_ordering::greater;
+}
+
+double ScalarConstant::toDouble() const {
+  if (const auto *f = std::get_if<llvm::APFloat>(&value))
+    return f->convertToDouble();
+  const auto &i = std::get<llvm::APSInt>(value);
+  return i.isSigned() ? static_cast<double>(i.getSExtValue())
+                      : static_cast<double>(i.getZExtValue());
+}
+
+// Read a single-element constant Value preserving its exact integer/float
+// value (see ScalarConstant). Fails if `v` is absent/None or not a
+// single-element constant.
+FailureOr<ScalarConstant> readScalarConstantExact(Value v) {
   if (!v || mlir::isa<NoneType>(v.getType()))
     return failure();
   ElementsAttr attr = getElementAttributeFromONNXValue(v);
   if (!attr || attr.getNumElements() != 1)
     return failure();
-  return getScalarValue<double>(attr, attr.getElementType());
+  Type elemType = getElementTypeOrSelf(attr.getType());
+  if (auto intType = mlir::dyn_cast<IntegerType>(elemType)) {
+    APInt raw = *attr.getValues<APInt>().begin();
+    // Preserve signedness so ordering matches the source type.
+    return ScalarConstant::getInt(APSInt(raw, intType.isUnsigned()));
+  }
+  if (mlir::isa<FloatType>(elemType))
+    return ScalarConstant::getFloat(*attr.getValues<APFloat>().begin());
+  // Quantized storage has no direct integer/float meaning; express the
+  // dequantized value `(storage - zeroPoint) * scale` as a float.
+  if (auto uq = mlir::dyn_cast<mlir::quant::UniformQuantizedType>(elemType)) {
+    assert(attr.getElementType() == uq.getStorageType() &&
+           "dense elements storage type must match quantized type storage");
+    APInt storage = *attr.getValues<APInt>().begin();
+    // (storage - zeroPoint) in a wide-enough signed integer, exactly.
+    APSInt storageS(storage, uq.getStorageType().isUnsignedInteger());
+    APInt shifted = storageS.extend(storageS.getBitWidth() + 1) -
+                    APInt(storageS.getBitWidth() + 1, uq.getZeroPoint(),
+                        /*isSigned=*/true);
+    APFloat expressed(APFloat::IEEEdouble());
+    expressed.convertFromAPInt(
+        shifted, /*IsSigned=*/true, APFloat::rmNearestTiesToEven);
+    // getScale() is a plain double; APFloat(double) is an exact IEEEdouble.
+    expressed.multiply(APFloat(uq.getScale()), APFloat::rmNearestTiesToEven);
+    return ScalarConstant::getFloat(std::move(expressed));
+  }
+  return failure();
+}
+
+// Read a scalar (single-element) constant Value into a double. Fails if `v`
+// is absent/None or not a single-element constant. Note the double conversion
+// is lossy for large integers -- prefer readScalarConstantExact.
+FailureOr<double> readScalarConstant(Value v) {
+  FailureOr<ScalarConstant> c = readScalarConstantExact(v);
+  if (failed(c))
+    return failure();
+  return c->toDouble();
 }
 
 /// Return the wide type of a value.
