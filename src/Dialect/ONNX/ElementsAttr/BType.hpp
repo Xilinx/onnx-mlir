@@ -75,7 +75,18 @@ enum class BType : int8_t {
   INT4 = 22,  // Signed integer in range [-8, 7], using two's-complement
               // representation
 
-  MAX_BTYPE = 23 // TODO: update this if more types are added to the enum
+  // AIESW-46865: storage-only marker BTypes. These never appear as a logical
+  // (mlir::Type-backed) element type -- they only ever appear as a
+  // DisposableElementsAttr's bufferBType, meaning "the buffer holds two
+  // UINT4/INT4 values packed per byte" (same layout as onnx TensorProto's
+  // packed int4/uint4 external/raw data). There is deliberately no
+  // mlirTypeOfBType mapping or BTypeTrait/CppType specialization for these --
+  // see DisposableElementsAttr's packed-aware accessors, which are the only
+  // code that interprets them.
+  PACKED_UINT4 = 23,
+  PACKED_INT4 = 24,
+
+  MAX_BTYPE = 25 // TODO: update this if more types are added to the enum
 };
 
 constexpr int kNumBTypes = static_cast<int8_t>(BType::MAX_BTYPE) + 1;

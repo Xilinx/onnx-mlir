@@ -43,7 +43,12 @@ bool forAllBTypes(std::function<bool(BType)> predicate) {
   for (BType d = static_cast<BType>(0); d < BType::MAX_BTYPE;
        d = static_cast<BType>(static_cast<int>(d) + 1)) {
     if (d == BType::UNDEFINED || d == BType::STRING || d == BType::COMPLEX64 ||
-        d == BType::COMPLEX128)
+        d == BType::COMPLEX128 ||
+        // AIESW-46865: PACKED_INT4/PACKED_UINT4 are storage-only bufferBType
+        // markers, not real logical element types (no mlirTypeOfBType
+        // mapping or CppType), so the generic per-BType tests below don't
+        // apply to them -- see test_packed_int4() instead.
+        d == BType::PACKED_INT4 || d == BType::PACKED_UINT4)
       continue;
     result &= predicate(d);
   }
@@ -81,6 +86,8 @@ class Test {
   Type I64;
   Type I8;
   Type I1;
+  Type I4;
+  Type U4;
 
 public:
   Test()
@@ -94,6 +101,8 @@ public:
     I64 = builder.getI64Type();
     I8 = builder.getI8Type();
     I1 = builder.getI1Type();
+    I4 = builder.getIntegerType(4);
+    U4 = builder.getIntegerType(4, /*isSigned=*/false);
   }
   ~Test() { delete ctx; }
 
@@ -190,6 +199,99 @@ public:
     assert(t.getValues<uint8_t>()[1] == 15);
     assert(t.getValues<uint8_t>()[28] == 14);
     assert(t.getValues<uint8_t>()[29] == 29);
+
+    return 0;
+  }
+
+  // AIESW-46865: DisposableElementsAttr can be backed by a buffer holding
+  // packed int4/uint4 bytes (two values per byte, same layout as onnx
+  // TensorProto's packed external/raw data) instead of the usual one
+  // (unpacked) byte per element, unpacking lazily on read.
+  int test_packed_int4() {
+    std::cout << "test_packed_int4:" << std::endl;
+
+    // byte0=0xE1: nibble0=0x1=1,        nibble1=0xE=-2 (int4) / 14 (uint4)
+    // byte1=0x83: nibble0=0x3=3,        nibble1=0x8=-8 (int4) /  8 (uint4)
+    // byte2=0x07: nibble0=0x7=7,        nibble1=0x0=0
+    std::vector<uint8_t> packedBytes = {0xE1, 0x83, 0x07};
+    std::vector<int_4> expectedI4 = {
+        int_4(1), int_4(-2), int_4(3), int_4(-8), int_4(7), int_4(0)};
+    std::vector<uint_4> expectedU4 = {uint_4(1), uint_4(14), uint_4(3),
+        uint_4(8), uint_4(7), uint_4(0)};
+
+    ShapedType typeI4 = RankedTensorType::get({6}, I4);
+    ShapedType typeU4 = RankedTensorType::get({6}, U4);
+
+    ElementsAttr packedI4 = elmsBuilder.fromPackedInt4MemoryBuffer(
+        typeI4, BType::PACKED_INT4, buffer<uint8_t>(packedBytes));
+    ElementsAttr packedU4 = elmsBuilder.fromPackedInt4MemoryBuffer(
+        typeU4, BType::PACKED_UINT4, buffer<uint8_t>(packedBytes));
+
+    // getArray<X>() unpacks correctly.
+    {
+      auto arr = mlir::cast<DisposableElementsAttr>(packedI4).getArray<int_4>();
+      for (size_t i = 0; i < 6; ++i)
+        assert(eq<int_4>(arr.get()[i], expectedI4[i]));
+      auto arrU =
+          mlir::cast<DisposableElementsAttr>(packedU4).getArray<uint_4>();
+      for (size_t i = 0; i < 6; ++i)
+        assert(eq<uint_4>(arrU.get()[i], expectedU4[i]));
+    }
+
+    // Iteration (value_begin / getValues) unpacks correctly.
+    {
+      auto b = mlir::cast<DisposableElementsAttr>(packedI4).value_begin<int_4>();
+      for (size_t i = 0; i < 6; ++i, ++b)
+        assert(eq<int_4>(*b, expectedI4[i]));
+    }
+
+    // toDenseElementsAttr() -- the one real materialization point -- unpacks
+    // correctly.
+    {
+      // Dense's generic getValues<T>() requires sizeof(T)*8 to match the
+      // element type's declared bit width exactly, which int_4 (a 1-byte
+      // wrapper for a 4-bit value) doesn't -- iterate as APInt instead, like
+      // the existing test_splat() does for non-byte-aligned int types.
+      DenseElementsAttr dense =
+          mlir::cast<DisposableElementsAttr>(packedI4).toDenseElementsAttr();
+      size_t i = 0;
+      for (const APInt &v : dense.getValues<APInt>())
+        assert(v.getSExtValue() == static_cast<int64_t>(expectedI4[i++]));
+      assert(i == 6);
+    }
+
+    // Bit-for-bit cross-check against today's eager fromArray path (built
+    // from the already-unpacked equivalent) -- proves the lazy packed path
+    // is equivalent to the existing eager path, not just plausible.
+    {
+      ElementsAttr eagerI4 = elmsBuilder.fromArray<int_4>(
+          typeI4, [&expectedI4](MutableArrayRef<int_4> dst) {
+            for (size_t i = 0; i < 6; ++i)
+              dst[i] = expectedI4[i];
+          });
+      assert(ElementsAttrBuilder::equal(packedI4, eagerI4));
+
+      ElementsAttr eagerU4 = elmsBuilder.fromArray<uint_4>(
+          typeU4, [&expectedU4](MutableArrayRef<uint_4> dst) {
+            for (size_t i = 0; i < 6; ++i)
+              dst[i] = expectedU4[i];
+          });
+      assert(ElementsAttrBuilder::equal(packedU4, eagerU4));
+    }
+
+    // Non-contiguous access (reshape [6] -> [2,3] -> transpose -> [3,2])
+    // exercises atFlatIndex/flatIndexToBufferPos's packed branch outside the
+    // pure contiguous fast path.
+    {
+      auto reshaped = elmsBuilder.reshape(packedI4, {2, 3});
+      auto transposed = elmsBuilder.transpose(reshaped, {1, 0});
+      // transposed[i][j] == reshaped[j][i] == packedI4[j*3 + i]
+      std::vector<int_4> expectedTransposed = {int_4(1), int_4(-8), int_4(-2),
+          int_4(7), int_4(3), int_4(0)};
+      auto tv = mlir::cast<DisposableElementsAttr>(transposed).getValues<int_4>();
+      for (size_t i = 0; i < 6; ++i)
+        assert(eq<int_4>(tv[i], expectedTransposed[i]));
+    }
 
     return 0;
   }
@@ -295,6 +397,7 @@ int main(int argc, char *argv[]) {
   int failures = 0;
   failures += test.test_splat();
   failures += test.test_transpose();
+  failures += test.test_packed_int4();
   failures += test.test_cast();
   failures += test.test_equal_ints();
   failures += test.test_equal_fps();

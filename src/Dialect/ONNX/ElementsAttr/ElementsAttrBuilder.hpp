@@ -39,6 +39,17 @@ public:
   mlir::ElementsAttr fromMemoryBuffer(
       mlir::ShapedType type, std::unique_ptr<llvm::MemoryBuffer> membuf);
 
+  // AIESW-46865: like fromMemoryBuffer, but membuf holds UINT4/INT4 data
+  // packed two values per byte (the same layout as onnx TensorProto's packed
+  // int4/uint4 external/raw data), rather than one (unpacked) byte per
+  // element. type's element type must be the corresponding logical i4/ui4
+  // type; the packed layout is recorded via bufferBType (BType::PACKED_UINT4
+  // or BType::PACKED_INT4) and unpacked lazily, on read, by
+  // DisposableElementsAttr -- no eager unpack-and-copy happens here. Takes
+  // ownership of membuf like fromMemoryBuffer.
+  mlir::ElementsAttr fromPackedInt4MemoryBuffer(mlir::ShapedType type,
+      BType packedBufferBType, std::unique_ptr<llvm::MemoryBuffer> membuf);
+
   // Wraps elements in a DisposableElementsAttr if it isn't already a
   // DisposableElementsAttr, provided the underlying DisposablePool is active.
   // If elements is DenseElementsAttr the wrapper points into elements' raw

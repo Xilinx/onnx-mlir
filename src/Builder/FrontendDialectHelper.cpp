@@ -214,10 +214,19 @@ ElementsAttr createElementsAttrFromMemoryBuffer_LE(
   MLIRContext *ctx = tensorType.getContext();
   assert(tensorType.getElementType() == toMlirType<T>(ctx));
   if constexpr (isAnyInt4Type<T>) {
-    // int4 and uint4 are packed, each int32_data stores 2 int4s or uint4s.
-    return createElmAttrFromArray<T>(tensorType,
-        ArrayRef<char>(membuf->getBuffer().begin(), membuf->getBuffer().end()),
-        extractIntOrUint4FromPackedByteArray<T>);
+    // AIESW-46865: membuf already holds the packed bytes (two int4/uint4
+    // values per byte) straight from the (possibly memory-mapped) external
+    // data file. Construct the DisposableElementsAttr directly over these
+    // packed bytes instead of eagerly unpacking to one byte per element here
+    // -- unpacking happens lazily, on first actual read, in
+    // DisposableElementsAttr (see widenArray's PACKED_INT4/PACKED_UINT4
+    // branch). This avoids doubling peak memory for every int4/uint4 weight
+    // at import time, which dominates FE peak memory for int4-quantized
+    // models.
+    BType packedBType =
+        std::is_same_v<T, int_4> ? BType::PACKED_INT4 : BType::PACKED_UINT4;
+    return OnnxElementsAttrBuilder(ctx).fromPackedInt4MemoryBuffer(
+        tensorType, packedBType, std::move(membuf));
   } else if constexpr (shouldSwapLEBytes<T>) {
     ArrayRef<T> array = asArrayRef<T>(membuf->getBuffer());
     return createElmAttrFromArray<T>(tensorType, array,
