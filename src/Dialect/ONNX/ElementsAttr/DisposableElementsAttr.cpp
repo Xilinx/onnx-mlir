@@ -198,8 +198,7 @@ std::unique_ptr<llvm::MemoryBuffer> DisposableElementsAttr::parse(
 }
 
 namespace {
-// AIESW-46865: see setPrintElisionThreshold's doc comment in the header.
-// -1 means "no override", preserving prior behavior exactly.
+// Threshold set through setPrintElisionThreshold; negative means no override.
 std::atomic<int64_t> gPrintElisionThreshold{-1};
 }
 
@@ -214,10 +213,7 @@ void DisposableElementsAttr::printWithoutType(AsmPrinter &printer) const {
   // an override of elideLargeElementsAttrs which we cannot see here.
   // Oh well, at least OpPrintingFlags().shouldElideElementsAttr(ElementsAttr)
   // lets us respect the --mlir-elide-elementsattrs-if-larger command line flag.
-  //
-  // AIESW-46865: ...except when a caller has set an explicit override via
-  // setPrintElisionThreshold, in which case use that instead of the default
-  // (which never elides, since OpPrintingFlags{}'s threshold is unset).
+  // A threshold set through setPrintElisionThreshold takes precedence.
   OpPrintingFlags printerFlags;
   int64_t threshold = gPrintElisionThreshold.load();
   if (threshold >= 0)
@@ -246,7 +242,7 @@ void DisposableElementsAttr::printWithoutType(AsmPrinter &printer) const {
 
 void DisposableElementsAttr::printAsDenseElementsAttr(
     AsmPrinter &printer) const {
-  // AIESW-46865: see printWithoutType above.
+  // See printWithoutType.
   OpPrintingFlags printerFlags;
   int64_t threshold = gPrintElisionThreshold.load();
   if (threshold >= 0)
