@@ -288,19 +288,11 @@ public:
 
   void printAsDenseElementsAttr(AsmPrinter &printer) const;
 
-  // AIESW-46865: printWithoutType/printAsDenseElementsAttr can't see the
-  // OpPrintingFlags the caller's AsmPrinter was actually constructed with
-  // (AsmPrinter doesn't expose them), so they fall back to a default-
-  // constructed OpPrintingFlags{} for the elision decision -- which means
-  // elideLargeElementsAttrs(N) requested by a caller (e.g. dumpMLIR's
-  // elideConstantsLargerThan) is silently ignored for Disposable attrs:
-  // every one gets force-materialized just to print, even when the result
-  // would have been elided anyway (measured: multi-second, multi-GB cost
-  // dumping a real model's intermediate/frontend MLIR). This explicit
-  // override lets a caller that already knows its own elision threshold
-  // (dumpMLIR) tell Disposable's print path to use the same one, instead of
-  // silently always materializing. -1 (default) preserves prior behavior
-  // (always materialize to decide, i.e. never elide via this override).
+  // printWithoutType and printAsDenseElementsAttr cannot read the flags the
+  // AsmPrinter was created with, so a requested elideLargeElementsAttrs(N) is
+  // ignored and every attribute is materialized just to be printed. A caller
+  // that knows its threshold can set it here; attributes larger than it are
+  // elided when printed. A negative value (the default) means no override.
   static void setPrintElisionThreshold(int64_t elideLargerThanOrNegativeOne);
 
 private:
