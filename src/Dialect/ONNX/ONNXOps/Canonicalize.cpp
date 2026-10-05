@@ -5291,6 +5291,7 @@ void ONNXOrOp::getCanonicalizationPatterns(
 /// on the ONNXReduceL1Op.
 void ONNXReduceL1Op::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceL1Op>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceL1Op>>(context);
 }
