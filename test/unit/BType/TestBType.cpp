@@ -49,7 +49,14 @@ public:
   int test_dispatchByBType() {
     std::cout << "test_dispatchByBType:" << std::endl;
 
-    for (BType d = static_cast<BType>(0); d < BType::MAX_BTYPE;
+    // AIESW-46865: iterate only up to the last BType dispatchByBType() actually
+    // handles (INT4), not BType::MAX_BTYPE -- MAX_BTYPE now extends to 127 to
+    // make room for storage-only PACKED_INT4/PACKED_UINT4 markers placed far
+    // from onnx's own (slowly growing) DataType range, which opened up a wide
+    // gap of unused ordinary values between INT4 and the markers that
+    // dispatchByBType() was never meant to handle. Update this bound too if
+    // dispatchByBType()'s switch grows to cover more types.
+    for (BType d = static_cast<BType>(0); d <= BType::INT4;
          d = static_cast<BType>(static_cast<int>(d) + 1)) {
       if (d == BType::UNDEFINED || d == BType::STRING ||
           d == BType::COMPLEX64 || d == BType::COMPLEX128)

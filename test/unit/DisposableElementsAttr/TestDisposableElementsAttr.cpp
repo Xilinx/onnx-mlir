@@ -40,15 +40,17 @@ bool eq(CPPTY a, CPPTY b) {
 
 bool forAllBTypes(std::function<bool(BType)> predicate) {
   bool result = true;
-  for (BType d = static_cast<BType>(0); d < BType::MAX_BTYPE;
+  // AIESW-46865: iterate only up to INT4, not BType::MAX_BTYPE -- MAX_BTYPE
+  // now extends to 127 to make room for storage-only PACKED_INT4/PACKED_UINT4
+  // markers placed far from onnx's own DataType range (see BType.hpp), which
+  // opened up a wide gap of unused ordinary values between INT4 and the
+  // markers. dispatchByBType() (used by the predicates below) was never meant
+  // to handle those gap values or the markers themselves -- see
+  // test_packed_int4() for the latter.
+  for (BType d = static_cast<BType>(0); d <= BType::INT4;
        d = static_cast<BType>(static_cast<int>(d) + 1)) {
     if (d == BType::UNDEFINED || d == BType::STRING || d == BType::COMPLEX64 ||
-        d == BType::COMPLEX128 ||
-        // AIESW-46865: PACKED_INT4/PACKED_UINT4 are storage-only bufferBType
-        // markers, not real logical element types (no mlirTypeOfBType
-        // mapping or CppType), so the generic per-BType tests below don't
-        // apply to them -- see test_packed_int4() instead.
-        d == BType::PACKED_INT4 || d == BType::PACKED_UINT4)
+        d == BType::COMPLEX128)
       continue;
     result &= predicate(d);
   }

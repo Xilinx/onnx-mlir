@@ -83,10 +83,17 @@ enum class BType : int8_t {
   // mlirTypeOfBType mapping or BTypeTrait/CppType specialization for these --
   // see DisposableElementsAttr's packed-aware accessors, which are the only
   // code that interprets them.
-  PACKED_UINT4 = 23,
-  PACKED_INT4 = 24,
+  //
+  // Deliberately placed near the top of the int8_t range (not immediately
+  // after INT4=22) to avoid colliding with onnx::TensorProto_DataType values
+  // that newer onnx opsets define there (e.g. FLOAT4E2M1=23, FLOAT8E8M0=24,
+  // UINT2=25, INT2=26) -- BType is cast to/from onnx::TensorProto_DataType
+  // (see onnxDataTypeOfBType/btypeOfOnnxDataType below), so a real onnx
+  // DataType must never alias one of these markers.
+  PACKED_UINT4 = 125,
+  PACKED_INT4 = 126,
 
-  MAX_BTYPE = 25 // TODO: update this if more types are added to the enum
+  MAX_BTYPE = 127 // TODO: update this if more types are added to the enum
 };
 
 constexpr int kNumBTypes = static_cast<int8_t>(BType::MAX_BTYPE) + 1;
