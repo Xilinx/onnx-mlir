@@ -5380,6 +5380,7 @@ void ONNXReduceMinV18Op::getCanonicalizationPatterns(
 /// on the ONNXReduceProdOp.
 void ONNXReduceProdOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceProdOp>>(context);
   result.insert<DropUnitAxesFromReducePattern<ONNXReduceProdOp>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceProdOp>>(context);
