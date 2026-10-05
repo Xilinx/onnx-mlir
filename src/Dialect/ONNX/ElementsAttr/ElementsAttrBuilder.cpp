@@ -949,12 +949,14 @@ ElementsAttr ElementsAttrBuilder::slice(ElementsAttr elms,
     ArrayRef<int64_t> steps) {
   ShapedType outType = elms.getShapedType().clone(shape);
 
-  // Like reshape(): absent an element-wise transform, copy the selected
-  // elements straight from the buffer bytes instead of first widening the
-  // whole source tensor to WideNums, which dominated ConstPropSlice on models
-  // that take many small slices of large constants.
+  // Copy the selected elements straight from the buffer bytes instead of first
+  // widening the whole source tensor to WideNums, which dominated
+  // ConstPropSlice on models that take many small slices of large constants.
+  // This applies when the buffer holds the elements as they are: no
+  // transformer, no cast, and no packed layout (which has no per-element
+  // bytewidth).
   auto disp = mlir::dyn_cast<DisposableElementsAttr>(elms);
-  if (disp && !disp.isTransformed() &&
+  if (disp && !disp.isTransformedOrCast() &&
       llvm::all_of(steps, [](int64_t step) { return step > 0; })) {
     return fromRawBytes(
         outType, disp.getBufferBType(), [&](MutableArrayRef<char> dst) {
