@@ -289,6 +289,22 @@ public:
         assert(eq<int_4>(tv[i], expectedTransposed[i]));
     }
 
+    // Slicing a packed buffer, contiguously and with a stride.
+    {
+      auto sliced = elmsBuilder.slice(packedI4, {4}, {1}, {1});
+      std::vector<int_4> expectedSlice = {
+          int_4(-2), int_4(3), int_4(-8), int_4(7)};
+      auto sv = mlir::cast<DisposableElementsAttr>(sliced).getValues<int_4>();
+      for (size_t i = 0; i < 4; ++i)
+        assert(eq<int_4>(sv[i], expectedSlice[i]));
+
+      auto strided = elmsBuilder.slice(packedI4, {3}, {0}, {2});
+      std::vector<int_4> expectedStrided = {int_4(1), int_4(3), int_4(7)};
+      auto tv2 = mlir::cast<DisposableElementsAttr>(strided).getValues<int_4>();
+      for (size_t i = 0; i < 3; ++i)
+        assert(eq<int_4>(tv2[i], expectedStrided[i]));
+    }
+
     return 0;
   }
 
