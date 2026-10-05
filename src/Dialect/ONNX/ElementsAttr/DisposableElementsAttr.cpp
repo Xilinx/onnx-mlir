@@ -200,7 +200,7 @@ std::unique_ptr<llvm::MemoryBuffer> DisposableElementsAttr::parse(
 namespace {
 // Threshold set through setPrintElisionThreshold; negative means no override.
 std::atomic<int64_t> gPrintElisionThreshold{-1};
-}
+} // namespace
 
 void DisposableElementsAttr::setPrintElisionThreshold(
     int64_t elideLargerThanOrNegativeOne) {
