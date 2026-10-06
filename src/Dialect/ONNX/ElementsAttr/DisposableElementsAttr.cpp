@@ -44,6 +44,18 @@ void narrowArray(
   });
 }
 
+// Unpacks dst.size() int4/uint4 values (two per byte, low nibble first) to one
+// byte each, which holds just the nibble.
+void unpackNibbles(ArrayRef<char> packed, MutableArrayRef<char> dst) {
+  const size_t numPairs = dst.size() / 2;
+  for (size_t i = 0; i < numPairs; ++i) {
+    dst[2 * i] = static_cast<char>(packed[i] & 0x0F);
+    dst[2 * i + 1] = static_cast<char>((packed[i] >> 4) & 0x0F);
+  }
+  if (dst.size() % 2)
+    dst.back() = static_cast<char>(packed[numPairs] & 0x0F);
+}
+
 // True if a buffer of type bufferBType can hold elements of type btype as they
 // are, without a transformer.
 bool bufferMatchesElementType(BType bufferBType, BType btype) {
@@ -365,18 +377,19 @@ void DisposableElementsAttr::readRawBytes(
   BType btype = getBType();
   unsigned elemBytewidth = bytewidthOfBType(btype);
   BType bufferBType = getBufferBType();
-  if (!isTransformed() && isContiguous() && isPackedBType(bufferBType)) {
-    // Unpack straight to one byte per element (int_4 and uint_4 hold just the
-    // nibble). Going through WideNums would transiently need 8 bytes per
-    // element, which adds up when many large weights are materialized
-    // concurrently.
-    ArrayRef<char> src = getBufferBytes();
-    for (int64_t i = 0, n = getNumElements(); i < n; ++i) {
-      char packedByte = src[i / 2];
-      bool isFirst = (i % 2) == 0;
-      dstBytes[i] =
-          static_cast<char>((isFirst ? packedByte : (packedByte >> 4)) & 0x0F);
+  if (!isTransformed() && isPackedBType(bufferBType)) {
+    // Unpack to one byte per element (int_4 and uint_4 hold just the nibble)
+    // without going through WideNums, which would need 8 bytes per element.
+    if (isContiguous()) {
+      unpackNibbles(getBufferBytes(), dstBytes.take_front(getNumElements()));
+      return;
     }
+    // A transposed or broadcast view: unpack the buffer once, then restride the
+    // bytes like those of any other buffer with one-byte elements.
+    SmallVector<char> unpacked;
+    unpacked.resize_for_overwrite(getNumBufferElements());
+    unpackNibbles(getBufferBytes(), unpacked);
+    restrideArray(elemBytewidth, getShape(), getStrides(), unpacked, dstBytes);
     return;
   }
   if (!isTransformedOrCast()) {

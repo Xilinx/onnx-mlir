@@ -289,6 +289,13 @@ public:
           mlir::cast<DisposableElementsAttr>(transposed).getValues<int_4>();
       for (size_t i = 0; i < 6; ++i)
         assert(eq<int_4>(tv[i], expectedTransposed[i]));
+      // The raw bytes of the view hold one nibble per byte, in view order.
+      auto transposedAttr = mlir::cast<DisposableElementsAttr>(transposed);
+      ArrayBuffer<char> transposedBytes = transposedAttr.getRawBytes();
+      std::vector<char> expectedBytes = {0x1, 0x8, 0xE, 0x7, 0x3, 0x0};
+      assert(transposedBytes.get().size() == 6);
+      for (size_t i = 0; i < 6; ++i)
+        assert(transposedBytes.get()[i] == expectedBytes[i]);
     }
 
     // Slicing a packed buffer, contiguously and with a stride.
