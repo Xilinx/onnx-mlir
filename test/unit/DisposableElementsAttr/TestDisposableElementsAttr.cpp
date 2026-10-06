@@ -10,8 +10,10 @@
 
 #include "src/Dialect/ONNX/ElementsAttr/BType.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/DisposableElementsAttr.hpp"
+#include "src/Dialect/ONNX/ElementsAttr/DisposablePool.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/ElementsAttrBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXDialect.hpp"
+#include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
 #include "src/Support/Arrays.hpp"
 
@@ -357,6 +359,43 @@ public:
     return 0;
   }
 
+  int test_scrub_packed_int4() {
+    std::cout << "test_scrub_packed_int4:" << std::endl;
+
+    // Scrubbing makes every constant dense, except packed int4/uint4 ones
+    // when asked to preserve them.
+    for (bool preserve : {false, true}) {
+      ShapedType packedType = RankedTensorType::get({6}, I4);
+      ElementsAttr packed = elmsBuilder.fromPackedInt4MemoryBuffer(
+          packedType, BType::PACKED_INT4, buffer<uint8_t>({0xE1, 0x83, 0x07}));
+      ShapedType plainType = RankedTensorType::get({2}, I8);
+      ElementsAttr plain =
+          elmsBuilder.fromMemoryBuffer(plainType, buffer<int8_t>({1, 2}));
+
+      OwningOpRef<ModuleOp> module(ModuleOp::create(loc));
+      OpBuilder b(ctx);
+      b.setInsertionPointToStart(module->getBody());
+      auto packedOp = b.create<ONNXConstantOp>(loc, Attribute(), packed);
+      auto plainOp = b.create<ONNXConstantOp>(loc, Attribute(), plain);
+
+      DisposablePool::get<ONNXDialect>(ctx)->scrub(
+          *module, {{ONNXConstantOp::getOperationName(), "value"}}, preserve);
+
+      assert(isa<DenseElementsAttr>(plainOp.getValueAttr()));
+      assert(isa<DisposableElementsAttr>(packedOp.getValueAttr()) == preserve);
+      assert(isa<DenseElementsAttr>(packedOp.getValueAttr()) == !preserve);
+      // Either way the values are still readable.
+      auto values = mlir::cast<ElementsAttr>(packedOp.getValueAttr());
+      std::vector<int64_t> expected = {1, -2, 3, -8, 7, 0};
+      size_t i = 0;
+      for (const APInt &v : values.getValues<APInt>())
+        assert(v.getSExtValue() == expected[i++]);
+      assert(i == 6);
+    }
+
+    return 0;
+  }
+
   int test_cast() {
     std::cout << "test_cast:" << std::endl;
 
@@ -459,6 +498,7 @@ int main(int argc, char *argv[]) {
   failures += test.test_splat();
   failures += test.test_transpose();
   failures += test.test_packed_int4();
+  failures += test.test_scrub_packed_int4();
   failures += test.test_cast();
   failures += test.test_equal_ints();
   failures += test.test_equal_fps();
