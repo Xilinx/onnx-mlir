@@ -1048,11 +1048,9 @@ struct PropagateConstantScalingInAttentionLayerPattern
   }
 };
 
-// Drop reduction axes that point to dimensions of size 1 from
-// ReduceMean, ReduceMin, ReduceMax, ReduceSum, and ReduceProd. Reducing a
-// unit-sized dimension is a
-// no-op, so the axis can be removed from the `axes` operand without changing
-// the result.
+// Drop reduction axes that point to dimensions of size 1 from reduction ops.
+// Reducing a unit-sized dimension is a no-op, so the axis can be removed from
+// the `axes` operand without changing the result.
 //
 // Only `keepdims = 1` is handled here. With `keepdims = 0`, dropping a
 // size-1 axis would change the output rank and require inserting a Squeeze,
@@ -1146,17 +1144,17 @@ public:
   }
 };
 
-// Materialize the implicit "reduce all axes" of a ReduceMean whose reduction
+// Materialize the implicit "reduce all axes" of a reduction whose reduction
 // axes operand is absent (None). An omitted `axes` means "reduce over every
 // dimension" unless `noop_with_empty_axes = 1`, which is a no-op that
-// `ONNXReduceMeanOp::fold` already forwards.
-class MaterializeAbsentAxesReduceMeanPattern
-    : public OpRewritePattern<ONNXReduceMeanOp> {
+// the reduction op's fold already forwards.
+template <typename OP_TYPE>
+class MaterializeAbsentAxesReducePattern : public OpRewritePattern<OP_TYPE> {
 public:
-  using OpRewritePattern<ONNXReduceMeanOp>::OpRewritePattern;
+  using OpRewritePattern<OP_TYPE>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
-      ONNXReduceMeanOp op, PatternRewriter &rewriter) const override {
+      OP_TYPE op, PatternRewriter &rewriter) const override {
     if (!isNoneValue(op.getAxes()))
       return rewriter.notifyMatchFailure(op, "axes already present");
 
@@ -5293,6 +5291,7 @@ void ONNXOrOp::getCanonicalizationPatterns(
 /// on the ONNXReduceL1Op.
 void ONNXReduceL1Op::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceL1Op>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceL1Op>>(context);
 }
@@ -5300,6 +5299,7 @@ void ONNXReduceL1Op::getCanonicalizationPatterns(
 /// on the ONNXReduceL2Op.
 void ONNXReduceL2Op::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceL2Op>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceL2Op>>(context);
 }
@@ -5322,6 +5322,7 @@ void ONNXReduceLogSumExpOp::getCanonicalizationPatterns(
 /// on the ONNXReduceMaxOp.
 void ONNXReduceMaxOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceMaxOp>>(context);
   result.insert<DropUnitAxesFromReducePattern<ONNXReduceMaxOp>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceMaxOp>>(context);
@@ -5343,7 +5344,7 @@ void ONNXReduceMaxV18Op::getCanonicalizationPatterns(
 /// on the ONNXReduceMeanOp.
 void ONNXReduceMeanOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  result.insert<MaterializeAbsentAxesReduceMeanPattern>(context);
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceMeanOp>>(context);
   result.insert<DropUnitAxesFromReducePattern<ONNXReduceMeanOp>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceMeanOp>>(context);
@@ -5358,6 +5359,7 @@ void ONNXReduceMeanV13Op::getCanonicalizationPatterns(
 /// on the ONNXReduceMinOp.
 void ONNXReduceMinOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceMinOp>>(context);
   result.insert<DropUnitAxesFromReducePattern<ONNXReduceMinOp>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceMinOp>>(context);
@@ -5379,6 +5381,7 @@ void ONNXReduceMinV18Op::getCanonicalizationPatterns(
 /// on the ONNXReduceProdOp.
 void ONNXReduceProdOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceProdOp>>(context);
   result.insert<DropUnitAxesFromReducePattern<ONNXReduceProdOp>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceProdOp>>(context);
@@ -5387,6 +5390,7 @@ void ONNXReduceProdOp::getCanonicalizationPatterns(
 /// on the ONNXReduceSumOp.
 void ONNXReduceSumOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceSumOp>>(context);
   result.insert<DropUnitAxesFromReducePattern<ONNXReduceSumOp>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceSumOp>>(context);

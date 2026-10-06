@@ -167,8 +167,8 @@ func.func @test_recompose_reducel2_from_pow_reduce_sum_mul(%arg0: tensor<2x3x4xf
 // CHECK-LABEL:  func.func @test_recompose_reducel2_from_pow_reduce_sum_mul
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x3x4xf32>) -> tensor<f32> {
 // CHECK-NOT:       "onnx.ReduceSumSquare"
-// CHECK:           [[NONE_:%.+]] = "onnx.NoValue"() {value} : () -> none
-// CHECK:           [[L2_:%.+]] = "onnx.ReduceL2"([[PARAM_0_]], [[NONE_]]) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
+// CHECK:           [[AXES_:%.+]] = onnx.Constant dense<[0, 1, 2]> : tensor<3xi64>
+// CHECK:           [[L2_:%.+]] = "onnx.ReduceL2"([[PARAM_0_]], [[AXES_]]) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
 // CHECK:           onnx.Return [[L2_]] : tensor<f32>
 // CHECK:         }
 // DISABLED-CHECK-LABEL:  func.func @test_recompose_reducel2_from_pow_reduce_sum_mul
