@@ -960,6 +960,9 @@ ElementsAttr ElementsAttrBuilder::slice(ElementsAttr elms,
       llvm::all_of(steps, [](int64_t step) { return step > 0; })) {
     return fromRawBytes(
         outType, disp.getBufferBType(), [&](MutableArrayRef<char> dst) {
+          // An empty slice may start beyond the end of the buffer.
+          if (dst.empty())
+            return;
           const unsigned bytewidth = disp.getBufferElementBytewidth();
           SmallVector<int64_t> strides(disp.getStrides());
           int64_t startOffset = 0;

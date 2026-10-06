@@ -194,6 +194,27 @@ public:
     return 0;
   }
 
+  int test_slice() {
+    std::cout << "test_slice:" << std::endl;
+
+    ShapedType type = RankedTensorType::get({2, 3}, getUInt(8));
+    auto elms = nums<uint8_t>(std::make_integer_sequence<uint8_t, 6>{});
+    auto e = elmsBuilder.fromMemoryBuffer(type, buffer<uint8_t>(elms));
+
+    auto s = elmsBuilder.slice(e, {2, 2}, {0, 1}, {1, 1});
+    assert(s.getValues<uint8_t>()[0] == 1);
+    assert(s.getValues<uint8_t>()[1] == 2);
+    assert(s.getValues<uint8_t>()[2] == 4);
+    assert(s.getValues<uint8_t>()[3] == 5);
+
+    // An empty slice is valid even if its combined start offset (2 * 3 + 1)
+    // lies beyond the six elements of the buffer.
+    auto empty = elmsBuilder.slice(e, {0, 2}, {2, 1}, {1, 1});
+    assert(empty.getNumElements() == 0);
+
+    return 0;
+  }
+
   int test_cast() {
     std::cout << "test_cast:" << std::endl;
 
@@ -295,6 +316,7 @@ int main(int argc, char *argv[]) {
   int failures = 0;
   failures += test.test_splat();
   failures += test.test_transpose();
+  failures += test.test_slice();
   failures += test.test_cast();
   failures += test.test_equal_ints();
   failures += test.test_equal_fps();
