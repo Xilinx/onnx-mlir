@@ -22,6 +22,7 @@
 //===----------------------------------------------------------------------===//
 
 #include <cassert>
+#include <cmath>
 #include <numeric>
 #include <optional>
 
@@ -2557,6 +2558,89 @@ struct RecomposeRotaryEmbeddingPattern
   }
 };
 
+// Map the legacy ONNX Resize coordinate_transformation_mode
+// "tf_half_pixel_for_nn" to "asymmetric" when the resampling is
+// nearest-neighbour with floor rounding and an integer upsampling scale on
+// every axis.
+//
+// Exactness: tf_half_pixel_for_nn maps x_orig = (x_out + 0.5) / s, whereas
+// asymmetric maps x_orig = x_out / s. With mode=nearest and nearest_mode=floor
+// the sampled index is floor(x_orig). For an integer scale s >= 1,
+// floor((x_out + 0.5)/s) == floor(x_out/s): the fractional part of x_out/s is
+// (x_out mod s)/s <= (s-1)/s, and adding 0.5/s keeps it strictly below 1, so
+// the floor never changes. The equivalence does NOT hold for linear/cubic
+// modes, non-integer scales, or any *rounding* nearest_mode -- including
+// round_prefer_floor, which breaks on ties (at s=2, x_out=1 rounds
+// tf 0.75 -> 1 but asym 0.5 -> 0). Only nearest_mode == "floor" is exact, so
+// the guard is kept strict.
+//
+// Important: `s` is the scale used by the coordinate transform. When an
+// explicit `scales` input is present that value is authoritative and may
+// disagree with the shape ratio (e.g. in=4, scale=2.1, out=8: shapes look
+// like 2x but floor((2+0.5)/2.1)=1 != floor(2/2.1)=0). Only fall back to the
+// static shape ratio on the `sizes` path where scales is absent.
+struct RecomposeTfHalfPixelForNnResize : public OpRewritePattern<ONNXResizeOp> {
+  using OpRewritePattern<ONNXResizeOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXResizeOp op, PatternRewriter &rewriter) const final {
+
+    if (op.getCoordinateTransformationMode() != "tf_half_pixel_for_nn")
+      return rewriter.notifyMatchFailure(op, "not tf_half_pixel_for_nn");
+
+    op->emitWarning("'tf_half_pixel_for_nn' is only supported in opset 11.");
+
+    if (op.getMode() != "nearest")
+      return rewriter.notifyMatchFailure(
+          op, "tf_half_pixel_for_nn->asymmetric is only exact for nearest");
+
+    if (op.getNearestMode() != "floor")
+      return rewriter.notifyMatchFailure(op,
+          "tf_half_pixel_for_nn->asymmetric is only exact for "
+          "nearest_mode=floor (rounding modes break on ties)");
+
+    // Prefer an explicit `scales` input when present -- that is what the
+    // coordinate transform divides by. Fall back to the static shape ratio
+    // only when scales is absent (the `sizes` path).
+    Value scalesVal = op.getScales();
+    const bool hasScales = !onnx_mlir::isNoneValue(scalesVal);
+
+    if (hasScales) {
+      if (!onnx_mlir::isDenseONNXConstant(scalesVal))
+        return rewriter.notifyMatchFailure(
+            op, "non-constant scales; cannot verify integer scale");
+      ElementsAttr scalesAttr =
+          onnx_mlir::getElementAttributeFromONNXValue(scalesVal);
+      if (!scalesAttr)
+        return rewriter.notifyMatchFailure(op, "cannot read scales constant");
+      for (APFloat sAP : scalesAttr.getValues<APFloat>()) {
+        double s = sAP.convertToDouble();
+        if (!(s >= 1.0) || std::floor(s) != s)
+          return rewriter.notifyMatchFailure(
+              op, "resize scale must be an integer >= 1 on every axis");
+      }
+    } else {
+      auto inTy = dyn_cast<RankedTensorType>(op.getX().getType());
+      auto outTy = dyn_cast<RankedTensorType>(op.getResult().getType());
+      if (!inTy || !outTy || !inTy.hasStaticShape() ||
+          !outTy.hasStaticShape() || inTy.getRank() != outTy.getRank())
+        return rewriter.notifyMatchFailure(
+            op, "static, equal-rank input/output shapes required");
+
+      for (auto [inDim, outDim] :
+          llvm::zip_equal(inTy.getShape(), outTy.getShape())) {
+        if (inDim <= 0 || outDim < inDim || (outDim % inDim) != 0)
+          return rewriter.notifyMatchFailure(
+              op, "resize scale must be an integer >= 1 on every axis");
+      }
+    }
+
+    rewriter.modifyOpInPlace(
+        op, [&] { op.setCoordinateTransformationMode("asymmetric"); });
+    return success();
+  }
+};
+
 struct RecomposeONNXToONNXPass
     : public onnx_mlir::impl::RecomposeONNXToONNXPassBase<
           RecomposeONNXToONNXPass> {
@@ -2585,6 +2669,7 @@ void onnx_mlir::getRecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns, bool enableRotaryEmbeddingRecompose,
     bool enableReduceL2Recompositions, bool enableDepthToSpaceDecompose) {
   MLIRContext *context = patterns.getContext();
+  patterns.insert<RecomposeTfHalfPixelForNnResize>(context);
   patterns.insert<RecomposeHardSwishFromMulPattern>(context);
   patterns.insert<RecomposeHardSigmoidFromMulClipPattern>(context);
   patterns.insert<RecomposeHardSigmoidFromReluPattern>(context);
