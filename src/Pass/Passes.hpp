@@ -36,8 +36,11 @@ namespace onnx_mlir {
 #include "src/Dialect/ONNX/Transforms/Passes.h.inc"
 #undef GEN_PASS_DECL
 
-/// Pass for removing DisposableElementsAttr attributes.
-std::unique_ptr<mlir::Pass> createScrubDisposablePass(bool closeAfter = true);
+/// Pass for removing DisposableElementsAttr attributes. With
+/// preservePackedInt4, attributes holding packed int4/uint4 data are kept as
+/// they are.
+std::unique_ptr<mlir::Pass> createScrubDisposablePass(
+    bool closeAfter = true, bool preservePackedInt4 = false);
 
 /// Pass for ONNX graph level optimization
 std::unique_ptr<mlir::Pass> createONNXOpTransformPass();

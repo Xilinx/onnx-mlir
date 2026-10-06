@@ -181,7 +181,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // DenseElementsAttr, so later passes that build views of existing constants
   // (reshapes, transposes) would copy them.
   if (!donotScrubDisposableElementsAttr)
-    pm.addPass(createScrubDisposablePass(/*closeAfter=*/false));
+    pm.addPass(createScrubDisposablePass(
+        /*closeAfter=*/false, opts.preservePackedInt4Constants));
 
   // Set onnx_node_name if it is missing. Keep this pass at the end of this
   // function and just before instrumentation.

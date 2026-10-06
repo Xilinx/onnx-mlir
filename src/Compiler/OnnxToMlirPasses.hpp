@@ -30,6 +30,10 @@ struct OnnxToMlirOptions {
   bool enableRemoveBinary = false;
   bool enableFusePadIntoAvgpool = false;
   bool enableXMCPasses = false;
+  // Keep packed int4/uint4 constants as DisposableElementsAttr when scrubbing,
+  // so they are only unpacked when something reads them. The consumers of the
+  // module must then accept DisposableElementsAttr for these constants.
+  bool preservePackedInt4Constants = false;
 
   bool disableBatchNormDecompose = false;
   // Reshape-family canonicalization (Flatten/Squeeze/Unsqueeze -> Reshape).

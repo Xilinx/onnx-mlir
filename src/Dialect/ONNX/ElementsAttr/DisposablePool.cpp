@@ -76,20 +76,22 @@ void DisposablePool::garbageCollectUnreachable(
   }
 }
 
-void DisposablePool::scrub(ModuleOp moduleOp, OpAttrDictionary opsAttrs) {
+void DisposablePool::scrub(
+    ModuleOp moduleOp, OpAttrDictionary opsAttrs, bool preservePackedInt4) {
   using Translation = std::pair<DisposableElementsAttr, DenseElementsAttr>;
   std::unordered_map<size_t, Translation> translations;
-  // Packed int4/uint4 attributes are left as DisposableElementsAttr: converting
-  // them to Dense here would expand them right after import. They are tracked
-  // separately so eraseUnreachable() below keeps their buffers alive.
+  // With preservePackedInt4, packed int4/uint4 attributes are left as
+  // DisposableElementsAttr: converting them to Dense here would expand them
+  // right after import. They are tracked separately so eraseUnreachable()
+  // below keeps their buffers alive.
   // getBufferBType() is private to DisposableElementsAttr, and DisposablePool
   // is a friend, hence the check is inlined here.
   Pool preserved;
   walkOpsAttrs(moduleOp, opsAttrs,
-      [&translations, &preserved](Operation *op, StringRef attrName,
-          DisposableElementsAttr disposable) {
+      [&translations, &preserved, preservePackedInt4](Operation *op,
+          StringRef attrName, DisposableElementsAttr disposable) {
         BType bufferBType = disposable.getBufferBType();
-        if (isPackedBType(bufferBType)) {
+        if (preservePackedInt4 && isPackedBType(bufferBType)) {
           preserved.try_emplace(disposable.getId(), disposable);
           return;
         }

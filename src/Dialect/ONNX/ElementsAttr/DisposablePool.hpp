@@ -69,7 +69,12 @@ public:
   // Disposes every DisposableElementsAttr and in moduleOp replaces each with a
   // DenseElementsAttr. This is irreversible and is called when we
   // are done transforming the ONNX dialect, just before we lower it.
-  void scrub(mlir::ModuleOp moduleOp, OpAttrDictionary opsAttrs);
+  //
+  // If preservePackedInt4 is set, attributes whose buffer holds packed
+  // int4/uint4 data are left as DisposableElementsAttr, so the weights stay
+  // packed until something reads them.
+  void scrub(mlir::ModuleOp moduleOp, OpAttrDictionary opsAttrs,
+      bool preservePackedInt4 = false);
 
   // Can be called when the pool is empty, namely after calling scrub(), to
   // ensure that no more DisposableElementsAttr instances are created, i.e.
