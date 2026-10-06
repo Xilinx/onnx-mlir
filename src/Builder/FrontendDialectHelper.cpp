@@ -15,8 +15,12 @@
 
 #include "src/Builder/FrontendDialectHelper.hpp"
 
+#include <memory>
+#include <mutex>
+
 #include "mlir/IR/BuiltinAttributeInterfaces.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -69,6 +73,48 @@ bool isInMemoryExternal(std::string_view location) {
   return location == "*/_ORT_MEM_ADDR_/*";
 }
 
+// A view of part of a shared, whole-file MemoryBuffer; keeps the whole buffer
+// alive for as long as the slice is.
+class SlicedMemoryBuffer : public llvm::MemoryBuffer {
+public:
+  SlicedMemoryBuffer(
+      std::shared_ptr<llvm::MemoryBuffer> whole, llvm::StringRef slice)
+      : whole(std::move(whole)) {
+    init(slice.begin(), slice.end(), /*RequiresNullTerminator=*/false);
+  }
+  llvm::StringRef getBufferIdentifier() const override {
+    return whole->getBufferIdentifier();
+  }
+  BufferKind getBufferKind() const override { return whole->getBufferKind(); }
+
+private:
+  std::shared_ptr<llvm::MemoryBuffer> whole;
+};
+
+// Returns a read-only buffer (mmap'ed if large) for a whole external data
+// file. A model typically stores thousands of tensors in one data file, and
+// opening it once per tensor is costly on network filesystems. The mapping is
+// cached only while some tensor slice still references it.
+std::shared_ptr<llvm::MemoryBuffer> getWholeExternalDataFile(
+    const std::string &pathStr) {
+  static std::mutex mutex;
+  static llvm::StringMap<std::weak_ptr<llvm::MemoryBuffer>> cache;
+  std::lock_guard<std::mutex> lock(mutex);
+  std::weak_ptr<llvm::MemoryBuffer> &entry = cache[pathStr];
+  if (std::shared_ptr<llvm::MemoryBuffer> whole = entry.lock())
+    return whole;
+  auto bufferOrError = llvm::MemoryBuffer::getFile(pathStr, /*IsText=*/false,
+      /*RequiresNullTerminator=*/false, /*IsVolatile=*/false);
+  if (std::error_code ec = bufferOrError.getError()) {
+    llvm::errs() << "Error " << ec.message() << " reading from file " << pathStr
+                 << "\n";
+    llvm::report_fatal_error("Cannot read external data file");
+  }
+  std::shared_ptr<llvm::MemoryBuffer> whole = std::move(bufferOrError.get());
+  entry = whole;
+  return whole;
+}
+
 // Reads external data from file location specified in tensor proto.
 // The data is little endian encoded.
 // See https://github.com/onnx/onnx/blob/main/docs/ExternalData.md
@@ -82,35 +128,20 @@ std::unique_ptr<llvm::MemoryBuffer> readExternalData_LE(
   llvm::sys::path::append(path, loc.location);
   const std::string pathStr(path.data(), path.size());
 
-  // Check file size before memory mapping to avoid Bus errors
-  uint64_t fileSize;
-  if (std::error_code ec = llvm::sys::fs::file_size(pathStr, fileSize)) {
-    llvm::errs() << "Error getting file size for " << pathStr << ": "
-                 << ec.message() << "\n";
-    llvm::report_fatal_error("Cannot get external data file size");
-  }
-
-  const uint64_t requiredSize = loc.offset + loc.length;
-  if (loc.offset > fileSize ||
-      (loc.length != uint64_t(-1) && requiredSize > fileSize)) {
+  std::shared_ptr<llvm::MemoryBuffer> whole = getWholeExternalDataFile(pathStr);
+  const uint64_t fileSize = whole->getBufferSize();
+  const uint64_t length =
+      loc.length == uint64_t(-1) ? fileSize - loc.offset : loc.length;
+  if (loc.offset > fileSize || loc.offset + length > fileSize) {
     llvm::errs() << "Error: External data file " << pathStr
                  << " is too small.\n"
                  << "  File size: " << fileSize << " bytes\n"
-                 << "  Required:  " << requiredSize << " bytes "
-                 << "(offset=" << loc.offset << " + length=" << loc.length
-                 << ")\n";
+                 << "  Required:  " << loc.offset + length << " bytes "
+                 << "(offset=" << loc.offset << " + length=" << length << ")\n";
     llvm::report_fatal_error("External data file is truncated or corrupted");
   }
-
-  auto bufferOrError = llvm::MemoryBuffer::getFileSlice(
-      path, loc.length, loc.offset, /*IsVolatile=*/false);
-  if (std::error_code ec = bufferOrError.getError()) {
-    llvm::errs() << "Error " << ec.message() << " reading from file " << pathStr
-                 << ", offset=" << loc.offset << ", length=" << loc.length
-                 << "\n";
-    llvm_unreachable("llvm::MemoryBuffer::getFileSlice failed");
-  }
-  return std::move(bufferOrError.get());
+  return std::make_unique<SlicedMemoryBuffer>(
+      whole, whole->getBuffer().substr(loc.offset, length));
 }
 
 template <typename T>
@@ -200,12 +231,27 @@ auto getRangeTransformer(Transform transform) {
              size_t idx) { output[idx] = transform(data[idx]); };
 }
 
+// Unpacks packed int4/uint4 bytes (2 values per byte, low nibble first) in a
+// tight byte loop. A per-element indirect call here dominated import time for
+// large int4-weight models.
 template <typename T>
-void extractIntOrUint4FromPackedByteArray(
-    ArrayRef<char> data, MutableArrayRef<T> output, size_t idx) {
-  // two int4s are packed into one byte each
-  const bool isEven = (idx % 2) == 0;
-  output[idx] = T::extractFromPacked(data[idx / 2], isEven);
+ElementsAttr createInt4ElmAttrFromPackedBytes(
+    RankedTensorType tensorType, ArrayRef<char> packed) {
+  const int64_t numElements = tensorType.getNumElements();
+  return OnnxElementsAttrBuilder(tensorType.getContext())
+      .fromArray<T>(tensorType, [packed, numElements](MutableArrayRef<T> dst) {
+        assert(packed.size() >= static_cast<size_t>((numElements + 1) / 2));
+        const char *in = packed.data();
+        T *out = dst.data();
+        const int64_t numPairs = numElements / 2;
+        for (int64_t i = 0; i < numPairs; ++i) {
+          out[2 * i] = T::extractFromPacked(in[i], /*isFirst=*/true);
+          out[2 * i + 1] = T::extractFromPacked(in[i], /*isFirst=*/false);
+        }
+        if (numElements % 2)
+          out[numElements - 1] =
+              T::extractFromPacked(in[numPairs], /*isFirst=*/true);
+      });
 }
 
 template <typename T>
@@ -214,10 +260,8 @@ ElementsAttr createElementsAttrFromMemoryBuffer_LE(
   MLIRContext *ctx = tensorType.getContext();
   assert(tensorType.getElementType() == toMlirType<T>(ctx));
   if constexpr (isAnyInt4Type<T>) {
-    // int4 and uint4 are packed, each int32_data stores 2 int4s or uint4s.
-    return createElmAttrFromArray<T>(tensorType,
-        ArrayRef<char>(membuf->getBuffer().begin(), membuf->getBuffer().end()),
-        extractIntOrUint4FromPackedByteArray<T>);
+    return createInt4ElmAttrFromPackedBytes<T>(tensorType,
+        ArrayRef<char>(membuf->getBuffer().begin(), membuf->getBuffer().end()));
   } else if constexpr (shouldSwapLEBytes<T>) {
     ArrayRef<T> array = asArrayRef<T>(membuf->getBuffer());
     return createElmAttrFromArray<T>(tensorType, array,
@@ -232,8 +276,7 @@ template <typename T>
 ElementsAttr createElmAttrFromRawBytes_LE(
     RankedTensorType tensorType, ArrayRef<char> bytes) {
   if constexpr (isAnyInt4Type<T>) {
-    return createElmAttrFromArray<T>(
-        tensorType, bytes, extractIntOrUint4FromPackedByteArray<T>);
+    return createInt4ElmAttrFromPackedBytes<T>(tensorType, bytes);
   } else {
     ArrayRef<T> array = castArrayRef<T>(bytes);
     return createElmAttrFromArray<T>(
