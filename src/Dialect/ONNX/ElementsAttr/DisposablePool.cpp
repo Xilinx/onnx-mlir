@@ -89,8 +89,7 @@ void DisposablePool::scrub(ModuleOp moduleOp, OpAttrDictionary opsAttrs) {
       [&translations, &preserved](Operation *op, StringRef attrName,
           DisposableElementsAttr disposable) {
         BType bufferBType = disposable.getBufferBType();
-        if (bufferBType == BType::PACKED_INT4 ||
-            bufferBType == BType::PACKED_UINT4) {
+        if (isPackedBType(bufferBType)) {
           preserved.try_emplace(disposable.getId(), disposable);
           return;
         }

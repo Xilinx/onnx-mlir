@@ -44,13 +44,23 @@ void narrowArray(
   });
 }
 
+// True if a buffer of type bufferBType can hold elements of type btype as they
+// are, without a transformer.
+bool bufferMatchesElementType(BType bufferBType, BType btype) {
+  if (bufferBType == BType::PACKED_INT4)
+    return btype == BType::INT4;
+  if (bufferBType == BType::PACKED_UINT4)
+    return btype == BType::UINT4;
+  return wideBTypeOfBType(bufferBType) == wideBTypeOfBType(btype);
+}
+
 // Copies srcBytes to dst while widening from the given datatype.
 void widenArray(
     BType bt, ArrayRef<char> srcBytes, MutableArrayRef<WideNum> dst) {
   // A packed buffer holds two values per byte, so unlike other types a source
   // slot is not one dst element. Callers pass the whole buffer, so i is the
   // flat element index; atFlatIndex does not use this function for that reason.
-  if (bt == BType::PACKED_INT4 || bt == BType::PACKED_UINT4) {
+  if (isPackedBType(bt)) {
     bool isSigned = bt == BType::PACKED_INT4;
     for (size_t i = 0; i < dst.size(); ++i) {
       char packedByte = srcBytes[i / 2];
@@ -79,9 +89,7 @@ DisposableElementsAttr DisposableElementsAttr::create(ShapedType type,
   // Packed buffer types have no CppType, so check their pairing with the
   // logical type explicitly instead of comparing wide types.
   assert((transformer != nullptr ||
-             (bufferBType == BType::PACKED_INT4 && btype == BType::INT4) ||
-             (bufferBType == BType::PACKED_UINT4 && btype == BType::UINT4) ||
-             wideBTypeOfBType(bufferBType) == wideBTypeOfBType(btype)) &&
+             bufferMatchesElementType(bufferBType, btype)) &&
          "buffer wide type mismatch requires transformer");
   bool isContiguous = areStridesContiguous(type.getShape(), strides);
   DisposableElementsAttr a = Base::get(
@@ -141,16 +149,14 @@ BType DisposableElementsAttr::getBufferBType() const {
 
 unsigned DisposableElementsAttr::getBufferElementBytewidth() const {
   BType bufferBType = getBufferBType();
-  // Packed buffers have no fixed bytewidth (two elements share a byte); 0 makes
-  // callers that compare it against sizeof(WideNum) skip their raw-bytes path.
-  if (bufferBType == BType::PACKED_INT4 || bufferBType == BType::PACKED_UINT4)
-    return 0;
+  assert(!isPackedBType(bufferBType) &&
+         "a packed buffer has no element bytewidth");
   return bytewidthOfBType(bufferBType);
 }
 
 int64_t DisposableElementsAttr::getNumBufferElements() const {
   BType bufferBType = getBufferBType();
-  if (bufferBType == BType::PACKED_INT4 || bufferBType == BType::PACKED_UINT4)
+  if (isPackedBType(bufferBType))
     return getBuffer()->getBufferSize() * 2;
   return getBuffer()->getBufferSize() / getBufferElementBytewidth();
 }
@@ -302,17 +308,18 @@ ArrayRef<char> DisposableElementsAttr::getBufferBytes() const {
 }
 
 ArrayBuffer<WideNum> DisposableElementsAttr::getBufferAsWideNums() const {
-  if (!isTransformed() && getBufferElementBytewidth() == sizeof(WideNum)) {
-    return castArrayRef<WideNum>(getBufferBytes());
-  }
-  ArrayBuffer<WideNum>::Vector dst;
   BType bufferBType = getBufferBType();
-  if (bufferBType == BType::PACKED_INT4 || bufferBType == BType::PACKED_UINT4) {
-    // The element count of a packed buffer cannot be derived from its byte size
-    // (the last byte may be half used), so use the attribute's own count. This
-    // is exact as long as the buffer is not viewed through a broadcast.
-    dst.resize_for_overwrite(getNumElements());
+  ArrayBuffer<WideNum>::Vector dst;
+  if (isPackedBType(bufferBType)) {
+    // A contiguous view of a buffer with an odd number of elements leaves the
+    // last byte half used, so its size is that of the view. Any other view may
+    // have more elements than the buffer (a broadcast) or address all of it
+    // (a transpose), so it is sized by the buffer.
+    dst.resize_for_overwrite(
+        isContiguous() ? getNumElements() : getNumBufferElements());
   } else {
+    if (!isTransformed() && getBufferElementBytewidth() == sizeof(WideNum))
+      return castArrayRef<WideNum>(getBufferBytes());
     dst.resize_for_overwrite(getNumBufferElements());
   }
   readBytesAsWideNums(getBufferBytes(), dst);
@@ -322,7 +329,7 @@ ArrayBuffer<WideNum> DisposableElementsAttr::getBufferAsWideNums() const {
 WideNum DisposableElementsAttr::atFlatIndex(size_t flatIndex) const {
   size_t pos = flatIndexToBufferPos(flatIndex);
   BType bufferBType = getBufferBType();
-  if (bufferBType == BType::PACKED_INT4 || bufferBType == BType::PACKED_UINT4) {
+  if (isPackedBType(bufferBType)) {
     // Extract the nibble directly: widenArray picks the nibble from the index
     // into the array it receives, which would always be 0 for a one-byte slice.
     char packedByte = getBufferBytes()[pos / 2];
@@ -358,9 +365,7 @@ void DisposableElementsAttr::readRawBytes(
   BType btype = getBType();
   unsigned elemBytewidth = bytewidthOfBType(btype);
   BType bufferBType = getBufferBType();
-  if (!isTransformed() && isContiguous() &&
-      (bufferBType == BType::PACKED_INT4 ||
-          bufferBType == BType::PACKED_UINT4)) {
+  if (!isTransformed() && isContiguous() && isPackedBType(bufferBType)) {
     // Unpack straight to one byte per element (int_4 and uint_4 hold just the
     // nibble). Going through WideNums would transiently need 8 bytes per
     // element, which adds up when many large weights are materialized

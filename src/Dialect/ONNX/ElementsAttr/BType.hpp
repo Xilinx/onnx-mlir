@@ -85,11 +85,12 @@ enum class BType : int8_t {
   // INT4 (FLOAT4E2M1=23, FLOAT8E8M0=24, UINT2=25, INT2=26) to real data types.
   PACKED_UINT4 = 125,
   PACKED_INT4 = 126,
-
-  MAX_BTYPE = 127 // TODO: update this if more types are added to the enum
 };
 
-constexpr int kNumBTypes = static_cast<int8_t>(BType::MAX_BTYPE) + 1;
+// True for the storage-only types that hold two int4/uint4 values per byte.
+constexpr bool isPackedBType(BType bt) {
+  return bt == BType::PACKED_UINT4 || bt == BType::PACKED_INT4;
+}
 
 // BType and enum onnx::TensorProto_DataType convert to each other with
 // static_cast because BType faithfully copies onnx::TensorProto_DataType.

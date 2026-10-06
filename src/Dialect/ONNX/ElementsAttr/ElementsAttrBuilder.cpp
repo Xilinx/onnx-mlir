@@ -437,9 +437,14 @@ ElementsAttr ElementsAttrBuilder::castToIntElementType(
                         : functionTransformer(wideCast<int64_t, uint64_t>);
     } else {
       ElementsProperties props = getElementsProperties(elms);
-      ShapedType newType = elms.getShapedType().clone(newElementType);
-      return create(newType, props.bufferBType, props.strides, props.buffer,
-          props.transformer);
+      if (!isPackedBType(props.bufferBType)) {
+        ShapedType newType = elms.getShapedType().clone(newElementType);
+        return create(newType, props.bufferBType, props.strides, props.buffer,
+            props.transformer);
+      }
+      // A packed buffer can only be read as its own int4 or uint4 type, so the
+      // cast needs a transformer even though it does not change any value.
+      transformer = functionTransformer([](WideNum n) { return n; });
     }
   } else {
     llvm_unreachable("unsupported element type");
@@ -831,10 +836,8 @@ ElementsAttr ElementsAttrBuilder::reshape(
 
   // The raw-bytes path assumes a fixed per-element bytewidth, which packed
   // int4/uint4 buffers do not have; take the WideNums path for them.
-  bool bufferIsPacked = disp.getBufferBType() == BType::PACKED_INT4 ||
-                        disp.getBufferBType() == BType::PACKED_UINT4;
-  if (!disp.isTransformed() &&
-      !bufferIsPacked) // Skip WideNums absent element-wise transform.
+  // Skip WideNums absent an element-wise transform.
+  if (!disp.isTransformed() && !isPackedBType(disp.getBufferBType()))
     return fromRawBytes(
         reshapedType, disp.getBufferBType(), [disp](MutableArrayRef<char> dst) {
           auto src = disp.getBufferBytes();

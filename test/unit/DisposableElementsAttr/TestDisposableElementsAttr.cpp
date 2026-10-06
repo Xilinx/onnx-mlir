@@ -305,6 +305,55 @@ public:
         assert(eq<int_4>(tv2[i], expectedStrided[i]));
     }
 
+    // A broadcast addresses the buffer through zero strides, so the view has
+    // more elements than the one-byte buffer holds.
+    {
+      ShapedType type2 = RankedTensorType::get({2}, I4);
+      ElementsAttr packed2 = elmsBuilder.fromPackedInt4MemoryBuffer(
+          type2, BType::PACKED_INT4, buffer<uint8_t>({0xE1}));
+      auto expanded = mlir::cast<DisposableElementsAttr>(
+          elmsBuilder.expand(packed2, {3, 2}));
+      ArrayBuffer<WideNum> wideNums = expanded.getWideNums();
+      assert(wideNums.get().size() == 6);
+      for (size_t i = 0; i < 6; ++i)
+        assert(wideNums.get()[i].i64 == (i % 2 == 0 ? 1 : -2));
+      ArrayBuffer<char> rawBytes = expanded.getRawBytes();
+      assert(rawBytes.get().size() == 6);
+      for (size_t i = 0; i < 6; ++i)
+        assert(rawBytes.get()[i] == (i % 2 == 0 ? 0x1 : 0xE));
+    }
+
+    // Widening casts must read the packed buffer through its own type and give
+    // sign-extended (int4) or zero-extended (uint4) values in the new type.
+    {
+      for (Type wide : {I8, I32, I64}) {
+        auto castI4 = mlir::cast<DisposableElementsAttr>(
+            elmsBuilder.castElementType(packedI4, wide));
+        ElementsAttr denseI4 = castI4.toDenseElementsAttr();
+        size_t i = 0;
+        for (const APInt &v : denseI4.getValues<APInt>())
+          assert(v.getSExtValue() == static_cast<int64_t>(expectedI4[i++]));
+        assert(i == 6);
+      }
+      auto castI8 = mlir::cast<DisposableElementsAttr>(
+          elmsBuilder.castElementType(packedI4, I8));
+      ArrayBuffer<char> bytesI8 = castI8.getRawBytes();
+      assert(bytesI8.get().size() == 6);
+      for (size_t i = 0; i < 6; ++i)
+        assert(static_cast<int8_t>(bytesI8.get()[i]) ==
+               static_cast<int8_t>(expectedI4[i]));
+
+      for (Type wide : {U8, U32}) {
+        auto castU4 = mlir::cast<DisposableElementsAttr>(
+            elmsBuilder.castElementType(packedU4, wide));
+        ElementsAttr denseU4 = castU4.toDenseElementsAttr();
+        size_t i = 0;
+        for (const APInt &v : denseU4.getValues<APInt>())
+          assert(v.getZExtValue() == static_cast<uint64_t>(expectedU4[i++]));
+        assert(i == 6);
+      }
+    }
+
     return 0;
   }
 
