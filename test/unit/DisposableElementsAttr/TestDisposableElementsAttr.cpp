@@ -369,9 +369,14 @@ public:
   int test_scrub_packed_int4() {
     std::cout << "test_scrub_packed_int4:" << std::endl;
 
-    // Scrubbing makes every constant dense, except packed int4/uint4 ones
-    // when asked to preserve them.
-    for (bool preserve : {false, true}) {
+    // Scrubbing makes every constant dense, except packed int4/uint4 ones that
+    // are large enough, when asked to preserve them.
+    struct Case {
+      int64_t minElements;
+      bool expectPreserved;
+    };
+    for (Case c :
+        {Case{-1, false}, Case{7, false}, Case{6, true}, Case{0, true}}) {
       ShapedType packedType = RankedTensorType::get({6}, I4);
       ElementsAttr packed = elmsBuilder.fromPackedInt4MemoryBuffer(
           packedType, BType::PACKED_INT4, buffer<uint8_t>({0xE1, 0x83, 0x07}));
@@ -385,12 +390,15 @@ public:
       auto packedOp = b.create<ONNXConstantOp>(loc, Attribute(), packed);
       auto plainOp = b.create<ONNXConstantOp>(loc, Attribute(), plain);
 
-      DisposablePool::get<ONNXDialect>(ctx)->scrub(
-          *module, {{ONNXConstantOp::getOperationName(), "value"}}, preserve);
+      DisposablePool::get<ONNXDialect>(ctx)->scrub(*module,
+          {{ONNXConstantOp::getOperationName(), "value"}}, c.minElements);
 
+      // Constants other than packed int4/uint4 are always dense afterwards.
       assert(isa<DenseElementsAttr>(plainOp.getValueAttr()));
-      assert(isa<DisposableElementsAttr>(packedOp.getValueAttr()) == preserve);
-      assert(isa<DenseElementsAttr>(packedOp.getValueAttr()) == !preserve);
+      assert(isa<DisposableElementsAttr>(packedOp.getValueAttr()) ==
+             c.expectPreserved);
+      assert(isa<DenseElementsAttr>(packedOp.getValueAttr()) ==
+             !c.expectPreserved);
       // Either way the values are still readable.
       auto values = mlir::cast<ElementsAttr>(packedOp.getValueAttr());
       std::vector<int64_t> expected = {1, -2, 3, -8, 7, 0};

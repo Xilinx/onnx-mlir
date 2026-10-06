@@ -182,7 +182,7 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // (reshapes, transposes) would copy them.
   if (!donotScrubDisposableElementsAttr)
     pm.addPass(createScrubDisposablePass(
-        /*closeAfter=*/false, opts.preservePackedInt4Constants));
+        /*closeAfter=*/false, opts.preservePackedInt4MinElements));
 
   // Set onnx_node_name if it is missing. Keep this pass at the end of this
   // function and just before instrumentation.
