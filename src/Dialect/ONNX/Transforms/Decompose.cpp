@@ -4078,11 +4078,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // causal = 1 (the default) can be preserved.
   static LogicalResult validateCausal(
       ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
-    auto causal = dyn_cast<IntegerAttr>(attr);
-    if (!causal)
+    if (!isa<IntegerAttr>(attr))
       return rewriter.notifyMatchFailure(
           customOp, "expected 'causal' attribute to be an integer");
-    if (causal.getSInt() != 1)
+    if (!onnx_mlir::gqaIsCausal(customOp))
       return rewriter.notifyMatchFailure(
           customOp, "non-causal GroupQueryAttention is not supported");
     return success();
@@ -4093,11 +4092,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // preserved.
   static LogicalResult validateSlidingWindowCache(
       ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
-    auto slidingWindowCache = dyn_cast<IntegerAttr>(attr);
-    if (!slidingWindowCache)
+    if (!isa<IntegerAttr>(attr))
       return rewriter.notifyMatchFailure(customOp,
           "expected 'sliding_window_cache' attribute to be an integer");
-    if (slidingWindowCache.getSInt() != 0)
+    if (!onnx_mlir::gqaHasLinearCacheLayout(customOp))
       return rewriter.notifyMatchFailure(customOp,
           "sliding-window KV cache GroupQueryAttention is not supported");
     return success();
@@ -6322,6 +6320,21 @@ bool onnx_mlir::gqaWindowNeverBinds(mlir::Operation *op, int64_t maskSeqLen) {
   // An absent attribute is the spec default, -1, which is no window at all.
   return !localWindowSize || localWindowSize.getSInt() == -1 ||
          localWindowSize.getSInt() >= maskSeqLen;
+}
+
+bool onnx_mlir::gqaIsCausal(mlir::Operation *op) {
+  if (!op->hasAttr("causal"))
+    return true;
+  auto causal = op->getAttrOfType<IntegerAttr>("causal");
+  return causal && causal.getSInt() == 1;
+}
+
+bool onnx_mlir::gqaHasLinearCacheLayout(mlir::Operation *op) {
+  if (!op->hasAttr("sliding_window_cache"))
+    return true;
+  auto slidingWindowCache =
+      op->getAttrOfType<IntegerAttr>("sliding_window_cache");
+  return slidingWindowCache && slidingWindowCache.getSInt() == 0;
 }
 
 bool onnx_mlir::hasFullDepthFullRotaryGQACache(mlir::Operation *op) {
