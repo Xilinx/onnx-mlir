@@ -4064,11 +4064,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // values can be passed through this decomposition.
   static LogicalResult validateSmoothSoftmax(
       ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
-    auto smoothSoftmax = dyn_cast<IntegerAttr>(attr);
-    if (!smoothSoftmax)
+    if (!isa<IntegerAttr>(attr))
       return rewriter.notifyMatchFailure(
           customOp, "expected 'smooth_softmax' attribute to be an integer");
-    if (smoothSoftmax.getSInt() == 1)
+    if (onnx_mlir::gqaHasSmoothSoftmax(customOp))
       return rewriter.notifyMatchFailure(customOp,
           "attribute 'smooth_softmax' not supported by onnx.Attention");
     return success();
@@ -4105,11 +4104,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // only handles the non-quantized mode.
   static LogicalResult validateQuantType(
       ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
-    auto quantType = dyn_cast<StringAttr>(attr);
-    if (!quantType)
+    if (!isa<StringAttr>(attr))
       return rewriter.notifyMatchFailure(
           customOp, "expected quantization type attribute to be a string");
-    if (!quantType.getValue().equals_insensitive("NONE"))
+    if (onnx_mlir::gqaHasQuantizedKVCache(customOp))
       return rewriter.notifyMatchFailure(customOp,
           "quantized KV-cache GroupQueryAttention variants are not supported");
     return success();
@@ -6335,6 +6333,22 @@ bool onnx_mlir::gqaHasLinearCacheLayout(mlir::Operation *op) {
   auto slidingWindowCache =
       op->getAttrOfType<IntegerAttr>("sliding_window_cache");
   return slidingWindowCache && slidingWindowCache.getSInt() == 0;
+}
+
+bool onnx_mlir::gqaHasSmoothSoftmax(mlir::Operation *op) {
+  auto smoothSoftmax = op->getAttrOfType<IntegerAttr>("smooth_softmax");
+  return smoothSoftmax && smoothSoftmax.getSInt() == 1;
+}
+
+bool onnx_mlir::gqaHasQuantizedKVCache(mlir::Operation *op) {
+  if (op->hasAttr("kv_cache_bit_width"))
+    return true;
+  for (StringRef name : {"k_quant_type", "v_quant_type"}) {
+    auto quantType = op->getAttrOfType<StringAttr>(name);
+    if (quantType && !quantType.getValue().equals_insensitive("NONE"))
+      return true;
+  }
+  return false;
 }
 
 bool onnx_mlir::hasFullDepthFullRotaryGQACache(mlir::Operation *op) {

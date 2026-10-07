@@ -65,6 +65,15 @@ bool gqaIsCausal(mlir::Operation *op);
 // cache that rotates, which every linear addressing of the cache would misread.
 bool gqaHasLinearCacheLayout(mlir::Operation *op);
 
+// smooth_softmax adds a term to the softmax denominator. It has no spec
+// default, so an absent attribute is off.
+bool gqaHasSmoothSoftmax(mlir::Operation *op);
+
+// True for any of the quantized KV-cache spellings: a k_quant_type or
+// v_quant_type that is not NONE, or the presence of kv_cache_bit_width, which
+// is only meaningful for a quantized cache.
+bool gqaHasQuantizedKVCache(mlir::Operation *op);
+
 // True for a preallocated com.microsoft.GroupQueryAttention whose rotary
 // width covers the full cache head.
 bool hasFullDepthFullRotaryGQACache(mlir::Operation *op);
