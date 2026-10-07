@@ -72,8 +72,11 @@ def ONNXDecomposePatternOptions {
            "bool", /*default=*/"false",
            "Skip GroupQueryAttention decomposition on preallocated full-RoPE "
            "nodes, leaving them intact for a whole-node match. "
-           "Empty-cache prefill and partial-RoPE nodes are still decomposed "
-           "here, where the resulting ONNX ops can still be lowered.">,
+           "Partial RoPE is kept too when each rotary half splits into whole "
+           "16-lane runs; a fully rotating head has no such boundary and is "
+           "kept whatever its width. Empty-cache prefill and rotary widths the "
+           "matcher cannot lay out are still decomposed here, where the "
+           "resulting ONNX ops can still be lowered.">,
 
     Option<"enableGQAUint16CacheSlotRewrite",
            "enable-gqa-uint16-cache-slot-rewrite",

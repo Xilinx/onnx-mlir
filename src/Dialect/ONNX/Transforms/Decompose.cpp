@@ -6295,7 +6295,7 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       enableLstmDecompose, /*lstmDecompositionPredicate=*/{},
       holdBackPreallocatedGQADecompose
           ? onnx_mlir::GQADecompositionPredicate([](mlir::Operation *op) {
-              return !onnx_mlir::hasFullDepthFullRotaryGQACache(op);
+              return !onnx_mlir::hasTokenDecodableGQACache(op);
             })
           : onnx_mlir::GQADecompositionPredicate{});
 
@@ -6351,7 +6351,7 @@ bool onnx_mlir::gqaHasQuantizedKVCache(mlir::Operation *op) {
   return false;
 }
 
-bool onnx_mlir::hasFullDepthFullRotaryGQACache(mlir::Operation *op) {
+bool onnx_mlir::hasTokenDecodableGQACache(mlir::Operation *op) {
   auto customOp = mlir::dyn_cast_or_null<ONNXCustomOp>(op);
   if (!customOp || !isCustomOpWithNameAndDialect(
                        customOp, "GroupQueryAttention", MicrosoftDomainName))
@@ -6375,9 +6375,17 @@ bool onnx_mlir::hasFullDepthFullRotaryGQACache(mlir::Operation *op) {
       !cosCacheType || !cosCacheType.hasStaticShape() ||
       cosCacheType.getRank() != 2)
     return false;
+  const int64_t headDim = pastKeyType.getShape()[3];
+  const int64_t halfRotary = cosCacheType.getShape()[1];
+  const int64_t rotaryDim = 2 * halfRotary;
+  if (headDim % 4 != 0 || rotaryDim <= 0 || rotaryDim > headDim)
+    return false;
+  // held back partial RoPE when each half fits in 16-lane vectors.
+  if (rotaryDim < headDim &&
+      (halfRotary % 16 != 0 || (headDim / 2 - halfRotary) % 16 != 0))
+    return false;
   return pastKeyType.getShape()[2] > 0 &&
-         presentKeyType.getShape()[2] == pastKeyType.getShape()[2] &&
-         2 * cosCacheType.getShape()[1] == pastKeyType.getShape()[3];
+         presentKeyType.getShape()[2] == pastKeyType.getShape()[2];
 }
 
 void onnx_mlir::getDecomposeONNXToONNXPatterns(

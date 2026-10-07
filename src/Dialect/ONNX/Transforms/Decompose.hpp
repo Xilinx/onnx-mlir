@@ -74,9 +74,9 @@ bool gqaHasSmoothSoftmax(mlir::Operation *op);
 // is only meaningful for a quantized cache.
 bool gqaHasQuantizedKVCache(mlir::Operation *op);
 
-// True for a preallocated com.microsoft.GroupQueryAttention whose rotary
-// width covers the full cache head.
-bool hasFullDepthFullRotaryGQACache(mlir::Operation *op);
+// True for a preallocated com.microsoft.GroupQueryAttention a whole-node
+// token-decode match can claim.
+bool hasTokenDecodableGQACache(mlir::Operation *op);
 
 // Exports the DecomposeONNXToONNXPass patterns. They are all plain rewrite
 // patterns that can be used with any PatternRewriter, not conversion patterns.
