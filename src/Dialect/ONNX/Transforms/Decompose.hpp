@@ -53,6 +53,10 @@ extern bool convTransposeToResizeActive;
 // predicate decomposes every node.
 using GQADecompositionPredicate = std::function<bool(mlir::Operation *)>;
 
+// True, when a com.microsoft.GroupQueryAttention local_window_size is so big
+// that it actually covers everything and is equivalent to not specifying it (-1).
+bool gqaWindowNeverBinds(mlir::Operation *op, int64_t maskSeqLen);
+
 // True for a preallocated com.microsoft.GroupQueryAttention whose rotary
 // width covers the full cache head.
 bool hasFullDepthFullRotaryGQACache(mlir::Operation *op);

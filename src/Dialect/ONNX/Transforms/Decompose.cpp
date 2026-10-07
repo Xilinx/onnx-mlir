@@ -4049,11 +4049,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // capacity and the true position stays below it.
   static LogicalResult validateWindowNeverBinds(
       ONNXCustomOp customOp, PatternRewriter &rewriter, int64_t maskSeqLen) {
+    if (onnx_mlir::gqaWindowNeverBinds(customOp, maskSeqLen))
+      return success();
     auto localWindowSize =
         customOp->getAttrOfType<IntegerAttr>("local_window_size");
-    if (!localWindowSize || localWindowSize.getSInt() == -1 ||
-        localWindowSize.getSInt() >= maskSeqLen)
-      return success();
     return rewriter.notifyMatchFailure(customOp,
         "attribute 'local_window_size' = " +
             std::to_string(localWindowSize.getSInt()) +
@@ -6317,6 +6316,13 @@ void DecomposeONNXToONNXPass::runOnOperation() {
 }
 
 } // namespace
+
+bool onnx_mlir::gqaWindowNeverBinds(mlir::Operation *op, int64_t maskSeqLen) {
+  auto localWindowSize = op->getAttrOfType<IntegerAttr>("local_window_size");
+  // An absent attribute is the spec default, -1, which is no window at all.
+  return !localWindowSize || localWindowSize.getSInt() == -1 ||
+         localWindowSize.getSInt() >= maskSeqLen;
+}
 
 bool onnx_mlir::hasFullDepthFullRotaryGQACache(mlir::Operation *op) {
   auto customOp = mlir::dyn_cast_or_null<ONNXCustomOp>(op);
