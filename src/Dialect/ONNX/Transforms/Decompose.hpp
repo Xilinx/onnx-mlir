@@ -54,7 +54,8 @@ extern bool convTransposeToResizeActive;
 using GQADecompositionPredicate = std::function<bool(mlir::Operation *)>;
 
 // True, when a com.microsoft.GroupQueryAttention local_window_size is so big
-// that it actually covers everything and is equivalent to not specifying it (-1).
+// that it actually covers everything and is equivalent to not specifying it
+// (-1).
 bool gqaWindowNeverBinds(mlir::Operation *op, int64_t maskSeqLen);
 
 // causal defaults to 1. False when the node is explicitly non-causal, or when
