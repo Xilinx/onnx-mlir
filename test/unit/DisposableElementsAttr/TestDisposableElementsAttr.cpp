@@ -335,6 +335,21 @@ public:
         assert(eq<int_4>(tv2[i], expectedStrided[i]));
     }
 
+    // Slicing a transposed view reads the nibbles in place, with an offset
+    // and strides, and gives the same values as slicing the dense equivalent.
+    {
+      auto reshaped = elmsBuilder.reshape(packedI4, {2, 3});
+      auto transposed = elmsBuilder.transpose(reshaped, {1, 0}); // shape [3,2]
+      // transposed = [[1,-8],[-2,7],[3,0]]; take rows 1.. and column 1.
+      auto sliced = elmsBuilder.slice(transposed, {2, 1}, {1, 1}, {1, 1});
+      auto sv = mlir::cast<DisposableElementsAttr>(sliced).getValues<int_4>();
+      assert(eq<int_4>(sv[0], int_4(7)));
+      assert(eq<int_4>(sv[1], int_4(0)));
+      // An empty slice is fine too.
+      auto empty = elmsBuilder.slice(transposed, {0, 2}, {3, 0}, {1, 1});
+      assert(empty.getNumElements() == 0);
+    }
+
     // A broadcast addresses the buffer through zero strides, so the view has
     // more elements than the one-byte buffer holds.
     {

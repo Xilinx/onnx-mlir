@@ -974,7 +974,7 @@ ElementsAttr ElementsAttrBuilder::slice(ElementsAttr elms,
   // ConstPropSlice on models that take many small slices of large constants.
   // This applies when the buffer holds the elements as they are: no
   // transformer, no cast, and no packed layout (which has no per-element
-  // bytewidth).
+  // bytewidth; see below).
   auto disp = mlir::dyn_cast<DisposableElementsAttr>(elms);
   if (disp && !disp.isTransformedOrCast() &&
       llvm::all_of(steps, [](int64_t step) { return step > 0; })) {
@@ -993,6 +993,32 @@ ElementsAttr ElementsAttrBuilder::slice(ElementsAttr elms,
           restrideArray(bytewidth, shape, strides,
               disp.getBufferBytes().drop_front(startOffset * bytewidth), dst);
         });
+  }
+
+  // A packed int4/uint4 buffer is also read in place: widening all of it just
+  // to take a slice would need 8 bytes per element of the whole tensor. The
+  // result holds one element per byte.
+  if (disp && !disp.isTransformed() && isPackedBType(disp.getBufferBType()) &&
+      llvm::all_of(steps, [](int64_t step) { return step > 0; })) {
+    ArrayRef<char> packed = disp.getBufferBytes();
+    SmallVector<int64_t> strides(disp.getStrides());
+    int64_t startOffset = 0;
+    for (size_t axis = 0; axis < shape.size(); ++axis) {
+      startOffset += starts[axis] * strides[axis];
+      strides[axis] *= steps[axis];
+    }
+    auto slicePacked = [&](auto elementType) {
+      using T = decltype(elementType);
+      return fromArray<T>(outType, [&](MutableArrayRef<T> dst) {
+        for (auto &idxoffs : StridesRange<1>(shape, {strides})) {
+          int64_t pos = startOffset + idxoffs[0];
+          dst[idxoffs.flattenedIndex] =
+              T::extractFromPacked(packed[pos / 2], /*isFirst=*/pos % 2 == 0);
+        }
+      });
+    };
+    return disp.getBufferBType() == BType::PACKED_INT4 ? slicePacked(int_4())
+                                                       : slicePacked(uint_4());
   }
 
   return fromWideNums(outType, [&](MutableArrayRef<WideNum> dst) {
