@@ -288,6 +288,13 @@ public:
 
   void printAsDenseElementsAttr(AsmPrinter &printer) const;
 
+  // printWithoutType and printAsDenseElementsAttr cannot read the flags the
+  // AsmPrinter was created with, so a requested elideLargeElementsAttrs(N) is
+  // ignored and every attribute is materialized just to be printed. A caller
+  // that knows its threshold can set it here; attributes larger than it are
+  // elided when printed. A negative value (the default) means no override.
+  static void setPrintElisionThreshold(int64_t elideLargerThanOrNegativeOne);
+
 private:
   // Widens and transforms bytes into WideNums in accordance with
   // bufferDType and transformer.

@@ -260,8 +260,12 @@ ElementsAttr createElementsAttrFromMemoryBuffer_LE(
   MLIRContext *ctx = tensorType.getContext();
   assert(tensorType.getElementType() == toMlirType<T>(ctx));
   if constexpr (isAnyInt4Type<T>) {
-    return createInt4ElmAttrFromPackedBytes<T>(tensorType,
-        ArrayRef<char>(membuf->getBuffer().begin(), membuf->getBuffer().end()));
+    // The buffer already holds packed values (two per byte). Keep them packed
+    // and unpack on read instead of expanding to one byte per element here.
+    BType packedBType =
+        std::is_same_v<T, int_4> ? BType::PACKED_INT4 : BType::PACKED_UINT4;
+    return OnnxElementsAttrBuilder(ctx).fromPackedInt4MemoryBuffer(
+        tensorType, packedBType, std::move(membuf));
   } else if constexpr (shouldSwapLEBytes<T>) {
     ArrayRef<T> array = asArrayRef<T>(membuf->getBuffer());
     return createElmAttrFromArray<T>(tensorType, array,

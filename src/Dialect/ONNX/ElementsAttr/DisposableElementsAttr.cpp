@@ -18,6 +18,7 @@
 #include "llvm/Support/Endian.h"
 
 #include <algorithm>
+#include <atomic>
 #include <string>
 
 using namespace onnx_mlir;
@@ -43,9 +44,46 @@ void narrowArray(
   });
 }
 
+// Unpacks dst.size() int4/uint4 values (two per byte, low nibble first) to one
+// byte each, which holds just the nibble.
+void unpackNibbles(ArrayRef<char> packed, MutableArrayRef<char> dst) {
+  const size_t numPairs = dst.size() / 2;
+  for (size_t i = 0; i < numPairs; ++i) {
+    dst[2 * i] = static_cast<char>(packed[i] & 0x0F);
+    dst[2 * i + 1] = static_cast<char>((packed[i] >> 4) & 0x0F);
+  }
+  if (dst.size() % 2)
+    dst.back() = static_cast<char>(packed[numPairs] & 0x0F);
+}
+
+// True if a buffer of type bufferBType can hold elements of type btype as they
+// are, without a transformer.
+bool bufferMatchesElementType(BType bufferBType, BType btype) {
+  if (bufferBType == BType::PACKED_INT4)
+    return btype == BType::INT4;
+  if (bufferBType == BType::PACKED_UINT4)
+    return btype == BType::UINT4;
+  return wideBTypeOfBType(bufferBType) == wideBTypeOfBType(btype);
+}
+
 // Copies srcBytes to dst while widening from the given datatype.
 void widenArray(
     BType bt, ArrayRef<char> srcBytes, MutableArrayRef<WideNum> dst) {
+  // A packed buffer holds two values per byte, so unlike other types a source
+  // slot is not one dst element. Callers pass the whole buffer, so i is the
+  // flat element index; atFlatIndex does not use this function for that reason.
+  if (isPackedBType(bt)) {
+    bool isSigned = bt == BType::PACKED_INT4;
+    for (size_t i = 0; i < dst.size(); ++i) {
+      char packedByte = srcBytes[i / 2];
+      bool isFirst = (i % 2) == 0;
+      dst[i] = isSigned ? WideNum::widen<BType::INT4>(
+                              int_4::extractFromPacked(packedByte, isFirst))
+                        : WideNum::widen<BType::UINT4>(
+                              uint_4::extractFromPacked(packedByte, isFirst));
+    }
+    return;
+  }
   dispatchByBType(bt, [srcBytes, dst](auto btype) {
     auto src = castArrayRef<CppType<btype>>(srcBytes);
     assert(src.size() == dst.size() && "widenArray size mismatch");
@@ -60,8 +98,10 @@ DisposableElementsAttr DisposableElementsAttr::create(ShapedType type,
     size_t id, BType bufferBType, ArrayRef<int64_t> strides,
     const Buffer &buffer, Transformer transformer) {
   BType btype = btypeOfMlirType(type.getElementType());
+  // Packed buffer types have no CppType, so check their pairing with the
+  // logical type explicitly instead of comparing wide types.
   assert((transformer != nullptr ||
-             wideBTypeOfBType(bufferBType) == wideBTypeOfBType(btype)) &&
+             bufferMatchesElementType(bufferBType, btype)) &&
          "buffer wide type mismatch requires transformer");
   bool isContiguous = areStridesContiguous(type.getShape(), strides);
   DisposableElementsAttr a = Base::get(
@@ -120,10 +160,16 @@ BType DisposableElementsAttr::getBufferBType() const {
 }
 
 unsigned DisposableElementsAttr::getBufferElementBytewidth() const {
-  return bytewidthOfBType(getBufferBType());
+  BType bufferBType = getBufferBType();
+  assert(!isPackedBType(bufferBType) &&
+         "a packed buffer has no element bytewidth");
+  return bytewidthOfBType(bufferBType);
 }
 
 int64_t DisposableElementsAttr::getNumBufferElements() const {
+  BType bufferBType = getBufferBType();
+  if (isPackedBType(bufferBType))
+    return getBuffer()->getBufferSize() * 2;
   return getBuffer()->getBufferSize() / getBufferElementBytewidth();
 }
 
@@ -196,13 +242,27 @@ std::unique_ptr<llvm::MemoryBuffer> DisposableElementsAttr::parse(
   }
 }
 
+namespace {
+// Threshold set through setPrintElisionThreshold; negative means no override.
+std::atomic<int64_t> gPrintElisionThreshold{-1};
+} // namespace
+
+void DisposableElementsAttr::setPrintElisionThreshold(
+    int64_t elideLargerThanOrNegativeOne) {
+  gPrintElisionThreshold.store(elideLargerThanOrNegativeOne);
+}
+
 void DisposableElementsAttr::printWithoutType(AsmPrinter &printer) const {
   // It would be ideal if we could read the printer flags from printer instead
   // of constructing them here, because printer may have been constructed with
   // an override of elideLargeElementsAttrs which we cannot see here.
   // Oh well, at least OpPrintingFlags().shouldElideElementsAttr(ElementsAttr)
   // lets us respect the --mlir-elide-elementsattrs-if-larger command line flag.
-  static OpPrintingFlags printerFlags{};
+  // A threshold set through setPrintElisionThreshold takes precedence.
+  OpPrintingFlags printerFlags;
+  int64_t threshold = gPrintElisionThreshold.load();
+  if (threshold >= 0)
+    printerFlags.elideLargeElementsAttrs(threshold);
   printer << getMnemonic() << "<" << getImpl()->id << ":";
   if (!printerFlags.shouldElideElementsAttr(*this)) {
     auto rawBytes = getRawBytes();
@@ -227,7 +287,11 @@ void DisposableElementsAttr::printWithoutType(AsmPrinter &printer) const {
 
 void DisposableElementsAttr::printAsDenseElementsAttr(
     AsmPrinter &printer) const {
-  static OpPrintingFlags printerFlags{};
+  // See printWithoutType.
+  OpPrintingFlags printerFlags;
+  int64_t threshold = gPrintElisionThreshold.load();
+  if (threshold >= 0)
+    printerFlags.elideLargeElementsAttrs(threshold);
   if (isSplat() || !printerFlags.shouldElideElementsAttr(*this)) {
     // Take shortcut by first converting to DenseElementsAttr.
     // NOTE: This creates a copy which is never garbage collected. This is not
@@ -238,7 +302,9 @@ void DisposableElementsAttr::printAsDenseElementsAttr(
     // TODO: Do the work to print without constructing DenseElementsAttr.
   } else {
     // In this special case it's easy to avoid conversion to DenseElementsAttr.
-    printer << "dense<__elided__> : " << getType();
+    // MLIR's AsmPrinter prints an elided ElementsAttr as dense_resource<...>;
+    // match it so the output can be parsed back.
+    printer << "dense_resource<__elided__> : " << getType();
   }
 }
 
@@ -254,17 +320,41 @@ ArrayRef<char> DisposableElementsAttr::getBufferBytes() const {
 }
 
 ArrayBuffer<WideNum> DisposableElementsAttr::getBufferAsWideNums() const {
-  if (!isTransformed() && getBufferElementBytewidth() == sizeof(WideNum)) {
-    return castArrayRef<WideNum>(getBufferBytes());
-  }
+  BType bufferBType = getBufferBType();
   ArrayBuffer<WideNum>::Vector dst;
-  dst.resize_for_overwrite(getNumBufferElements());
+  if (isPackedBType(bufferBType)) {
+    // A contiguous view of a buffer with an odd number of elements leaves the
+    // last byte half used, so its size is that of the view. Any other view may
+    // have more elements than the buffer (a broadcast) or address all of it
+    // (a transpose), so it is sized by the buffer.
+    dst.resize_for_overwrite(
+        isContiguous() ? getNumElements() : getNumBufferElements());
+  } else {
+    if (!isTransformed() && getBufferElementBytewidth() == sizeof(WideNum))
+      return castArrayRef<WideNum>(getBufferBytes());
+    dst.resize_for_overwrite(getNumBufferElements());
+  }
   readBytesAsWideNums(getBufferBytes(), dst);
   return std::move(dst);
 }
 
 WideNum DisposableElementsAttr::atFlatIndex(size_t flatIndex) const {
   size_t pos = flatIndexToBufferPos(flatIndex);
+  BType bufferBType = getBufferBType();
+  if (isPackedBType(bufferBType)) {
+    // Extract the nibble directly: widenArray picks the nibble from the index
+    // into the array it receives, which would always be 0 for a one-byte slice.
+    char packedByte = getBufferBytes()[pos / 2];
+    bool isFirst = (pos % 2) == 0;
+    WideNum n = bufferBType == BType::PACKED_INT4
+                    ? WideNum::widen<BType::INT4>(
+                          int_4::extractFromPacked(packedByte, isFirst))
+                    : WideNum::widen<BType::UINT4>(
+                          uint_4::extractFromPacked(packedByte, isFirst));
+    if (const Transformer &transformer = getTransformer())
+      transformer(llvm::MutableArrayRef(n));
+    return n;
+  }
   unsigned bufBytewidth = getBufferElementBytewidth();
   ArrayRef<char> bytes =
       getBufferBytes().slice(pos * bufBytewidth, bufBytewidth);
@@ -286,6 +376,22 @@ void DisposableElementsAttr::readRawBytes(
     MutableArrayRef<char> dstBytes) const {
   BType btype = getBType();
   unsigned elemBytewidth = bytewidthOfBType(btype);
+  BType bufferBType = getBufferBType();
+  if (!isTransformed() && isPackedBType(bufferBType)) {
+    // Unpack to one byte per element (int_4 and uint_4 hold just the nibble)
+    // without going through WideNums, which would need 8 bytes per element.
+    if (isContiguous()) {
+      unpackNibbles(getBufferBytes(), dstBytes.take_front(getNumElements()));
+      return;
+    }
+    // A transposed or broadcast view: unpack the buffer once, then restride the
+    // bytes like those of any other buffer with one-byte elements.
+    SmallVector<char> unpacked;
+    unpacked.resize_for_overwrite(getNumBufferElements());
+    unpackNibbles(getBufferBytes(), unpacked);
+    restrideArray(elemBytewidth, getShape(), getStrides(), unpacked, dstBytes);
+    return;
+  }
   if (!isTransformedOrCast()) {
     auto srcBytes = getBufferBytes();
     restrideArray(elemBytewidth, getShape(), getStrides(), srcBytes, dstBytes);
