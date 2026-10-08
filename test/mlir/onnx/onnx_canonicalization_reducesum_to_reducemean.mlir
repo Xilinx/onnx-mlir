@@ -59,3 +59,36 @@ func.func @no_fuse_wrong_scale(%arg0: tensor<2x3x4xf32>) -> tensor<2x1x4xf32> {
   // CHECK: "onnx.Mul"
   // CHECK-NOT: "onnx.ReduceMean"
 }
+
+// -----
+
+// An integer Mul by zero is not 1/N. isConstOf would truncate 1/N to 0.
+// CHECK-LABEL: func.func @no_fuse_integer_zero_scale
+func.func @no_fuse_integer_zero_scale(%arg0: tensor<2x3xi32>) -> tensor<2x1xi32> {
+  %axes = onnx.Constant dense<[1]> : tensor<1xi64>
+  %scale = onnx.Constant dense<0> : tensor<i32>
+  %sum = "onnx.ReduceSum"(%arg0, %axes) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
+      : (tensor<2x3xi32>, tensor<1xi64>) -> tensor<2x1xi32>
+  %0 = "onnx.Mul"(%sum, %scale) : (tensor<2x1xi32>, tensor<i32>) -> tensor<2x1xi32>
+  onnx.Return %0 : tensor<2x1xi32>
+  // CHECK: "onnx.ReduceSum"
+  // CHECK: "onnx.Mul"
+  // CHECK-NOT: "onnx.ReduceMean"
+}
+
+// -----
+
+// The scale matches 1/N but broadcasts the reduced tensor to a wider shape.
+// CHECK-LABEL: func.func @no_fuse_broadcasting_scale
+func.func @no_fuse_broadcasting_scale(%arg0: tensor<2x3x4xf32>) -> tensor<2x5x4xf32> {
+  %axes = onnx.Constant dense<[1]> : tensor<1xi64>
+  %scale = onnx.Constant dense<0.333333343> : tensor<2x5x4xf32>
+  %sum = "onnx.ReduceSum"(%arg0, %axes) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
+      : (tensor<2x3x4xf32>, tensor<1xi64>) -> tensor<2x1x4xf32>
+  %0 = "onnx.Mul"(%sum, %scale) : (tensor<2x1x4xf32>, tensor<2x5x4xf32>) -> tensor<2x5x4xf32>
+  onnx.Return %0 : tensor<2x5x4xf32>
+  // CHECK: "onnx.ReduceSum"
+  // CHECK: "onnx.Mul"
+  // CHECK-SAME: -> tensor<2x5x4xf32>
+  // CHECK-NOT: "onnx.ReduceMean"
+}

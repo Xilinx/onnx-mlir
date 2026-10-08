@@ -79,3 +79,31 @@ func.func @test_reducemean_noaxes_noop(%arg0: tensor<2x3x4xf32>) -> tensor<2x3x4
 // CHECK:           onnx.Return [[PARAM_0_]] : tensor<2x3x4xf32>
 // CHECK-NOT:       "onnx.Constant"
 }
+
+// -----
+
+// A rank-0 reduction has no axes to materialize. Rewriting an empty axes
+// operand to another empty axes operand must not loop.
+func.func @test_reducemean_rank0_noaxes(%arg0: tensor<f32>) -> tensor<f32> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %0 = "onnx.ReduceMean"(%arg0, %none) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<f32>, none) -> tensor<f32>
+  onnx.Return %0 : tensor<f32>
+// CHECK-LABEL:  func.func @test_reducemean_rank0_noaxes
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<f32>) -> tensor<f32> {
+// CHECK:           [[NONE_:%.+]] = "onnx.NoValue"() {value} : () -> none
+// CHECK:           [[RES_:%.+]] = "onnx.ReduceMean"([[PARAM_0_]], [[NONE_]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<f32>, none) -> tensor<f32>
+// CHECK:           onnx.Return [[RES_]] : tensor<f32>
+}
+
+// -----
+
+func.func @test_reducemean_rank0_empty_axes(%arg0: tensor<f32>) -> tensor<f32> {
+  %empty = onnx.Constant dense<> : tensor<0xi64>
+  %0 = "onnx.ReduceMean"(%arg0, %empty) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<f32>, tensor<0xi64>) -> tensor<f32>
+  onnx.Return %0 : tensor<f32>
+// CHECK-LABEL:  func.func @test_reducemean_rank0_empty_axes
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<f32>) -> tensor<f32> {
+// CHECK:           [[AXES_:%.+]] = onnx.Constant dense<> : tensor<0xi64>
+// CHECK:           [[RES_:%.+]] = "onnx.ReduceMean"([[PARAM_0_]], [[AXES_]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<f32>, tensor<0xi64>) -> tensor<f32>
+// CHECK:           onnx.Return [[RES_]] : tensor<f32>
+}

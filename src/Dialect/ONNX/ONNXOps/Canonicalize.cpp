@@ -1133,7 +1133,12 @@ public:
       return rewriter.notifyMatchFailure(
           reduceSumOp, "sole user is not onnx.Mul");
 
-    // NormalizeMulPattern puts constants on the RHS of a Mul.
+    // A broadcasting Mul changes the result shape. ReduceMean cannot
+    // reproduce that, so only a shape-preserving scales are rewritten.
+    if (mulOp.getResult().getType() != reduceSumOp.getResult().getType())
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "Mul broadcasts the reduced value");
+
     Value scaleOperand = mulOp.getB();
 
     auto inputType =
@@ -1142,8 +1147,6 @@ public:
       return rewriter.notifyMatchFailure(reduceSumOp, "input must be ranked");
 
     SmallVector<int64_t> axes;
-    // MaterializeAbsentAxesReducePattern canonicalizes empty axes before this
-    // pattern runs.
     if (!getI64ValuesFromONNXConstantOp(reduceSumOp.getAxes(), axes))
       return rewriter.notifyMatchFailure(reduceSumOp, "axes is not constant");
 
@@ -1162,6 +1165,10 @@ public:
     if (numReducedElements <= 0)
       return rewriter.notifyMatchFailure(
           reduceSumOp, "invalid reduced element count");
+
+    if (!isa<FloatType>(getElementTypeOrSelf(scaleOperand.getType())))
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "scale must be floating point");
 
     const double expectedScale = 1.0 / static_cast<double>(numReducedElements);
     if (!isConstOf(scaleOperand, expectedScale))
@@ -1209,8 +1216,8 @@ public:
 
 // Materialize the implicit "reduce all axes" of a reduction whose reduction
 // axes operand is absent (None) or explicitly empty. An empty `axes` means
-// "reduce over every dimension" unless `noop_with_empty_axes = 1`, in which
-// case the reduction is a no-op that forwards its data input.
+// "reduce over every dimension" unless `noop_with_empty_axes = 1`, which is a
+// no-op handled by the reduction op's fold.
 template <typename OP_TYPE>
 class MaterializeAbsentAxesReducePattern : public OpRewritePattern<OP_TYPE> {
 public:
@@ -1218,25 +1225,24 @@ public:
 
   LogicalResult matchAndRewrite(
       OP_TYPE op, PatternRewriter &rewriter) const override {
-    bool emptyAxes = isNoneValue(op.getAxes());
-    if (!emptyAxes) {
-      SmallVector<int64_t> axes;
-      if (!getI64ValuesFromONNXConstantOp(op.getAxes(), axes))
-        return rewriter.notifyMatchFailure(op, "axes is not a constant");
-      emptyAxes = axes.empty();
-    }
-    if (!emptyAxes)
-      return rewriter.notifyMatchFailure(op, "axes are already present");
+    if (op.getNoopWithEmptyAxes() != 0)
+      return rewriter.notifyMatchFailure(op, "noop on empty axes");
 
-    if (op.getNoopWithEmptyAxes() != 0) {
-      rewriter.replaceOp(op, op.getData());
-      return success();
-    }
+    SmallVector<int64_t> oldAxes;
+    if (!isNoneValue(op.getAxes()) &&
+        (!getI64ValuesFromONNXConstantOp(op.getAxes(), oldAxes) ||
+            !oldAxes.empty()))
+      return rewriter.notifyMatchFailure(op, "axes are not known to be empty");
 
     auto dataType = mlir::dyn_cast<RankedTensorType>(op.getData().getType());
     if (!dataType)
       return rewriter.notifyMatchFailure(op, "data must be ranked");
     const int64_t rank = dataType.getRank();
+    // Rank 0 has no axes to list. Materializing another empty tensor would
+    // match this pattern again and the rewrite would not converge.
+    if (rank == 0)
+      return rewriter.notifyMatchFailure(
+          op, "rank-0 reduction has no axes to materialize");
 
     SmallVector<int64_t> axes(rank);
     std::iota(axes.begin(), axes.end(), int64_t{0});

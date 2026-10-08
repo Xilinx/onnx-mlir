@@ -41,24 +41,6 @@ func.func @test_recompose_reducel2_keepdims(%arg0: tensor<2x3x4xf32>, %arg1: ten
 
 // -----
 
-func.func @test_recompose_reducel2_noop_with_empty_axes(%arg0: tensor<2x3x4xf32>) -> tensor<2x3x4xf32> {
-  %none = "onnx.NoValue"() {value} : () -> none
-  %0 = "onnx.Mul"(%arg0, %arg0) : (tensor<2x3x4xf32>, tensor<2x3x4xf32>) -> tensor<2x3x4xf32>
-  %1 = "onnx.ReduceSum"(%0, %none) {keepdims = 1 : si64, noop_with_empty_axes = 1 : si64} : (tensor<2x3x4xf32>, none) -> tensor<2x3x4xf32>
-  %2 = "onnx.Sqrt"(%1) : (tensor<2x3x4xf32>) -> tensor<2x3x4xf32>
-  onnx.Return %2 : tensor<2x3x4xf32>
-// CHECK-LABEL:  func.func @test_recompose_reducel2_noop_with_empty_axes
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x3x4xf32>) -> tensor<2x3x4xf32> {
-// CHECK-NEXT:      onnx.Return [[PARAM_0_]] : tensor<2x3x4xf32>
-// CHECK:         }
-}
-
-// DISABLED-CHECK-LABEL:  func.func @test_recompose_reducel2_noop_with_empty_axes
-// DISABLED-CHECK-NOT:       "onnx.ReduceL2"
-// DISABLED-CHECK-NOT:       "onnx.ReduceSumSquare"
-
-// -----
-
 func.func @test_recompose_reducel2_from_reducesumsquare(%arg0: tensor<2x3x4xf32>, %arg1: tensor<1xi64>) -> tensor<?x?xf32> {
   %0 = "onnx.ReduceSumSquare"(%arg0, %arg1) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64} : (tensor<2x3x4xf32>, tensor<1xi64>) -> tensor<?x?xf32>
   %1 = "onnx.Sqrt"(%0) : (tensor<?x?xf32>) -> tensor<?x?xf32>
@@ -186,9 +168,10 @@ func.func @test_recompose_reducel2_from_pow_reducesumsquare_empty_axes(%arg0: te
   onnx.Return %result : tensor<2x3x4xf32>
 // CHECK-LABEL:  func.func @test_recompose_reducel2_from_pow_reducesumsquare_empty_axes
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x3x4xf32>) -> tensor<2x3x4xf32> {
+// CHECK:           [[AXES_:%.+]] = onnx.Constant dense<> : tensor<0xi64>
 // CHECK-NOT:       "onnx.ReduceSumSquare"
-// CHECK-NOT:       "onnx.ReduceL2"
-// CHECK-NEXT:      onnx.Return [[PARAM_0_]] : tensor<2x3x4xf32>
+// CHECK:           [[L2_:%.+]] = "onnx.ReduceL2"([[PARAM_0_]], [[AXES_]]) {keepdims = 1 : si64, noop_with_empty_axes = 1 : si64}
+// CHECK:           onnx.Return [[L2_]] : tensor<2x3x4xf32>
 // CHECK:         }
 // DISABLED-CHECK-LABEL:  func.func @test_recompose_reducel2_from_pow_reducesumsquare_empty_axes
 // DISABLED-CHECK-NOT:       "onnx.ReduceL2"
