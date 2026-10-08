@@ -140,7 +140,7 @@ struct ONNXHybridTransformPass
           // here, while the resulting ONNX ops can still be lowered.
           holdBackPreallocatedGQADecompose
               ? onnx_mlir::GQADecompositionPredicate([](mlir::Operation *op) {
-                  return !onnx_mlir::hasFullDepthFullRotaryGQACache(op);
+                  return !onnx_mlir::hasTokenDecodableGQACache(op);
                 })
               : onnx_mlir::GQADecompositionPredicate{});
 
