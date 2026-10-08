@@ -1115,6 +1115,69 @@ public:
   }
 };
 
+// Fuse ReduceSum followed by Mul(1/N) into ReduceMean, where N is the number
+// of elements reduced (product of reduced axis sizes).
+class FuseReduceSumMulToReduceMeanPattern
+    : public OpRewritePattern<ONNXReduceSumOp> {
+public:
+  using OpRewritePattern<ONNXReduceSumOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXReduceSumOp reduceSumOp, PatternRewriter &rewriter) const override {
+    if (!reduceSumOp->hasOneUse())
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "ReduceSum result must have a single use");
+
+    auto mulOp = dyn_cast<ONNXMulOp>(*reduceSumOp->getUsers().begin());
+    if (!mulOp)
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "sole user is not onnx.Mul");
+
+    // NormalizeMulPattern puts constants on the RHS of a Mul.
+    Value scaleOperand = mulOp.getB();
+
+    auto inputType =
+        mlir::dyn_cast<RankedTensorType>(reduceSumOp.getData().getType());
+    if (!inputType)
+      return rewriter.notifyMatchFailure(reduceSumOp, "input must be ranked");
+
+    SmallVector<int64_t> axes;
+    // MaterializeAbsentAxesReducePattern canonicalizes empty axes before this
+    // pattern runs.
+    if (!getI64ValuesFromONNXConstantOp(reduceSumOp.getAxes(), axes))
+      return rewriter.notifyMatchFailure(reduceSumOp, "axes is not constant");
+
+    int64_t numReducedElements = 1;
+    const int64_t rank = inputType.getRank();
+    for (int64_t axis : axes) {
+      const int64_t normAxis = axis < 0 ? axis + rank : axis;
+      if (normAxis < 0 || normAxis >= rank)
+        return rewriter.notifyMatchFailure(reduceSumOp, "axis out of range");
+      const int64_t dimSize = inputType.getDimSize(normAxis);
+      if (ShapedType::isDynamic(dimSize))
+        return rewriter.notifyMatchFailure(
+            reduceSumOp, "reduced dimension is dynamic");
+      numReducedElements *= dimSize;
+    }
+    if (numReducedElements <= 0)
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "invalid reduced element count");
+
+    const double expectedScale = 1.0 / static_cast<double>(numReducedElements);
+    if (!isConstOf(scaleOperand, expectedScale))
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "Mul scale is not 1/N for the reduced axes");
+
+    auto meanOp = rewriter.create<ONNXReduceMeanOp>(mulOp.getLoc(),
+        mulOp.getResult().getType(), reduceSumOp.getData(),
+        reduceSumOp.getAxes(), reduceSumOp.getKeepdimsAttr(),
+        reduceSumOp.getNoopWithEmptyAxesAttr());
+    rewriter.replaceOp(mulOp, meanOp.getResult());
+    rewriter.eraseOp(reduceSumOp);
+    return success();
+  }
+};
+
 // Upgrade ReduceMeanV13 latest ReduceMean. A present `axes` attribute becomes a
 // constant axes operand; an absent one becomes a None operand with
 // `noop_with_empty_axes = 0`, preserving the legacy "reduce over every
@@ -1145,9 +1208,9 @@ public:
 };
 
 // Materialize the implicit "reduce all axes" of a reduction whose reduction
-// axes operand is absent (None). An omitted `axes` means "reduce over every
-// dimension" unless `noop_with_empty_axes = 1`, which is a no-op that
-// the reduction op's fold already forwards.
+// axes operand is absent (None) or explicitly empty. An empty `axes` means
+// "reduce over every dimension" unless `noop_with_empty_axes = 1`, in which
+// case the reduction is a no-op that forwards its data input.
 template <typename OP_TYPE>
 class MaterializeAbsentAxesReducePattern : public OpRewritePattern<OP_TYPE> {
 public:
@@ -1155,11 +1218,20 @@ public:
 
   LogicalResult matchAndRewrite(
       OP_TYPE op, PatternRewriter &rewriter) const override {
-    if (!isNoneValue(op.getAxes()))
-      return rewriter.notifyMatchFailure(op, "axes already present");
+    bool emptyAxes = isNoneValue(op.getAxes());
+    if (!emptyAxes) {
+      SmallVector<int64_t> axes;
+      if (!getI64ValuesFromONNXConstantOp(op.getAxes(), axes))
+        return rewriter.notifyMatchFailure(op, "axes is not a constant");
+      emptyAxes = axes.empty();
+    }
+    if (!emptyAxes)
+      return rewriter.notifyMatchFailure(op, "axes are already present");
 
-    if (op.getNoopWithEmptyAxes() != 0)
-      return rewriter.notifyMatchFailure(op, "noop on empty axes");
+    if (op.getNoopWithEmptyAxes() != 0) {
+      rewriter.replaceOp(op, op.getData());
+      return success();
+    }
 
     auto dataType = mlir::dyn_cast<RankedTensorType>(op.getData().getType());
     if (!dataType)
@@ -5392,6 +5464,7 @@ void ONNXReduceSumOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceSumOp>>(context);
   result.insert<DropUnitAxesFromReducePattern<ONNXReduceSumOp>>(context);
+  result.insert<FuseReduceSumMulToReduceMeanPattern>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceSumOp>>(context);
 }
