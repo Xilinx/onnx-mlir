@@ -76,12 +76,26 @@ void DisposablePool::garbageCollectUnreachable(
   }
 }
 
-void DisposablePool::scrub(ModuleOp moduleOp, OpAttrDictionary opsAttrs) {
+void DisposablePool::scrub(ModuleOp moduleOp, OpAttrDictionary opsAttrs,
+    int64_t preservePackedInt4MinElements) {
   using Translation = std::pair<DisposableElementsAttr, DenseElementsAttr>;
   std::unordered_map<size_t, Translation> translations;
+  // Large packed int4/uint4 attributes can be left as DisposableElementsAttr:
+  // converting them to Dense here would expand them right after import. They
+  // are tracked separately so eraseUnreachable() below keeps their buffers
+  // alive.
+  // getBufferBType() is private to DisposableElementsAttr, and DisposablePool
+  // is a friend, hence the check is inlined here.
+  Pool preserved;
   walkOpsAttrs(moduleOp, opsAttrs,
-      [&translations](Operation *op, StringRef attrName,
-          DisposableElementsAttr disposable) {
+      [&translations, &preserved, preservePackedInt4MinElements](Operation *op,
+          StringRef attrName, DisposableElementsAttr disposable) {
+        BType bufferBType = disposable.getBufferBType();
+        if (preservePackedInt4MinElements >= 0 && isPackedBType(bufferBType) &&
+            disposable.getNumElements() >= preservePackedInt4MinElements) {
+          preserved.try_emplace(disposable.getId(), disposable);
+          return;
+        }
         translations.try_emplace(
             disposable.getId(), std::make_pair(disposable, nullptr));
       });
@@ -136,8 +150,12 @@ void DisposablePool::scrub(ModuleOp moduleOp, OpAttrDictionary opsAttrs) {
   walkOpsAttrs(moduleOp, opsAttrs,
       [&translations](Operation *op, StringRef attrName,
           DisposableElementsAttr disposable) {
-        DenseElementsAttr dense = translations.at(disposable.getId()).second;
-        op->setAttr(attrName, dense);
+        // Preserved packed attributes have no translation; keep them as they
+        // are.
+        auto it = translations.find(disposable.getId());
+        if (it == translations.end())
+          return;
+        op->setAttr(attrName, it->second.second);
       });
 
   {
@@ -146,7 +164,7 @@ void DisposablePool::scrub(ModuleOp moduleOp, OpAttrDictionary opsAttrs) {
     for (const auto &t : translations)
       assert(pool.count(t.first) == 1 &&
              "scrubbed disposables must be in the pool");
-    eraseUnreachable({});
+    eraseUnreachable(preserved);
   }
 }
 

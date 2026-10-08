@@ -10,8 +10,10 @@
 
 #include "src/Dialect/ONNX/ElementsAttr/BType.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/DisposableElementsAttr.hpp"
+#include "src/Dialect/ONNX/ElementsAttr/DisposablePool.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/ElementsAttrBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXDialect.hpp"
+#include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
 #include "src/Support/Arrays.hpp"
 
@@ -40,8 +42,11 @@ bool eq(CPPTY a, CPPTY b) {
 
 bool forAllBTypes(std::function<bool(BType)> predicate) {
   bool result = true;
-  for (BType d = static_cast<BType>(0); d < BType::MAX_BTYPE;
-       d = static_cast<BType>(static_cast<int>(d) + 1)) {
+  // Only iterate up to INT4: dispatchByBType(), used by the predicates below,
+  // does not handle the packed markers (see test_packed_int4()) or the unused
+  // values between INT4 and them.
+  for (BType d = static_cast<BType>(0); d <= BType::INT4;
+      d = static_cast<BType>(static_cast<int>(d) + 1)) {
     if (d == BType::UNDEFINED || d == BType::STRING || d == BType::COMPLEX64 ||
         d == BType::COMPLEX128)
       continue;
@@ -81,6 +86,8 @@ class Test {
   Type I64;
   Type I8;
   Type I1;
+  Type I4;
+  Type U4;
 
 public:
   Test()
@@ -94,6 +101,8 @@ public:
     I64 = builder.getI64Type();
     I8 = builder.getI8Type();
     I1 = builder.getI1Type();
+    I4 = builder.getIntegerType(4);
+    U4 = builder.getIntegerType(4, /*isSigned=*/false);
   }
   ~Test() { delete ctx; }
 
@@ -215,6 +224,229 @@ public:
     return 0;
   }
 
+  // A DisposableElementsAttr can be backed by packed int4/uint4 bytes (two
+  // values per byte, as in ONNX's packed data) and unpack them on read.
+  int test_packed_int4() {
+    std::cout << "test_packed_int4:" << std::endl;
+
+    // byte0=0xE1: nibble0=0x1=1,        nibble1=0xE=-2 (int4) / 14 (uint4)
+    // byte1=0x83: nibble0=0x3=3,        nibble1=0x8=-8 (int4) /  8 (uint4)
+    // byte2=0x07: nibble0=0x7=7,        nibble1=0x0=0
+    std::vector<uint8_t> packedBytes = {0xE1, 0x83, 0x07};
+    std::vector<int_4> expectedI4 = {
+        int_4(1), int_4(-2), int_4(3), int_4(-8), int_4(7), int_4(0)};
+    std::vector<uint_4> expectedU4 = {
+        uint_4(1), uint_4(14), uint_4(3), uint_4(8), uint_4(7), uint_4(0)};
+
+    ShapedType typeI4 = RankedTensorType::get({6}, I4);
+    ShapedType typeU4 = RankedTensorType::get({6}, U4);
+
+    ElementsAttr packedI4 = elmsBuilder.fromPackedInt4MemoryBuffer(
+        typeI4, BType::PACKED_INT4, buffer<uint8_t>(packedBytes));
+    ElementsAttr packedU4 = elmsBuilder.fromPackedInt4MemoryBuffer(
+        typeU4, BType::PACKED_UINT4, buffer<uint8_t>(packedBytes));
+
+    // getArray<X>() unpacks correctly.
+    {
+      auto arr = mlir::cast<DisposableElementsAttr>(packedI4).getArray<int_4>();
+      for (size_t i = 0; i < 6; ++i)
+        assert(eq<int_4>(arr.get()[i], expectedI4[i]));
+      auto arrU =
+          mlir::cast<DisposableElementsAttr>(packedU4).getArray<uint_4>();
+      for (size_t i = 0; i < 6; ++i)
+        assert(eq<uint_4>(arrU.get()[i], expectedU4[i]));
+    }
+
+    // Iteration (value_begin / getValues) unpacks correctly.
+    {
+      auto b =
+          mlir::cast<DisposableElementsAttr>(packedI4).value_begin<int_4>();
+      for (size_t i = 0; i < 6; ++i, ++b)
+        assert(eq<int_4>(*b, expectedI4[i]));
+    }
+
+    // toDenseElementsAttr() unpacks correctly.
+    {
+      // Dense's generic getValues<T>() requires sizeof(T)*8 to match the
+      // element type's declared bit width exactly, which int_4 (a 1-byte
+      // wrapper for a 4-bit value) doesn't -- iterate as APInt instead, like
+      // the existing test_splat() does for non-byte-aligned int types.
+      DenseElementsAttr dense =
+          mlir::cast<DisposableElementsAttr>(packedI4).toDenseElementsAttr();
+      size_t i = 0;
+      for (const APInt &v : dense.getValues<APInt>())
+        assert(v.getSExtValue() == static_cast<int64_t>(expectedI4[i++]));
+      assert(i == 6);
+    }
+
+    // Bit-for-bit cross-check against the eager fromArray path, built from the
+    // already-unpacked equivalent.
+    {
+      ElementsAttr eagerI4 = elmsBuilder.fromArray<int_4>(
+          typeI4, [&expectedI4](MutableArrayRef<int_4> dst) {
+            for (size_t i = 0; i < 6; ++i)
+              dst[i] = expectedI4[i];
+          });
+      assert(ElementsAttrBuilder::equal(packedI4, eagerI4));
+
+      ElementsAttr eagerU4 = elmsBuilder.fromArray<uint_4>(
+          typeU4, [&expectedU4](MutableArrayRef<uint_4> dst) {
+            for (size_t i = 0; i < 6; ++i)
+              dst[i] = expectedU4[i];
+          });
+      assert(ElementsAttrBuilder::equal(packedU4, eagerU4));
+    }
+
+    // Non-contiguous access (reshape [6] -> [2,3] -> transpose -> [3,2])
+    // exercises atFlatIndex/flatIndexToBufferPos's packed branch outside the
+    // pure contiguous fast path.
+    {
+      auto reshaped = elmsBuilder.reshape(packedI4, {2, 3});
+      auto transposed = elmsBuilder.transpose(reshaped, {1, 0});
+      // transposed[i][j] == reshaped[j][i] == packedI4[j*3 + i]
+      std::vector<int_4> expectedTransposed = {
+          int_4(1), int_4(-8), int_4(-2), int_4(7), int_4(3), int_4(0)};
+      auto tv =
+          mlir::cast<DisposableElementsAttr>(transposed).getValues<int_4>();
+      for (size_t i = 0; i < 6; ++i)
+        assert(eq<int_4>(tv[i], expectedTransposed[i]));
+      // The raw bytes of the view hold one nibble per byte, in view order.
+      auto transposedAttr = mlir::cast<DisposableElementsAttr>(transposed);
+      ArrayBuffer<char> transposedBytes = transposedAttr.getRawBytes();
+      std::vector<char> expectedBytes = {0x1, 0x8, 0xE, 0x7, 0x3, 0x0};
+      assert(transposedBytes.get().size() == 6);
+      for (size_t i = 0; i < 6; ++i)
+        assert(transposedBytes.get()[i] == expectedBytes[i]);
+    }
+
+    // Slicing a packed buffer, contiguously and with a stride.
+    {
+      auto sliced = elmsBuilder.slice(packedI4, {4}, {1}, {1});
+      std::vector<int_4> expectedSlice = {
+          int_4(-2), int_4(3), int_4(-8), int_4(7)};
+      auto sv = mlir::cast<DisposableElementsAttr>(sliced).getValues<int_4>();
+      for (size_t i = 0; i < 4; ++i)
+        assert(eq<int_4>(sv[i], expectedSlice[i]));
+
+      auto strided = elmsBuilder.slice(packedI4, {3}, {0}, {2});
+      std::vector<int_4> expectedStrided = {int_4(1), int_4(3), int_4(7)};
+      auto tv2 = mlir::cast<DisposableElementsAttr>(strided).getValues<int_4>();
+      for (size_t i = 0; i < 3; ++i)
+        assert(eq<int_4>(tv2[i], expectedStrided[i]));
+    }
+
+    // Slicing a transposed view reads the nibbles in place, with an offset
+    // and strides, and gives the same values as slicing the dense equivalent.
+    {
+      auto reshaped = elmsBuilder.reshape(packedI4, {2, 3});
+      auto transposed = elmsBuilder.transpose(reshaped, {1, 0}); // shape [3,2]
+      // transposed = [[1,-8],[-2,7],[3,0]]; take rows 1.. and column 1.
+      auto sliced = elmsBuilder.slice(transposed, {2, 1}, {1, 1}, {1, 1});
+      auto sv = mlir::cast<DisposableElementsAttr>(sliced).getValues<int_4>();
+      assert(eq<int_4>(sv[0], int_4(7)));
+      assert(eq<int_4>(sv[1], int_4(0)));
+      // An empty slice is fine too.
+      auto empty = elmsBuilder.slice(transposed, {0, 2}, {3, 0}, {1, 1});
+      assert(empty.getNumElements() == 0);
+    }
+
+    // A broadcast addresses the buffer through zero strides, so the view has
+    // more elements than the one-byte buffer holds.
+    {
+      ShapedType type2 = RankedTensorType::get({2}, I4);
+      ElementsAttr packed2 = elmsBuilder.fromPackedInt4MemoryBuffer(
+          type2, BType::PACKED_INT4, buffer<uint8_t>({0xE1}));
+      auto expanded = mlir::cast<DisposableElementsAttr>(
+          elmsBuilder.expand(packed2, {3, 2}));
+      ArrayBuffer<WideNum> wideNums = expanded.getWideNums();
+      assert(wideNums.get().size() == 6);
+      for (size_t i = 0; i < 6; ++i)
+        assert(wideNums.get()[i].i64 == (i % 2 == 0 ? 1 : -2));
+      ArrayBuffer<char> rawBytes = expanded.getRawBytes();
+      assert(rawBytes.get().size() == 6);
+      for (size_t i = 0; i < 6; ++i)
+        assert(rawBytes.get()[i] == (i % 2 == 0 ? 0x1 : 0xE));
+    }
+
+    // Widening casts must read the packed buffer through its own type and give
+    // sign-extended (int4) or zero-extended (uint4) values in the new type.
+    {
+      for (Type wide : {I8, I32, I64}) {
+        auto castI4 = mlir::cast<DisposableElementsAttr>(
+            elmsBuilder.castElementType(packedI4, wide));
+        ElementsAttr denseI4 = castI4.toDenseElementsAttr();
+        size_t i = 0;
+        for (const APInt &v : denseI4.getValues<APInt>())
+          assert(v.getSExtValue() == static_cast<int64_t>(expectedI4[i++]));
+        assert(i == 6);
+      }
+      auto castI8 = mlir::cast<DisposableElementsAttr>(
+          elmsBuilder.castElementType(packedI4, I8));
+      ArrayBuffer<char> bytesI8 = castI8.getRawBytes();
+      assert(bytesI8.get().size() == 6);
+      for (size_t i = 0; i < 6; ++i)
+        assert(static_cast<int8_t>(bytesI8.get()[i]) ==
+               static_cast<int8_t>(expectedI4[i]));
+
+      for (Type wide : {U8, U32}) {
+        auto castU4 = mlir::cast<DisposableElementsAttr>(
+            elmsBuilder.castElementType(packedU4, wide));
+        ElementsAttr denseU4 = castU4.toDenseElementsAttr();
+        size_t i = 0;
+        for (const APInt &v : denseU4.getValues<APInt>())
+          assert(v.getZExtValue() == static_cast<uint64_t>(expectedU4[i++]));
+        assert(i == 6);
+      }
+    }
+
+    return 0;
+  }
+
+  int test_scrub_packed_int4() {
+    std::cout << "test_scrub_packed_int4:" << std::endl;
+
+    // Scrubbing makes every constant dense, except packed int4/uint4 ones that
+    // are large enough, when asked to preserve them.
+    struct Case {
+      int64_t minElements;
+      bool expectPreserved;
+    };
+    for (Case c :
+        {Case{-1, false}, Case{7, false}, Case{6, true}, Case{0, true}}) {
+      ShapedType packedType = RankedTensorType::get({6}, I4);
+      ElementsAttr packed = elmsBuilder.fromPackedInt4MemoryBuffer(
+          packedType, BType::PACKED_INT4, buffer<uint8_t>({0xE1, 0x83, 0x07}));
+      ShapedType plainType = RankedTensorType::get({2}, I8);
+      ElementsAttr plain =
+          elmsBuilder.fromMemoryBuffer(plainType, buffer<int8_t>({1, 2}));
+
+      OwningOpRef<ModuleOp> module(ModuleOp::create(loc));
+      OpBuilder b(ctx);
+      b.setInsertionPointToStart(module->getBody());
+      auto packedOp = b.create<ONNXConstantOp>(loc, Attribute(), packed);
+      auto plainOp = b.create<ONNXConstantOp>(loc, Attribute(), plain);
+
+      DisposablePool::get<ONNXDialect>(ctx)->scrub(*module,
+          {{ONNXConstantOp::getOperationName(), "value"}}, c.minElements);
+
+      // Constants other than packed int4/uint4 are always dense afterwards.
+      assert(isa<DenseElementsAttr>(plainOp.getValueAttr()));
+      assert(isa<DisposableElementsAttr>(packedOp.getValueAttr()) ==
+             c.expectPreserved);
+      assert(isa<DenseElementsAttr>(packedOp.getValueAttr()) ==
+             !c.expectPreserved);
+      // Either way the values are still readable.
+      auto values = mlir::cast<ElementsAttr>(packedOp.getValueAttr());
+      std::vector<int64_t> expected = {1, -2, 3, -8, 7, 0};
+      size_t i = 0;
+      for (const APInt &v : values.getValues<APInt>())
+        assert(v.getSExtValue() == expected[i++]);
+      assert(i == 6);
+    }
+
+    return 0;
+  }
+
   int test_cast() {
     std::cout << "test_cast:" << std::endl;
 
@@ -316,6 +548,8 @@ int main(int argc, char *argv[]) {
   int failures = 0;
   failures += test.test_splat();
   failures += test.test_transpose();
+  failures += test.test_packed_int4();
+  failures += test.test_scrub_packed_int4();
   failures += test.test_slice();
   failures += test.test_cast();
   failures += test.test_equal_ints();
