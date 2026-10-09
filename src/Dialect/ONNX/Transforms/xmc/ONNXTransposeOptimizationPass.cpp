@@ -753,6 +753,10 @@ struct PushTransposeThroughUnaryOp : public OpRewritePattern<UnaryOp> {
     LLVM_DEBUG(llvm::dbgs() << "Pushing transpose through "
                             << op->getName().getStringRef() << "\n");
 
+    [[maybe_unused]] Attribute opResultNames = op->getAttr("ResultNames");
+    [[maybe_unused]] Attribute transposeResultNames =
+        transposeOp->getAttr("ResultNames");
+
     auto newOp = rewriter.create<UnaryOp>(
         op.getLoc(), newOutputType, transposeOp.getOperand());
 
@@ -764,6 +768,11 @@ struct PushTransposeThroughUnaryOp : public OpRewritePattern<UnaryOp> {
 
     auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(
         op, op.getType(), newOp.getResult(), rewriter.getI64ArrayAttr(*perm));
+
+    if constexpr (std::is_same_v<UnaryOp, XCOMPILERRequantizeOp>) {
+      if (!opResultNames && transposeResultNames)
+        newTranspose->setAttr("ResultNames", transposeResultNames);
+    }
     (void)maintainTransposeTag(newTranspose);
 
     return success();
