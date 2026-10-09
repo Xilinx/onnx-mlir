@@ -67,6 +67,13 @@ std::variant<quant::QuantizedType, StringLiteral> getQuantType(QDQOp op) {
   if (auto qType = dyn_cast<quant::QuantizedType>(expressedType))
     return qType;
 
+  // UniformQuantized(PerAxis)Type only supports integer storage. FP8 / other
+  // float-typed "quantized" tensors (e.g. Float8E4M3FN) cannot be modeled
+  // here and reading their zero-point as APInt would assert, so skip them.
+  if (!mlir::isa<mlir::IntegerType>(storageType))
+    return StringLiteral(
+        "Non-integer (e.g. float8) quantized storage not supported");
+
   bool isSigned =
       storageType.isSignedInteger() || storageType.isSignlessInteger();
 

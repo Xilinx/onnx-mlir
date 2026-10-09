@@ -204,6 +204,48 @@ module {
   // CHECK: onnx.Conv
   // CHECK-NOT: onnx.Concat
 
+  // Test 9b: Single-channel dense conv - IC=1, group=1 (should NOT be split).
+  // Regression: with IC==1 the (group != inputChannelDim) check is 1 != 1 =
+  // false, so before the group>1 guard this dense conv was wrongly treated as
+  // depthwise (channel_multiplier = outputChannels/1 > 1) and split.
+  func.func @test_single_channel_dense_conv(%arg0: tensor<1x1x192x192xf32>) -> tensor<1x32x186x186xf32> {
+    %weights = "onnx.Constant"() {value = dense<1.0> : tensor<32x1x7x7xf32>} : () -> tensor<32x1x7x7xf32>
+    %none = "onnx.NoValue"() {value} : () -> none
+    %0 = "onnx.Conv"(%arg0, %weights, %none) {
+      auto_pad = "NOTSET",
+      dilations = [1, 1],
+      group = 1 : si64,
+      kernel_shape = [7, 7],
+      pads = [0, 0, 0, 0],
+      strides = [1, 1]
+    } : (tensor<1x1x192x192xf32>, tensor<32x1x7x7xf32>, none) -> tensor<1x32x186x186xf32>
+    return %0 : tensor<1x32x186x186xf32>
+  }
+  // CHECK-LABEL: func.func @test_single_channel_dense_conv
+  // CHECK: onnx.Constant
+  // CHECK: onnx.NoValue
+  // CHECK: onnx.Conv
+  // CHECK-NOT: onnx.Concat
+
+  // Test 9c: XFE single-channel dense conv - IC=1, group=1, NHWC (should NOT
+  // be split). Same regression as above for the XFEConv (channel-last) path.
+  func.func @test_xfe_single_channel_dense_conv(%arg0: tensor<1x192x192x1xf32>) -> tensor<1x186x186x32xf32> {
+    %weights = "onnx.Constant"() {value = dense<1.0> : tensor<32x1x7x7xf32>} : () -> tensor<32x1x7x7xf32>
+    %none = "onnx.NoValue"() {value} : () -> none
+    %0 = "onnx.XFEConv"(%arg0, %weights, %none) {
+      dilations = [1, 1],
+      group = 1 : si64,
+      pads = [0, 0, 0, 0],
+      strides = [1, 1]
+    } : (tensor<1x192x192x1xf32>, tensor<32x1x7x7xf32>, none) -> tensor<1x186x186x32xf32>
+    return %0 : tensor<1x186x186x32xf32>
+  }
+  // CHECK-LABEL: func.func @test_xfe_single_channel_dense_conv
+  // CHECK: onnx.Constant
+  // CHECK: onnx.NoValue
+  // CHECK: onnx.XFEConv
+  // CHECK-NOT: onnx.Concat
+
   // =========================================================================
   // XFE Conv Tests (channel-last layout)
   // =========================================================================

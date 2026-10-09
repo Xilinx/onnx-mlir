@@ -92,6 +92,12 @@ bool isDepthwiseConvWithChannelMultiplier(
     inputChannelDim = inputShape[3];
   }
 
+  // A depthwise conv convolves each input channel independently, which needs
+  // group > 1. group == 1 is an ordinary dense conv and must not be split.
+  if (group <= 1) {
+    return false;
+  }
+
   // Check if this is a depthwise conv (group == input_channels)
   if (group != inputChannelDim) {
     return false;
