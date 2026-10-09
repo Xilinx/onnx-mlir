@@ -30,6 +30,12 @@ struct OnnxToMlirOptions {
   bool enableRemoveBinary = false;
   bool enableFusePadIntoAvgpool = false;
   bool enableXMCPasses = false;
+  // Leave the DisposablePool open after scrubbing, so that later passes can
+  // still build views of existing constants (reshape, transpose) without
+  // copying them. Attributes created from then on are DisposableElementsAttr
+  // and are not scrubbed, so only set this if the module's consumers accept
+  // them and nothing scrubs or garbage collects the pool again.
+  bool keepDisposablePoolOpen = false;
   // Keep packed int4/uint4 constants with at least this many elements as
   // DisposableElementsAttr when scrubbing, so they are only unpacked when
   // something reads them. A negative value keeps none. The consumers of the
