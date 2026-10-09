@@ -397,26 +397,44 @@ LogicalResult ONNXReduceSumSquareV13Op::inferShapes(
 // Folder
 //===----------------------------------------------------------------------===//
 
-OpFoldResult ONNXReduceMeanOp::fold(FoldAdaptor adaptor) {
-  typename ONNXReduceMeanOp::Adaptor opAdaptor(*this);
-  onnx_mlir::ONNXGenericReductionOpShapeHelper<ONNXReduceMeanOp> shapeHelper(
-      getOperation(), opAdaptor.getOperands());
-
-  if (failed(shapeHelper.computeShape()))
+// Empty axes with noop_with_empty_axes set forwards the input. Only valid for
+// reductions without an elementwise pre/post step: ReduceL2 of a no-op is
+// |x| in the ONNX reference, not x.
+template <typename OP_TYPE>
+static OpFoldResult foldNoopWithEmptyAxes(OP_TYPE op) {
+  if (op.getNoopWithEmptyAxes() == 0 ||
+      op.getData().getType() != op.getResult().getType())
     return nullptr;
 
   if (auto elemType =
-          mlir::cast<ShapedType>(getData().getType()).getElementType();
+          mlir::cast<ShapedType>(op.getData().getType()).getElementType();
       !mlir::isa<IntegerType, FloatType>(elemType))
     return nullptr;
 
-  const bool hasReduction =
-      llvm::any_of(shapeHelper.isReductionAxis, [](bool axis) { return axis; });
+  // A non-constant axes operand is not known to be empty.
+  Value axes = op.getAxes();
+  if (!isNoneValue(axes)) {
+    SmallVector<int64_t> axesVals;
+    if (!getI64ValuesFromONNXConstantOp(axes, axesVals) || !axesVals.empty())
+      return nullptr;
+  }
+  return op.getData();
+}
 
-  if (!hasReduction && opAdaptor.getNoopWithEmptyAxes())
-    return getData();
+OpFoldResult ONNXReduceMaxOp::fold(FoldAdaptor) {
+  return foldNoopWithEmptyAxes(*this);
+}
 
-  return nullptr;
+OpFoldResult ONNXReduceMeanOp::fold(FoldAdaptor) {
+  return foldNoopWithEmptyAxes(*this);
+}
+
+OpFoldResult ONNXReduceMinOp::fold(FoldAdaptor) {
+  return foldNoopWithEmptyAxes(*this);
+}
+
+OpFoldResult ONNXReduceSumOp::fold(FoldAdaptor) {
+  return foldNoopWithEmptyAxes(*this);
 }
 
 //===----------------------------------------------------------------------===//

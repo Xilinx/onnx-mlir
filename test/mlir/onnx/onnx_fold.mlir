@@ -47,6 +47,69 @@ func.func @test_reduceMeanIsNoopWithEmptyAxes(%arg0: tensor<4x512x256x8xf32>) ->
 
 // -----
 
+func.func @test_reduceSumIsNoopWithEmptyAxes(%arg0: tensor<4x512x256x8xf32>) -> tensor<4x512x256x8xf32> {
+  %0 = "onnx.NoValue"() {value} : () -> none
+  %1 = "onnx.ReduceSum"(%arg0, %0) {noop_with_empty_axes = 1: si64} : (tensor<4x512x256x8xf32>, none) -> tensor<4x512x256x8xf32>
+  return %1 : tensor<4x512x256x8xf32>
+}
+
+// CHECK-LABEL: @test_reduceSumIsNoopWithEmptyAxes
+// CHECK-SAME: (%[[VAL_0:.*]]: tensor<4x512x256x8xf32>) -> tensor<4x512x256x8xf32> {
+// CHECK:   return %[[VAL_0]] : tensor<4x512x256x8xf32>
+// CHECK: }
+
+// -----
+
+func.func @test_reduceSumEmptyAxesNoop(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  %empty = onnx.Constant dense<> : tensor<0xi64>
+  %0 = "onnx.ReduceSum"(%arg0, %empty) {noop_with_empty_axes = 1: si64} : (tensor<2x3xf32>, tensor<0xi64>) -> tensor<2x3xf32>
+  return %0 : tensor<2x3xf32>
+}
+
+// CHECK-LABEL: @test_reduceSumEmptyAxesNoop
+// CHECK-SAME: (%[[VAL_0:.*]]: tensor<2x3xf32>) -> tensor<2x3xf32> {
+// CHECK-NOT: "onnx.ReduceSum"
+// CHECK:   return %[[VAL_0]] : tensor<2x3xf32>
+// CHECK: }
+
+// -----
+
+func.func @test_reduceSumDynamicAxesNoopNotFolded(%arg0: tensor<2x3xf32>, %arg1: tensor<?xi64>) -> tensor<2x3xf32> {
+  %0 = "onnx.ReduceSum"(%arg0, %arg1) {noop_with_empty_axes = 1: si64} : (tensor<2x3xf32>, tensor<?xi64>) -> tensor<2x3xf32>
+  return %0 : tensor<2x3xf32>
+}
+
+// CHECK-LABEL: @test_reduceSumDynamicAxesNoopNotFolded
+// CHECK: "onnx.ReduceSum"
+
+// -----
+
+func.func @test_reduceMinIsNoopWithEmptyAxes(%arg0: tensor<4x8xf32>) -> tensor<4x8xf32> {
+  %0 = "onnx.NoValue"() {value} : () -> none
+  %1 = "onnx.ReduceMin"(%arg0, %0) {noop_with_empty_axes = 1: si64} : (tensor<4x8xf32>, none) -> tensor<4x8xf32>
+  return %1 : tensor<4x8xf32>
+}
+
+// CHECK-LABEL: @test_reduceMinIsNoopWithEmptyAxes
+// CHECK-SAME: (%[[VAL_0:.*]]: tensor<4x8xf32>) -> tensor<4x8xf32> {
+// CHECK:   return %[[VAL_0]] : tensor<4x8xf32>
+// CHECK: }
+
+// -----
+
+func.func @test_reduceMaxIsNoopWithEmptyAxes(%arg0: tensor<4x8xf32>) -> tensor<4x8xf32> {
+  %0 = "onnx.NoValue"() {value} : () -> none
+  %1 = "onnx.ReduceMax"(%arg0, %0) {noop_with_empty_axes = 1: si64} : (tensor<4x8xf32>, none) -> tensor<4x8xf32>
+  return %1 : tensor<4x8xf32>
+}
+
+// CHECK-LABEL: @test_reduceMaxIsNoopWithEmptyAxes
+// CHECK-SAME: (%[[VAL_0:.*]]: tensor<4x8xf32>) -> tensor<4x8xf32> {
+// CHECK:   return %[[VAL_0]] : tensor<4x8xf32>
+// CHECK: }
+
+// -----
+
 func.func @test_slice(%arg0: tensor<16x1x2500x4xf32>) -> tensor<16x1x2500x4xf32> {
   %0 = onnx.Constant dense<0> : tensor<1xi64>
   %1 = onnx.Constant dense<4> : tensor<1xi64>
