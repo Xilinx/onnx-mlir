@@ -1119,6 +1119,27 @@ public:
 // of elements reduced (product of reduced axis sizes).
 class FuseReduceSumMulToReduceMeanPattern
     : public OpRewritePattern<ONNXReduceSumOp> {
+  // Returns the number of elements reduced when all axes and dimensions are
+  // statically valid.
+  static FailureOr<int64_t> getReducedElementCount(
+      RankedTensorType inputType, ArrayRef<int64_t> axes) {
+    SmallVector<int64_t> normalizedAxes;
+    if (failed(normalizeONNXAxisValues(
+            axes, inputType.getRank(), /*includeRank=*/false, normalizedAxes)))
+      return failure();
+
+    int64_t elementCount = 1;
+    for (int64_t axis : normalizedAxes) {
+      const int64_t dimSize = inputType.getDimSize(axis);
+      int64_t nextElementCount;
+      if (ShapedType::isDynamic(dimSize) || dimSize <= 0 ||
+          llvm::MulOverflow(elementCount, dimSize, nextElementCount))
+        return failure();
+      elementCount = nextElementCount;
+    }
+    return elementCount;
+  }
+
 public:
   using OpRewritePattern<ONNXReduceSumOp>::OpRewritePattern;
 
@@ -1145,42 +1166,33 @@ public:
         mlir::dyn_cast<RankedTensorType>(reduceSumOp.getData().getType());
     if (!inputType)
       return rewriter.notifyMatchFailure(reduceSumOp, "input must be ranked");
+    if (!isa<FloatType>(inputType.getElementType()))
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "input must have a floating-point element type");
 
     SmallVector<int64_t> axes;
     if (!getI64ValuesFromONNXConstantOp(reduceSumOp.getAxes(), axes))
       return rewriter.notifyMatchFailure(reduceSumOp, "axes is not constant");
 
-    int64_t numReducedElements = 1;
-    const int64_t rank = inputType.getRank();
-    for (int64_t axis : axes) {
-      const int64_t normAxis = axis < 0 ? axis + rank : axis;
-      if (normAxis < 0 || normAxis >= rank)
-        return rewriter.notifyMatchFailure(reduceSumOp, "axis out of range");
-      const int64_t dimSize = inputType.getDimSize(normAxis);
-      if (ShapedType::isDynamic(dimSize))
-        return rewriter.notifyMatchFailure(
-            reduceSumOp, "reduced dimension is dynamic");
-      numReducedElements *= dimSize;
-    }
-    if (numReducedElements <= 0)
+    FailureOr<int64_t> numReducedElements =
+        getReducedElementCount(inputType, axes);
+    if (failed(numReducedElements))
       return rewriter.notifyMatchFailure(
-          reduceSumOp, "invalid reduced element count");
+          reduceSumOp, "reduced axes must have a valid static shape");
 
     if (!isa<FloatType>(getElementTypeOrSelf(scaleOperand.getType())))
       return rewriter.notifyMatchFailure(
           reduceSumOp, "scale must be floating point");
 
-    const double expectedScale = 1.0 / static_cast<double>(numReducedElements);
+    const double expectedScale = 1.0 / static_cast<double>(*numReducedElements);
     if (!isConstOf(scaleOperand, expectedScale))
       return rewriter.notifyMatchFailure(
           reduceSumOp, "Mul scale is not 1/N for the reduced axes");
 
-    auto meanOp = rewriter.create<ONNXReduceMeanOp>(mulOp.getLoc(),
-        mulOp.getResult().getType(), reduceSumOp.getData(),
-        reduceSumOp.getAxes(), reduceSumOp.getKeepdimsAttr(),
-        reduceSumOp.getNoopWithEmptyAxesAttr());
-    rewriter.replaceOp(mulOp, meanOp.getResult());
-    rewriter.eraseOp(reduceSumOp);
+    rewriter.replaceOpWithNewOp<ONNXReduceMeanOp>(mulOp,
+        {reduceSumOp.getLoc(), mulOp.getLoc()}, mulOp.getResult().getType(),
+        reduceSumOp.getData(), reduceSumOp.getAxes(),
+        reduceSumOp.getKeepdimsAttr(), reduceSumOp.getNoopWithEmptyAxesAttr());
     return success();
   }
 };
