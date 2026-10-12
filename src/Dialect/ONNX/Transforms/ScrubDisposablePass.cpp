@@ -25,9 +25,11 @@ struct ScrubDisposablePass
     : public PassWrapper<ScrubDisposablePass, OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScrubDisposablePass)
 
-  ScrubDisposablePass(bool closeAfter, int64_t preservePackedInt4MinElements)
+  ScrubDisposablePass(bool closeAfter, int64_t preservePackedInt4MinElements,
+      DisposablePool::PreservePredicate preserve)
       : closeAfter(closeAfter),
-        preservePackedInt4MinElements(preservePackedInt4MinElements) {}
+        preservePackedInt4MinElements(preservePackedInt4MinElements),
+        preserve(std::move(preserve)) {}
 
   StringRef getArgument() const override { return "scrub-disposable"; }
 
@@ -37,7 +39,7 @@ struct ScrubDisposablePass
     pool->scrub(moduleOp,
         {{ONNXConstantOp::getOperationName(), "value"},
             {ONNXConstantOfShapeOp::getOperationName(), "value"}},
-        preservePackedInt4MinElements);
+        preservePackedInt4MinElements, preserve);
     if (closeAfter)
       pool->close();
   }
@@ -52,15 +54,17 @@ struct ScrubDisposablePass
 
   const bool closeAfter;
   const int64_t preservePackedInt4MinElements;
+  const DisposablePool::PreservePredicate preserve;
   DisposablePool *disposablePool = nullptr;
 };
 
 } // namespace
 
-std::unique_ptr<mlir::Pass> createScrubDisposablePass(
-    bool closeAfter, int64_t preservePackedInt4MinElements) {
+std::unique_ptr<mlir::Pass> createScrubDisposablePass(bool closeAfter,
+    int64_t preservePackedInt4MinElements,
+    DisposablePool::PreservePredicate preserve) {
   return std::make_unique<ScrubDisposablePass>(
-      closeAfter, preservePackedInt4MinElements);
+      closeAfter, preservePackedInt4MinElements, std::move(preserve));
 }
 
 } // namespace onnx_mlir
