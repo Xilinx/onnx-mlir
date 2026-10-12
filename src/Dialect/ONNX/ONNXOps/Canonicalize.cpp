@@ -628,6 +628,28 @@ void inferShapes(ONNXOp op) {
 
 } // namespace
 
+/// Two Pad operations have the same fill value when their operands are the
+/// same value, or when they are distinct ConstantLike values with equal
+/// attributes.
+/// Missing constant_value operands are both the ONNX default zero.
+static bool haveSamePadFillValue(ONNXPadOp lhs, ONNXPadOp rhs) {
+  Value lhsValue = lhs.getConstantValue();
+  Value rhsValue = rhs.getConstantValue();
+
+  const bool lhsIsNone = isNoneValue(lhsValue);
+  const bool rhsIsNone = isNoneValue(rhsValue);
+  if (lhsIsNone || rhsIsNone)
+    return lhsIsNone && rhsIsNone;
+
+  if (lhsValue == rhsValue)
+    return true;
+
+  ElementsAttr lhsAttribute = getDenseOrDisposableConstLikeElements(lhsValue);
+  ElementsAttr rhsAttribute = getDenseOrDisposableConstLikeElements(rhsValue);
+  return lhsAttribute && rhsAttribute &&
+         compareValueFromElementAttribute(lhsAttribute, rhsAttribute);
+}
+
 // =============================================================================
 /// Include the patterns defined in the Declarative Rewrite framework.
 // =============================================================================
@@ -1289,6 +1311,87 @@ public:
 
     rewriter.replaceOp(onnxResizeOp, onnxResizeOp.getX());
 
+    return success();
+  }
+};
+
+/// Remove a Pad that has no padding and does not change the value type.
+///
+struct RemoveZeroPadCanonicalizationPattern
+    : public OpRewritePattern<ONNXPadOp> {
+  using OpRewritePattern<ONNXPadOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXPadOp padOp, PatternRewriter &rewriter) const override {
+    if (padOp.getData().getType() != padOp.getType())
+      return failure();
+
+    SmallVector<int64_t> pads = valToVector(padOp.getPads());
+    if (!isConstLikeValue(padOp.getPads()) ||
+        !llvm::all_of(pads, [](int64_t value) { return value == 0; }))
+      return failure();
+
+    rewriter.replaceOp(padOp, padOp.getData());
+    return success();
+  }
+};
+
+/// Fuse two non-negative constant-mode Pads with the same fill.
+struct FusePadPadPattern : public OpRewritePattern<ONNXPadOp> {
+  using OpRewritePattern<ONNXPadOp>::OpRewritePattern;
+
+  /// Return Pad's begin/end values in the full-rank ONNX layout.
+  static FailureOr<SmallVector<int64_t>> getNormalizedPadValues(
+      ONNXPadOp padOp) {
+    ONNXPadOpShapeHelper shapeHelper(padOp.getOperation(), {});
+    // computeShape() succeeds without filling `pads` when axes are not
+    // constant.
+    if (failed(shapeHelper.computeShape()) || shapeHelper.pads.empty() ||
+        !IndexExpr::isLiteral(shapeHelper.pads))
+      return failure();
+    SmallVector<int64_t> pads;
+    IndexExpr::getLiteral(shapeHelper.pads, pads);
+    return pads;
+  }
+
+  LogicalResult matchAndRewrite(
+      ONNXPadOp outerPad, PatternRewriter &rewriter) const override {
+    auto innerPad = outerPad.getData().getDefiningOp<ONNXPadOp>();
+    if (!innerPad)
+      return failure();
+
+    if (outerPad.getMode() != "constant" || innerPad.getMode() != "constant")
+      return failure();
+    if (!haveSamePadFillValue(outerPad, innerPad))
+      return failure();
+
+    FailureOr<SmallVector<int64_t>> innerPads =
+        getNormalizedPadValues(innerPad);
+    FailureOr<SmallVector<int64_t>> outerPads =
+        getNormalizedPadValues(outerPad);
+    if (failed(innerPads) || failed(outerPads))
+      return failure();
+
+    if (llvm::any_of(*innerPads, [](int64_t value) { return value < 0; }) ||
+        llvm::any_of(*outerPads, [](int64_t value) { return value < 0; }))
+      return failure();
+
+    SmallVector<int64_t> fusedPads(innerPads->size());
+    llvm::transform(llvm::zip(*innerPads, *outerPads), fusedPads.begin(),
+        [](auto pair) { return std::get<0>(pair) + std::get<1>(pair); });
+
+    SmallVector<Location> padLocations{innerPad.getLoc(), outerPad.getLoc()};
+    Location fusedLoc = rewriter.getFusedLoc(padLocations);
+    Value fusedPadsValue = onnx_mlir::createConstantOp(
+        rewriter, fusedLoc, rewriter.getI64ArrayAttr(fusedPads));
+    Value fusedAxes = outerPad.getAxes();
+    if (!isNoneValue(fusedAxes))
+      fusedAxes = OnnxBuilder(rewriter, fusedLoc).none();
+    rewriter.replaceOpWithNewOp<ONNXPadOp>(outerPad,
+        {innerPad.getLoc(), outerPad.getLoc()}, TypeRange{outerPad.getType()},
+        ValueRange{innerPad.getData(), fusedPadsValue,
+            outerPad.getConstantValue(), fusedAxes},
+        outerPad->getAttrs());
     return success();
   }
 };
@@ -5286,6 +5389,13 @@ void ONNXMulOp::getCanonicalizationPatterns(
 void ONNXOrOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<BinaryOpBroadcastAxisPattern<ONNXOrOp>>(context);
+}
+
+/// on the ONNXPadOp.
+void ONNXPadOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<RemoveZeroPadCanonicalizationPattern>(context);
+  results.insert<FusePadPadPattern>(context);
 }
 
 /// on the ONNXReduceL1Op.
