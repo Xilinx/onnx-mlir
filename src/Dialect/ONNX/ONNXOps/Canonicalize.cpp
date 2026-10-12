@@ -629,7 +629,8 @@ void inferShapes(ONNXOp op) {
 } // namespace
 
 /// Two Pad operations have the same fill value when their operands are the
-/// same value, or when they are distinct ONNX constants with equal attributes.
+/// same value, or when they are distinct ConstantLike values with equal
+/// attributes.
 /// Missing constant_value operands are both the ONNX default zero.
 static bool haveSamePadFillValue(ONNXPadOp lhs, ONNXPadOp rhs) {
   Value lhsValue = lhs.getConstantValue();
@@ -643,11 +644,8 @@ static bool haveSamePadFillValue(ONNXPadOp lhs, ONNXPadOp rhs) {
   if (lhsValue == rhsValue)
     return true;
 
-  if (!getONNXConstantOp(lhsValue) || !getONNXConstantOp(rhsValue))
-    return false;
-
-  ElementsAttr lhsAttribute = getElementAttributeFromONNXValue(lhsValue);
-  ElementsAttr rhsAttribute = getElementAttributeFromONNXValue(rhsValue);
+  ElementsAttr lhsAttribute = getDenseOrDisposableConstLikeElements(lhsValue);
+  ElementsAttr rhsAttribute = getDenseOrDisposableConstLikeElements(rhsValue);
   return lhsAttribute && rhsAttribute &&
          compareValueFromElementAttribute(lhsAttribute, rhsAttribute);
 }
@@ -1319,9 +1317,6 @@ public:
 
 /// Remove a Pad that has no padding and does not change the value type.
 ///
-/// Zero padding is an identity for every ONNX Pad mode. The type check is
-/// intentional: replacing the operation with its input must not discard a
-/// more precise result type.
 struct RemoveZeroPadCanonicalizationPattern
     : public OpRewritePattern<ONNXPadOp> {
   using OpRewritePattern<ONNXPadOp>::OpRewritePattern;
@@ -1331,8 +1326,8 @@ struct RemoveZeroPadCanonicalizationPattern
     if (padOp.getData().getType() != padOp.getType())
       return failure();
 
-    SmallVector<int64_t> pads;
-    if (!getI64ValuesFromONNXConstantOp(padOp.getPads(), pads) ||
+    SmallVector<int64_t> pads = valToVector(padOp.getPads());
+    if (!isConstLikeValue(padOp.getPads()) ||
         !llvm::all_of(pads, [](int64_t value) { return value == 0; }))
       return failure();
 
@@ -1362,25 +1357,20 @@ struct FusePadPadPattern : public OpRewritePattern<ONNXPadOp> {
     if (!inputType)
       return failure();
 
-    SmallVector<int64_t> innerPads;
-    SmallVector<int64_t> outerPads;
     const size_t expectedPads = 2 * inputType.getRank();
-    if (!getI64ValuesFromONNXConstantOp(innerPad.getPads(), innerPads) ||
-        !getI64ValuesFromONNXConstantOp(outerPad.getPads(), outerPads) ||
+    SmallVector<int64_t> innerPads = valToVector(innerPad.getPads());
+    SmallVector<int64_t> outerPads = valToVector(outerPad.getPads());
+    if (!isConstLikeValue(innerPad.getPads()) ||
+        !isConstLikeValue(outerPad.getPads()) ||
         innerPads.size() != expectedPads || outerPads.size() != expectedPads)
       return failure();
     if (llvm::any_of(innerPads, [](int64_t value) { return value < 0; }) ||
         llvm::any_of(outerPads, [](int64_t value) { return value < 0; }))
       return failure();
 
-    SmallVector<int64_t> fusedPads;
-    fusedPads.reserve(expectedPads);
-    for (auto [innerValue, outerValue] : llvm::zip(innerPads, outerPads)) {
-      int64_t fusedValue = 0;
-      if (llvm::AddOverflow(innerValue, outerValue, fusedValue))
-        return failure();
-      fusedPads.push_back(fusedValue);
-    }
+    SmallVector<int64_t> fusedPads(expectedPads);
+    llvm::transform(llvm::zip(innerPads, outerPads), fusedPads.begin(),
+        [](auto pair) { return std::get<0>(pair) + std::get<1>(pair); });
 
     SmallVector<Location> padLocations{innerPad.getLoc(), outerPad.getLoc()};
     Location fusedLoc = rewriter.getFusedLoc(padLocations);
