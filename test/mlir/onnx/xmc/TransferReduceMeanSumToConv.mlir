@@ -384,3 +384,26 @@ func.func @reduce_sum_spatial_axis3_quant_keepdims_defer(%arg0: tensor<1x8x4x4x!
 // CHECK: "onnx.ReduceSum"
 // CHECK-NOT: "onnx.Conv"
 // CHECK-NOT: "onnx.Transpose"
+
+// -----
+// FP16 single-axis channel ReduceSum converts to Conv. Regression: the Conv
+// weight constant must be materialized with an f16 element type -- it was
+// previously built from an f32 float array, which tripped an assertion.
+// CHECK-LABEL: @reduce_sum_f16_channel
+func.func @reduce_sum_f16_channel(%arg0: tensor<1x8x4x4xf16>) -> tensor<1x1x4x4xf16> {
+    %0 = onnx.Constant dense<[1]> : tensor<1xi64>
+    %1 = "onnx.ReduceSum"(%arg0, %0) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x8x4x4xf16>, tensor<1xi64>) -> tensor<1x1x4x4xf16>
+    return %1 : tensor<1x1x4x4xf16>
+}
+// CHECK: "onnx.Conv"
+// CHECK-NOT: "onnx.ReduceSum"
+
+// -----
+// FP16 single-axis channel ReduceMean converts to Conv (same f16 weight fix).
+// CHECK-LABEL: @reduce_mean_f16_channel
+func.func @reduce_mean_f16_channel(%arg0: tensor<1x8x4x4xf16>) -> tensor<1x1x4x4xf16> {
+    %0 = "onnx.ReduceMeanV13"(%arg0) {axes = [1], keepdims = 1 : si64} : (tensor<1x8x4x4xf16>) -> tensor<1x1x4x4xf16>
+    return %0 : tensor<1x1x4x4xf16>
+}
+// CHECK: "onnx.Conv"
+// CHECK-NOT: "onnx.ReduceMeanV13"

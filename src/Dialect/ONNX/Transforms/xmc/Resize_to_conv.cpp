@@ -825,6 +825,14 @@ struct TransferResizeLinearToDwConv
     if (mlir::isa<mlir::quant::QuantizedType>(inputType.getElementType()))
       return failure();
 
+    // FP16 Resize is supported natively by xcompiler, so it must not be
+    // lowered to a (depthwise/transposed) Conv here. The conv-weight builders
+    // below materialize f32 weight constants, which is both unnecessary and
+    // lossy for a 16-bit float path, so skip fp16 entirely.
+    if (inputType.getElementType().isF16())
+      return rewriter.notifyMatchFailure(
+          resizeOp, "fp16 Resize handled natively; not lowered to Conv");
+
     // Only handle linear/trilinear resize
     std::string mode = resizeOp.getMode().str();
     if (mode != "linear" && mode != "trilinear") {
