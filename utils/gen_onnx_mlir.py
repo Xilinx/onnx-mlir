@@ -626,6 +626,7 @@ OpsWithCanonicalizer = [
     "LSTM",
     "Mul",
     "Or",
+    "Pad",
     "Pow",
     "ReduceL1",
     "ReduceL2",

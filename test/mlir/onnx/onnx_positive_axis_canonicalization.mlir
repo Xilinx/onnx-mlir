@@ -353,12 +353,12 @@ func.func @positive_axis_dft_v17_attr(%arg0: tensor<?x?x?xf32>, %length: tensor<
 
 // -----
 
-func.func @positive_axes_pad_operand(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+func.func @positive_axes_pad_operand(%arg0: tensor<2x3xf32>) -> tensor<2x5xf32> {
   %none = "onnx.NoValue"() {value} : () -> none
-  %pads = onnx.Constant dense<[0, 0]> : tensor<2xi64>
+  %pads = onnx.Constant dense<[1, 1]> : tensor<2xi64>
   %axes = onnx.Constant dense<[-1]> : tensor<1xi64>
-  %0 = "onnx.Pad"(%arg0, %pads, %none, %axes) {mode = "constant"} : (tensor<2x3xf32>, tensor<2xi64>, none, tensor<1xi64>) -> tensor<2x3xf32>
-  return %0 : tensor<2x3xf32>
+  %0 = "onnx.Pad"(%arg0, %pads, %none, %axes) {mode = "constant"} : (tensor<2x3xf32>, tensor<2xi64>, none, tensor<1xi64>) -> tensor<2x5xf32>
+  return %0 : tensor<2x5xf32>
 // CHECK-LABEL: func.func @positive_axes_pad_operand
 // CHECK: onnx.Constant dense<1> : tensor<1xi64>
 // CHECK: "onnx.Pad"
@@ -366,12 +366,12 @@ func.func @positive_axes_pad_operand(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> 
 
 // -----
 
-func.func @positive_axes_pad_v18_operand(%arg0: tensor<2x3xf32>) -> tensor<2x3xf32> {
+func.func @positive_axes_pad_v18_operand(%arg0: tensor<2x3xf32>) -> tensor<2x5xf32> {
   %none = "onnx.NoValue"() {value} : () -> none
-  %pads = onnx.Constant dense<[0, 0]> : tensor<2xi64>
+  %pads = onnx.Constant dense<[1, 1]> : tensor<2xi64>
   %axes = onnx.Constant dense<[-1]> : tensor<1xi64>
-  %0 = "onnx.PadV18"(%arg0, %pads, %none, %axes) {mode = "constant"} : (tensor<2x3xf32>, tensor<2xi64>, none, tensor<1xi64>) -> tensor<2x3xf32>
-  return %0 : tensor<2x3xf32>
+  %0 = "onnx.PadV18"(%arg0, %pads, %none, %axes) {mode = "constant"} : (tensor<2x3xf32>, tensor<2xi64>, none, tensor<1xi64>) -> tensor<2x5xf32>
+  return %0 : tensor<2x5xf32>
 // CHECK-LABEL: func.func @positive_axes_pad_v18_operand
 // CHECK: onnx.Constant dense<1> : tensor<1xi64>
 // CHECK: "onnx.PadV18"
