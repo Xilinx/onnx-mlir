@@ -10,6 +10,9 @@
 //
 // This file provides definition of ONNX dialect Pad operation.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
@@ -89,8 +92,7 @@ LogicalResult ONNXPadOpShapeHelper::computeShape() {
     }
   }
 
-  // Initialize pads according to the most likely case
-  pads.resize(2 * dataRank); // pads two sides of each axis.
+  pads.assign(2 * dataRank, LiteralIndexExpr(0));
 
   llvm::SmallSet<uint64_t, 4> visited;
   for (auto [idx, axis] : llvm::enumerate(axes)) {
@@ -116,12 +118,8 @@ LogicalResult ONNXPadOpShapeHelper::computeShape() {
 
     visited.insert(axis);
 
-    // Currently "pads" is only used when axes is NoneType and for constant
-    // propagation
-    if (isNoneValue(axesOperand)) {
-      pads[axis] = padBegin;
-      pads[axis + dataRank] = padEnd;
-    }
+    pads[axis] = padBegin;
+    pads[axis + dataRank] = padEnd;
 
     outputDims[axis] = dimOutputFinal;
   }

@@ -153,8 +153,8 @@ func.func @preserve_negative_pad_chain(%arg0: tensor<4xf32>) -> tensor<4xf32> {
 
 // -----
 
-// Pads with explicit axes are not fused.
-func.func @preserve_pad_chain_with_axes(
+// Pads with the same explicit axis are normalized and fused.
+func.func @fuse_pad_chain_with_axes(
     %arg0: tensor<2x4xf32>) -> tensor<2x8xf32> {
   %pads = onnx.Constant dense<[1, 1]> : tensor<2xi64>
   %axes = onnx.Constant dense<1> : tensor<1xi64>
@@ -164,7 +164,85 @@ func.func @preserve_pad_chain_with_axes(
   return %outer : tensor<2x8xf32>
 }
 
-// CHECK-LABEL: func.func @preserve_pad_chain_with_axes
-// CHECK-COUNT-2: onnx.Pad
+// CHECK-LABEL: func.func @fuse_pad_chain_with_axes
+// CHECK-DAG: %[[PADS:.*]] = onnx.Constant dense<[0, 2, 0, 2]> : tensor<4xi64>
+// CHECK-DAG: %[[AXES:.*]] = "onnx.NoValue"() {value} : () -> none
+// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], {{.*}}, %[[AXES]]) {mode = "constant"} : (tensor<2x4xf32>, tensor<4xi64>, none, none) -> tensor<2x8xf32>
 // CHECK-NOT: onnx.Pad
-// CHECK: return
+// CHECK: return %[[PAD]] : tensor<2x8xf32>
+
+// -----
+
+// Pads acting on different axes are also fused after normalization.
+func.func @fuse_pad_chain_on_different_axes(
+    %arg0: tensor<2x3xf32>) -> tensor<5x10xf32> {
+  %inner_pads = onnx.Constant dense<[1, 2]> : tensor<2xi64>
+  %outer_pads = onnx.Constant dense<[3, 4]> : tensor<2xi64>
+  %inner_axes = onnx.Constant dense<0> : tensor<1xi64>
+  %outer_axes = onnx.Constant dense<1> : tensor<1xi64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %inner = "onnx.Pad"(%arg0, %inner_pads, %none, %inner_axes) {
+    mode = "constant"
+  } : (tensor<2x3xf32>, tensor<2xi64>, none, tensor<1xi64>) -> tensor<5x3xf32>
+  %outer = "onnx.Pad"(%inner, %outer_pads, %none, %outer_axes) {
+    mode = "constant"
+  } : (tensor<5x3xf32>, tensor<2xi64>, none, tensor<1xi64>) -> tensor<5x10xf32>
+  return %outer : tensor<5x10xf32>
+}
+
+// CHECK-LABEL: func.func @fuse_pad_chain_on_different_axes
+// CHECK-DAG: %[[PADS:.*]] = onnx.Constant dense<[1, 3, 2, 4]> : tensor<4xi64>
+// CHECK-DAG: %[[AXES:.*]] = "onnx.NoValue"() {value} : () -> none
+// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], {{.*}}, %[[AXES]]) {mode = "constant"} : (tensor<2x3xf32>, tensor<4xi64>, none, none) -> tensor<5x10xf32>
+// CHECK-NOT: onnx.Pad
+// CHECK: return %[[PAD]] : tensor<5x10xf32>
+
+// -----
+
+// A Pad with explicit axes is fused with a full-rank Pad without axes.
+func.func @fuse_pad_chain_mixed_axes(
+    %arg0: tensor<2x3xf32>) -> tensor<4x6xf32> {
+  %inner_pads = onnx.Constant dense<[1, 2]> : tensor<2xi64>
+  %outer_pads = onnx.Constant dense<[1, 0, 1, 0]> : tensor<4xi64>
+  %inner_axes = onnx.Constant dense<1> : tensor<1xi64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %inner = "onnx.Pad"(%arg0, %inner_pads, %none, %inner_axes) {
+    mode = "constant"
+  } : (tensor<2x3xf32>, tensor<2xi64>, none, tensor<1xi64>) -> tensor<2x6xf32>
+  %outer = "onnx.Pad"(%inner, %outer_pads, %none, %none) {
+    mode = "constant"
+  } : (tensor<2x6xf32>, tensor<4xi64>, none, none) -> tensor<4x6xf32>
+  return %outer : tensor<4x6xf32>
+}
+
+// CHECK-LABEL: func.func @fuse_pad_chain_mixed_axes
+// CHECK-DAG: %[[PADS:.*]] = onnx.Constant dense<[1, 1, 1, 2]> : tensor<4xi64>
+// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], {{.*}}) {mode = "constant"} : (tensor<2x3xf32>, tensor<4xi64>, none, none) -> tensor<4x6xf32>
+// CHECK-NOT: onnx.Pad
+// CHECK: return %[[PAD]] : tensor<4x6xf32>
+
+// -----
+
+// Negative axes are normalized before fusing.
+func.func @fuse_pad_chain_with_negative_axis(
+    %arg0: tensor<2x4xf32>) -> tensor<7x6xf32> {
+  %inner_pads = onnx.Constant dense<[1, 1]> : tensor<2xi64>
+  %outer_pads = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  %inner_axes = onnx.Constant dense<-1> : tensor<1xi64>
+  %outer_axes = onnx.Constant dense<-2> : tensor<1xi64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %inner = "onnx.Pad"(%arg0, %inner_pads, %none, %inner_axes) {
+    mode = "constant"
+  } : (tensor<2x4xf32>, tensor<2xi64>, none, tensor<1xi64>) -> tensor<2x6xf32>
+  %outer = "onnx.Pad"(%inner, %outer_pads, %none, %outer_axes) {
+    mode = "constant"
+  } : (tensor<2x6xf32>, tensor<2xi64>, none, tensor<1xi64>) -> tensor<7x6xf32>
+  return %outer : tensor<7x6xf32>
+}
+
+// CHECK-LABEL: func.func @fuse_pad_chain_with_negative_axis
+// CHECK-DAG: %[[PADS:.*]] = onnx.Constant dense<[2, 1, 3, 1]> : tensor<4xi64>
+// CHECK-DAG: %[[AXES:.*]] = "onnx.NoValue"() {value} : () -> none
+// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], {{.*}}, %[[AXES]]) {mode = "constant"} : (tensor<2x4xf32>, tensor<4xi64>, none, none) -> tensor<7x6xf32>
+// CHECK-NOT: onnx.Pad
+// CHECK: return %[[PAD]] : tensor<7x6xf32>

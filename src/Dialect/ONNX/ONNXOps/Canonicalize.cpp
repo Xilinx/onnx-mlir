@@ -1336,9 +1336,23 @@ struct RemoveZeroPadCanonicalizationPattern
   }
 };
 
-/// Fuse two non-negative, full-rank constant-mode Pads with the same fill.
+/// Fuse two non-negative constant-mode Pads with the same fill.
 struct FusePadPadPattern : public OpRewritePattern<ONNXPadOp> {
   using OpRewritePattern<ONNXPadOp>::OpRewritePattern;
+
+  /// Return Pad's begin/end values in the full-rank ONNX layout.
+  static FailureOr<SmallVector<int64_t>> getNormalizedPadValues(
+      ONNXPadOp padOp) {
+    ONNXPadOpShapeHelper shapeHelper(padOp.getOperation(), {});
+    // computeShape() succeeds without filling `pads` when axes are not
+    // constant.
+    if (failed(shapeHelper.computeShape()) || shapeHelper.pads.empty() ||
+        !IndexExpr::isLiteral(shapeHelper.pads))
+      return failure();
+    SmallVector<int64_t> pads;
+    IndexExpr::getLiteral(shapeHelper.pads, pads);
+    return pads;
+  }
 
   LogicalResult matchAndRewrite(
       ONNXPadOp outerPad, PatternRewriter &rewriter) const override {
@@ -1348,38 +1362,35 @@ struct FusePadPadPattern : public OpRewritePattern<ONNXPadOp> {
 
     if (outerPad.getMode() != "constant" || innerPad.getMode() != "constant")
       return failure();
-    if (!isNoneValue(outerPad.getAxes()) || !isNoneValue(innerPad.getAxes()))
-      return failure();
     if (!haveSamePadFillValue(outerPad, innerPad))
       return failure();
 
-    auto inputType = dyn_cast<RankedTensorType>(innerPad.getData().getType());
-    if (!inputType)
+    FailureOr<SmallVector<int64_t>> innerPads =
+        getNormalizedPadValues(innerPad);
+    FailureOr<SmallVector<int64_t>> outerPads =
+        getNormalizedPadValues(outerPad);
+    if (failed(innerPads) || failed(outerPads))
       return failure();
 
-    const size_t expectedPads = 2 * inputType.getRank();
-    SmallVector<int64_t> innerPads = valToVector(innerPad.getPads());
-    SmallVector<int64_t> outerPads = valToVector(outerPad.getPads());
-    if (!isConstLikeValue(innerPad.getPads()) ||
-        !isConstLikeValue(outerPad.getPads()) ||
-        innerPads.size() != expectedPads || outerPads.size() != expectedPads)
-      return failure();
-    if (llvm::any_of(innerPads, [](int64_t value) { return value < 0; }) ||
-        llvm::any_of(outerPads, [](int64_t value) { return value < 0; }))
+    if (llvm::any_of(*innerPads, [](int64_t value) { return value < 0; }) ||
+        llvm::any_of(*outerPads, [](int64_t value) { return value < 0; }))
       return failure();
 
-    SmallVector<int64_t> fusedPads(expectedPads);
-    llvm::transform(llvm::zip(innerPads, outerPads), fusedPads.begin(),
+    SmallVector<int64_t> fusedPads(innerPads->size());
+    llvm::transform(llvm::zip(*innerPads, *outerPads), fusedPads.begin(),
         [](auto pair) { return std::get<0>(pair) + std::get<1>(pair); });
 
     SmallVector<Location> padLocations{innerPad.getLoc(), outerPad.getLoc()};
     Location fusedLoc = rewriter.getFusedLoc(padLocations);
     Value fusedPadsValue = onnx_mlir::createConstantOp(
         rewriter, fusedLoc, rewriter.getI64ArrayAttr(fusedPads));
+    Value fusedAxes = outerPad.getAxes();
+    if (!isNoneValue(fusedAxes))
+      fusedAxes = OnnxBuilder(rewriter, fusedLoc).none();
     rewriter.replaceOpWithNewOp<ONNXPadOp>(outerPad,
         {innerPad.getLoc(), outerPad.getLoc()}, TypeRange{outerPad.getType()},
         ValueRange{innerPad.getData(), fusedPadsValue,
-            outerPad.getConstantValue(), outerPad.getAxes()},
+            outerPad.getConstantValue(), fusedAxes},
         outerPad->getAttrs());
     return success();
   }
