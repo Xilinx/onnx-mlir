@@ -84,11 +84,19 @@ mlir::Value createConstantTensor(mlir::PatternRewriter &rewriter,
 
   mlir::Attribute denseAttr;
 
-  if (mlir::isa<mlir::FloatType>(storageType)) {
-    // Float path
-    llvm::SmallVector<float> values(numElements, value);
+  if (auto floatType = mlir::dyn_cast<mlir::FloatType>(storageType)) {
+    // Float path. Build the splat value in the storage type's own float
+    // semantics: DenseElementsAttr::get(..., ArrayRef<float>) is only valid
+    // for f32, so an f16/bf16 element type would trip an element-type vs
+    // data-width assertion. Using APFloat converted to the type's semantics
+    // handles f16/bf16/f32/f64 uniformly.
+    llvm::APFloat apVal(value);
+    bool losesInfo = false;
+    apVal.convert(floatType.getFloatSemantics(),
+        llvm::APFloat::rmNearestTiesToEven, &losesInfo);
+    llvm::SmallVector<llvm::APFloat> values(numElements, apVal);
     denseAttr = mlir::DenseElementsAttr::get(
-        storageTensorType, llvm::ArrayRef<float>(values));
+        storageTensorType, llvm::ArrayRef<llvm::APFloat>(values));
   } else {
     // Integer/quantized path
     int64_t intValue = static_cast<int64_t>(std::round(value));
