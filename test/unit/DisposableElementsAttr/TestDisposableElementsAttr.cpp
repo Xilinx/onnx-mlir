@@ -203,6 +203,51 @@ public:
     return 0;
   }
 
+  int test_unpack_int4_nibbles() {
+    std::cout << "test_unpack_int4_nibbles:" << std::endl;
+
+    // Any start and count, around the 16-byte steps of the SSE2 loop.
+    std::vector<uint8_t> packed(80);
+    for (size_t i = 0; i < packed.size(); ++i)
+      packed[i] = static_cast<uint8_t>(i * 37 + 11);
+    for (size_t first = 0; first < 4; ++first) {
+      for (size_t count : {0, 1, 2, 3, 15, 16, 17, 31, 32, 33, 34, 63, 100}) {
+        std::vector<char> got(count + 1, 0x55);
+        unpackInt4Nibbles(reinterpret_cast<const char *>(packed.data()), first,
+            count, got.data());
+        for (size_t i = 0; i < count; ++i) {
+          size_t pos = first + i;
+          char expected =
+              static_cast<char>((pos % 2 == 0) ? (packed[pos / 2] & 0x0F)
+                                               : (packed[pos / 2] >> 4));
+          assert(got[i] == expected);
+        }
+        // Nothing is written past the count.
+        assert(got[count] == 0x55);
+      }
+    }
+
+    // A 2-D slice whose rows are contiguous in the packed buffer, starting at
+    // an odd element, gives the elements of the original.
+    {
+      const int64_t rows = 7, cols = 45;
+      std::vector<uint8_t> bytes((rows * cols + 1) / 2);
+      for (size_t i = 0; i < bytes.size(); ++i)
+        bytes[i] = static_cast<uint8_t>(i * 91 + 5);
+      ShapedType type = RankedTensorType::get({rows, cols}, U4);
+      ElementsAttr e = elmsBuilder.fromPackedInt4MemoryBuffer(
+          type, BType::PACKED_UINT4, buffer<uint8_t>(bytes));
+      auto sliced = elmsBuilder.slice(e, {3, 37}, {2, 3}, {1, 1});
+      auto orig = mlir::cast<DisposableElementsAttr>(e).getValues<uint_4>();
+      auto sv = mlir::cast<DisposableElementsAttr>(sliced).getValues<uint_4>();
+      for (int64_t r = 0; r < 3; ++r)
+        for (int64_t c = 0; c < 37; ++c)
+          assert(eq<uint_4>(sv[r * 37 + c], orig[(r + 2) * cols + c + 3]));
+    }
+
+    return 0;
+  }
+
   int test_slice() {
     std::cout << "test_slice:" << std::endl;
 
@@ -550,6 +595,7 @@ int main(int argc, char *argv[]) {
   failures += test.test_transpose();
   failures += test.test_packed_int4();
   failures += test.test_scrub_packed_int4();
+  failures += test.test_unpack_int4_nibbles();
   failures += test.test_slice();
   failures += test.test_cast();
   failures += test.test_equal_ints();
