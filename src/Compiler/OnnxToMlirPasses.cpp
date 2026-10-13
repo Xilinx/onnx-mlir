@@ -181,7 +181,7 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   if (!donotScrubDisposableElementsAttr)
     pm.addPass(createScrubDisposablePass(
         /*closeAfter=*/!opts.keepDisposablePoolOpen,
-        opts.preservePackedInt4MinElements));
+        opts.preservePackedInt4MinElements, opts.preserveDisposableConstant));
 
   // Set onnx_node_name if it is missing. Keep this pass at the end of this
   // function and just before instrumentation.

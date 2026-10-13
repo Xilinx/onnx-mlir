@@ -77,28 +77,34 @@ void DisposablePool::garbageCollectUnreachable(
 }
 
 void DisposablePool::scrub(ModuleOp moduleOp, OpAttrDictionary opsAttrs,
-    int64_t preservePackedInt4MinElements) {
+    int64_t preservePackedInt4MinElements, const PreservePredicate &preserve) {
   using Translation = std::pair<DisposableElementsAttr, DenseElementsAttr>;
   std::unordered_map<size_t, Translation> translations;
-  // Large packed int4/uint4 attributes can be left as DisposableElementsAttr:
-  // converting them to Dense here would expand them right after import. They
-  // are tracked separately so eraseUnreachable() below keeps their buffers
-  // alive.
+  // Some attributes can be left as DisposableElementsAttr: converting a large
+  // packed int4/uint4 weight to Dense here would expand it right after import,
+  // and converting any large weight copies it. They are tracked separately so
+  // eraseUnreachable() below keeps their buffers alive.
   // getBufferBType() is private to DisposableElementsAttr, and DisposablePool
   // is a friend, hence the check is inlined here.
   Pool preserved;
   walkOpsAttrs(moduleOp, opsAttrs,
-      [&translations, &preserved, preservePackedInt4MinElements](Operation *op,
-          StringRef attrName, DisposableElementsAttr disposable) {
+      [&translations, &preserved, preservePackedInt4MinElements, &preserve](
+          Operation *op, StringRef attrName,
+          DisposableElementsAttr disposable) {
         BType bufferBType = disposable.getBufferBType();
-        if (preservePackedInt4MinElements >= 0 && isPackedBType(bufferBType) &&
-            disposable.getNumElements() >= preservePackedInt4MinElements) {
+        if ((preservePackedInt4MinElements >= 0 && isPackedBType(bufferBType) &&
+                disposable.getNumElements() >= preservePackedInt4MinElements) ||
+            (preserve && preserve(op, disposable))) {
           preserved.try_emplace(disposable.getId(), disposable);
           return;
         }
         translations.try_emplace(
             disposable.getId(), std::make_pair(disposable, nullptr));
       });
+  // An attribute can be shared by several ops. If any of them keeps it, all of
+  // them do: converting it for the others would dispose its buffer.
+  for (const auto &entry : preserved)
+    translations.erase(entry.first);
 
   {
     // The mutex protects access to the iterator 'next' which is progressed as

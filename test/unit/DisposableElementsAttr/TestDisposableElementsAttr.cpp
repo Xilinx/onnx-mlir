@@ -492,6 +492,66 @@ public:
     return 0;
   }
 
+  int test_scrub_preserve_predicate() {
+    std::cout << "test_scrub_preserve_predicate:" << std::endl;
+
+    // The predicate decides per op, for any element type.
+    {
+      ElementsAttr small = elmsBuilder.fromMemoryBuffer(
+          RankedTensorType::get({2}, I8), buffer<int8_t>({1, 2}));
+      ElementsAttr large = elmsBuilder.fromMemoryBuffer(
+          RankedTensorType::get({4}, I32), buffer<int32_t>({1, 2, 3, 4}));
+
+      OwningOpRef<ModuleOp> module(ModuleOp::create(loc));
+      OpBuilder b(ctx);
+      b.setInsertionPointToStart(module->getBody());
+      auto smallOp = b.create<ONNXConstantOp>(loc, Attribute(), small);
+      auto largeOp = b.create<ONNXConstantOp>(loc, Attribute(), large);
+
+      DisposablePool::get<ONNXDialect>(ctx)->scrub(*module,
+          {{ONNXConstantOp::getOperationName(), "value"}}, /*packedMin=*/-1,
+          [](Operation *, DisposableElementsAttr attr) {
+            return attr.getNumElements() >= 4;
+          });
+
+      assert(isa<DenseElementsAttr>(smallOp.getValueAttr()));
+      assert(isa<DisposableElementsAttr>(largeOp.getValueAttr()));
+      auto values = mlir::cast<ElementsAttr>(largeOp.getValueAttr());
+      int64_t expected = 1;
+      for (const APInt &v : values.getValues<APInt>())
+        assert(v.getSExtValue() == expected++);
+    }
+
+    // An attribute shared by two ops is kept by both if either keeps it, so
+    // that converting it for one of them does not dispose the buffer of the
+    // other.
+    {
+      ElementsAttr shared = elmsBuilder.fromMemoryBuffer(
+          RankedTensorType::get({3}, I32), buffer<int32_t>({7, 8, 9}));
+
+      OwningOpRef<ModuleOp> module(ModuleOp::create(loc));
+      OpBuilder b(ctx);
+      b.setInsertionPointToStart(module->getBody());
+      auto first = b.create<ONNXConstantOp>(loc, Attribute(), shared);
+      auto second = b.create<ONNXConstantOp>(loc, Attribute(), shared);
+
+      Operation *firstOp = first.getOperation();
+      DisposablePool::get<ONNXDialect>(ctx)->scrub(*module,
+          {{ONNXConstantOp::getOperationName(), "value"}}, /*packedMin=*/-1,
+          [firstOp](
+              Operation *op, DisposableElementsAttr) { return op == firstOp; });
+
+      assert(isa<DisposableElementsAttr>(first.getValueAttr()));
+      assert(isa<DisposableElementsAttr>(second.getValueAttr()));
+      auto values = mlir::cast<ElementsAttr>(second.getValueAttr());
+      int64_t expected = 7;
+      for (const APInt &v : values.getValues<APInt>())
+        assert(v.getSExtValue() == expected++);
+    }
+
+    return 0;
+  }
+
   int test_cast() {
     std::cout << "test_cast:" << std::endl;
 
@@ -595,6 +655,7 @@ int main(int argc, char *argv[]) {
   failures += test.test_transpose();
   failures += test.test_packed_int4();
   failures += test.test_scrub_packed_int4();
+  failures += test.test_scrub_preserve_predicate();
   failures += test.test_unpack_int4_nibbles();
   failures += test.test_slice();
   failures += test.test_cast();
