@@ -1155,10 +1155,12 @@ public:
           reduceSumOp, "sole user is not onnx.Mul");
 
     // A broadcasting Mul changes the result shape. ReduceMean cannot
-    // reproduce that, so only a shape-preserving scales are rewritten.
-    if (mulOp.getResult().getType() != reduceSumOp.getResult().getType())
+    // reproduce that, so only static, shape-preserving scales are rewritten.
+    Type mulResultType = mulOp.getResult().getType();
+    if (!hasStaticShape(mulResultType) ||
+        mulResultType != reduceSumOp.getResult().getType())
       return rewriter.notifyMatchFailure(
-          reduceSumOp, "Mul broadcasts the reduced value");
+          reduceSumOp, "Mul must have identical static input/output shapes");
 
     Value scaleOperand = mulOp.getB();
 
