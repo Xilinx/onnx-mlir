@@ -14,6 +14,9 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/WalkPatternRewriteDriver.h"
+#include "src/Dialect/ONNX/ElementsAttr/DisposableElementsAttr.hpp"
+#include "src/Dialect/ONNX/ElementsAttr/ElementsAttrBuilder.hpp"
+#include "src/Dialect/ONNX/ElementsAttr/WideNum.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Pass/Passes.hpp"
@@ -89,6 +92,33 @@ std::optional<T> getScalarTensorValue(ONNXConstantOp constOp) {
         return static_cast<T>(iAttr.getInt()); // signed ok
     }
     return std::nullopt;
+  }
+
+  // A DisposableElementsAttr is compared on its buffer. Iterating one that is a
+  // view (a transpose, say) goes through an indexer that allocates for every
+  // element, which is slow for a large constant that is still lazy.
+  if (mlir::isa<DisposableElementsAttr>(elementsAttr) &&
+      elementsAttr.getNumElements() > 0) {
+    if (mlir::isa<FloatType>(elementType)) {
+      if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
+        APFloat first = *elementsAttr.getValues<APFloat>().begin();
+        if (!ElementsAttrBuilder::allEqual(
+                elementsAttr, WideNum::fromAPFloat(first)))
+          return std::nullopt;
+        return static_cast<T>(FloatAttr::getValueAsDouble(first));
+      }
+    } else if (auto intType = mlir::dyn_cast<IntegerType>(elementType);
+        intType && intType.getWidth() >= 8) {
+      if constexpr (std::is_integral_v<T>) {
+        APInt first = *elementsAttr.getValues<APInt>().begin();
+        if (!ElementsAttrBuilder::allEqual(
+                elementsAttr, WideNum::fromAPInt(first, !intType.isUnsigned())))
+          return std::nullopt;
+        return static_cast<T>(
+            intType.isUnsigned() ? first.getZExtValue() : first.getSExtValue());
+      }
+    }
+    // Other element types (bool, int4) take the generic path below.
   }
 
   // Case: rank >= 1 → scalar iff every element equals the first. Comparing the
