@@ -626,6 +626,7 @@ OpsWithCanonicalizer = [
     "LSTM",
     "Mul",
     "Or",
+    "Pad",
     "Pow",
     "ReduceL1",
     "ReduceL2",
@@ -757,7 +758,17 @@ OpsWithVerifier = [
 ]
 
 # Op with fold function
-OpsWithFolder = ["Constant", "Squeeze", "SqueezeV11", "ReduceMean", "Slice", "Clip"]
+OpsWithFolder = [
+    "Constant",
+    "Squeeze",
+    "SqueezeV11",
+    "ReduceMax",
+    "ReduceMean",
+    "ReduceMin",
+    "ReduceSum",
+    "Slice",
+    "Clip",
+]
 
 # Op with ConstantLike trait
 OpsWithConstantLike = ["Constant"]

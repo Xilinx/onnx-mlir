@@ -29,6 +29,7 @@ static ONNXHybridTransformPassOptions getDecomposeOnlyOptions(
   options.constantPropagation = false;
   options.qdqConstProp = false;
   options.quantConstFold = false;
+  options.dequantConstFold = false;
   options.decomposition = true;
   options.recomposition = false;
   options.quarkQuantizedOpsLegalization = false;
@@ -103,7 +104,9 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
           /*expansionBound=*/-1, /*disabledPatterns=*/{""},
           /*constantPropIsDisabled=*/false);
       pm.addNestedPass<func::FuncOp>(onnx_mlir::createConstPropONNXToONNXPass(
-          opts.hybrid.qdqConstProp, opts.hybrid.quantConstFold));
+          {.enableQDQ = opts.hybrid.qdqConstProp,
+              .enableQuantConstFold = opts.hybrid.quantConstFold,
+              .enableDequantConstFold = opts.hybrid.dequantConstFold}));
     }
   } else {
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
@@ -118,7 +121,9 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     pm.addNestedPass<func::FuncOp>(
         onnx_mlir::createLegalizeQuarkQuantizedOpsPass());
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createConstPropONNXToONNXPass(
-        opts.hybrid.qdqConstProp, opts.hybrid.quantConstFold));
+        {.enableQDQ = opts.hybrid.qdqConstProp,
+            .enableQuantConstFold = opts.hybrid.quantConstFold,
+            .enableDequantConstFold = opts.hybrid.dequantConstFold}));
     if (opts.onnxOpTransformThreshold > 0) {
       // Dynamic iterate in ONNXOpTransformPass
       pm.addPass(onnx_mlir::createONNXOpTransformPass(
@@ -131,7 +136,9 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
         pm.addPass(onnx_mlir::createCanonicalizeWithResultNamesPass());
         pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
         pm.addNestedPass<func::FuncOp>(onnx_mlir::createConstPropONNXToONNXPass(
-            opts.hybrid.qdqConstProp, opts.hybrid.quantConstFold));
+            {.enableQDQ = opts.hybrid.qdqConstProp,
+                .enableQuantConstFold = opts.hybrid.quantConstFold,
+                .enableDequantConstFold = opts.hybrid.dequantConstFold}));
       }
     }
   }
@@ -143,7 +150,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
 
   // Canonicalizing Q-DQ related ops
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createQDQCanonicalizePass(
-      opts.enableRemoveBinary, opts.enableRemoveDqQAroundOp));
+      {.removeBinary = opts.enableRemoveBinary,
+          .removeQDQAroundOps = opts.enableRemoveDqQAroundOp}));
 
   // One more call to ONNX shape inference/canonicalization/... to update
   // shape if possible.
@@ -167,9 +175,13 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // Clean dead code.
   pm.addPass(mlir::createSymbolDCEPass());
 
-  // Replace every DisposableElementsAttr with DenseElementsAttr.
+  // Replace every DisposableElementsAttr with DenseElementsAttr. Once the pool
+  // is closed, DisposablePool::createElementsAttr falls back to copying into a
+  // DenseElementsAttr, so keep it open only if the client asked for that.
   if (!donotScrubDisposableElementsAttr)
-    pm.addPass(createScrubDisposablePass());
+    pm.addPass(createScrubDisposablePass(
+        /*closeAfter=*/!opts.keepDisposablePoolOpen,
+        opts.preservePackedInt4MinElements));
 
   // Set onnx_node_name if it is missing. Keep this pass at the end of this
   // function and just before instrumentation.

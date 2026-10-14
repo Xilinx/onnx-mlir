@@ -628,6 +628,28 @@ void inferShapes(ONNXOp op) {
 
 } // namespace
 
+/// Two Pad operations have the same fill value when their operands are the
+/// same value, or when they are distinct ConstantLike values with equal
+/// attributes.
+/// Missing constant_value operands are both the ONNX default zero.
+static bool haveSamePadFillValue(ONNXPadOp lhs, ONNXPadOp rhs) {
+  Value lhsValue = lhs.getConstantValue();
+  Value rhsValue = rhs.getConstantValue();
+
+  const bool lhsIsNone = isNoneValue(lhsValue);
+  const bool rhsIsNone = isNoneValue(rhsValue);
+  if (lhsIsNone || rhsIsNone)
+    return lhsIsNone && rhsIsNone;
+
+  if (lhsValue == rhsValue)
+    return true;
+
+  ElementsAttr lhsAttribute = getDenseOrDisposableConstLikeElements(lhsValue);
+  ElementsAttr rhsAttribute = getDenseOrDisposableConstLikeElements(rhsValue);
+  return lhsAttribute && rhsAttribute &&
+         compareValueFromElementAttribute(lhsAttribute, rhsAttribute);
+}
+
 // =============================================================================
 /// Include the patterns defined in the Declarative Rewrite framework.
 // =============================================================================
@@ -700,6 +722,75 @@ public:
       assert(removedBroadcastAttr && "broadcast should be removed");
     });
     return success();
+  }
+};
+
+/// Sink DepthToSpace ops beneath elementwise ops
+/// Unary:  `UnaryOp(DepthToSpace(x))` -> `DepthToSpace(UnaryOp(x))`
+/// Binary: `BinaryOp(DepthToSpace(x), DepthToSpace(y))` ->
+///         `DepthToSpace(BinaryOp(x, y))` (no broadcast)
+/// Sinking requires the DepthToSpace ops to have the same configuration and the
+/// binary operation does not broadcast.
+class DepthToSpaceElementwisePattern
+    : public OpRewritePattern<ONNXDepthToSpaceOp> {
+public:
+  using OpRewritePattern<ONNXDepthToSpaceOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXDepthToSpaceOp d2sOp, PatternRewriter &rewriter) const override {
+    for (Operation *user : d2sOp.getResult().getUsers()) {
+      if (!user->hasTrait<OpTrait::ONNXElementwise>())
+        continue;
+
+      const unsigned numOperands = user->getNumOperands();
+      if (numOperands == 1) {
+        // Unary: DepthToSpace(UnaryOp(x)) -> UnaryOp(DepthToSpace(x))
+        // rewritten as UnaryOp(DepthToSpace(x)) -> DepthToSpace(UnaryOp(x))
+        const Type inputType = d2sOp.getInput().getType();
+        const Type outputType = user->getResult(0).getType();
+
+        Operation *newUnary = rewriter.clone(*user);
+        newUnary->setOperands({d2sOp.getInput()});
+        newUnary->getResult(0).setType(inputType);
+        rewriter.replaceOpWithNewOp<ONNXDepthToSpaceOp>(user, {d2sOp.getLoc()},
+            outputType, newUnary->getResult(0), d2sOp.getBlocksizeAttr(),
+            d2sOp.getModeAttr());
+        return success();
+      }
+
+      if (numOperands == 2) {
+        // Binary: BinaryOp(DepthToSpace(x), DepthToSpace(y)) ->
+        //         DepthToSpace(BinaryOp(x, y))
+        auto lhs = user->getOperand(0).getDefiningOp<ONNXDepthToSpaceOp>();
+        auto rhs = user->getOperand(1).getDefiningOp<ONNXDepthToSpaceOp>();
+        if (!lhs || !rhs)
+          continue;
+
+        // Different DepthToSpace configurations
+        if (lhs.getBlocksize() != rhs.getBlocksize() ||
+            lhs.getMode() != rhs.getMode())
+          continue;
+
+        // Different input types implies they are broadcast. We should not sink
+        // in this case.
+        const Type lhsInputType = lhs.getInput().getType();
+        const Type rhsInputType = rhs.getInput().getType();
+        const Type outputType = user->getResult(0).getType();
+        if (lhsInputType != rhsInputType ||
+            lhs.getResult().getType() != outputType ||
+            rhs.getResult().getType() != outputType)
+          continue;
+
+        Operation *newBinary = rewriter.clone(*user);
+        newBinary->setOperands({lhs.getInput(), rhs.getInput()});
+        newBinary->getResult(0).setType(lhsInputType);
+        rewriter.replaceOpWithNewOp<ONNXDepthToSpaceOp>(user,
+            {lhs.getLoc(), rhs.getLoc()}, outputType, newBinary->getResult(0),
+            lhs.getBlocksizeAttr(), lhs.getModeAttr());
+        return success();
+      }
+    }
+    return failure();
   }
 };
 
@@ -979,23 +1070,22 @@ struct PropagateConstantScalingInAttentionLayerPattern
   }
 };
 
-// Drop reduction axes that point to dimensions of size 1 from
-// `onnx.ReduceMean`. Reducing a unit-sized dimension is a no-op, so the axis
-// can be removed from the `axes` operand without changing the result.
+// Drop reduction axes that point to dimensions of size 1 from reduction ops.
+// Reducing a unit-sized dimension is a no-op, so the axis can be removed from
+// the `axes` operand without changing the result.
 //
 // Only `keepdims = 1` is handled here. With `keepdims = 0`, dropping a
 // size-1 axis would change the output rank and require inserting a Squeeze,
 // which is left to other rewrites.
 //
-// The empty-axes + `noop_with_empty_axes = 1` case (no reduction at all) is
-// already handled by `ONNXReduceMeanOp::fold`, which forwards `data`.
-class DropUnitAxesFromReduceMeanPattern
-    : public OpRewritePattern<ONNXReduceMeanOp> {
+// Empty axes with `noop_with_empty_axes = 1` forward the data input.
+template <typename OP_TYPE>
+class DropUnitAxesFromReducePattern : public OpRewritePattern<OP_TYPE> {
 public:
-  using OpRewritePattern<ONNXReduceMeanOp>::OpRewritePattern;
+  using OpRewritePattern<OP_TYPE>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
-      ONNXReduceMeanOp op, PatternRewriter &rewriter) const override {
+      OP_TYPE op, PatternRewriter &rewriter) const override {
     if (op.getKeepdims() != 1)
       return rewriter.notifyMatchFailure(op, "only keepdims=1 is handled");
 
@@ -1011,12 +1101,14 @@ public:
     if (!isNoneValue(op.getAxes())) {
       if (!getI64ValuesFromONNXConstantOp(op.getAxes(), axes))
         return rewriter.notifyMatchFailure(op, "axes is not a constant");
-    } else if (op.getNoopWithEmptyAxes() == 0) {
+    }
+    if (axes.empty() && op.getNoopWithEmptyAxes() == 0) {
       // Empty axes with default semantics means reduce all dims.
       axes.resize(rank);
       std::iota(axes.begin(), axes.end(), int64_t{0});
-    } else {
-      return rewriter.notifyMatchFailure(op, "noop on empty axes");
+    } else if (axes.empty()) {
+      rewriter.replaceOp(op, op.getData());
+      return success();
     }
 
     // Drop axes that target unit-sized dimensions.
@@ -1041,6 +1133,90 @@ public:
     OnnxBuilder create(rewriter, op.getLoc());
     Value newAxes = create.constantInt64(remainingAxes);
     rewriter.modifyOpInPlace(op, [&] { op.getAxesMutable().assign(newAxes); });
+    return success();
+  }
+};
+
+// Fuse ReduceSum followed by Mul(1/N) into ReduceMean, where N is the number
+// of elements reduced (product of reduced axis sizes).
+class FuseReduceSumMulToReduceMeanPattern
+    : public OpRewritePattern<ONNXReduceSumOp> {
+  // Returns the number of elements reduced when all axes and dimensions are
+  // statically valid.
+  static FailureOr<int64_t> getReducedElementCount(
+      RankedTensorType inputType, ArrayRef<int64_t> axes) {
+    SmallVector<int64_t> normalizedAxes;
+    if (failed(normalizeONNXAxisValues(
+            axes, inputType.getRank(), /*includeRank=*/false, normalizedAxes)))
+      return failure();
+
+    int64_t elementCount = 1;
+    for (int64_t axis : normalizedAxes) {
+      const int64_t dimSize = inputType.getDimSize(axis);
+      int64_t nextElementCount;
+      if (ShapedType::isDynamic(dimSize) || dimSize <= 0 ||
+          llvm::MulOverflow(elementCount, dimSize, nextElementCount))
+        return failure();
+      elementCount = nextElementCount;
+    }
+    return elementCount;
+  }
+
+public:
+  using OpRewritePattern<ONNXReduceSumOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXReduceSumOp reduceSumOp, PatternRewriter &rewriter) const override {
+    if (!reduceSumOp->hasOneUse())
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "ReduceSum result must have a single use");
+
+    auto mulOp = dyn_cast<ONNXMulOp>(*reduceSumOp->getUsers().begin());
+    if (!mulOp)
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "sole user is not onnx.Mul");
+
+    // A broadcasting Mul changes the result shape. ReduceMean cannot
+    // reproduce that, so only static, shape-preserving scales are rewritten.
+    Type mulResultType = mulOp.getResult().getType();
+    if (!hasStaticShape(mulResultType) ||
+        mulResultType != reduceSumOp.getResult().getType())
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "Mul must have identical static input/output shapes");
+
+    Value scaleOperand = mulOp.getB();
+
+    auto inputType =
+        mlir::dyn_cast<RankedTensorType>(reduceSumOp.getData().getType());
+    if (!inputType)
+      return rewriter.notifyMatchFailure(reduceSumOp, "input must be ranked");
+    if (!isa<FloatType>(inputType.getElementType()))
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "input must have a floating-point element type");
+
+    SmallVector<int64_t> axes;
+    if (!getI64ValuesFromONNXConstantOp(reduceSumOp.getAxes(), axes))
+      return rewriter.notifyMatchFailure(reduceSumOp, "axes is not constant");
+
+    FailureOr<int64_t> numReducedElements =
+        getReducedElementCount(inputType, axes);
+    if (failed(numReducedElements))
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "reduced axes must have a valid static shape");
+
+    if (!isa<FloatType>(getElementTypeOrSelf(scaleOperand.getType())))
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "scale must be floating point");
+
+    const double expectedScale = 1.0 / static_cast<double>(*numReducedElements);
+    if (!isConstOf(scaleOperand, expectedScale))
+      return rewriter.notifyMatchFailure(
+          reduceSumOp, "Mul scale is not 1/N for the reduced axes");
+
+    rewriter.replaceOpWithNewOp<ONNXReduceMeanOp>(mulOp,
+        {reduceSumOp.getLoc(), mulOp.getLoc()}, mulOp.getResult().getType(),
+        reduceSumOp.getData(), reduceSumOp.getAxes(),
+        reduceSumOp.getKeepdimsAttr(), reduceSumOp.getNoopWithEmptyAxesAttr());
     return success();
   }
 };
@@ -1074,27 +1250,35 @@ public:
   }
 };
 
-// Materialize the implicit "reduce all axes" of a ReduceMean whose reduction
-// axes operand is absent (None). An omitted `axes` means "reduce over every
-// dimension" unless `noop_with_empty_axes = 1`, which is a no-op that
-// `ONNXReduceMeanOp::fold` already forwards.
-class MaterializeAbsentAxesReduceMeanPattern
-    : public OpRewritePattern<ONNXReduceMeanOp> {
+// Materialize the implicit "reduce all axes" of a reduction whose reduction
+// axes operand is absent (None) or explicitly empty. An empty `axes` means
+// "reduce over every dimension" unless `noop_with_empty_axes = 1`, which is a
+// no-op handled by the reduction op's fold.
+template <typename OP_TYPE>
+class MaterializeAbsentAxesReducePattern : public OpRewritePattern<OP_TYPE> {
 public:
-  using OpRewritePattern<ONNXReduceMeanOp>::OpRewritePattern;
+  using OpRewritePattern<OP_TYPE>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
-      ONNXReduceMeanOp op, PatternRewriter &rewriter) const override {
-    if (!isNoneValue(op.getAxes()))
-      return rewriter.notifyMatchFailure(op, "axes already present");
-
+      OP_TYPE op, PatternRewriter &rewriter) const override {
     if (op.getNoopWithEmptyAxes() != 0)
       return rewriter.notifyMatchFailure(op, "noop on empty axes");
+
+    SmallVector<int64_t> oldAxes;
+    if (!isNoneValue(op.getAxes()) &&
+        (!getI64ValuesFromONNXConstantOp(op.getAxes(), oldAxes) ||
+            !oldAxes.empty()))
+      return rewriter.notifyMatchFailure(op, "axes are not known to be empty");
 
     auto dataType = mlir::dyn_cast<RankedTensorType>(op.getData().getType());
     if (!dataType)
       return rewriter.notifyMatchFailure(op, "data must be ranked");
     const int64_t rank = dataType.getRank();
+    // Rank 0 has no axes to list. Materializing another empty tensor would
+    // match this pattern again and the rewrite would not converge.
+    if (rank == 0)
+      return rewriter.notifyMatchFailure(
+          op, "rank-0 reduction has no axes to materialize");
 
     SmallVector<int64_t> axes(rank);
     std::iota(axes.begin(), axes.end(), int64_t{0});
@@ -1219,6 +1403,87 @@ public:
 
     rewriter.replaceOp(onnxResizeOp, onnxResizeOp.getX());
 
+    return success();
+  }
+};
+
+/// Remove a Pad that has no padding and does not change the value type.
+///
+struct RemoveZeroPadCanonicalizationPattern
+    : public OpRewritePattern<ONNXPadOp> {
+  using OpRewritePattern<ONNXPadOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXPadOp padOp, PatternRewriter &rewriter) const override {
+    if (padOp.getData().getType() != padOp.getType())
+      return failure();
+
+    SmallVector<int64_t> pads = valToVector(padOp.getPads());
+    if (!isConstLikeValue(padOp.getPads()) ||
+        !llvm::all_of(pads, [](int64_t value) { return value == 0; }))
+      return failure();
+
+    rewriter.replaceOp(padOp, padOp.getData());
+    return success();
+  }
+};
+
+/// Fuse two non-negative constant-mode Pads with the same fill.
+struct FusePadPadPattern : public OpRewritePattern<ONNXPadOp> {
+  using OpRewritePattern<ONNXPadOp>::OpRewritePattern;
+
+  /// Return Pad's begin/end values in the full-rank ONNX layout.
+  static FailureOr<SmallVector<int64_t>> getNormalizedPadValues(
+      ONNXPadOp padOp) {
+    ONNXPadOpShapeHelper shapeHelper(padOp.getOperation(), {});
+    // computeShape() succeeds without filling `pads` when axes are not
+    // constant.
+    if (failed(shapeHelper.computeShape()) || shapeHelper.pads.empty() ||
+        !IndexExpr::isLiteral(shapeHelper.pads))
+      return failure();
+    SmallVector<int64_t> pads;
+    IndexExpr::getLiteral(shapeHelper.pads, pads);
+    return pads;
+  }
+
+  LogicalResult matchAndRewrite(
+      ONNXPadOp outerPad, PatternRewriter &rewriter) const override {
+    auto innerPad = outerPad.getData().getDefiningOp<ONNXPadOp>();
+    if (!innerPad)
+      return failure();
+
+    if (outerPad.getMode() != "constant" || innerPad.getMode() != "constant")
+      return failure();
+    if (!haveSamePadFillValue(outerPad, innerPad))
+      return failure();
+
+    FailureOr<SmallVector<int64_t>> innerPads =
+        getNormalizedPadValues(innerPad);
+    FailureOr<SmallVector<int64_t>> outerPads =
+        getNormalizedPadValues(outerPad);
+    if (failed(innerPads) || failed(outerPads))
+      return failure();
+
+    if (llvm::any_of(*innerPads, [](int64_t value) { return value < 0; }) ||
+        llvm::any_of(*outerPads, [](int64_t value) { return value < 0; }))
+      return failure();
+
+    SmallVector<int64_t> fusedPads(innerPads->size());
+    llvm::transform(llvm::zip(*innerPads, *outerPads), fusedPads.begin(),
+        [](auto pair) { return std::get<0>(pair) + std::get<1>(pair); });
+
+    SmallVector<Location> padLocations{innerPad.getLoc(), outerPad.getLoc()};
+    Location fusedLoc = rewriter.getFusedLoc(padLocations);
+    Value fusedPadsValue = onnx_mlir::createConstantOp(
+        rewriter, fusedLoc, rewriter.getI64ArrayAttr(fusedPads));
+    Value fusedAxes = outerPad.getAxes();
+    if (!isNoneValue(fusedAxes))
+      fusedAxes = OnnxBuilder(rewriter, fusedLoc).none();
+    rewriter.replaceOpWithNewOp<ONNXPadOp>(outerPad,
+        {innerPad.getLoc(), outerPad.getLoc()}, TypeRange{outerPad.getType()},
+        ValueRange{innerPad.getData(), fusedPadsValue,
+            outerPad.getConstantValue(), fusedAxes},
+        outerPad->getAttrs());
     return success();
   }
 };
@@ -2237,10 +2502,18 @@ struct RecomposeConcatPattern : public OpRewritePattern<ONNXConcatOp> {
 
   // Helper function to check if an input is a mergeable Concat.
   static bool isMergeableConcat(Value input, int64_t axis) {
-    ONNXConcatOp concatOp = input.getDefiningOp<ONNXConcatOp>();
+    auto concatOp = input.getDefiningOp<ONNXConcatOp>();
     if (!concatOp)
       return false;
-    return (concatOp.getAxis() == axis) && (concatOp.getResult().hasOneUse());
+    if (concatOp.getAxis() != axis || !concatOp.getResult().hasOneUse())
+      return false;
+    // Do not flatten an inner concat whose operands are all dense constants:
+    // those groupings are intentionally created by
+    // GroupConsecutiveConstantConcatOperandsPattern and will later be
+    // constant-folded to a single constant operand.
+    if (llvm::all_of(concatOp.getOperands(), isDenseONNXConstant))
+      return false;
+    return true;
   }
 
   LogicalResult matchAndRewrite(
@@ -2678,6 +2951,55 @@ struct EliminateCarveOutAroundRotaryEmbeddingPattern
            "concat result type");
 
     rewriter.replaceOp(concatOp, newOut);
+    return success();
+  }
+};
+
+// Pull each run of two or more consecutive dense constants into its own Concat
+// so later const-prop can fold that run. Skips all-constant Concat ops (those
+// are already foldable as a whole).
+struct GroupConsecutiveConstantConcatOperandsPattern
+    : public OpRewritePattern<ONNXConcatOp> {
+  using OpRewritePattern<ONNXConcatOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXConcatOp concatOp, PatternRewriter &rewriter) const final {
+    ValueRange inputs = concatOp.getOperands();
+    if (llvm::all_of(inputs, isDenseONNXConstant))
+      return failure();
+
+    SmallVector<Value> newInputs;
+    bool grouped = false;
+    for (size_t i = 0, e = inputs.size(); i < e;) {
+      if (!isDenseONNXConstant(inputs[i])) {
+        newInputs.push_back(inputs[i]);
+        ++i;
+        continue;
+      }
+      size_t j = i + 1;
+      while (j < e && isDenseONNXConstant(inputs[j]))
+        ++j;
+      if (j - i >= 2) {
+        ValueRange run = inputs.slice(i, j - i);
+        auto elementType =
+            mlir::cast<ShapedType>(run.front().getType()).getElementType();
+        auto runTy = UnrankedTensorType::get(elementType);
+        auto inner = rewriter.create<ONNXConcatOp>(
+            concatOp.getLoc(), runTy, run, concatOp.getAxis());
+        inferShapes(inner);
+        newInputs.push_back(inner.getResult());
+        grouped = true;
+      } else {
+        newInputs.push_back(inputs[i]);
+      }
+      i = j;
+    }
+
+    if (!grouped)
+      return failure();
+
+    rewriter.replaceOpWithNewOp<ONNXConcatOp>(concatOp,
+        concatOp.getResult().getType(), newInputs, concatOp.getAxis());
     return success();
   }
 };
@@ -4991,6 +5313,7 @@ void ONNXConcatOp::getCanonicalizationPatterns(
   results.insert<RemoveEmptyConcatOperandsPattern>(context);
   results.insert<ConcatSingleOperandPattern>(context);
   results.insert<EliminateCarveOutAroundRotaryEmbeddingPattern>(context);
+  results.insert<GroupConsecutiveConstantConcatOperandsPattern>(context);
 }
 
 /// on the ONNXConvOp.
@@ -5015,6 +5338,7 @@ void ONNXConstantOp::getCanonicalizationPatterns(
 void ONNXDepthToSpaceOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<RemoveDepthToSpaceSpaceToDepthPattern>(context);
+  results.insert<DepthToSpaceElementwisePattern>(context);
 }
 
 /// on the ONNXDivOp.
@@ -5159,9 +5483,17 @@ void ONNXOrOp::getCanonicalizationPatterns(
   result.insert<BinaryOpBroadcastAxisPattern<ONNXOrOp>>(context);
 }
 
+/// on the ONNXPadOp.
+void ONNXPadOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<RemoveZeroPadCanonicalizationPattern>(context);
+  results.insert<FusePadPadPattern>(context);
+}
+
 /// on the ONNXReduceL1Op.
 void ONNXReduceL1Op::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceL1Op>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceL1Op>>(context);
 }
@@ -5169,6 +5501,7 @@ void ONNXReduceL1Op::getCanonicalizationPatterns(
 /// on the ONNXReduceL2Op.
 void ONNXReduceL2Op::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceL2Op>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceL2Op>>(context);
 }
@@ -5191,6 +5524,8 @@ void ONNXReduceLogSumExpOp::getCanonicalizationPatterns(
 /// on the ONNXReduceMaxOp.
 void ONNXReduceMaxOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceMaxOp>>(context);
+  result.insert<DropUnitAxesFromReducePattern<ONNXReduceMaxOp>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceMaxOp>>(context);
 }
@@ -5211,8 +5546,8 @@ void ONNXReduceMaxV18Op::getCanonicalizationPatterns(
 /// on the ONNXReduceMeanOp.
 void ONNXReduceMeanOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  result.insert<MaterializeAbsentAxesReduceMeanPattern>(context);
-  result.insert<DropUnitAxesFromReduceMeanPattern>(context);
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceMeanOp>>(context);
+  result.insert<DropUnitAxesFromReducePattern<ONNXReduceMeanOp>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceMeanOp>>(context);
 }
@@ -5226,6 +5561,8 @@ void ONNXReduceMeanV13Op::getCanonicalizationPatterns(
 /// on the ONNXReduceMinOp.
 void ONNXReduceMinOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceMinOp>>(context);
+  result.insert<DropUnitAxesFromReducePattern<ONNXReduceMinOp>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceMinOp>>(context);
 }
@@ -5246,6 +5583,8 @@ void ONNXReduceMinV18Op::getCanonicalizationPatterns(
 /// on the ONNXReduceProdOp.
 void ONNXReduceProdOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceProdOp>>(context);
+  result.insert<DropUnitAxesFromReducePattern<ONNXReduceProdOp>>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceProdOp>>(context);
 }
@@ -5253,6 +5592,9 @@ void ONNXReduceProdOp::getCanonicalizationPatterns(
 /// on the ONNXReduceSumOp.
 void ONNXReduceSumOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<MaterializeAbsentAxesReducePattern<ONNXReduceSumOp>>(context);
+  result.insert<DropUnitAxesFromReducePattern<ONNXReduceSumOp>>(context);
+  result.insert<FuseReduceSumMulToReduceMeanPattern>(context);
   if (enableKeepdimsCanonicalization)
     result.insert<KeepdimsCanonicalizationPattern<ONNXReduceSumOp>>(context);
 }

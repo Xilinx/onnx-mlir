@@ -18,7 +18,9 @@
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Pass/Passes.hpp"
 #include "llvm/ADT/STLExtras.h"
+#include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <variant>
@@ -27,6 +29,20 @@ using namespace mlir;
 using namespace onnx_mlir;
 
 namespace {
+
+// If every element of `range`, mapped through `toValue`, is equal, returns that
+// common value; returns nullopt for an empty range or if any element differs.
+template <typename Value, typename Range, typename ToValue>
+std::optional<Value> getCommonValue(const Range &range, ToValue toValue) {
+  auto first = range.begin();
+  if (first == range.end())
+    return std::nullopt;
+  const Value common = toValue(*first);
+  if (!std::all_of(std::next(first), range.end(),
+          [&](const auto &element) { return toValue(element) == common; }))
+    return std::nullopt;
+  return common;
+}
 
 template <typename T>
 std::optional<T> getScalarTensorValue(ONNXConstantOp constOp) {
@@ -75,26 +91,24 @@ std::optional<T> getScalarTensorValue(ONNXConstantOp constOp) {
     return std::nullopt;
   }
 
-  // Case: rank >= 1 → flatten & check all the same
-  std::set<double> flattenedFP;
-  std::set<int64_t> flattenedInt;
-
+  // Case: rank >= 1 → scalar iff every element equals the first. Comparing the
+  // raw APFloat/APInt values avoids materializing a uniqued attribute per
+  // element.
   if (mlir::isa<FloatType>(elementType)) {
     if constexpr (std::is_same_v<T, double> || std::is_same_v<T, float>) {
-      for (auto a : elementsAttr.getValues<FloatAttr>())
-        flattenedFP.insert(a.getValueAsDouble());
-      if (flattenedFP.size() == 1)
-        return static_cast<T>(*flattenedFP.begin());
+      auto common = getCommonValue<double>(elementsAttr.getValues<APFloat>(),
+          [](const APFloat &a) { return FloatAttr::getValueAsDouble(a); });
+      if (common)
+        return static_cast<T>(*common);
     }
   } else if (auto intType = mlir::dyn_cast<IntegerType>(elementType)) {
     if constexpr (std::is_integral_v<T>) {
-      // Iterate the raw APInt values instead of materializing (and uniquing)
-      // an IntegerAttr per element to reduce processing time.
-      for (const APInt &a : elementsAttr.getValues<APInt>())
-        flattenedInt.insert(
-            intType.isUnsigned() ? a.getZExtValue() : a.getSExtValue());
-      if (flattenedInt.size() == 1)
-        return static_cast<T>(*flattenedInt.begin());
+      auto common = getCommonValue<int64_t>(
+          elementsAttr.getValues<APInt>(), [&](const APInt &a) -> int64_t {
+            return intType.isUnsigned() ? a.getZExtValue() : a.getSExtValue();
+          });
+      if (common)
+        return static_cast<T>(*common);
     }
   }
   return std::nullopt;

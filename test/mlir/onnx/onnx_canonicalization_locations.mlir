@@ -101,14 +101,14 @@ func.func @maxpool_k5_p1_s1_maxpool_k3_p1_s1_quant_int8(%arg0: tensor<1x3x224x22
 // the rewritten Conv
 func.func @test_fuse_add_conv_qdq_zero_bias_loc(%arg0 : tensor<1x3x4x4xf32>, %arg1 : tensor<3x3x1x1xf32>) -> tensor<1x3x4x4xf32> {
     %bias = onnx.Constant dense<0.000000e+00> : tensor<3xf32> loc("BiasConst")
-    %scale = onnx.Constant dense<5.000000e-01> : tensor<f32>
-    %zp = onnx.Constant dense<0> : tensor<i8>
+    %scale = onnx.Constant dense<5.000000e-01> : tensor<f32> loc("Scale")
+    %zp = onnx.Constant dense<0> : tensor<i8> loc("ZP")
+    %addend_q = onnx.Constant dense<48> : tensor<1x1x1x1xi8> loc("AddQConst")
+    %addend_scale = onnx.Constant dense<6.250000e-02> : tensor<f32> loc("AddScaleConst")
+    %addend_zp = onnx.Constant dense<0> : tensor<i8> loc("AddZpConst")
     %0 = "onnx.Conv"(%arg0, %arg1, %bias) {auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64, kernel_shape = [1, 1], strides = [1, 1]} : (tensor<1x3x4x4xf32>, tensor<3x3x1x1xf32>, tensor<3xf32>) -> tensor<1x3x4x4xf32> loc("MyConv")
     %1 = "onnx.QuantizeLinear"(%0, %scale, %zp) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x3x4x4xf32>, tensor<f32>, tensor<i8>) -> tensor<1x3x4x4xi8> loc("Q")
     %2 = "onnx.DequantizeLinear"(%1, %scale, %zp) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x3x4x4xi8>, tensor<f32>, tensor<i8>) -> tensor<1x3x4x4xf32> loc("DQ")
-    %addend_q = onnx.Constant dense<48> : tensor<1x1x1x1xi8>
-    %addend_scale = onnx.Constant dense<6.250000e-02> : tensor<f32>
-    %addend_zp = onnx.Constant dense<0> : tensor<i8>
     %addend = "onnx.DequantizeLinear"(%addend_q, %addend_scale, %addend_zp) {axis = 1 : si64, block_size = 0 : si64} : (tensor<1x1x1x1xi8>, tensor<f32>, tensor<i8>) -> tensor<1x1x1x1xf32> loc("AddendDQ")
     %3 = "onnx.Add"(%2, %addend) : (tensor<1x3x4x4xf32>, tensor<1x1x1x1xf32>) -> tensor<1x3x4x4xf32> loc("MyAdd")
     onnx.Return %3 : tensor<1x3x4x4xf32>
@@ -120,5 +120,7 @@ func.func @test_fuse_add_conv_qdq_zero_bias_loc(%arg0 : tensor<1x3x4x4xf32>, %ar
 // CHECK-DAG:   [[LOC_MY_CONV:#.+]] = loc("MyConv")
 // CHECK-DAG:   [[LOC_Q:#.+]] = loc("Q")
 // CHECK-DAG:   [[LOC_DQ:#.+]] = loc("DQ")
+// CHECK-DAG:   [[LOC_ADD_Q_CONST:#.+]] = loc("AddQConst")
+// CHECK-DAG:   [[LOC_ADD_SCALE_CONST:#.+]] = loc("AddScaleConst")
 // CHECK-DAG:   [[LOC_ADDEND_DQ:#.+]] = loc("AddendDQ")
-// CHECK-DAG:   [[LOC_FUSED]] = loc(fused[[[LOC_MY_ADD]], [[LOC_MY_CONV]], [[LOC_Q]], [[LOC_DQ]], [[LOC_ADDEND_DQ]]])
+// CHECK-DAG:   [[LOC_FUSED]] = loc(fused[[[LOC_MY_ADD]], [[LOC_MY_CONV]], [[LOC_Q]], [[LOC_DQ]], [[LOC_ADD_Q_CONST]], [[LOC_ADD_SCALE_CONST]], [[LOC_ADDEND_DQ]]])

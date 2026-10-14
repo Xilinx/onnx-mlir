@@ -29,8 +29,8 @@ func.func @test_reducesumv11_noaxes(%arg0: tensor<2x3x4xf32>) -> tensor<1x1x1xf3
   onnx.Return %0 : tensor<1x1x1xf32>
 // CHECK-LABEL:  func.func @test_reducesumv11_noaxes
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x3x4xf32>) -> tensor<1x1x1xf32> {
-// CHECK:           [[VAR_0_:%.+]] = "onnx.NoValue"() {value} : () -> none
-// CHECK:           [[VAR_1_:%.+]] = "onnx.ReduceSum"([[PARAM_0_]], [[VAR_0_]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<2x3x4xf32>, none) -> tensor<1x1x1xf32>
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[0, 1, 2]> : tensor<3xi64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.ReduceSum"([[PARAM_0_]], [[VAR_0_]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64} : (tensor<2x3x4xf32>, tensor<3xi64>) -> tensor<1x1x1xf32>
 // CHECK:           onnx.Return [[VAR_1_]] : tensor<1x1x1xf32>
 // CHECK:         }
 }
@@ -130,9 +130,9 @@ func.func @reduce_sum_keepdims_zero(%arg0: tensor<1x2x3x4xf32>) -> tensor<2x3xf3
       : (tensor<1x2x3x4xf32>, tensor<2xi64>) -> tensor<2x3xf32>
   onnx.Return %0 : tensor<2x3xf32>
   // CHECK-DAG: [[SHAPE:%.+]] = onnx.Constant dense<[2, 3]> : tensor<2xi64>
-  // CHECK-DAG: [[AXES:%.+]] = onnx.Constant dense<[0, 3]> : tensor<2xi64>
+  // CHECK-DAG: [[AXES:%.+]] = onnx.Constant dense<3> : tensor<1xi64>
   // CHECK: [[REDUCE:%.+]] = "onnx.ReduceSum"(%arg0, [[AXES]]) {keepdims = 1 : si64, noop_with_empty_axes = 0 : si64}
-  // CHECK-SAME: (tensor<1x2x3x4xf32>, tensor<2xi64>) -> tensor<1x2x3x1xf32>
+  // CHECK-SAME: (tensor<1x2x3x4xf32>, tensor<1xi64>) -> tensor<1x2x3x1xf32>
   // CHECK: [[RES:%.+]] = "onnx.Reshape"([[REDUCE]], [[SHAPE]]) {allowzero = 0 : si64}
   // CHECK-SAME: (tensor<1x2x3x1xf32>, tensor<2xi64>) -> tensor<2x3xf32>
   // CHECK: onnx.Return [[RES]]
