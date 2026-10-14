@@ -1212,30 +1212,30 @@ ONNXConstantOp getONNXConstOpFromVector(
 // together to get the final output.
 // Below shows the high level view of the decomposition.
 // clang-format off
-//                                                                                             
-// +--------+     +--------+-------+--------+-------+--------+-------+                         
-// |ConvT   |     |        |       |        |       |        |       |                         
-// |        +---->| Conv1  |Conv2  | Conv1  |Conv2  | Conv1  |Conv2  |                         
-// |stride 2|     |        |       |        |       |        |       |                         
-// +--------+     +--------+-------+--------+-------+--------+-------+                         
-//                                                                                             
-// +--------+      +------+------+------+------+------+------+------+------+                   
-// |ConvT   |      |      |      |      |      |      |      |      |      |                   
-// |        +----> |conv1 |conv2 |conv3 |conv4 |conv1 |conv2 |conv3 |conv4 |                   
-// |stride4 |      +------+------+------+------+------+------+------+------+                   
-// +--------+                                                                                  
-//                                                                                             
-// +--------+                                                                                  
-// |ConvT   |   +------+------+------+------+-----+                                            
-// |        +-->|      |      |      |      |     |                                            
-// |Stride 5|   |conv1 |conv2 |conv3 |conv4 |conv5|                                            
-// +--------+   +------+------+------+------+-----+                                            
-//                                                                                             
-//                                                                                             
-//  ConvTranspose weights are sliced to generated phased conv weights                          
-//                                                                                             
-//  phased conv outputs are merged to get complete ofm                                         
-//                                                                                             
+//
+// +--------+     +--------+-------+--------+-------+--------+-------+
+// |ConvT   |     |        |       |        |       |        |       |
+// |        +---->| Conv1  |Conv2  | Conv1  |Conv2  | Conv1  |Conv2  |
+// |stride 2|     |        |       |        |       |        |       |
+// +--------+     +--------+-------+--------+-------+--------+-------+
+//
+// +--------+      +------+------+------+------+------+------+------+------+
+// |ConvT   |      |      |      |      |      |      |      |      |      |
+// |        +----> |conv1 |conv2 |conv3 |conv4 |conv1 |conv2 |conv3 |conv4 |
+// |stride4 |      +------+------+------+------+------+------+------+------+
+// +--------+
+//
+// +--------+
+// |ConvT   |   +------+------+------+------+-----+
+// |        +-->|      |      |      |      |     |
+// |Stride 5|   |conv1 |conv2 |conv3 |conv4 |conv5|
+// +--------+   +------+------+------+------+-----+
+//
+//
+//  ConvTranspose weights are sliced to generated phased conv weights
+//
+//  phased conv outputs are merged to get complete ofm
+//
 //                                                -
 // clang-format on
 // If no activation op ( lrelu or relu) found in the matching, the alpha value
@@ -1622,17 +1622,17 @@ Value decomposeConvT1dIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
 // Below shows the high level view of the decomposition.
 // clang-format off
 /*
- * +---------------+       +-----------+ 
- * | ConvT         |       |           | 
- * |               |       |   Conv    | 
- * |stride [1,1]   +--->   |           | 
- * |               |       |           | 
- * +---------------+       +-----------+ 
- *                                       
- *                                       
- *                                       
- *                                       
- *                         +-------+-------+-------+-------+-- --------------+  
+ * +---------------+       +-----------+
+ * | ConvT         |       |           |
+ * |               |       |   Conv    |
+ * |stride [1,1]   +--->   |           |
+ * |               |       |           |
+ * +---------------+       +-----------+
+ *
+ *
+ *
+ *
+ *                         +-------+-------+-------+-------+-- --------------+
  * +----------------+      | conv1 |conv3  | conv1 |conv3  |                 |
  * |  ConvT         |      |       |       |       |       |                 |
  * |                |      +-------+-------+-------+-------+                 |
@@ -1649,11 +1649,11 @@ Value decomposeConvT1dIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
  *                         |                                                 |
  *                         |                                                 |
  *                         +-------------------------------------------------+
- *                                                                            
- *                                                                            
- *                                 4 conv ofms merged                         
- *                                                                            
- *                                                                            
+ *
+ *
+ *                                 4 conv ofms merged
+ *
+ *
  * +-------------------+         +--------+-------+------+--------+-------+------+-+
  * |                   |         |conv1   |conv2  |conv7 |conv1   |conv2  |conv7 | |
  * |convT              |         |        |       |      |        |       |      | |
@@ -1677,7 +1677,7 @@ Value decomposeConvT1dIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
  *                               |                                                 |
  *                               |                                                 |
  *                               +-------------------------------------------------+
- *                               9 conv ofms are merged                             
+ *                               9 conv ofms are merged
  */
 // clang-format on
 // If no activation op ( lrelu or relu) found in the matching, the alpha value
@@ -4049,11 +4049,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // capacity and the true position stays below it.
   static LogicalResult validateWindowNeverBinds(
       ONNXCustomOp customOp, PatternRewriter &rewriter, int64_t maskSeqLen) {
+    if (onnx_mlir::gqaWindowNeverBinds(customOp, maskSeqLen))
+      return success();
     auto localWindowSize =
         customOp->getAttrOfType<IntegerAttr>("local_window_size");
-    if (!localWindowSize || localWindowSize.getSInt() == -1 ||
-        localWindowSize.getSInt() >= maskSeqLen)
-      return success();
     return rewriter.notifyMatchFailure(customOp,
         "attribute 'local_window_size' = " +
             std::to_string(localWindowSize.getSInt()) +
@@ -4065,11 +4064,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // values can be passed through this decomposition.
   static LogicalResult validateSmoothSoftmax(
       ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
-    auto smoothSoftmax = dyn_cast<IntegerAttr>(attr);
-    if (!smoothSoftmax)
+    if (!isa<IntegerAttr>(attr))
       return rewriter.notifyMatchFailure(
           customOp, "expected 'smooth_softmax' attribute to be an integer");
-    if (smoothSoftmax.getSInt() == 1)
+    if (onnx_mlir::gqaHasSmoothSoftmax(customOp))
       return rewriter.notifyMatchFailure(customOp,
           "attribute 'smooth_softmax' not supported by onnx.Attention");
     return success();
@@ -4079,11 +4077,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // causal = 1 (the default) can be preserved.
   static LogicalResult validateCausal(
       ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
-    auto causal = dyn_cast<IntegerAttr>(attr);
-    if (!causal)
+    if (!isa<IntegerAttr>(attr))
       return rewriter.notifyMatchFailure(
           customOp, "expected 'causal' attribute to be an integer");
-    if (causal.getSInt() != 1)
+    if (!onnx_mlir::gqaIsCausal(customOp))
       return rewriter.notifyMatchFailure(
           customOp, "non-causal GroupQueryAttention is not supported");
     return success();
@@ -4094,11 +4091,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // preserved.
   static LogicalResult validateSlidingWindowCache(
       ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
-    auto slidingWindowCache = dyn_cast<IntegerAttr>(attr);
-    if (!slidingWindowCache)
+    if (!isa<IntegerAttr>(attr))
       return rewriter.notifyMatchFailure(customOp,
           "expected 'sliding_window_cache' attribute to be an integer");
-    if (slidingWindowCache.getSInt() != 0)
+    if (!onnx_mlir::gqaHasLinearCacheLayout(customOp))
       return rewriter.notifyMatchFailure(customOp,
           "sliding-window KV cache GroupQueryAttention is not supported");
     return success();
@@ -4108,11 +4104,10 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   // only handles the non-quantized mode.
   static LogicalResult validateQuantType(
       ONNXCustomOp customOp, PatternRewriter &rewriter, Attribute attr) {
-    auto quantType = dyn_cast<StringAttr>(attr);
-    if (!quantType)
+    if (!isa<StringAttr>(attr))
       return rewriter.notifyMatchFailure(
           customOp, "expected quantization type attribute to be a string");
-    if (!quantType.getValue().equals_insensitive("NONE"))
+    if (onnx_mlir::gqaHasQuantizedKVCache(customOp))
       return rewriter.notifyMatchFailure(customOp,
           "quantized KV-cache GroupQueryAttention variants are not supported");
     return success();
@@ -6300,7 +6295,7 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       enableLstmDecompose, /*lstmDecompositionPredicate=*/{},
       holdBackPreallocatedGQADecompose
           ? onnx_mlir::GQADecompositionPredicate([](mlir::Operation *op) {
-              return !onnx_mlir::hasFullDepthFullRotaryGQACache(op);
+              return !onnx_mlir::hasTokenDecodableGQACache(op);
             })
           : onnx_mlir::GQADecompositionPredicate{});
 
@@ -6318,7 +6313,45 @@ void DecomposeONNXToONNXPass::runOnOperation() {
 
 } // namespace
 
-bool onnx_mlir::hasFullDepthFullRotaryGQACache(mlir::Operation *op) {
+bool onnx_mlir::gqaWindowNeverBinds(mlir::Operation *op, int64_t maskSeqLen) {
+  auto localWindowSize = op->getAttrOfType<IntegerAttr>("local_window_size");
+  // An absent attribute is the spec default, -1, which is no window at all.
+  return !localWindowSize || localWindowSize.getSInt() == -1 ||
+         localWindowSize.getSInt() >= maskSeqLen;
+}
+
+bool onnx_mlir::gqaIsCausal(mlir::Operation *op) {
+  if (!op->hasAttr("causal"))
+    return true;
+  auto causal = op->getAttrOfType<IntegerAttr>("causal");
+  return causal && causal.getSInt() == 1;
+}
+
+bool onnx_mlir::gqaHasLinearCacheLayout(mlir::Operation *op) {
+  if (!op->hasAttr("sliding_window_cache"))
+    return true;
+  auto slidingWindowCache =
+      op->getAttrOfType<IntegerAttr>("sliding_window_cache");
+  return slidingWindowCache && slidingWindowCache.getSInt() == 0;
+}
+
+bool onnx_mlir::gqaHasSmoothSoftmax(mlir::Operation *op) {
+  auto smoothSoftmax = op->getAttrOfType<IntegerAttr>("smooth_softmax");
+  return smoothSoftmax && smoothSoftmax.getSInt() == 1;
+}
+
+bool onnx_mlir::gqaHasQuantizedKVCache(mlir::Operation *op) {
+  if (op->hasAttr("kv_cache_bit_width"))
+    return true;
+  for (StringRef name : {"k_quant_type", "v_quant_type"}) {
+    auto quantType = op->getAttrOfType<StringAttr>(name);
+    if (quantType && !quantType.getValue().equals_insensitive("NONE"))
+      return true;
+  }
+  return false;
+}
+
+bool onnx_mlir::hasTokenDecodableGQACache(mlir::Operation *op) {
   auto customOp = mlir::dyn_cast_or_null<ONNXCustomOp>(op);
   if (!customOp || !isCustomOpWithNameAndDialect(
                        customOp, "GroupQueryAttention", MicrosoftDomainName))
@@ -6342,9 +6375,17 @@ bool onnx_mlir::hasFullDepthFullRotaryGQACache(mlir::Operation *op) {
       !cosCacheType || !cosCacheType.hasStaticShape() ||
       cosCacheType.getRank() != 2)
     return false;
+  const int64_t headDim = pastKeyType.getShape()[3];
+  const int64_t halfRotary = cosCacheType.getShape()[1];
+  const int64_t rotaryDim = 2 * halfRotary;
+  if (headDim % 4 != 0 || rotaryDim <= 0 || rotaryDim > headDim)
+    return false;
+  // held back partial RoPE when each half fits in 16-lane vectors.
+  if (rotaryDim < headDim &&
+      (halfRotary % 16 != 0 || (headDim / 2 - halfRotary) % 16 != 0))
+    return false;
   return pastKeyType.getShape()[2] > 0 &&
-         presentKeyType.getShape()[2] == pastKeyType.getShape()[2] &&
-         2 * cosCacheType.getShape()[1] == pastKeyType.getShape()[3];
+         presentKeyType.getShape()[2] == pastKeyType.getShape()[2];
 }
 
 void onnx_mlir::getDecomposeONNXToONNXPatterns(

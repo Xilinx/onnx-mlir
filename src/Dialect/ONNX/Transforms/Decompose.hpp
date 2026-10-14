@@ -53,9 +53,31 @@ extern bool convTransposeToResizeActive;
 // predicate decomposes every node.
 using GQADecompositionPredicate = std::function<bool(mlir::Operation *)>;
 
-// True for a preallocated com.microsoft.GroupQueryAttention whose rotary
-// width covers the full cache head.
-bool hasFullDepthFullRotaryGQACache(mlir::Operation *op);
+// True, when a com.microsoft.GroupQueryAttention local_window_size is so big
+// that it actually covers everything and is equivalent to not specifying it
+// (-1).
+bool gqaWindowNeverBinds(mlir::Operation *op, int64_t maskSeqLen);
+
+// causal defaults to 1. False when the node is explicitly non-causal, or when
+// the attribute is present but not an integer and so says nothing.
+bool gqaIsCausal(mlir::Operation *op);
+
+// sliding_window_cache defaults to 0: cache slot i holds token i. False for a
+// cache that rotates, which every linear addressing of the cache would misread.
+bool gqaHasLinearCacheLayout(mlir::Operation *op);
+
+// smooth_softmax adds a term to the softmax denominator. It has no spec
+// default, so an absent attribute is off.
+bool gqaHasSmoothSoftmax(mlir::Operation *op);
+
+// True for any of the quantized KV-cache spellings: a k_quant_type or
+// v_quant_type that is not NONE, or the presence of kv_cache_bit_width, which
+// is only meaningful for a quantized cache.
+bool gqaHasQuantizedKVCache(mlir::Operation *op);
+
+// True for a preallocated com.microsoft.GroupQueryAttention a whole-node
+// token-decode match can claim.
+bool hasTokenDecodableGQACache(mlir::Operation *op);
 
 // Exports the DecomposeONNXToONNXPass patterns. They are all plain rewrite
 // patterns that can be used with any PatternRewriter, not conversion patterns.
