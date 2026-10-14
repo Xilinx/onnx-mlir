@@ -7127,6 +7127,7 @@ def ONNXReduceMaxOp:ONNX_Op<"ReduceMax",
         return sh;
       }
     }];
+    let hasFolder = 1;
 }
 
 def ONNXReduceMaxV18Op:ONNX_Op<"ReduceMaxV18",
@@ -7348,6 +7349,7 @@ def ONNXReduceMinOp:ONNX_Op<"ReduceMin",
       return sh;
     }
   }];
+  let hasFolder = 1;
 }
 
 def ONNXReduceMinV18Op:ONNX_Op<"ReduceMinV18",
@@ -7555,6 +7557,7 @@ def ONNXReduceSumOp:ONNX_Op<"ReduceSum",
         return sh;
       }
     }];
+    let hasFolder = 1;
 }
 
 def ONNXReduceSumV11Op:ONNX_Op<"ReduceSumV11",

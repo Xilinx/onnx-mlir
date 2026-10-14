@@ -61,8 +61,7 @@ func.func @reduce_max_noop_with_emtpy_axes_one_none_input(%arg0: tensor<2x5x9x11
 return %0 : tensor<2x5x9x11xf32>
 // CHECK-LABEL:   func.func @reduce_max_noop_with_emtpy_axes_one_none_input(
 // CHECK-SAME:                                                               %[[VAL_0:.*]]: tensor<2x5x9x11xf32>) -> tensor<2x5x9x11xf32> {
-// CHECK:           %[[VAL_1:.*]] = tosa.identity %[[VAL_0]] : (tensor<2x5x9x11xf32>) -> tensor<2x5x9x11xf32>
-// CHECK:           return %[[VAL_1]] : tensor<2x5x9x11xf32>
+// CHECK:           return %[[VAL_0]] : tensor<2x5x9x11xf32>
 }
 
 // -----
