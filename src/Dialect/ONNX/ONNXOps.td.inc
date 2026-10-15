@@ -288,7 +288,7 @@ def ONNXArgMaxOp:ONNX_Op<"ArgMax",
     DefaultValuedAttr<SI64Attr, "0">:$axis,
     DefaultValuedAttr<SI64Attr, "1">:$keepdims,
     DefaultValuedAttr<SI64Attr, "0">:$select_last_index);
-  let results = (outs TensorOf<[I64]>:$reduced);
+  let results = (outs TensorOf<[I64, UI16, UI32]>:$reduced);
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
       return 1;
@@ -327,7 +327,7 @@ def ONNXArgMinOp:ONNX_Op<"ArgMin",
     DefaultValuedAttr<SI64Attr, "0">:$axis,
     DefaultValuedAttr<SI64Attr, "1">:$keepdims,
     DefaultValuedAttr<SI64Attr, "0">:$select_last_index);
-  let results = (outs TensorOf<[I64]>:$reduced);
+  let results = (outs TensorOf<[I64, UI16, UI32]>:$reduced);
   let extraClassDeclaration = [{
     static int getNumberOfOperands() {
       return 1;
