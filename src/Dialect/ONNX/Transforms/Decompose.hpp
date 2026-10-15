@@ -94,6 +94,7 @@ void getDecomposeONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
     bool enableDepthToSpaceDecompose = false,
     bool enableGQAUint16CacheSlotRewrite = false,
     bool enableConvTransposeToResize = false, bool enableLstmDecompose = false,
+    bool enableGridSample5DDecompose = false,
     LSTMDecompositionPredicate lstmDecompositionPredicate = {},
     GQADecompositionPredicate gqaDecompositionPredicate = {});
 
