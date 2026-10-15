@@ -650,6 +650,7 @@ OpsWithCanonicalizer = [
     "Resize",
     "RNN",
     "Shape",
+    "Slice",
     "Split",
     "Size",
     "Softmax",
