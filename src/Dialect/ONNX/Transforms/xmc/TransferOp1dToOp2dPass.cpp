@@ -232,6 +232,18 @@ struct Conv1dToConv2dPattern : public OpRewritePattern<ConvOpType> {
       kernel1d = {weightType.getShape()[2]};
     int64_t kernelSize = kernel1d[0];
 
+    // Kernel width > 16 cannot be offloaded to the AIE conv kernels; leave
+    // as Conv1D (CPU) instead of wrapping in reshapes.
+    if constexpr (std::is_same_v<ConvOpType, ONNXConvOp>) {
+      constexpr int64_t kMaxDeviceKernelWidth = 16;
+      auto strides = getArrayAttrValues(convOp.getStrides());
+      int64_t strideW = strides.empty() ? 1 : strides[0];
+      int64_t effKernelWidth =
+          strideW > 2 ? (kernelSize + strideW - 1) / strideW : kernelSize;
+      if (effKernelWidth > kMaxDeviceKernelWidth)
+        return failure();
+    }
+
     // Reshape input: [N, C, L] → [N, C, 1, L] or [1, N, C, L] for kernel=1
     Value reshapedInput = reshapeInputTo4D(rewriter, loc, input, kernelSize);
 
