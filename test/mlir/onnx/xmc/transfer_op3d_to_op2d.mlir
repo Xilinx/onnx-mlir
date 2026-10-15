@@ -436,4 +436,28 @@ module {
   // CHECK: onnx.Reshape{{.*}}(tensor<1x3x20x20x2xf32>{{.*}}) -> tensor<1x60x20x2xf32>
   // CHECK: onnx.Add{{.*}}(tensor<1x60x20x2xf32>, tensor<1x60x20x2xf32>) -> tensor<1x60x20x2xf32>
   // CHECK: onnx.Reshape{{.*}} -> tensor<1x3x20x20x2xf32>
+
+  // Test 22: Same as Test 21 with a non-splat FLOAT16 constant (yolov7-tiny
+  // fp16 detect head); the constant is tiled across dim 1 with values kept.
+  func.func @test_eltwise_add_broadcast_const_nonsplat_f16(%arg0: tensor<1x2x1x2x2xf16>) -> tensor<1x2x1x2x2xf16> {
+    %grid = onnx.Constant {value = dense<[[[[[1.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00]]]]]> : tensor<1x1x1x2x2xf16>} : tensor<1x1x1x2x2xf16>
+    %0 = "onnx.Add"(%arg0, %grid) : (tensor<1x2x1x2x2xf16>, tensor<1x1x1x2x2xf16>) -> tensor<1x2x1x2x2xf16>
+    return %0 : tensor<1x2x1x2x2xf16>
+  }
+  // CHECK-LABEL: func.func @test_eltwise_add_broadcast_const_nonsplat_f16
+  // CHECK-DAG: %[[GRID:.*]] = onnx.Constant dense<{{\[\[\[\[\[}}1.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00]]], {{\[\[\[}}1.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00]]]]]> : tensor<1x2x1x2x2xf16>
+  // CHECK-DAG: %[[SHAPE:.*]] = onnx.Constant dense<[1, 2, 2, 2]> : tensor<4xi64>
+  // CHECK-DAG: %[[A:.*]] = "onnx.Reshape"(%arg0, %[[SHAPE]]) {{.*}} -> tensor<1x2x2x2xf16>
+  // CHECK-DAG: %[[B:.*]] = "onnx.Reshape"(%[[GRID]], %[[SHAPE]]) {{.*}} -> tensor<1x2x2x2xf16>
+  // CHECK: "onnx.Add"(%[[A]], %[[B]]) : (tensor<1x2x2x2xf16>, tensor<1x2x2x2xf16>) -> tensor<1x2x2x2xf16>
+
+  // Test 23: Non-splat integer constant through the same broadcast path.
+  func.func @test_eltwise_add_broadcast_const_nonsplat_i32(%arg0: tensor<1x2x1x2x2xi32>) -> tensor<1x2x1x2x2xi32> {
+    %grid = onnx.Constant {value = dense<[[[[[1, 2], [3, 4]]]]]> : tensor<1x1x1x2x2xi32>} : tensor<1x1x1x2x2xi32>
+    %0 = "onnx.Add"(%arg0, %grid) : (tensor<1x2x1x2x2xi32>, tensor<1x1x1x2x2xi32>) -> tensor<1x2x1x2x2xi32>
+    return %0 : tensor<1x2x1x2x2xi32>
+  }
+  // CHECK-LABEL: func.func @test_eltwise_add_broadcast_const_nonsplat_i32
+  // CHECK-DAG: %[[GRID:.*]] = onnx.Constant dense<{{\[\[\[\[\[}}1, 2], [3, 4]]], {{\[\[\[}}1, 2], [3, 4]]]]]> : tensor<1x2x1x2x2xi32>
+  // CHECK: "onnx.Add"({{.*}}) : (tensor<1x2x2x2xi32>, tensor<1x2x2x2xi32>) -> tensor<1x2x2x2xi32>
 }
