@@ -2168,6 +2168,18 @@ func.func @test_dequantize_linear_2(%arg0 : tensor<5x?x3x4xi8>, %arg1 : tensor<*
 
 // -----
 
+// COM: inferShapes derives Y's shape from X.
+func.func @test_dequantize_linear_stale_output_batch(%arg0 : tensor<2x4x8xi8>, %arg1 : tensor<f32>, %arg2 : tensor<i8>) -> tensor<1x4x8xf32> {
+  %1 = "onnx.DequantizeLinear"(%arg0, %arg1, %arg2) {} : (tensor<2x4x8xi8>, tensor<f32>, tensor<i8>) -> tensor<1x4x8xf32>
+  "onnx.Return"(%1) {} : (tensor<1x4x8xf32>) -> ()
+
+  // CHECK-LABEL: test_dequantize_linear_stale_output_batch
+  // CHECK: [[RES:%.+]] = "onnx.DequantizeLinear"(%arg0, %arg1, %arg2) {axis = 1 : si64, block_size = 0 : si64} : (tensor<2x4x8xi8>, tensor<f32>, tensor<i8>) -> tensor<2x4x8xf32>
+  // CHECK: onnx.Return [[RES]] : tensor<2x4x8xf32>
+}
+
+// -----
+
 //===----------------------------------------------------------------------===//
 /// Test shape inference for ConvInteger operation and all its attributes.
 //===----------------------------------------------------------------------===//
