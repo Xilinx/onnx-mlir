@@ -205,6 +205,17 @@ public:
       module_->setAttr(
           "producer.name", StringAttr::get(&context_, model.producer_name()));
     }
+    // Preserve ONNX metadata (e.g. sliding_window_size) so later passes can
+    // turn symbolic KV dims such as max_seq_len_sliding into concrete lengths.
+    if (model.metadata_props_size() > 0) {
+      llvm::SmallVector<NamedAttribute, 8> props;
+      props.reserve(model.metadata_props_size());
+      for (const auto &prop : model.metadata_props()) {
+        props.push_back(builder_.getNamedAttr(
+            prop.key(), builder_.getStringAttr(prop.value())));
+      }
+      module_->setAttr("onnx.metadata", builder_.getDictionaryAttr(props));
+    }
     return module_;
   }
 
@@ -640,11 +651,15 @@ private:
         return ec;
 
       Type argTy = modelInputShaper_.reshape(inputIndex, *importedType);
+      // One entry per block argument, including "" when the input has no
+      // symbolic dim. moveFuncAttrsToArgAttrs zips this array by argument
+      // index; dropping empty entries shifts later dim_params onto the wrong
+      // inputs (and drops the tail).
       if (inputDimParamsFromOption.contains(inputIndex))
         inputDimParams.emplace_back(inputDimParamsFromOption[inputIndex]);
       else if (!inputDimParamsFromOptionForAllArgs.empty())
         inputDimParams.emplace_back(inputDimParamsFromOptionForAllArgs);
-      else if (!dimParams.empty())
+      else
         inputDimParams.emplace_back(dimParams);
 
       argTypes.emplace_back(argTy);
@@ -896,8 +911,8 @@ private:
             "Failed to import output tensor '" + output.name() + "'.\n";
         return ec;
       }
-      if (!dimParams.empty())
-        outputDimParams.emplace_back(dimParams);
+      // Keep one slot per output so result attributes stay index-aligned.
+      outputDimParams.emplace_back(dimParams);
     }
     return {};
   }
@@ -2105,7 +2120,8 @@ private:
       for (size_t k = 0; k < funcAttrsToMove.size(); ++k) {
         if (i < funcAttrsToMove[k].size()) {
           auto name = mlir::cast<StringAttr>(funcAttrsToMove[k].getValue()[i]);
-          if (name) {
+          // Skip placeholder "" entries used to keep dim_params aligned.
+          if (name && !name.getValue().empty()) {
             NamedAttribute namedAttr =
                 builder_.getNamedAttr(argAttrNames[k], name);
             argAttrs.emplace_back(namedAttr);
