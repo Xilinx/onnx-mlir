@@ -316,7 +316,8 @@ struct Conv3dReluToConv2dPattern : public OpRewritePattern<ONNXReluOp> {
 
 /// Broadcast a constant DenseElementsAttr (storage-typed) from inShape to
 /// outShape following numpy/ONNX broadcast rules (size-1 dims replicated).
-/// Generic over rank; integer storage values are replicated by index mapping.
+/// Generic over rank and element type (integer or float); values are
+/// replicated by index mapping.
 static DenseElementsAttr broadcastDenseTo(DenseElementsAttr in,
     llvm::ArrayRef<int64_t> inShape, llvm::ArrayRef<int64_t> outShape) {
   auto storageElem = in.getType().getElementType();
@@ -334,8 +335,8 @@ static DenseElementsAttr broadcastDenseTo(DenseElementsAttr in,
   for (auto s : outShape)
     outCount *= s;
 
-  auto inVals = llvm::to_vector(in.getValues<llvm::APInt>());
-  llvm::SmallVector<llvm::APInt> outVals;
+  auto inVals = llvm::to_vector(in.getValues<mlir::Attribute>());
+  llvm::SmallVector<mlir::Attribute> outVals;
   outVals.reserve(outCount);
   for (int64_t o = 0; o < outCount; ++o) {
     int64_t inIdx = 0;
