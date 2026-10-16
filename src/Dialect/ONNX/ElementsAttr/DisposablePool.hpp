@@ -33,6 +33,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectInterface.h"
 
+#include <functional>
 #include <mutex>
 #include <unordered_map>
 
@@ -50,6 +51,11 @@ public:
 
   using OpAttrPair = std::pair<llvm::StringRef, llvm::StringRef>;
   using OpAttrDictionary = llvm::ArrayRef<OpAttrPair>;
+
+  // Decides, for the DisposableElementsAttr in an attribute of op, whether the
+  // scrub leaves it as it is.
+  using PreservePredicate =
+      std::function<bool(mlir::Operation *, mlir::DisposableElementsAttr)>;
 
   DisposablePool(mlir::Dialect *dialect, mlir::MLIRContext *context);
   ~DisposablePool();
@@ -70,12 +76,16 @@ public:
   // DenseElementsAttr. This is irreversible and is called when we
   // are done transforming the ONNX dialect, just before we lower it.
   //
-  // If preservePackedInt4MinElements is not negative, attributes whose buffer
-  // holds packed int4/uint4 data and that have at least that many elements are
-  // left as DisposableElementsAttr, so large weights stay packed until
-  // something reads them.
+  // Some attributes can be left as DisposableElementsAttr, so that large
+  // weights stay lazy (and packed int4/uint4 weights stay packed) until
+  // something reads them:
+  // - if preservePackedInt4MinElements is not negative, those whose buffer
+  //   holds packed int4/uint4 data and that have at least that many elements;
+  // - those for which preserve, if given, returns true.
+  // The consumers of the module must accept DisposableElementsAttr for them.
   void scrub(mlir::ModuleOp moduleOp, OpAttrDictionary opsAttrs,
-      int64_t preservePackedInt4MinElements = -1);
+      int64_t preservePackedInt4MinElements = -1,
+      const PreservePredicate &preserve = nullptr);
 
   // Can be called when the pool is empty, namely after calling scrub(), to
   // ensure that no more DisposableElementsAttr instances are created, i.e.
