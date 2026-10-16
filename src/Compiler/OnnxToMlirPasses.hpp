@@ -41,6 +41,12 @@ struct OnnxToMlirOptions {
   // something reads them. A negative value keeps none. The consumers of the
   // module must then accept DisposableElementsAttr for these constants.
   int64_t preservePackedInt4MinElements = -1;
+  // Keep the constants for which this returns true as DisposableElementsAttr
+  // when scrubbing, whatever their element type. It is given the op that holds
+  // the attribute. The consumers of the module must accept
+  // DisposableElementsAttr for those constants, so the client should only
+  // select the constants that it knows its passes can handle.
+  DisposablePool::PreservePredicate preserveDisposableConstant;
 
   bool disableBatchNormDecompose = false;
   // Reshape-family canonicalization (Flatten/Squeeze/Unsqueeze -> Reshape).
