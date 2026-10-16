@@ -75,10 +75,22 @@ enum class BType : int8_t {
   INT4 = 22,  // Signed integer in range [-8, 7], using two's-complement
               // representation
 
-  MAX_BTYPE = 23 // TODO: update this if more types are added to the enum
+  // Storage-only types for a DisposableElementsAttr buffer that holds two
+  // UINT4/INT4 values per byte, in the layout of ONNX's packed int4/uint4 data.
+  // They are never an element type, so they have no mlir::Type or CppType
+  // mapping; only DisposableElementsAttr interprets them.
+  //
+  // They sit at the top of the int8_t range because BType is cast to and from
+  // onnx::TensorProto_DataType, and newer ONNX versions give the values after
+  // INT4 (FLOAT4E2M1=23, FLOAT8E8M0=24, UINT2=25, INT2=26) to real data types.
+  PACKED_UINT4 = 125,
+  PACKED_INT4 = 126,
 };
 
-constexpr int kNumBTypes = static_cast<int8_t>(BType::MAX_BTYPE) + 1;
+// True for the storage-only types that hold two int4/uint4 values per byte.
+constexpr bool isPackedBType(BType bt) {
+  return bt == BType::PACKED_UINT4 || bt == BType::PACKED_INT4;
+}
 
 // BType and enum onnx::TensorProto_DataType convert to each other with
 // static_cast because BType faithfully copies onnx::TensorProto_DataType.
