@@ -12,9 +12,16 @@
 #define ONNX_MLIR_INT_4_H
 
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <type_traits>
+
+#if defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#include <emmintrin.h>
+#define ONNX_MLIR_INT4_SSE2 1
+#endif
 
 namespace onnx_mlir {
 
@@ -97,6 +104,43 @@ public:
   }
 };
 static_assert(sizeof(uint_4) == 1, "int_4 must be 1 byte in size");
+
+/// Unpacks `count` 4-bit values of a packed buffer, starting at element
+/// `first`, to one byte each (int_4 and uint_4 hold just the nibble). The
+/// buffer holds two elements per byte, the first one in the low nibble. This is
+/// the hot loop when a large packed weight is read or sliced, so whole bytes
+/// are handled 16 at a time where SSE2 is available.
+inline void unpackInt4Nibbles(
+    const char *packed, size_t first, size_t count, char *dst) {
+  if (count == 0)
+    return;
+  if (first % 2 == 1) {
+    // The first element is the high nibble of its byte.
+    *dst++ = static_cast<char>((static_cast<uint8_t>(packed[first / 2]) >> 4));
+    ++first;
+    --count;
+  }
+  const uint8_t *src = reinterpret_cast<const uint8_t *>(packed) + first / 2;
+  size_t pairs = count / 2;
+#ifdef ONNX_MLIR_INT4_SSE2
+  const __m128i mask = _mm_set1_epi8(0x0F);
+  for (; pairs >= 16; pairs -= 16, src += 16, dst += 32) {
+    __m128i bytes = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src));
+    __m128i low = _mm_and_si128(bytes, mask);
+    __m128i high = _mm_and_si128(_mm_srli_epi16(bytes, 4), mask);
+    _mm_storeu_si128(
+        reinterpret_cast<__m128i *>(dst), _mm_unpacklo_epi8(low, high));
+    _mm_storeu_si128(
+        reinterpret_cast<__m128i *>(dst + 16), _mm_unpackhi_epi8(low, high));
+  }
+#endif
+  for (; pairs > 0; --pairs, ++src, dst += 2) {
+    dst[0] = static_cast<char>(*src & 0x0F);
+    dst[1] = static_cast<char>(*src >> 4);
+  }
+  if (count % 2)
+    *dst = static_cast<char>(*src & 0x0F);
+}
 
 } // namespace onnx_mlir
 

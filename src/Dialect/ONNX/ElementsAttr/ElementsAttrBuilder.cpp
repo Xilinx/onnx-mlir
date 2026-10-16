@@ -22,6 +22,7 @@
 #include "src/Dialect/ONNX/ElementsAttr/ElementsAttrHelper.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/Strides.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/StridesRange.hpp"
+#include "src/Support/Int4.hpp"
 #include "src/Support/TypeUtilities.hpp"
 
 #include <algorithm>
@@ -1010,6 +1011,26 @@ ElementsAttr ElementsAttrBuilder::slice(ElementsAttr elms,
     auto slicePacked = [&](auto elementType) {
       using T = decltype(elementType);
       return fromArray<T>(outType, [&](MutableArrayRef<T> dst) {
+        if (dst.empty())
+          return;
+        if (!shape.empty() && strides.back() == 1) {
+          // Each row is contiguous in the buffer, so unpack it as a whole.
+          const int64_t rowLen = shape.back();
+          char *out = reinterpret_cast<char *>(dst.data());
+          auto unpackRow = [&](int64_t pos, int64_t flattenedRow) {
+            unpackInt4Nibbles(packed.data(), pos, rowLen, out + flattenedRow);
+          };
+          if (shape.size() == 1) {
+            unpackRow(startOffset, 0);
+            return;
+          }
+          SmallVector<int64_t> outerStrides(strides.begin(), strides.end() - 1);
+          for (auto &idxoffs :
+              StridesRange<1>(shape.drop_back(), {outerStrides}))
+            unpackRow(
+                startOffset + idxoffs[0], idxoffs.flattenedIndex * rowLen);
+          return;
+        }
         for (auto &idxoffs : StridesRange<1>(shape, {strides})) {
           int64_t pos = startOffset + idxoffs[0];
           dst[idxoffs.flattenedIndex] =
