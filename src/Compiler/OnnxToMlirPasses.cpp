@@ -175,9 +175,13 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // Clean dead code.
   pm.addPass(mlir::createSymbolDCEPass());
 
-  // Replace every DisposableElementsAttr with DenseElementsAttr.
+  // Replace every DisposableElementsAttr with DenseElementsAttr. Once the pool
+  // is closed, DisposablePool::createElementsAttr falls back to copying into a
+  // DenseElementsAttr, so keep it open only if the client asked for that.
   if (!donotScrubDisposableElementsAttr)
-    pm.addPass(createScrubDisposablePass());
+    pm.addPass(createScrubDisposablePass(
+        /*closeAfter=*/!opts.keepDisposablePoolOpen,
+        opts.preservePackedInt4MinElements, opts.preserveDisposableConstant));
 
   // Set onnx_node_name if it is missing. Keep this pass at the end of this
   // function and just before instrumentation.
