@@ -12,6 +12,7 @@
 #include "src/Dialect/ONNX/ElementsAttr/DisposableElementsAttributeStorage.hpp"
 
 #include "src/Dialect/ONNX/ElementsAttr/Strides.hpp"
+#include "src/Support/Int4.hpp"
 #include "src/Support/TypeUtilities.hpp"
 
 #include "llvm/ADT/StringExtras.h"
@@ -47,13 +48,7 @@ void narrowArray(
 // Unpacks dst.size() int4/uint4 values (two per byte, low nibble first) to one
 // byte each, which holds just the nibble.
 void unpackNibbles(ArrayRef<char> packed, MutableArrayRef<char> dst) {
-  const size_t numPairs = dst.size() / 2;
-  for (size_t i = 0; i < numPairs; ++i) {
-    dst[2 * i] = static_cast<char>(packed[i] & 0x0F);
-    dst[2 * i + 1] = static_cast<char>((packed[i] >> 4) & 0x0F);
-  }
-  if (dst.size() % 2)
-    dst.back() = static_cast<char>(packed[numPairs] & 0x0F);
+  unpackInt4Nibbles(packed.data(), /*first=*/0, dst.size(), dst.data());
 }
 
 // True if a buffer of type bufferBType can hold elements of type btype as they
