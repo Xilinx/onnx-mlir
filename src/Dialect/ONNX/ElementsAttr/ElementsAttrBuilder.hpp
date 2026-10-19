@@ -39,6 +39,13 @@ public:
   mlir::ElementsAttr fromMemoryBuffer(
       mlir::ShapedType type, std::unique_ptr<llvm::MemoryBuffer> membuf);
 
+  // Like fromMemoryBuffer, but membuf holds UINT4/INT4 data packed two values
+  // per byte, as in ONNX's packed int4/uint4 data. type must have the matching
+  // i4/ui4 element type. The data stays packed (bufferBType is PACKED_UINT4 or
+  // PACKED_INT4) and is unpacked on read. Takes ownership of membuf.
+  mlir::ElementsAttr fromPackedInt4MemoryBuffer(mlir::ShapedType type,
+      BType packedBufferBType, std::unique_ptr<llvm::MemoryBuffer> membuf);
+
   // Wraps elements in a DisposableElementsAttr if it isn't already a
   // DisposableElementsAttr, provided the underlying DisposablePool is active.
   // If elements is DenseElementsAttr the wrapper points into elements' raw

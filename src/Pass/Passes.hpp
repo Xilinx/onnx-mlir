@@ -22,6 +22,8 @@
 #include <optional>
 #include <string>
 
+#include "src/Dialect/ONNX/ElementsAttr/DisposablePool.hpp"
+
 #include "mlir/IR/PatternMatch.h"
 #include "llvm/ADT/ArrayRef.h"
 
@@ -36,8 +38,13 @@ namespace onnx_mlir {
 #include "src/Dialect/ONNX/Transforms/Passes.h.inc"
 #undef GEN_PASS_DECL
 
-/// Pass for removing DisposableElementsAttr attributes.
-std::unique_ptr<mlir::Pass> createScrubDisposablePass(bool closeAfter = true);
+/// Pass for removing DisposableElementsAttr attributes. If
+/// preservePackedInt4MinElements is not negative, attributes holding packed
+/// int4/uint4 data with at least that many elements are kept as they are, and
+/// so are those for which preserve returns true.
+std::unique_ptr<mlir::Pass> createScrubDisposablePass(bool closeAfter = true,
+    int64_t preservePackedInt4MinElements = -1,
+    DisposablePool::PreservePredicate preserve = nullptr);
 
 /// Pass for ONNX graph level optimization
 std::unique_ptr<mlir::Pass> createONNXOpTransformPass();
