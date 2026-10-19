@@ -1719,6 +1719,19 @@ func.func @test_push_transpose_through_sub_quant_const_f32_nonsplat(%arg0: tenso
 }
 
 // -----
+// Test: Non-splat f16 payload is transposed with its f16 values preserved.
+// CHECK-LABEL: func @test_push_transpose_through_sub_const_f16_nonsplat
+func.func @test_push_transpose_through_sub_const_f16_nonsplat(%arg0: tensor<1x2x3xf16>) -> tensor<1x3x2xf16> {
+  // CHECK: %[[C:.*]] = onnx.Constant dense<{{\[\[\[}}1.000000e+00, 3.000000e+00, 5.000000e+00], [2.000000e+00, 4.000000e+00, 6.000000e+00]]]> : tensor<1x2x3xf16>
+  // CHECK: %[[S:.*]] = "onnx.Sub"(%arg0, %[[C]]) {{.*}} -> tensor<1x2x3xf16>
+  // CHECK: "onnx.Transpose"(%[[S]]) {perm = [0, 2, 1]}
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 1]} : (tensor<1x2x3xf16>) -> tensor<1x3x2xf16>
+  %1 = onnx.Constant {value = dense<[[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]]> : tensor<1x3x2xf16>} : tensor<1x3x2xf16>
+  %2 = "onnx.Sub"(%0, %1) : (tensor<1x3x2xf16>, tensor<1x3x2xf16>) -> tensor<1x3x2xf16>
+  return %2 : tensor<1x3x2xf16>
+}
+
+// -----
 // Test: Non-splat i8 storage payload still transposes as before.
 // CHECK-LABEL: func @test_push_transpose_through_sub_quant_const_i8_nonsplat
 func.func @test_push_transpose_through_sub_quant_const_i8_nonsplat(%arg0: tensor<1x2x3x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x3x2x!quant.uniform<i8:f32, 3.125000e-02>> {

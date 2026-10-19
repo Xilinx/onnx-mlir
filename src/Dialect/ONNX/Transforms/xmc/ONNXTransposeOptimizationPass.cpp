@@ -1285,8 +1285,8 @@ struct PushTransposeThroughBinaryWithConst : public OpRewritePattern<BinaryOp> {
       newDenseAttr = DenseElementsAttr::get(
           denseAttrType, denseAttr.getSplatValue<Attribute>());
     } else {
-      if (!payloadType.isF32() && !payloadType.isInteger(64) &&
-          !payloadType.isInteger(8))
+      if (!payloadType.isF32() && !payloadType.isF16() &&
+          !payloadType.isInteger(64) && !payloadType.isInteger(8))
         return failure();
 
       SmallVector<int64_t> strides(constShape.size());
