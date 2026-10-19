@@ -29,114 +29,99 @@ def SharedDecomposeRecomposePatternOptions {
 }
 
 def ONNXDecomposePatternOptions {
-  list<Option> options = [
-    Option<"enableConvTransposeDecompose", "enable-convtranspose",
-           "bool", /*default=*/"false",
-           "Enable decomposition of ConvTranspose.">,
+  list<Option> options = [Option<"enableConvTransposeDecompose",
+                              "enable-convtranspose", "bool",
+                              /*default=*/"false",
+                              "Enable decomposition of ConvTranspose.">,
 
-    Option<"enableConvTransposeDecomposeToPhasedConv",
-           "enable-convtranspose-phased",
-           "bool", /*default=*/"false",
-           "Enable decomposition of ONNX ConvTranspose operator to "
-           "4 phased Conv.">,
+      Option<"enableConvTransposeDecomposeToPhasedConv",
+          "enable-convtranspose-phased", "bool", /*default=*/"false",
+          "Enable decomposition of ONNX ConvTranspose operator to "
+          "4 phased Conv.">,
 
-    Option<"enableConvTranspose1dDecomposeToPhasedConv",
-           "enable-convtranspose-1d-phased",
-           "bool", /*default=*/"false",
-           "Enable decomposition of ONNX ConvTranspose 1D operator to "
-           "phased Conv.">,
+      Option<"enableConvTranspose1dDecomposeToPhasedConv",
+          "enable-convtranspose-1d-phased", "bool", /*default=*/"false",
+          "Enable decomposition of ONNX ConvTranspose 1D operator to "
+          "phased Conv.">,
 
-    Option<"enableInstanceNormDecompose", "enable-instancenorm-decompose",
-           "bool", /*default=*/"true",
-           "Enable decomposition of InstanceNormalization to "
-           "LayerNormalization.">,
+      Option<"enableInstanceNormDecompose", "enable-instancenorm-decompose",
+          "bool", /*default=*/"true",
+          "Enable decomposition of InstanceNormalization to "
+          "LayerNormalization.">,
 
-    Option<"enableGroupNormDecompose", "enable-groupnorm-decompose",
-           "bool", /*default=*/"true",
-           "Enable decomposition of GroupNormalization to "
-           "LayerNormalization.">,
+      Option<"enableGroupNormDecompose", "enable-groupnorm-decompose", "bool",
+          /*default=*/"true",
+          "Enable decomposition of GroupNormalization to "
+          "LayerNormalization.">,
 
-    Option<"enableMatmulNBitsDecompose", "enable-matmulnbits-decompose",
-           "bool", /*default=*/"false",
-           "Enable decomposition of Microsoft MatmulNBits to "
-           "DequantizeLinear and Matmul ops.">,
+      Option<"enableMatmulNBitsDecompose", "enable-matmulnbits-decompose",
+          "bool", /*default=*/"false",
+          "Enable decomposition of Microsoft MatmulNBits to "
+          "DequantizeLinear and Matmul ops.">,
 
-    Option<"enableGroupQueryAttentionDecompose",
-           "enable-groupqueryattention-decompose",
-           "bool", /*default=*/"true",
-           "Enable decomposition of Microsoft GroupQueryAttention to "
-           "onnx.Attention and onnx.RotaryEmbedding ops.">,
+      Option<"enableGroupQueryAttentionDecompose",
+          "enable-groupqueryattention-decompose", "bool", /*default=*/"true",
+          "Enable decomposition of Microsoft GroupQueryAttention to "
+          "onnx.Attention and onnx.RotaryEmbedding ops.">,
 
-    Option<"holdBackPreallocatedGQADecompose",
-           "hold-back-preallocated-gqa-decompose",
-           "bool", /*default=*/"false",
-           "Skip GroupQueryAttention decomposition on preallocated full-RoPE "
-           "nodes, leaving them intact for a whole-node match. "
-           "Partial RoPE is kept too when each rotary half splits into whole "
-           "16-lane runs; a fully rotating head has no such boundary and is "
-           "kept whatever its width. Empty-cache prefill and rotary widths the "
-           "matcher cannot lay out are still decomposed here, where the "
-           "resulting ONNX ops can still be lowered.">,
+      Option<"enableGQAUint16CacheSlotRewrite",
+          "enable-gqa-uint16-cache-slot-rewrite", "bool", /*default=*/"false",
+          "Rewrite preallocated GroupQueryAttention cache slot updates using "
+          "a uint16 selector and arithmetic instead of Expand/ScatterElements. "
+          "Warning: this is not safe if the value cannot fit into uint16 "
+          "range.">,
 
-    Option<"enableGQAUint16CacheSlotRewrite",
-           "enable-gqa-uint16-cache-slot-rewrite",
-           "bool", /*default=*/"false",
-           "Rewrite preallocated GroupQueryAttention cache slot updates using "
-           "a uint16 selector and arithmetic instead of Expand/ScatterElements. Warning: this is not safe if the value cannot fit into uint16 range.">,
+      Option<"enableSplitToSliceDecompose", "enable-split-to-slice", "bool",
+          /*default=*/"false",
+          "Enable decomposition of Split to Slice operations.">,
 
-    Option<"enableSplitToSliceDecompose", "enable-split-to-slice",
-           "bool", /*default=*/"false",
-           "Enable decomposition of Split to Slice operations.">,
+      Option<"enableConcatFuse", "enable-concat-fuse", "bool",
+          /*default=*/"true", "Enable ConcatFusePattern rewriter.">,
 
-    Option<"enableConcatFuse", "enable-concat-fuse",
-           "bool", /*default=*/"true",
-           "Enable ConcatFusePattern rewriter.">,
+      Option<"enableLstmSeqDecompose", "enable-lstm-seq-decomposition", "bool",
+          /*default=*/"false",
+          "Enable sequence-length decomposition of LSTM (unroll a "
+          "seq_len>1 LSTM into a chain of seq_len=1 LSTMs).">,
 
-    Option<"enableLstmSeqDecompose", "enable-lstm-seq-decomposition",
-           "bool", /*default=*/"false",
-           "Enable sequence-length decomposition of LSTM (unroll a "
-           "seq_len>1 LSTM into a chain of seq_len=1 LSTMs).">,
+      Option<"enableLstmDecompose", "enable-lstm-decomposition", "bool",
+          /*default=*/"false",
+          "Enable decomposition of static LSTM operations into basic ONNX "
+          "operations and bounded onnx.Loop operations.">,
 
-    Option<"enableLstmDecompose", "enable-lstm-decomposition",
-           "bool", /*default=*/"false",
-           "Enable decomposition of static LSTM operations into basic ONNX "
-           "operations and bounded onnx.Loop operations.">,
+      Option<"enableReduceL2Decompose", "enable-reducel2-decompose", "bool",
+          /*default=*/"true",
+          "Enable decomposition of ReduceL2 to Sqrt(ReduceSumSquare(x)).">,
 
-    Option<"enableReduceL2Decompose", "enable-reducel2-decompose",
-           "bool", /*default=*/"true",
-           "Enable decomposition of ReduceL2 to Sqrt(ReduceSumSquare(x)).">,
+      Option<"enableGatherToSlice", "enable-gather-to-slice", "bool",
+          /*default=*/"true",
+          "Enable decomposition of Gather with scalar index to "
+          "Slice+Reshape.">,
 
-    Option<"enableGatherToSlice", "enable-gather-to-slice",
-           "bool", /*default=*/"true",
-           "Enable decomposition of Gather with scalar index to "
-           "Slice+Reshape.">,
+      Option<"enableHardSwishDecompose", "enable-hardswish-decompose", "bool",
+          /*default=*/"true",
+          "Enable decomposition of HardSwish into "
+          "x * HardSigmoid(x) (alpha=1/6, beta=0.5).">,
 
-    Option<"enableHardSwishDecompose", "enable-hardswish-decompose",
-           "bool", /*default=*/"true",
-           "Enable decomposition of HardSwish into "
-           "x * HardSigmoid(x) (alpha=1/6, beta=0.5).">,
+      Option<"enableSeparatePhasedConvsForConvTranspose",
+          "enable-separate-phased-convs-for-convtranspose", "bool",
+          /*default=*/"false",
+          "In 4-phase ConvTranspose decomposition, force 4 separate Conv ops "
+          "(concatenated) instead of combining the phased weights into a "
+          "single Conv, when the conv output channels are DMA-aligned.">,
 
-    Option<"enableSeparatePhasedConvsForConvTranspose",
-           "enable-separate-phased-convs-for-convtranspose",
-           "bool", /*default=*/"false",
-           "In 4-phase ConvTranspose decomposition, force 4 separate Conv ops "
-           "(concatenated) instead of combining the phased weights into a "
-           "single Conv, when the conv output channels are DMA-aligned.">,
+      Option<"enableConvTransposeDecomposeToDepthToSpace",
+          "enable-convtranspose-depthtospace", "bool", /*default=*/"false",
+          "In the phased ConvTranspose decomposition, emit a DepthToSpace "
+          "(DCR) as the final interleave instead of "
+          "Reshape/Transpose/Reshape.">,
 
-    Option<"enableConvTransposeDecomposeToDepthToSpace",
-           "enable-convtranspose-depthtospace",
-           "bool", /*default=*/"false",
-           "In the phased ConvTranspose decomposition, emit a DepthToSpace "
-           "(DCR) as the final interleave instead of "
-           "Reshape/Transpose/Reshape.">,
-
-    Option<"enableConvTransposeToResize",
-           "convert-convtranspose-to-resize",
-           "bool", /*default=*/"false",
-           "Rewrite a nearest-neighbor upsampling ConvTranspose (kernel==stride, "
-           "pads=0, per-channel all-ones weights, group=1 block-diagonal or "
-           "depthwise group=C) into onnx.Resize (nearest mode) and keep it out "
-           "of the phased-Conv ConvTranspose decomposition.">,
+      Option<"enableConvTransposeToResize", "convert-convtranspose-to-resize",
+          "bool", /*default=*/"false",
+          "Rewrite a nearest-neighbor upsampling ConvTranspose "
+          "(kernel==stride, "
+          "pads=0, per-channel all-ones weights, group=1 block-diagonal or "
+          "depthwise group=C) into onnx.Resize (nearest mode) and keep it out "
+          "of the phased-Conv ConvTranspose decomposition.">,
 
   ];
 }
