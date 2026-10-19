@@ -1275,197 +1275,45 @@ struct PushTransposeThroughBinaryWithConst : public OpRewritePattern<BinaryOp> {
     // space).
     auto origElementType = constType.getElementType();
     auto remappedElementType = remapPerAxisQuantType(origElementType, invPerm);
-    auto isQuantized = mlir::isa<mlir::quant::QuantizedType>(origElementType);
 
-    // For quantized types, we need to work with storage type for
-    // DenseElementsAttr
-    auto workingElementType = origElementType;
-    if (isQuantized) {
-      auto quantType = mlir::cast<mlir::quant::QuantizedType>(origElementType);
-      workingElementType = quantType.getStorageType();
-    }
-
-    // Transpose the dense data
-    SmallVector<int64_t> strides(constShape.size());
-    int64_t stride = 1;
-    for (int i = constShape.size() - 1; i >= 0; --i) {
-      strides[i] = stride;
-      stride *= constShape[i];
-    }
-
-    // Calculate new strides after transpose
-    SmallVector<int64_t> newStrides(newConstShape.size());
-    stride = 1;
-    for (int i = newConstShape.size() - 1; i >= 0; --i) {
-      newStrides[i] = stride;
-      stride *= newConstShape[i];
-    }
-
-    // Create mapping from new indices to old indices
-    int64_t numElements = 1;
-    for (auto dim : constShape)
-      numElements *= dim;
-
-    SmallVector<Attribute> newValues;
-    newValues.reserve(numElements);
-
-    // For each position in the new transposed tensor, compute the old
-    // position
-    auto rawData = denseAttr.getRawData();
-
-    // Splat constants have compressed storage - transpose directly
+    // Rebuild the payload in its own element type: it can differ from the
+    // result type (e.g. f32 data behind a quantized result type).
+    auto payloadType = denseAttr.getElementType();
+    auto denseAttrType = RankedTensorType::get(newConstShape, payloadType);
+    DenseElementsAttr newDenseAttr;
     if (denseAttr.isSplat()) {
-      RankedTensorType denseAttrType;
-      if (isQuantized) {
-        denseAttrType =
-            RankedTensorType::get(newConstShape, workingElementType);
-      } else {
-        denseAttrType = RankedTensorType::get(newConstShape, origElementType);
-      }
-      auto newDenseAttr = DenseElementsAttr::get(
+      newDenseAttr = DenseElementsAttr::get(
           denseAttrType, denseAttr.getSplatValue<Attribute>());
-      auto newConstType =
-          RankedTensorType::get(newConstShape, remappedElementType);
-      auto newConstOp = rewriter.create<ONNXConstantOp>(constantOp.getLoc(),
-          newConstType, Attribute(), newDenseAttr, nullptr, nullptr, nullptr,
-          nullptr, nullptr, nullptr);
-
-      auto outputType = mlir::cast<RankedTensorType>(op.getType());
-      auto newOutputShape = permuteShape(outputType.getShape(), invPerm);
-      auto newOutputType =
-          RankedTensorType::get(newOutputShape, outputType.getElementType());
-
-      Value lhs =
-          isLhsTransposed ? transposeOp.getOperand() : newConstOp.getResult();
-      Value rhs =
-          isLhsTransposed ? newConstOp.getResult() : transposeOp.getOperand();
-
-      auto newOp =
-          rewriter.create<BinaryOp>(op.getLoc(), newOutputType, lhs, rhs);
-
-      for (auto namedAttr : op->getAttrs()) {
-        if (namedAttr.getName() == "ResultNames")
-          continue;
-        newOp->setAttr(namedAttr.getName(), namedAttr.getValue());
-      }
-
-      auto newTranspose = rewriter.replaceOpWithNewOp<ONNXTransposeOp>(
-          op, op.getType(), newOp.getResult(), rewriter.getI64ArrayAttr(*perm));
-      (void)maintainTransposeTag(newTranspose);
-
-      return success();
-    }
-
-    if (workingElementType.isF32()) {
-      // Handle float32
-      // Use ArrayRef for safe access without pointer arithmetic
-      ArrayRef<float> floatData(reinterpret_cast<const float *>(rawData.data()),
-          static_cast<size_t>(numElements));
-      for (int64_t newLinearIdx = 0; newLinearIdx < numElements;
-          ++newLinearIdx) {
-        // Convert linear index to multi-dimensional index in new space
-        SmallVector<int64_t> newIndices(newConstShape.size());
-        int64_t remaining = newLinearIdx;
-        for (int i = newConstShape.size() - 1; i >= 0; --i) {
-          newIndices[i] = remaining % newConstShape[i];
-          remaining /= newConstShape[i];
-        }
-
-        // Map to old indices using inverse permutation
-        SmallVector<int64_t> oldIndices(constShape.size());
-        for (size_t i = 0; i < invPerm.size(); ++i) {
-          oldIndices[invPerm[i]] = newIndices[i];
-        }
-
-        // Convert old multi-dimensional index to linear index
-        int64_t oldLinearIdx = 0;
-        for (size_t i = 0; i < oldIndices.size(); ++i) {
-          oldLinearIdx += oldIndices[i] * strides[i];
-        }
-
-        // Copy the element using safe ArrayRef access
-        float value = floatData[static_cast<size_t>(oldLinearIdx)];
-        newValues.push_back(rewriter.getF32FloatAttr(value));
-      }
-    } else if (workingElementType.isInteger(64)) {
-      // Handle int64
-      // Use ArrayRef for safe access without pointer arithmetic
-      ArrayRef<int64_t> intData(
-          reinterpret_cast<const int64_t *>(rawData.data()),
-          static_cast<size_t>(numElements));
-      for (int64_t newLinearIdx = 0; newLinearIdx < numElements;
-          ++newLinearIdx) {
-        SmallVector<int64_t> newIndices(newConstShape.size());
-        int64_t remaining = newLinearIdx;
-        for (int i = newConstShape.size() - 1; i >= 0; --i) {
-          newIndices[i] = remaining % newConstShape[i];
-          remaining /= newConstShape[i];
-        }
-
-        SmallVector<int64_t> oldIndices(constShape.size());
-        for (size_t i = 0; i < invPerm.size(); ++i) {
-          oldIndices[invPerm[i]] = newIndices[i];
-        }
-
-        int64_t oldLinearIdx = 0;
-        for (size_t i = 0; i < oldIndices.size(); ++i) {
-          oldLinearIdx += oldIndices[i] * strides[i];
-        }
-
-        // Copy the element using safe ArrayRef access
-        int64_t value = intData[static_cast<size_t>(oldLinearIdx)];
-        newValues.push_back(rewriter.getI64IntegerAttr(value));
-      }
-    } else if (workingElementType.isInteger(8)) {
-      // Handle int8/uint8 (quantized types)
-      // Use ArrayRef for safe access without pointer arithmetic
-      ArrayRef<int8_t> intData(reinterpret_cast<const int8_t *>(rawData.data()),
-          static_cast<size_t>(numElements));
-      for (int64_t newLinearIdx = 0; newLinearIdx < numElements;
-          ++newLinearIdx) {
-        // Convert linear index to multi-dimensional index in new space
-        SmallVector<int64_t> newIndices(newConstShape.size());
-        int64_t remaining = newLinearIdx;
-        for (int i = newConstShape.size() - 1; i >= 0; --i) {
-          newIndices[i] = remaining % newConstShape[i];
-          remaining /= newConstShape[i];
-        }
-
-        // Map to old indices using inverse permutation
-        SmallVector<int64_t> oldIndices(constShape.size());
-        for (size_t i = 0; i < invPerm.size(); ++i) {
-          oldIndices[invPerm[i]] = newIndices[i];
-        }
-
-        // Convert old multi-dimensional index to linear index
-        int64_t oldLinearIdx = 0;
-        for (size_t i = 0; i < oldIndices.size(); ++i) {
-          oldLinearIdx += oldIndices[i] * strides[i];
-        }
-
-        // Copy the element using safe ArrayRef access
-        int8_t value = intData[static_cast<size_t>(oldLinearIdx)];
-        // Reinterpret as unsigned bits to avoid APInt assertion for signed
-        // values
-        uint64_t rawValue = static_cast<uint8_t>(value);
-        newValues.push_back(
-            rewriter.getIntegerAttr(workingElementType, APInt(8, rawValue)));
-      }
     } else {
-      // Unsupported type - skip this optimization
-      return failure();
-    }
+      if (!payloadType.isF32() && !payloadType.isInteger(64) &&
+          !payloadType.isInteger(8))
+        return failure();
 
-    // Create new constant with transposed data
-    // For quantized types, create DenseElementsAttr with storage type
-    RankedTensorType denseAttrType;
-    if (isQuantized) {
-      denseAttrType = RankedTensorType::get(newConstShape, workingElementType);
-    } else {
-      denseAttrType = RankedTensorType::get(newConstShape, origElementType);
-    }
+      SmallVector<int64_t> strides(constShape.size());
+      int64_t stride = 1;
+      for (int i = constShape.size() - 1; i >= 0; --i) {
+        strides[i] = stride;
+        stride *= constShape[i];
+      }
 
-    auto newDenseAttr = DenseElementsAttr::get(denseAttrType, newValues);
+      auto oldValues = llvm::to_vector(denseAttr.getValues<Attribute>());
+      SmallVector<Attribute> newValues;
+      newValues.reserve(oldValues.size());
+      SmallVector<int64_t> newIndices(newConstShape.size());
+      for (int64_t newLinearIdx = 0, e = oldValues.size(); newLinearIdx < e;
+          ++newLinearIdx) {
+        int64_t remaining = newLinearIdx;
+        for (int i = newConstShape.size() - 1; i >= 0; --i) {
+          newIndices[i] = remaining % newConstShape[i];
+          remaining /= newConstShape[i];
+        }
+        int64_t oldLinearIdx = 0;
+        for (size_t i = 0; i < invPerm.size(); ++i)
+          oldLinearIdx += newIndices[i] * strides[invPerm[i]];
+        newValues.push_back(oldValues[oldLinearIdx]);
+      }
+      newDenseAttr = DenseElementsAttr::get(denseAttrType, newValues);
+    }
 
     // Create the constant with the final type (including quantization),
     // using the remapped per-axis quant dimension.

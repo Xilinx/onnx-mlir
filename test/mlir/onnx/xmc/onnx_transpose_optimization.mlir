@@ -1689,3 +1689,43 @@ func.func @test_multiuse_transpose_split_operand(%arg0: tensor<1x6x8x8xf32> {onn
   %3 = "onnx.Tanh"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
   return %0#1, %2, %3 : tensor<1x3x8x8xf32>, tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
 }
+
+// -----
+// Test: Sub with a quantized-result constant whose payload is f32 (splat).
+// The payload keeps its f32 element type; the result keeps the quant type.
+// CHECK-LABEL: func @test_push_transpose_through_sub_quant_const_f32_splat
+func.func @test_push_transpose_through_sub_quant_const_f32_splat(%arg0: tensor<1x4x4x8x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x8x4x4x!quant.uniform<i8:f32, 3.125000e-02>> {
+  // CHECK: %[[C:.*]] = onnx.Constant {value = dense<5.000000e-01> : tensor<1x4x4x8xf32>} : tensor<1x4x4x8x!quant.uniform<i8:f32, 7.812500e-03>>
+  // CHECK: %[[S:.*]] = "onnx.Sub"(%arg0, %[[C]]) {{.*}} -> tensor<1x4x4x8x!quant.uniform<i8:f32, 3.125000e-02>>
+  // CHECK: "onnx.Transpose"(%[[S]]) {perm = [0, 3, 1, 2]}
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 3, 1, 2]} : (tensor<1x4x4x8x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x8x4x4x!quant.uniform<i8:f32, 7.812500e-03>>
+  %1 = onnx.Constant {value = dense<5.000000e-01> : tensor<1x8x4x4xf32>} : tensor<1x8x4x4x!quant.uniform<i8:f32, 7.812500e-03>>
+  %2 = "onnx.Sub"(%0, %1) : (tensor<1x8x4x4x!quant.uniform<i8:f32, 7.812500e-03>>, tensor<1x8x4x4x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x8x4x4x!quant.uniform<i8:f32, 3.125000e-02>>
+  return %2 : tensor<1x8x4x4x!quant.uniform<i8:f32, 3.125000e-02>>
+}
+
+// -----
+// Test: Same with a non-splat f32 payload; values are transposed, not
+// reinterpreted as the i8 storage type.
+// CHECK-LABEL: func @test_push_transpose_through_sub_quant_const_f32_nonsplat
+func.func @test_push_transpose_through_sub_quant_const_f32_nonsplat(%arg0: tensor<1x2x3x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x3x2x!quant.uniform<i8:f32, 3.125000e-02>> {
+  // CHECK: %[[C:.*]] = onnx.Constant {value = dense<{{\[\[\[}}1.000000e+00, 3.000000e+00, 5.000000e+00], [2.000000e+00, 4.000000e+00, 6.000000e+00]]]> : tensor<1x2x3xf32>} : tensor<1x2x3x!quant.uniform<i8:f32, 7.812500e-03>>
+  // CHECK: %[[S:.*]] = "onnx.Sub"(%arg0, %[[C]]) {{.*}} -> tensor<1x2x3x!quant.uniform<i8:f32, 3.125000e-02>>
+  // CHECK: "onnx.Transpose"(%[[S]]) {perm = [0, 2, 1]}
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 1]} : (tensor<1x2x3x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>
+  %1 = onnx.Constant {value = dense<[[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]]> : tensor<1x3x2xf32>} : tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>
+  %2 = "onnx.Sub"(%0, %1) : (tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>, tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x3x2x!quant.uniform<i8:f32, 3.125000e-02>>
+  return %2 : tensor<1x3x2x!quant.uniform<i8:f32, 3.125000e-02>>
+}
+
+// -----
+// Test: Non-splat i8 storage payload still transposes as before.
+// CHECK-LABEL: func @test_push_transpose_through_sub_quant_const_i8_nonsplat
+func.func @test_push_transpose_through_sub_quant_const_i8_nonsplat(%arg0: tensor<1x2x3x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x3x2x!quant.uniform<i8:f32, 3.125000e-02>> {
+  // CHECK: %[[C:.*]] = onnx.Constant {value = dense<{{\[\[\[}}1, 3, -5], [2, 4, -6]]]> : tensor<1x2x3xi8>} : tensor<1x2x3x!quant.uniform<i8:f32, 7.812500e-03>>
+  // CHECK: "onnx.Sub"(%arg0, %[[C]])
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 1]} : (tensor<1x2x3x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>
+  %1 = onnx.Constant {value = dense<[[[1, 2], [3, 4], [-5, -6]]]> : tensor<1x3x2xi8>} : tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>
+  %2 = "onnx.Sub"(%0, %1) : (tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>, tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x3x2x!quant.uniform<i8:f32, 3.125000e-02>>
+  return %2 : tensor<1x3x2x!quant.uniform<i8:f32, 3.125000e-02>>
+}
