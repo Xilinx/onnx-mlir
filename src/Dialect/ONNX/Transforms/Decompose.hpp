@@ -70,6 +70,12 @@ bool gqaHasSmoothSoftmax(mlir::Operation *op);
 // is only meaningful for a quantized cache.
 bool gqaHasQuantizedKVCache(mlir::Operation *op);
 
+// Populate the Microsoft GroupQueryAttention decomposition independently of
+// the rest of the ONNX decomposition pattern set.
+void populateDecomposeGroupQueryAttentionPattern(
+    mlir::RewritePatternSet &patterns, bool enableUint16CacheSlotRewrite,
+    mlir::PatternBenefit benefit = 1);
+
 // Exports the DecomposeONNXToONNXPass patterns. They are all plain rewrite
 // patterns that can be used with any PatternRewriter, not conversion patterns.
 void getDecomposeONNXToONNXPatterns(mlir::RewritePatternSet &patterns,

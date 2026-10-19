@@ -6337,6 +6337,13 @@ bool onnx_mlir::gqaHasQuantizedKVCache(mlir::Operation *op) {
   return false;
 }
 
+void onnx_mlir::populateDecomposeGroupQueryAttentionPattern(
+    mlir::RewritePatternSet &patterns, bool enableUint16CacheSlotRewrite,
+    mlir::PatternBenefit benefit) {
+  patterns.insert<MicrosoftGroupQueryAttention>(
+      patterns.getContext(), enableUint16CacheSlotRewrite, benefit);
+}
+
 void onnx_mlir::getDecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns, bool enableConvTransposeDecompose,
     bool enableConvTransposeDecomposeToPhasedConv,
@@ -6394,8 +6401,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     patterns.insert<MicrosoftSkipSimplifiedLayerNorm>(context);
   }
   if (enableGroupQueryAttentionDecompose)
-    patterns.insert<MicrosoftGroupQueryAttention>(
-        context, enableGQAUint16CacheSlotRewrite, PatternBenefit(1));
+    populateDecomposeGroupQueryAttentionPattern(
+        patterns, enableGQAUint16CacheSlotRewrite, PatternBenefit(1));
   if (!disableGenericDecompositions)
     patterns.insert<MicrosoftRotaryEmbedding>(context);
   if (enableMatmulNBitsDecompose)
