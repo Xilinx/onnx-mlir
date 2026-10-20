@@ -48,11 +48,6 @@ extern bool convTransposeDepthToSpaceActive;
 // in Decompose.cpp.
 extern bool convTransposeToResizeActive;
 
-// Per-node veto for the GroupQueryAttention decomposition. Returning false
-// holds the decomposition back for a whole-node match to claim. An empty
-// predicate decomposes every node.
-using GQADecompositionPredicate = std::function<bool(mlir::Operation *)>;
-
 // True, when a com.microsoft.GroupQueryAttention local_window_size is so big
 // that it actually covers everything and is equivalent to not specifying it
 // (-1).
@@ -75,9 +70,11 @@ bool gqaHasSmoothSoftmax(mlir::Operation *op);
 // is only meaningful for a quantized cache.
 bool gqaHasQuantizedKVCache(mlir::Operation *op);
 
-// True for a preallocated com.microsoft.GroupQueryAttention a whole-node
-// token-decode match can claim.
-bool hasTokenDecodableGQACache(mlir::Operation *op);
+// Populate the Microsoft GroupQueryAttention decomposition independently of
+// the rest of the ONNX decomposition pattern set.
+void populateDecomposeGroupQueryAttentionPattern(
+    mlir::RewritePatternSet &patterns, bool enableUint16CacheSlotRewrite,
+    mlir::PatternBenefit benefit = 1);
 
 // Exports the DecomposeONNXToONNXPass patterns. They are all plain rewrite
 // patterns that can be used with any PatternRewriter, not conversion patterns.
@@ -94,8 +91,7 @@ void getDecomposeONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
     bool enableDepthToSpaceDecompose = false,
     bool enableGQAUint16CacheSlotRewrite = false,
     bool enableConvTransposeToResize = false, bool enableLstmDecompose = false,
-    LSTMDecompositionPredicate lstmDecompositionPredicate = {},
-    GQADecompositionPredicate gqaDecompositionPredicate = {});
+    LSTMDecompositionPredicate lstmDecompositionPredicate = {});
 
 // Decompose onnx.DepthToSpace (DCR and CRD) into Reshape/Transpose/Reshape
 void populateDecomposeDepthToSpacePattern(mlir::RewritePatternSet &patterns,
