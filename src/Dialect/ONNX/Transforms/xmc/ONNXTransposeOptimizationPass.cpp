@@ -1266,7 +1266,7 @@ struct PushTransposeThroughBinaryWithConst : public OpRewritePattern<BinaryOp> {
                << "Pushing transpose through binary op with constant "
                << op->getName().getStringRef() << "\n");
 
-    // Transpose the constant's data (using possibly expanded shape)
+    // Shape of the transposed constant (using possibly expanded shape)
     auto invPerm = inversePermutation(*perm);
     auto newConstShape = permuteShape(constShape, invPerm);
 
@@ -1276,52 +1276,20 @@ struct PushTransposeThroughBinaryWithConst : public OpRewritePattern<BinaryOp> {
     auto origElementType = constType.getElementType();
     auto remappedElementType = remapPerAxisQuantType(origElementType, invPerm);
 
-    // Rebuild the payload in its own element type: it can differ from the
-    // result type (e.g. f32 data behind a quantized result type).
-    auto payloadType = denseAttr.getElementType();
-    auto denseAttrType = RankedTensorType::get(newConstShape, payloadType);
-    DenseElementsAttr newDenseAttr;
-    if (denseAttr.isSplat()) {
-      newDenseAttr = DenseElementsAttr::get(
-          denseAttrType, denseAttr.getSplatValue<Attribute>());
-    } else {
-      if (!payloadType.isF32() && !payloadType.isF16() &&
-          !payloadType.isInteger(64) && !payloadType.isInteger(8))
-        return failure();
-
-      SmallVector<int64_t> strides(constShape.size());
-      int64_t stride = 1;
-      for (int i = constShape.size() - 1; i >= 0; --i) {
-        strides[i] = stride;
-        stride *= constShape[i];
-      }
-
-      auto oldValues = llvm::to_vector(denseAttr.getValues<Attribute>());
-      SmallVector<Attribute> newValues;
-      newValues.reserve(oldValues.size());
-      SmallVector<int64_t> newIndices(newConstShape.size());
-      for (int64_t newLinearIdx = 0, e = oldValues.size(); newLinearIdx < e;
-          ++newLinearIdx) {
-        int64_t remaining = newLinearIdx;
-        for (int i = newConstShape.size() - 1; i >= 0; --i) {
-          newIndices[i] = remaining % newConstShape[i];
-          remaining /= newConstShape[i];
-        }
-        int64_t oldLinearIdx = 0;
-        for (size_t i = 0; i < invPerm.size(); ++i)
-          oldLinearIdx += newIndices[i] * strides[invPerm[i]];
-        newValues.push_back(oldValues[oldLinearIdx]);
-      }
-      newDenseAttr = DenseElementsAttr::get(denseAttrType, newValues);
+    // Feed Transpose(const, invPerm) to the binary op and let
+    // ConstPropONNXToONNXPass fold it into a transposed constant.
+    Value constInput = constantValue;
+    if (static_cast<size_t>(constType.getRank()) != constShape.size()) {
+      auto expandedAttr = denseAttr.reshape(
+          RankedTensorType::get(constShape, denseAttr.getElementType()));
+      constInput = rewriter.create<ONNXConstantOp>(constantOp.getLoc(),
+          RankedTensorType::get(constShape, origElementType), Attribute(),
+          expandedAttr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
     }
-
-    // Create the constant with the final type (including quantization),
-    // using the remapped per-axis quant dimension.
     auto newConstType =
         RankedTensorType::get(newConstShape, remappedElementType);
-    auto newConstOp = rewriter.create<ONNXConstantOp>(constantOp.getLoc(),
-        newConstType, Attribute(), newDenseAttr, nullptr, nullptr, nullptr,
-        nullptr, nullptr, nullptr);
+    auto constTranspose = rewriter.create<ONNXTransposeOp>(constantOp.getLoc(),
+        newConstType, constInput, rewriter.getI64ArrayAttr(invPerm));
 
     // Create new binary op with untransposed input and transposed constant
     auto outputType = mlir::cast<RankedTensorType>(op.getType());
@@ -1330,9 +1298,9 @@ struct PushTransposeThroughBinaryWithConst : public OpRewritePattern<BinaryOp> {
         RankedTensorType::get(newOutputShape, outputType.getElementType());
 
     Value lhs =
-        isLhsTransposed ? transposeOp.getOperand() : newConstOp.getResult();
+        isLhsTransposed ? transposeOp.getOperand() : constTranspose.getResult();
     Value rhs =
-        isLhsTransposed ? newConstOp.getResult() : transposeOp.getOperand();
+        isLhsTransposed ? constTranspose.getResult() : transposeOp.getOperand();
 
     auto newOp =
         rewriter.create<BinaryOp>(op.getLoc(), newOutputType, lhs, rhs);
