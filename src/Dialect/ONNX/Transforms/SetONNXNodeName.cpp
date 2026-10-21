@@ -1,5 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
  */
 
 //===-------- SetONNXNodeName.cpp - ONNX high level transformation --------===//
@@ -15,6 +17,7 @@
 
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/Debug.h"
 
@@ -47,7 +50,7 @@ struct SetONNXNodeNamePass
 private:
   uint64_t id = 0;
   llvm::SmallSet<std::string, 32> nodeNames;
-  llvm::SmallSet<Operation *, 32> opsNeedNodeName;
+  llvm::SmallSetVector<Operation *, 32> opsNeedNodeName;
   std::string nodeNameAttr = "onnx_node_name";
 };
 
