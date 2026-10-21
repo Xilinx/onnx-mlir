@@ -1,5 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
  */
 
 //===--------- FrontendDialectTransformer.hpp - MLIR Operations -----------===//
@@ -13,7 +15,11 @@
 #ifndef ONNX_MLIR_FRONTEND_TRANSFORMER_H
 #define ONNX_MLIR_FRONTEND_TRANSFORMER_H
 
+#include "llvm/ADT/ArrayRef.h"
+#include <cstdint>
+#include <map>
 #include <string>
+#include <vector>
 
 #include "onnx/onnx_pb.h"
 
@@ -35,6 +41,20 @@ class ModuleOp;
 //===----------------------------------------------------------------------===//
 
 namespace onnx_mlir {
+
+// A caller guarantees that the non-owning live view remains valid and bytewise
+// immutable until the MLIRContext passed to ImportFrontendModel* is destroyed.
+// The live view and disk range describe the same immutable tensor snapshot.
+// Live storage starts at the ORT address (not at a whole-model allocation).
+// This disk-range backup is provisional: _ORT_MEM_ADDR_ does not define an
+// on-disk range. Its durable form must locate the tensor by identity in a
+// backup ONNX model and then follow that TensorProto's storage metadata.
+struct ExternalInitializerBackup {
+  std::string path;
+  uint64_t offset = 0;
+  uint64_t length = 0;
+  llvm::ArrayRef<char> live;
+};
 
 /*!
  * Options to control the translation of an ONNX model to ONNX-MLIR.
@@ -85,7 +105,30 @@ struct ImportOptions {
   std::string externalDataDir = "";
 
   std::vector<std::string> functionsToDecompose = {};
+
+  // Experimental external-initializer source support. Keep these fields at
+  // the end so existing aggregate initialization, if any, is not reordered.
+  bool useInitializerSources = false;
+  bool skipAllInitializerMaterialization = false;
+  // Names are relative to the outer graph: name or nested/graph/name.
+  std::vector<std::string> skipInitializerMaterialization;
+  std::map<std::string, ExternalInitializerBackup> externalInitializerBackups;
 };
+
+// Lifetime contract for ImportFrontendModel* source references:
+//
+// ImportOptions and ordinary input buffers are borrowed only for the duration
+// of an import call. Storage referenced by a process-local initializer source
+// is different: the caller must keep it alive and bytewise immutable until the
+// MLIRContext passed to the import call is destroyed. Cloning the returned IR
+// copies the non-owning reference and does not extend the storage lifetime.
+//
+// The current external-initializer mode retains only live views supplied in
+// ExternalInitializerBackup; it does not retain the input ModelProto. A source
+// mode that retains a ModelProto, TensorProto, or resolver reference has the
+// same context-lifetime and immutability requirement. File and array entry
+// points parse temporary ModelProto objects and therefore cannot provide such
+// references unless the caller supplies separate long-lived source storage.
 
 /*!
  *  Load an ONNX model proto from a file into a protobuf object.
@@ -102,6 +145,8 @@ struct ImportOptions {
  *  @param onnxBuffer buffer containing onnx model protobuf.
  *  @param bufferSize size of buffer containing onnx model protobuf.
  *  @param MLIR::module generated for the ONNX model.
+ *  @pre Process-local source storage in options obeys the lifetime contract
+ *  above.
  */
 [[nodiscard]] std::error_code ImportFrontendModelArray(const void *onnxBuffer,
     int bufferSize, mlir::MLIRContext &context,
@@ -112,6 +157,8 @@ struct ImportOptions {
  *  Import an ONNX model file into the ONNX Dialect.
  *  @param model_fname file name pointing to the onnx model protobuf.
  *  @param MLIR::module generated for the ONNX model.
+ *  @pre Process-local source storage in options obeys the lifetime contract
+ *  above.
  */
 [[nodiscard]] std::error_code ImportFrontendModelFile(
     llvm::StringRef model_fname, mlir::MLIRContext &context,
@@ -124,6 +171,8 @@ struct ImportOptions {
  *  sorting, shape inference and opset conversion.
  *  @param model the onnx model protobuf.
  *  @param MLIR::module generated for the ONNX model.
+ *  @pre Process-local source storage in model or options obeys the lifetime
+ *  contract above if the selected source mode retains references to it.
  */
 [[nodiscard]] std::error_code ImportFrontendModelWithPreProcessing(
     onnx::ModelProto &model, mlir::MLIRContext &context,
@@ -134,6 +183,8 @@ struct ImportOptions {
  *  Import an ONNX model proto into the ONNX Dialect.
  *  @param model the onnx model protobuf.
  *  @param MLIR::module generated for the ONNX model.
+ *  @pre Process-local source storage in model or options obeys the lifetime
+ *  contract above if the selected source mode retains references to it.
  */
 [[nodiscard]] std::error_code ImportFrontendModel(const onnx::ModelProto &model,
     mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module,

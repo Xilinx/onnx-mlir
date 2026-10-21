@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+# Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+# affiliates
 
 # This will cause onnx to be built. More importantly, some variable definitions
 # when building onnx such as -DONNX_ML=1 -DONNX_NAMESPACE=onnx will be carried over
@@ -6,6 +8,7 @@
 # as part of the onnx target and target_link_libraries interprets them correctly.
 add_onnx_mlir_library(OMBuilder
   FrontendDialectHelper.cpp
+  InitializerSource.cpp
   FrontendDialectTransformer.cpp
   ImportONNXUtils.cpp
   ModelInputShaper.cpp
@@ -15,6 +18,7 @@ add_onnx_mlir_library(OMBuilder
   OMONNXOps
   OMResultTypeInferenceOpInterface
   MLIRFuncDialect
+  MLIRPass
   onnx
   )
 

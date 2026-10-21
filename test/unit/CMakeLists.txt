@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+# Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+# affiliates
 
 add_custom_target(unittest)
 set_target_properties(unittest PROPERTIES FOLDER "Tests")
@@ -54,3 +56,5 @@ add_subdirectory(FrontendDialectHelper)
 add_subdirectory(Runtime)
 add_subdirectory(SmallFP)
 add_subdirectory(Strides)
+
+add_subdirectory(InitializerSource)

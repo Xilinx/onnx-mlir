@@ -1,4 +1,5 @@
 <!--- SPDX-License-Identifier: Apache-2.0 -->
+<!--- Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its affiliates -->
 
 # Index of documents
 This document serves as an index for onnx-mlir documents.
@@ -15,6 +16,8 @@ This document serves as an index for onnx-mlir documents.
 
 # Development
 * Onnx operation are represented with  [ONNX dialect](Dialects/onnx.md) in onnx-mlir.
+* External ONNX initializer payloads can be represented by
+[deferred source operation](ExternalInitializerSources.md).
 * This [document](ImportONNXDefs.md#add_operation)
 tell you how to generate an ONNX operation into ONNX dialect.
 * After an ONNX model is imported into onnx-mlir, several graph-level transformations will be applied.

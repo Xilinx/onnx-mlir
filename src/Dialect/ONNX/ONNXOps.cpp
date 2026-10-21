@@ -1,5 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
  */
 
 //===------------------ ONNXOps.cpp - ONNX Operations ---------------------===//
@@ -16,6 +18,7 @@
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
 
 #include "src/Dialect/ONNX/ElementsAttr/DisposableElementsAttr.hpp"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
 #include "mlir/Dialect/Traits.h"
@@ -76,6 +79,80 @@ Type getBroadcastedRankedType(
 #include "src/Dialect/ONNX/ONNXOps.cpp.inc"
 
 using namespace mlir;
+
+namespace onnx_mlir {
+bool isSupportedInitializerSourceDataType(int64_t type) {
+  switch (static_cast<onnx::TensorProto_DataType>(type)) {
+  case onnx::TensorProto::FLOAT:
+  case onnx::TensorProto::UINT8:
+  case onnx::TensorProto::INT8:
+  case onnx::TensorProto::UINT16:
+  case onnx::TensorProto::INT16:
+  case onnx::TensorProto::INT32:
+  case onnx::TensorProto::INT64:
+  case onnx::TensorProto::BOOL:
+  case onnx::TensorProto::FLOAT16:
+  case onnx::TensorProto::DOUBLE:
+  case onnx::TensorProto::UINT32:
+  case onnx::TensorProto::UINT64:
+  case onnx::TensorProto::BFLOAT16:
+  case onnx::TensorProto::FLOAT8E4M3FN:
+  case onnx::TensorProto::FLOAT8E4M3FNUZ:
+  case onnx::TensorProto::FLOAT8E5M2:
+  case onnx::TensorProto::FLOAT8E5M2FNUZ:
+  case onnx::TensorProto::UINT4:
+  case onnx::TensorProto::INT4:
+    return true;
+  default:
+    return false;
+  }
+}
+
+FailureOr<uint64_t> getInitializerSourcePayloadSize(RankedTensorType type) {
+  uint64_t elements = 1;
+  for (int64_t dim : type.getShape()) {
+    if (dim < 0 || (dim && elements > UINT64_MAX / uint64_t(dim)))
+      return failure();
+    elements *= dim;
+  }
+  uint64_t bits =
+      type.getElementType().isInteger(1) ? 8 : type.getElementTypeBitWidth();
+  if (elements > (uint64_t(INT64_MAX) - 7) / bits)
+    return failure();
+  return (elements * bits + 7) / 8;
+}
+} // namespace onnx_mlir
+
+LogicalResult ONNXInitializerSourceOp::verify() {
+  auto source = getSource();
+  auto disk = source.getDisk();
+  for (StringRef field : {"path", "name", "scope"})
+    if (!disk.getAs<StringAttr>(field))
+      return emitOpError("requires string source field ") << field;
+  for (StringRef field : {"offset", "length", "data_type"})
+    if (auto integer = disk.getAs<IntegerAttr>(field);
+        !integer || !integer.getType().isInteger(64))
+      return emitOpError("requires i64 source field ") << field;
+  if (disk.getAs<StringAttr>("path").getValue().empty() ||
+      disk.getAs<IntegerAttr>("offset").getInt() < 0 ||
+      disk.getAs<IntegerAttr>("length").getInt() < 0)
+    return emitOpError("requires a disk path and nonnegative offset/length");
+  int64_t dataType = disk.getAs<IntegerAttr>("data_type").getInt();
+  if (!onnx_mlir::isSupportedInitializerSourceDataType(dataType))
+    return emitOpError("has unsupported source data_type ") << dataType;
+  Builder builder(getContext());
+  Type expected = onnx_mlir::convertONNXTypeToMLIRType(
+      builder, static_cast<onnx::TensorProto_DataType>(dataType));
+  auto resultType = cast<RankedTensorType>(getOutput().getType());
+  if (resultType.getElementType() != expected)
+    return emitOpError("source data_type disagrees with result element type");
+  auto payloadSize = onnx_mlir::getInitializerSourcePayloadSize(resultType);
+  if (failed(payloadSize))
+    return emitOpError("has invalid or overflowing result shape");
+  if (uint64_t(disk.getAs<IntegerAttr>("length").getInt()) != *payloadSize)
+    return emitOpError("source length disagrees with tensor payload size");
+  return success();
+}
 
 namespace {
 

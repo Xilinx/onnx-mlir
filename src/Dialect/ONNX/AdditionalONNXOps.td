@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
 
 //===-- AdditionalONNXOps.td -- ONNX Dialect Additional Ops  -*- tablegen -===//
 //
@@ -52,6 +54,31 @@ include "src/IR/AttrBase.td"
   should also be defined accordingly. Using ONNXxxxOpShapeHelper as an alias
   for ONNXUnimplementedOpShapeHelper is always a possibility.
 */
+
+def ONNX_InitializerSourceAttr : Attr<
+    CPred<"::mlir::isa<::mlir::InitializerSourceAttr>($_self)">,
+    "ONNX initializer source attribute"> {
+  let storageType = "::mlir::InitializerSourceAttr";
+  let returnType = "::mlir::InitializerSourceAttr";
+  let convertFromStorage = "$_self";
+}
+
+//===----------------------------------------------------------------------===//
+// ONNX InitializerSourceOp
+def ONNXInitializerSourceOp : ONNX_Op<"InitializerSource", [Pure]> {
+  let summary = "Reference an external ONNX initializer without reading it";
+  let description = [{
+    Represents the immutable contents of an external ONNX initializer by a
+    disk range and optional process-local, non-owning live view. The caller must
+    keep the live data valid and immutable for the lifetime of the owning MLIR
+    context. The operation itself does not read the source. It is deliberately
+    not `ConstantLike` and has no fold hook; materialization is an explicit pass
+    boundary. Process-local state is omitted from assembly and bytecode.
+  }];
+  let arguments = (ins ONNX_InitializerSourceAttr:$source);
+  let results = (outs AnyRankedTensor:$output);
+  let hasVerifier = 1;
+}
 
 //===----------------------------------------------------------------------===//
 // ONNX ReturnOp
