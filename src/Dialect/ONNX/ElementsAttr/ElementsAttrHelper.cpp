@@ -17,6 +17,7 @@
 #include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
+#include <cstdint>
 
 using namespace mlir;
 
@@ -80,6 +81,97 @@ void readElementsWideNums(ElementsAttr elms, MutableArrayRef<WideNum> dst) {
     return disposable.readWideNums(dst);
   assert(dst.size() == static_cast<size_t>(elms.size()));
   readDenseElementsWideNums(elms, dst);
+}
+
+SmallVector<IntegerElementRange> getIntegerElementRanges(
+    ElementsAttr elms, size_t groupSize) {
+  assert(isa<IntegerType>(elms.getElementType()) &&
+         !elms.getElementType().isInteger(1) &&
+         "expected a non-boolean integer element type");
+  assert(groupSize > 0 && "group size must be positive");
+  if (elms.size() == 0)
+    return {};
+  size_t rangeCount =
+      std::min(groupSize, static_cast<size_t>(elms.size()));
+
+  if (elms.isSplat()) {
+    APInt value = elms.getSplatValue<APInt>();
+    SmallVector<IntegerElementRange> ranges;
+    ranges.reserve(rangeCount);
+    for (size_t i = 0; i < rangeCount; ++i)
+      ranges.push_back({value, value, i, i});
+    return ranges;
+  }
+
+  BType elementBType = btypeOfMlirType(elms.getElementType());
+  return dispatchByBType(elementBType,
+      [&](auto btype) -> SmallVector<IntegerElementRange> {
+    constexpr BType tag = decltype(btype)::value;
+    if constexpr (BTypeTrait<tag>::isInt && tag != BType::BOOL) {
+      using cpptype = CppType<tag>;
+      using widetype = WideType<tag>;
+      ArrayBuffer<cpptype> buffer = getElementsArray<cpptype>(elms);
+      ArrayRef<cpptype> values = buffer.get();
+
+      struct NativeRange {
+        widetype min;
+        widetype max;
+        size_t minIndex;
+        size_t maxIndex;
+      };
+      SmallVector<NativeRange> nativeRanges;
+      nativeRanges.reserve(rangeCount);
+      for (size_t i = 0; i < rangeCount; ++i) {
+        widetype value = static_cast<widetype>(values[i]);
+        nativeRanges.push_back({value, value, i, i});
+      }
+      for (size_t i = groupSize; i < values.size(); ++i) {
+        widetype value = static_cast<widetype>(values[i]);
+        NativeRange &range = nativeRanges[i % groupSize];
+        if (value < range.min) {
+          range.min = value;
+          range.minIndex = i;
+        }
+        if (value > range.max) {
+          range.max = value;
+          range.maxIndex = i;
+        }
+      }
+
+      SmallVector<IntegerElementRange> ranges;
+      ranges.reserve(rangeCount);
+      for (const NativeRange &range : nativeRanges) {
+        constexpr unsigned bitWidth = BTypeTrait<tag>::bitwidth;
+        constexpr bool isSigned = BTypeTrait<tag>::isSignedInt;
+        ranges.push_back(
+            {APInt(bitWidth, static_cast<uint64_t>(range.min), isSigned),
+                APInt(bitWidth, static_cast<uint64_t>(range.max), isSigned),
+                range.minIndex, range.maxIndex});
+      }
+      return ranges;
+    } else {
+      llvm_unreachable("expected a non-boolean integer element type");
+    }
+  });
+}
+
+std::optional<IntegerElementValue> findIntegerRangeViolation(
+    const IntegerElementRange &range, int64_t signedMin, int64_t signedMax,
+    bool isUnsigned) {
+  if (isUnsigned) {
+    if (signedMax < 0 ||
+        range.max.getZExtValue() > static_cast<uint64_t>(signedMax))
+      return IntegerElementValue{range.max, range.maxIndex};
+    return std::nullopt;
+  }
+
+  bool minIsInvalid = range.min.getSExtValue() < signedMin;
+  bool maxIsInvalid = range.max.getSExtValue() > signedMax;
+  if (!minIsInvalid && !maxIsInvalid)
+    return std::nullopt;
+  if (minIsInvalid && (!maxIsInvalid || range.minIndex < range.maxIndex))
+    return IntegerElementValue{range.min, range.minIndex};
+  return IntegerElementValue{range.max, range.maxIndex};
 }
 
 } // namespace onnx_mlir

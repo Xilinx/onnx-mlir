@@ -12,6 +12,7 @@
 #include "src/Dialect/ONNX/ElementsAttr/DisposableElementsAttr.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/DisposablePool.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/ElementsAttrBuilder.hpp"
+#include "src/Dialect/ONNX/ElementsAttr/ElementsAttrHelper.hpp"
 #include "src/Dialect/ONNX/ONNXDialect.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
@@ -108,6 +109,55 @@ public:
 
   IntegerType getUInt(unsigned width) const {
     return IntegerType::get(ctx, width, IntegerType::Unsigned);
+  }
+
+  int test_integer_element_ranges() {
+    std::cout << "test_integer_element_ranges:" << std::endl;
+
+    ShapedType type = RankedTensorType::get({6}, I64);
+    std::vector<int64_t> values{-2, 100, -5, 7, 9, -1};
+    DenseElementsAttr dense = DenseElementsAttr::get(type, ArrayRef(values));
+    ElementsAttr disposable =
+        elmsBuilder.fromMemoryBuffer(type, buffer<int64_t>(values));
+
+    auto checkRanges = [](ElementsAttr elements) {
+      SmallVector<IntegerElementRange> ranges =
+          getIntegerElementRanges(elements, 2);
+      assert(ranges.size() == 2);
+      assert(ranges[0].min.getSExtValue() == -5);
+      assert(ranges[0].minIndex == 2);
+      assert(ranges[0].max.getSExtValue() == 9);
+      assert(ranges[0].maxIndex == 4);
+      assert(ranges[1].min.getSExtValue() == -1);
+      assert(ranges[1].minIndex == 5);
+      assert(ranges[1].max.getSExtValue() == 100);
+      assert(ranges[1].maxIndex == 1);
+
+      auto violation = findIntegerRangeViolation(
+          ranges[0], /*signedMin=*/-4, /*signedMax=*/8, /*isUnsigned=*/false);
+      assert(violation.has_value());
+      assert(violation->value.getSExtValue() == -5);
+      assert(violation->index == 2);
+    };
+    checkRanges(dense);
+    checkRanges(disposable);
+
+    ShapedType splatType = RankedTensorType::get({8}, I32);
+    int32_t value = 3;
+    DenseElementsAttr denseSplat = DenseElementsAttr::get(splatType, value);
+    ElementsAttr disposableSplat =
+        elmsBuilder.toDisposableElementsAttr(denseSplat);
+    SmallVector<IntegerElementRange> splatRanges =
+        getIntegerElementRanges(disposableSplat, 4);
+    assert(splatRanges.size() == 4);
+    for (size_t i = 0; i < splatRanges.size(); ++i) {
+      assert(splatRanges[i].min.getSExtValue() == value);
+      assert(splatRanges[i].max.getSExtValue() == value);
+      assert(splatRanges[i].minIndex == i);
+      assert(splatRanges[i].maxIndex == i);
+    }
+
+    return 0;
   }
 
   int test_splat() {
@@ -651,6 +701,7 @@ public:
 int main(int argc, char *argv[]) {
   Test test;
   int failures = 0;
+  failures += test.test_integer_element_ranges();
   failures += test.test_splat();
   failures += test.test_transpose();
   failures += test.test_packed_int4();
