@@ -30,25 +30,25 @@ The operation produces a ranked tensor value. For example:
 %0 = "onnx.InitializerSource"() {
   source = #onnx.initializer_source<{
     data_type = 1 : i64,
+    kind = "external_data",
     length = 64 : i64,
     name = "weight",
     offset = 0 : i64,
     path = "/models/weights.bin",
-    scope = "main_graph"
+    scope = ""
   }>
 } : () -> tensor<4x4xf32>
 ```
 
-The source attribute contains:
-
-- an absolute normalized path to the external data file;
-- the ONNX graph scope and initializer name;
-- the byte offset and length; and
-- the ONNX `TensorProto` data type.
+The source attribute contains an explicit source kind, the ONNX graph scope and
+initializer name, the ONNX `TensorProto` data type, and an absolute normalized
+path. An `external_data` source also contains its byte offset and length. An
+`onnx_model` source uses the path for a backup ONNX model and resolves the named
+initializer from that model.
 
 The verifier checks the source fields, result element type, tensor shape, and
-payload length. A new ONNX data type must have explicit decoder support before
-it can be used by this operation.
+the payload length of direct external ranges. A new ONNX data type must have
+explicit decoder support before it can be used by this operation.
 
 `ONNXInitializerSourceOp` is `Pure` because the operation does not read the
 external data and the source represents an immutable model snapshot. The
@@ -65,8 +65,10 @@ external data file.
 
 By default, import then runs the initializer-source materialization pass before
 returning the module. This preserves the existing behavior for callers that opt
-in only to test the new import path. The pass reads each source with the
-existing external-data cache and numerical decoders and replaces it with an
+in only to test the new import path. The pass reads direct external sources with
+the existing cache and numerical decoders. For a model source, it caches the
+parsed backup model, finds the named `TensorProto`, and decodes its embedded data
+or follows its external-data metadata. It replaces each source with an
 `ONNXConstantOp` containing a `DisposableElementsAttr`.
 
 The following options can leave source operations in the module for testing:
@@ -95,20 +97,17 @@ initializer. In this case, the caller adds an entry to
 The entry contains:
 
 - a non-owning, read-only `llvm::ArrayRef<char>` over the live data;
-- a path to the disk backup; and
-- the backup offset and length.
+- the path to the backup ONNX model.
 
-This disk-range form documents the current prototype, not the intended durable
-contract for `_ORT_MEM_ADDR_`. The marker does not define how a raw memory range
-maps to an on-disk range. The durable form should instead record the backup ONNX
-model and structured initializer identity. Reload can then find the saved
-`TensorProto` and either decode its embedded data or follow its ordinary
-`TensorProto::EXTERNAL` metadata. Until that lookup is implemented, serialized
-ORT-memory sources are an experimental limitation rather than a stable format.
+The `_ORT_MEM_ADDR_` marker does not define an on-disk byte range. Import
+therefore creates an `onnx_model` source containing the normalized backup-model
+path and the initializer's structured identity. After assembly or bytecode
+reload, materialization finds the saved `TensorProto` and either decodes its
+embedded data or follows its ordinary `TensorProto::EXTERNAL` metadata.
 
 Import checks the address and size metadata without reading the live data. The
-caller must ensure that the live data and the disk backup contain the same
-immutable tensor snapshot.
+caller must ensure that the live data and the named tensor in the backup model
+contain the same immutable tensor snapshot.
 
 The source attribute copies the view, not its storage. The caller must keep that
 storage alive and bytewise immutable until the `MLIRContext` passed to the
@@ -125,42 +124,39 @@ must keep the referenced model snapshot alive and bytewise immutable until the
 `MLIRContext` passed to the import call is destroyed. This includes backing data
 reached through a future model resolver or retained `const TensorProto *`.
 
-The current external-initializer implementation retains only the live views in
+The implementation retains only the live views in
 `ImportOptions::externalInitializerBackups`; it does not retain the input
-`ModelProto`. Future protobuf-backed sources may retain a caller-owned model,
-tensor, or resolver under the same lifetime contract. The file and array import
-entry points parse temporary protobuf objects, so they cannot expose pointers
-into those objects as deferred sources. They must use a durable disk locator or
-a separate long-lived source supplied by the caller.
+`ModelProto`. Model sources retain a path and parse the backup model when their
+contents are requested. A future process-local model or tensor resolver would
+use the same lifetime contract. The file and array import entry points parse
+temporary protobuf objects, so they cannot expose pointers into those objects
+as deferred sources.
 
 ## Assembly and Bytecode
 
-Assembly and bytecode contain only the external file metadata. They do not
+Assembly and bytecode contain only the durable source dictionary. They do not
 contain the process-local address, live owner, or tensor data. Parsing the saved
-IR creates a disk-only source. A different process can therefore load the tensor
-from the disk backup after the original live buffer is gone.
+IR creates a disk-only source. A different process can therefore load a direct
+external range or find a named tensor in the backup model after the original
+live buffer is gone.
 
-The external file must not change while it is referenced by a compilation. This
-is also required by the existing whole-file external-data cache.
+External files and backup models must not change while referenced by a
+compilation. This is also required by the existing whole-file external-data
+cache and parsed-model cache.
 
-## Future Protobuf Sources
+## Protobuf Tensor Lookup
 
-The source attribute can later distinguish external-data ranges from named
-tensors located through a model protobuf. A protobuf source would retain the
-backup model path, structured graph path, initializer name, data type, and
-result type. The same source kind is the durable fallback for an
-`_ORT_MEM_ADDR_` tensor. It would not retain a byte offset into the protobuf.
-Tensor data may be encoded as `raw_data` or typed repeated fields, and protobuf
-wire offsets are not a stable interface.
+An `onnx_model` source retains the backup model path, structured graph path,
+initializer name, data type, and result type. It does not retain a byte offset
+into the protobuf. Tensor data may be encoded as `raw_data` or typed repeated
+fields, and protobuf wire offsets are not a stable interface.
 
-Materialization would load the backup model, find the named initializer,
-validate its metadata, and use the existing tensor decoder. An optional
-process-local view or resolver would remain non-owning and would be omitted from
-assembly and bytecode, as it is for external-data sources. A live resolver may
-return the existing `const TensorProto *` without reparsing. The caller must
-keep the model alive and immutable; import must not retain pointers into
-temporary models created by file or array entry points. The resolver and all
-returned tensors obey the caller lifetime requirement above.
+Materialization caches the backup model, finds the named initializer, validates
+its data type and shape, and uses the existing tensor decoder. If the located
+tensor is external, its location is resolved relative to the backup model. A
+second `_ORT_MEM_ADDR_` marker is rejected because it is not a durable fallback.
+Direct deferred import of an initializer originally stored in the protobuf is
+future work; current model sources provide the durable fallback for live memory.
 
 ## Current Limitations
 
@@ -170,9 +166,9 @@ continue to use eager import. Sparse initializers are not handled by this path.
 ONNX model-local functions do not have initializer lists, and their
 tensor-valued node attributes also remain eager.
 
-References to initializers stored in the model protobuf, evaluation of
-constant-foldable expressions containing initializer sources, weights packing,
-and standalone weights repacking are future work.
+Selecting initializers stored in the model protobuf for deferred import,
+evaluation of constant-foldable expressions containing initializer sources,
+weights packing, and standalone weights repacking are future work.
 
 See the generated [ONNX dialect reference](Dialects/onnx.md) for the operation
 definition. See

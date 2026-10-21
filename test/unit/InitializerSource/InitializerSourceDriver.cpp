@@ -92,7 +92,7 @@ private:
 #endif
 
 static bool configureLive(onnx::GraphProto &graph, std::string scope,
-    ImportOptions &options,
+    StringRef defaultBackupModel, ImportOptions &options,
     std::vector<std::unique_ptr<llvm::MemoryBuffer>> &liveOwners,
     bool isMainGraph = false) {
   if (!isMainGraph) {
@@ -101,27 +101,40 @@ static bool configureLive(onnx::GraphProto &graph, std::string scope,
     scope += graph.name();
   }
   for (auto &tensor : *graph.mutable_initializer()) {
-    if (tensor.data_location() != onnx::TensorProto::EXTERNAL)
-      continue;
     uint64_t offset = 0, length = 0;
     std::string location;
-    for (const auto &field : tensor.external_data()) {
-      if (field.key() == "location")
-        location = field.value();
-      if (field.key() == "offset" &&
-          StringRef(field.value()).getAsInteger(10, offset))
+    bool wasExternal = tensor.data_location() == onnx::TensorProto::EXTERNAL;
+    if (wasExternal) {
+      for (const auto &field : tensor.external_data()) {
+        if (field.key() == "location")
+          location = field.value();
+        if (field.key() == "offset" &&
+            StringRef(field.value()).getAsInteger(10, offset))
+          return false;
+        if (field.key() == "length" &&
+            StringRef(field.value()).getAsInteger(10, length))
+          return false;
+      }
+    } else {
+      if (!tensor.has_raw_data() && liveData.empty()) {
+        llvm::errs()
+            << "live embedded fixture requires raw_data or --live-data\n";
         return false;
-      if (field.key() == "length" &&
-          StringRef(field.value()).getAsInteger(10, length))
-        return false;
+      }
+      if (tensor.has_raw_data())
+        length = tensor.raw_data().size();
+      else {
+        auto bytes = llvm::MemoryBuffer::getFile(liveData, false, false);
+        if (!bytes) {
+          llvm::errs() << "cannot read live embedded fixture\n";
+          return false;
+        }
+        length = (*bytes)->getBufferSize();
+      }
     }
     ExternalInitializerBackup source;
-    source.offset = offset;
-    source.length = length;
-    SmallString<256> original(options.externalDataDir);
-    llvm::sys::path::append(original, location);
-    source.path =
-        backupPath.empty() ? original.str().str() : backupPath.getValue();
+    source.modelPath =
+        backupPath.empty() ? defaultBackupModel.str() : backupPath.getValue();
     std::unique_ptr<llvm::MemoryBuffer> liveOwner;
     if (sourceMode == "guard") {
 #ifndef _WIN32
@@ -130,7 +143,7 @@ static bool configureLive(onnx::GraphProto &graph, std::string scope,
       llvm::errs() << "guarded-buffer scenario requires mmap\n";
       return false;
 #endif
-    } else {
+    } else if (wasExternal) {
       auto bytes = llvm::MemoryBuffer::getFile(liveData, false, false);
       if (!bytes || offset > (*bytes)->getBufferSize() ||
           length > (*bytes)->getBufferSize() - offset) {
@@ -139,11 +152,22 @@ static bool configureLive(onnx::GraphProto &graph, std::string scope,
       }
       liveOwner = llvm::MemoryBuffer::getMemBufferCopy(
           (*bytes)->getBuffer().substr(offset, length));
+    } else if (liveData.empty()) {
+      liveOwner = llvm::MemoryBuffer::getMemBufferCopy(tensor.raw_data());
+    } else {
+      auto bytes = llvm::MemoryBuffer::getFile(liveData, false, false);
+      if (!bytes || (*bytes)->getBufferSize() != length) {
+        llvm::errs() << "cannot read live embedded fixture\n";
+        return false;
+      }
+      liveOwner = llvm::MemoryBuffer::getMemBufferCopy((*bytes)->getBuffer());
     }
     source.live =
         ArrayRef<char>(liveOwner->getBufferStart(), liveOwner->getBufferSize());
     liveOwners.push_back(std::move(liveOwner));
     tensor.clear_external_data();
+    tensor.clear_raw_data();
+    tensor.set_data_location(onnx::TensorProto::EXTERNAL);
     auto add = [&](StringRef key, StringRef value) {
       auto *field = tensor.add_external_data();
       field->set_key(key.str());
@@ -160,10 +184,15 @@ static bool configureLive(onnx::GraphProto &graph, std::string scope,
     }
   }
   for (auto &node : *graph.mutable_node())
-    for (auto &attr : *node.mutable_attribute())
-      if (attr.has_g() &&
-          !configureLive(*attr.mutable_g(), scope, options, liveOwners, false))
+    for (auto &attr : *node.mutable_attribute()) {
+      if (attr.has_g() && !configureLive(*attr.mutable_g(), scope,
+                              defaultBackupModel, options, liveOwners, false))
         return false;
+      for (auto &nested : *attr.mutable_graphs())
+        if (!configureLive(
+                nested, scope, defaultBackupModel, options, liveOwners, false))
+          return false;
+    }
   return true;
 }
 
@@ -203,7 +232,8 @@ int main(int argc, char **argv) {
     options.externalDataDir =
         llvm::sys::path::parent_path(input.getValue()).str();
     if (sourceMode != "file" &&
-        !configureLive(*model.mutable_graph(), "", options, liveOwners, true))
+        !configureLive(*model.mutable_graph(), "", input.getValue(), options,
+            liveOwners, true))
       return 1;
     std::error_code ec;
     if (entry == "raw")

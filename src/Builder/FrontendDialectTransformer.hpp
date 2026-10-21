@@ -44,15 +44,11 @@ namespace onnx_mlir {
 
 // A caller guarantees that the non-owning live view remains valid and bytewise
 // immutable until the MLIRContext passed to ImportFrontendModel* is destroyed.
-// The live view and disk range describe the same immutable tensor snapshot.
+// The live view and named tensor in the backup model describe the same
+// immutable tensor snapshot.
 // Live storage starts at the ORT address (not at a whole-model allocation).
-// This disk-range backup is provisional: _ORT_MEM_ADDR_ does not define an
-// on-disk range. Its durable form must locate the tensor by identity in a
-// backup ONNX model and then follow that TensorProto's storage metadata.
 struct ExternalInitializerBackup {
-  std::string path;
-  uint64_t offset = 0;
-  uint64_t length = 0;
+  std::string modelPath;
   llvm::ArrayRef<char> live;
 };
 

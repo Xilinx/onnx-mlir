@@ -66,14 +66,15 @@ def ONNX_InitializerSourceAttr : Attr<
 //===----------------------------------------------------------------------===//
 // ONNX InitializerSourceOp
 def ONNXInitializerSourceOp : ONNX_Op<"InitializerSource", [Pure]> {
-  let summary = "Reference an external ONNX initializer without reading it";
+  let summary = "Reference an ONNX initializer without reading it";
   let description = [{
-    Represents the immutable contents of an external ONNX initializer by a
-    disk range and optional process-local, non-owning live view. The caller must
-    keep the live data valid and immutable for the lifetime of the owning MLIR
-    context. The operation itself does not read the source. It is deliberately
-    not `ConstantLike` and has no fold hook; materialization is an explicit pass
-    boundary. Process-local state is omitted from assembly and bytecode.
+    Represents immutable ONNX initializer contents by either an external-data
+    range or a named tensor in a backup ONNX model, plus an optional
+    process-local, non-owning live view. The caller must keep live data valid and
+    immutable for the lifetime of the owning MLIR context. The operation itself
+    does not read the source. It is deliberately not `ConstantLike` and has no
+    fold hook; materialization is an explicit pass boundary. Process-local state
+    is omitted from assembly and bytecode.
   }];
   let arguments = (ins ONNX_InitializerSourceAttr:$source);
   let results = (outs AnyRankedTensor:$output);
