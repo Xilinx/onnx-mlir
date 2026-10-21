@@ -126,9 +126,13 @@ FailureOr<uint64_t> getInitializerSourcePayloadSize(RankedTensorType type) {
 LogicalResult ONNXInitializerSourceOp::verify() {
   auto source = getSource();
   auto disk = source.getDisk();
-  for (StringRef field : {"kind", "path", "name", "scope"})
+  for (StringRef field : {"kind", "path", "name"})
     if (!disk.getAs<StringAttr>(field))
       return emitOpError("requires string source field ") << field;
+  auto scope = disk.getAs<ArrayAttr>("scope");
+  if (!scope || llvm::any_of(scope,
+                    [](Attribute attr) { return !isa<StringAttr>(attr); }))
+    return emitOpError("requires an array of strings source field scope");
   auto dataTypeAttr = disk.getAs<IntegerAttr>("data_type");
   if (!dataTypeAttr || !dataTypeAttr.getType().isInteger(64))
     return emitOpError("requires i64 source field data_type");

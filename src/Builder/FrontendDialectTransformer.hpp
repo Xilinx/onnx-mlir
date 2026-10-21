@@ -106,8 +106,18 @@ struct ImportOptions {
   // the end so existing aggregate initialization, if any, is not reordered.
   bool useInitializerSources = false;
   bool skipAllInitializerMaterialization = false;
-  // Names are relative to the outer graph: name or nested/graph/name.
+  // Outermost names are unchanged. Nested names use MLIR symbol references,
+  // for example @graph::@nested::@name.
   std::vector<std::string> skipInitializerMaterialization;
+
+  // Required for every TensorProto::EXTERNAL initializer whose location is
+  // "*/_ORT_MEM_ADDR_/*" when useInitializerSources is enabled. The key is
+  // the initializer identity: its unmodified ONNX name in the outermost graph,
+  // or an MLIR nested symbol reference such as @graph::@nested::@name. The
+  // value supplies a non-owning view beginning at the address encoded in the
+  // TensorProto and a durable backup-model path containing the same scoped
+  // tensor. Relative backup paths are resolved against externalDataDir. Import
+  // fails if an in-memory initializer has no matching complete entry.
   std::map<std::string, ExternalInitializerBackup> externalInitializerBackups;
 };
 

@@ -75,7 +75,7 @@ def nested_fixture(folder, ambiguous=False):
         value = helper.make_tensor_value_info(output, TensorProto.FLOAT, [1])
         return helper.make_graph([node], name, [], [value], initializer=[tensor])
 
-    then_graph = branch("branch" if ambiguous else "then_branch", 0, "then_y")
+    then_graph = branch("branch" if ambiguous else "then/branch", 0, "then_y")
     else_graph = branch("branch" if ambiguous else "else_branch", 4, "else_y")
     cond = helper.make_tensor_value_info("cond", TensorProto.BOOL, [])
     output = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1])
@@ -192,6 +192,17 @@ def main(driver):
         assert "source W0 live=0" in selected
         assert "source W1" not in selected and len(constants(selected)) == 1
         checks += 1
+        # An exact outermost name wins before '@' is interpreted as the start
+        # of a nested MLIR symbol reference.
+        proto = onnx.load_model(model, load_external_data=False)
+        proto.graph.initializer[0].name = "@W0"
+        proto.graph.node[0].input[0] = "@W0"
+        at_root_model = folder / "at-root.onnx"
+        at_root_model.write_bytes(proto.SerializeToString())
+        selected = run(driver, "--input", at_root_model, "--skip-name=@W0")
+        assert "source @W0 live=0" in selected
+        assert "source W1" not in selected and len(constants(selected)) == 1
+        checks += 1
         # skip-all is authoritative and does not validate an otherwise unknown
         # skip-name entry.
         out = run(driver, "--input", model, "--skip-all", "--skip-name=does-not-exist")
@@ -306,7 +317,7 @@ def main(driver):
         # on a registry, pointer, original protobuf, or original owner on reload.
         cases = [
             (TensorProto.FLOAT, payload, 4),
-            (TensorProto.INT64, struct.pack("<4q", -5, 0, 10, 2 ** 40), 4),
+            (TensorProto.INT64, struct.pack("<4q", -5, 0, 10, 2**40), 4),
             (TensorProto.BOOL, bytes([1, 0, 1, 1]), 4),
             (TensorProto.FLOAT16, struct.pack("<4e", 1, -2, 3, 4), 4),
             (TensorProto.INT4, bytes([0x78, 0x0F, 0x03]), 5),
@@ -409,8 +420,13 @@ def main(driver):
         checks += 1
         model, data = nested_fixture(folder)
         out = run(driver, "--input", model, "--skip-all")
-        assert "source then_branch/W" in out
-        assert "source else_branch/W" in out
+        assert 'source @"then/branch"::@W' in out
+        assert "source @else_branch::@W" in out
+        checks += 1
+        selected = run(driver, "--input", model, '--skip-name=@"then/branch"::@W')
+        assert 'source @"then/branch"::@W' in selected
+        assert "source @else_branch::@W" not in selected
+        assert len(constants(selected)) == 1
         checks += 1
         nested_expected = constants(run(driver, "--input", model, "--legacy"))
         nested_saved = folder / "nested-live.mlir"

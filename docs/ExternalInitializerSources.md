@@ -35,16 +35,18 @@ The operation produces a ranked tensor value. For example:
     name = "weight",
     offset = 0 : i64,
     path = "/models/weights.bin",
-    scope = ""
+    scope = []
   }>
 } : () -> tensor<4x4xf32>
 ```
 
 The source attribute contains an explicit source kind, the ONNX graph scope and
 initializer name, the ONNX `TensorProto` data type, and an absolute normalized
-path. An `external_data` source also contains its byte offset and length. An
-`onnx_model` source uses the path for a backup ONNX model and resolves the named
-initializer from that model.
+path. The scope is an array of nested graph names; it is empty for the outermost
+graph. Keeping the components separate avoids assigning separator semantics to
+ONNX names. An `external_data` source also contains its byte offset and length.
+An `onnx_model` source uses the path for a backup ONNX model and resolves the
+named initializer from that model.
 
 The verifier checks the source fields, result element type, tensor shape, and
 the payload length of direct external ranges. A new ONNX data type must have
@@ -69,16 +71,22 @@ in only to test the new import path. The pass reads direct external sources with
 the existing cache and numerical decoders. For a model source, it caches the
 parsed backup model, finds the named `TensorProto`, and decodes its embedded data
 or follows its external-data metadata. It replaces each source with an
-`ONNXConstantOp` containing a `DisposableElementsAttr`.
+`ONNXConstantOp` containing a `DisposableElementsAttr`. Other transformations
+can use `InitializerSourceMaterializer` to perform the same conversion for one
+source. The materializer keeps the parsed backup-model cache across calls.
 
 The following options can leave source operations in the module for testing:
 
 - `skipAllInitializerMaterialization` leaves all sources unchanged.
 - `skipInitializerMaterialization` leaves the named sources unchanged.
 
-Initializer names have the form `graph[/nested_graph]/initializer`. Names must
-match exactly. An unknown name is an error, and the skip-all option takes
-precedence over the name list.
+An outermost initializer is selected by its unmodified ONNX name, for example
+`weight`. A nested initializer uses MLIR nested symbol-reference syntax, for
+example `@graph::@nested_graph::@weight`. MLIR quoting makes each component
+unambiguous, such as `@"graph/with/slash"::@weight`. An exact outermost name is
+checked before parsing a nested symbol reference, so an outermost name beginning
+with `@` remains selectable without modification. An unknown or ambiguous name
+is an error, and the skip-all option takes precedence over the name list.
 
 Keeping an `ONNXInitializerSourceOp` in the module does not mean that all later
 passes support it. Those passes must be updated before the operation can remain

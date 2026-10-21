@@ -2,9 +2,11 @@
 // Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
 // affiliates
 #include "src/Builder/InitializerSource.hpp"
+#include "mlir/AsmParser/AsmParser.h"
 #include "mlir/IR/Builders.h"
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/BType.hpp"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include <limits>
@@ -33,10 +35,34 @@ bool containsParentTraversal(StringRef path) {
   return false;
 }
 
+SmallVector<StringRef> initializerScope(DictionaryAttr disk) {
+  SmallVector<StringRef> result;
+  for (Attribute component : disk.getAs<ArrayAttr>("scope"))
+    result.push_back(cast<StringAttr>(component).getValue());
+  return result;
+}
+
 std::string initializerIdentity(DictionaryAttr disk) {
-  StringRef scope = disk.getAs<StringAttr>("scope").getValue();
-  StringRef name = disk.getAs<StringAttr>("name").getValue();
-  return scope.empty() ? name.str() : scope.str() + "/" + name.str();
+  auto scope = initializerScope(disk);
+  SmallVector<std::string> ownedScope;
+  llvm::transform(scope, std::back_inserter(ownedScope),
+      [](StringRef component) { return component.str(); });
+  return getInitializerIdentity(
+      disk.getContext(), ownedScope, disk.getAs<StringAttr>("name").getValue());
+}
+
+bool matchesNestedIdentity(SymbolRefAttr identity, DictionaryAttr disk) {
+  auto scope = initializerScope(disk);
+  auto nested = identity.getNestedReferences();
+  if (scope.empty() || nested.size() != scope.size())
+    return false;
+  if (identity.getRootReference() != scope.front())
+    return false;
+  for (auto [reference, component] :
+      llvm::zip(nested.drop_back(), ArrayRef<StringRef>(scope).drop_front()))
+    if (reference.getValue() != component)
+      return false;
+  return nested.back().getValue() == disk.getAs<StringAttr>("name").getValue();
 }
 
 FailureOr<ElementsAttr> resolveFileRange(ONNXInitializerSourceOp op,
@@ -58,12 +84,11 @@ FailureOr<ElementsAttr> resolveFileRange(ONNXInitializerSourceOp op,
 }
 
 FailureOr<const onnx::TensorProto *> findInitializerInModel(
-    ONNXInitializerSourceOp op, const onnx::ModelProto &model, StringRef scope,
+    ONNXInitializerSourceOp op, const onnx::ModelProto &model, ArrayAttr scope,
     StringRef name) {
   const onnx::GraphProto *graph = &model.graph();
-  SmallVector<StringRef> components;
-  scope.split(components, '/', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
-  for (StringRef component : components) {
+  for (Attribute scopeAttr : scope) {
+    StringRef component = cast<StringAttr>(scopeAttr).getValue();
     const onnx::GraphProto *match = nullptr;
     for (const auto &node : graph->node()) {
       for (const auto &attr : node.attribute()) {
@@ -127,9 +152,9 @@ FailureOr<ElementsAttr> resolveModelTensor(ONNXInitializerSourceOp op,
     }
     found = models.emplace(modelPath.str(), std::move(model)).first;
   }
-  auto tensor = findInitializerInModel(op, *found->second,
-      disk.getAs<StringAttr>("scope").getValue(),
-      disk.getAs<StringAttr>("name").getValue());
+  auto tensor =
+      findInitializerInModel(op, *found->second, disk.getAs<ArrayAttr>("scope"),
+          disk.getAs<StringAttr>("name").getValue());
   if (failed(tensor))
     return failure();
   if ((*tensor)->data_type() != dataType ||
@@ -242,42 +267,90 @@ struct MaterializeInitializerSourcesPass
     if (skipAll)
       return;
     SmallVector<ONNXInitializerSourceOp> sources;
-    ModelCache models;
     getOperation().walk(
         [&](ONNXInitializerSourceOp op) { sources.push_back(op); });
+    llvm::StringSet<> skippedIdentities;
     for (const auto &name : skipNames) {
-      bool found = llvm::any_of(sources, [&](ONNXInitializerSourceOp op) {
-        auto disk = cast<InitializerSourceAttr>(op.getSource()).getDisk();
-        return name == initializerIdentity(disk);
-      });
-      if (!found) {
+      SmallVector<ONNXInitializerSourceOp> matches;
+      llvm::copy_if(sources, std::back_inserter(matches),
+          [&](ONNXInitializerSourceOp op) {
+            auto disk = cast<InitializerSourceAttr>(op.getSource()).getDisk();
+            return initializerScope(disk).empty() &&
+                   name == disk.getAs<StringAttr>("name").getValue();
+          });
+      // An exact outer-scope tensor name takes precedence, including names
+      // beginning with '@' that could otherwise parse as a symbol reference.
+      if (matches.empty() && StringRef(name).starts_with("@")) {
+        auto parsed = parseAttribute(name, getOperation().getContext());
+        auto symbol = dyn_cast_or_null<SymbolRefAttr>(parsed);
+        if (!symbol || symbol.getNestedReferences().empty()) {
+          getOperation().emitError(
+              "invalid nested initializer source in skip-names: ")
+              << name;
+          signalPassFailure();
+          return;
+        }
+        llvm::copy_if(sources, std::back_inserter(matches),
+            [&](ONNXInitializerSourceOp op) {
+              auto disk = cast<InitializerSourceAttr>(op.getSource()).getDisk();
+              return matchesNestedIdentity(symbol, disk);
+            });
+      }
+      if (matches.empty()) {
         getOperation().emitError("unknown initializer source in skip-names: ")
             << name;
         signalPassFailure();
         return;
       }
-    }
-    for (auto op : sources) {
-      auto disk = cast<InitializerSourceAttr>(op.getSource()).getDisk();
-      auto identity = initializerIdentity(disk);
-      if (llvm::is_contained(skipNames, identity))
-        continue;
-      auto value = resolve(op, models);
-      if (failed(value)) {
+      if (matches.size() != 1) {
+        getOperation().emitError("ambiguous initializer source in skip-names: ")
+            << name;
         signalPassFailure();
         return;
       }
-      OpBuilder builder(op);
-      auto constant = OnnxBuilder(builder, op.getLoc()).constant(*value);
-      for (auto attr : op->getAttrs())
-        if (attr.getName() != "source")
-          constant.getDefiningOp()->setAttr(attr.getName(), attr.getValue());
-      op.getOutput().replaceAllUsesWith(constant);
-      op.erase();
+      auto disk =
+          cast<InitializerSourceAttr>(matches.front().getSource()).getDisk();
+      skippedIdentities.insert(initializerIdentity(disk));
+    }
+    InitializerSourceMaterializer materializer;
+    for (auto op : sources) {
+      auto disk = cast<InitializerSourceAttr>(op.getSource()).getDisk();
+      auto identity = initializerIdentity(disk);
+      if (skippedIdentities.contains(identity))
+        continue;
+      if (failed(materializer.materialize(op))) {
+        signalPassFailure();
+        return;
+      }
     }
   }
 };
 } // namespace
+
+struct InitializerSourceMaterializer::Impl {
+  ModelCache models;
+};
+
+InitializerSourceMaterializer::InitializerSourceMaterializer()
+    : impl(std::make_unique<Impl>()) {}
+
+InitializerSourceMaterializer::~InitializerSourceMaterializer() = default;
+
+FailureOr<ONNXConstantOp> InitializerSourceMaterializer::materialize(
+    ONNXInitializerSourceOp op) {
+  auto value = resolve(op, impl->models);
+  if (failed(value))
+    return failure();
+  OpBuilder builder(op);
+  Value constantValue = OnnxBuilder(builder, op.getLoc()).constant(*value);
+  auto constant = cast<ONNXConstantOp>(constantValue.getDefiningOp());
+  for (auto attr : op->getAttrs())
+    if (attr.getName() != "source")
+      constant->setAttr(attr.getName(), attr.getValue());
+  op.getOutput().replaceAllUsesWith(constantValue);
+  op.erase();
+  return constant;
+}
 
 std::unique_ptr<Pass> createMaterializeInitializerSourcesPass(
     bool skipAll, ArrayRef<std::string> skipNames) {
@@ -288,8 +361,8 @@ std::unique_ptr<Pass> createMaterializeInitializerSourcesPass(
 }
 
 FailureOr<InitializerSourceAttr> createInitializerSource(
-    const onnx::TensorProto &tensor, RankedTensorType type, StringRef scope,
-    const ImportOptions &options, Location loc) {
+    const onnx::TensorProto &tensor, RankedTensorType type,
+    ArrayRef<std::string> scope, const ImportOptions &options, Location loc) {
   if (!supportedDataType(tensor.data_type())) {
     emitError(loc, "unsupported external initializer element type");
     return failure();
@@ -328,7 +401,7 @@ FailureOr<InitializerSourceAttr> createInitializerSource(
   StringRef kind = externalDataSourceKind;
   if (location == ortMemoryLocation) {
     auto identity =
-        scope.empty() ? tensor.name() : scope.str() + "/" + tensor.name();
+        getInitializerIdentity(loc.getContext(), scope, tensor.name());
     auto backup = options.externalInitializerBackups.find(identity);
     if (backup == options.externalInitializerBackups.end() ||
         backup->second.modelPath.empty() || !backup->second.live.data()) {
@@ -395,10 +468,13 @@ FailureOr<InitializerSourceAttr> createInitializerSource(
   }
   llvm::sys::path::remove_dots(absolute, true);
   Builder builder(loc.getContext());
+  SmallVector<StringRef> scopeRefs;
+  llvm::transform(scope, std::back_inserter(scopeRefs),
+      [](const std::string &component) { return StringRef(component); });
   SmallVector<NamedAttribute> fields{
       builder.getNamedAttr("kind", builder.getStringAttr(kind)),
       builder.getNamedAttr("path", builder.getStringAttr(absolute)),
-      builder.getNamedAttr("scope", builder.getStringAttr(scope)),
+      builder.getNamedAttr("scope", builder.getStrArrayAttr(scopeRefs)),
       builder.getNamedAttr("name", builder.getStringAttr(tensor.name())),
       builder.getNamedAttr(
           "data_type", builder.getI64IntegerAttr(tensor.data_type()))};
@@ -410,5 +486,21 @@ FailureOr<InitializerSourceAttr> createInitializerSource(
   }
   auto disk = builder.getDictionaryAttr(fields);
   return InitializerSourceAttr::get(disk, live);
+}
+
+std::string getInitializerIdentity(
+    MLIRContext *context, ArrayRef<std::string> scope, StringRef name) {
+  if (scope.empty())
+    return name.str();
+  SmallVector<FlatSymbolRefAttr> nested;
+  for (StringRef component : scope.drop_front())
+    nested.push_back(FlatSymbolRefAttr::get(context, component));
+  nested.push_back(FlatSymbolRefAttr::get(context, name));
+  auto identity =
+      SymbolRefAttr::get(StringAttr::get(context, scope.front()), nested);
+  std::string result;
+  llvm::raw_string_ostream stream(result);
+  identity.print(stream);
+  return result;
 }
 } // namespace onnx_mlir

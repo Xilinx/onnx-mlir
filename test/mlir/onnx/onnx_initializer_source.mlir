@@ -7,9 +7,9 @@
 
 module {
   func.func @sources() {
-    %0 = "onnx.InitializerSource"() {source = #onnx.initializer_source<{data_type = 1 : i64, kind = "external_data", length = 4 : i64, name = "W0", offset = 0 : i64, path = "/not/read", scope = ""}>} : () -> tensor<1xf32>
-    %1 = "onnx.InitializerSource"() {source = #onnx.initializer_source<{data_type = 1 : i64, kind = "external_data", length = 4 : i64, name = "W1", offset = 4 : i64, path = "/not/read", scope = ""}>} : () -> tensor<1xf32>
-    %2 = "onnx.InitializerSource"() {source = #onnx.initializer_source<{data_type = 1 : i64, kind = "external_data", length = 4 : i64, name = "W2", offset = 0 : i64, path = "@DATA@", scope = ""}>} : () -> tensor<1xf32>
+    %0 = "onnx.InitializerSource"() {source = #onnx.initializer_source<{data_type = 1 : i64, kind = "external_data", length = 4 : i64, name = "W0", offset = 0 : i64, path = "/not/read", scope = []}>} : () -> tensor<1xf32>
+    %1 = "onnx.InitializerSource"() {source = #onnx.initializer_source<{data_type = 1 : i64, kind = "external_data", length = 4 : i64, name = "W1", offset = 4 : i64, path = "/not/read", scope = []}>} : () -> tensor<1xf32>
+    %2 = "onnx.InitializerSource"() {source = #onnx.initializer_source<{data_type = 1 : i64, kind = "external_data", length = 4 : i64, name = "W2", offset = 0 : i64, path = "@DATA@", scope = []}>} : () -> tensor<1xf32>
     return
   }
 }

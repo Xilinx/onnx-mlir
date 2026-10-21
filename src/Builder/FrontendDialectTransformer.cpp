@@ -328,9 +328,8 @@ private:
     Value initializer;
     if (options_.useInitializerSources &&
         tensor.data_location() == onnx::TensorProto::EXTERNAL) {
-      std::string scope = llvm::join(initializerScopes_, "/");
       std::string identity =
-          scope.empty() ? tensor.name() : scope + "/" + tensor.name();
+          getInitializerIdentity(&context_, initializerScopes_, tensor.name());
       if (!initializerIdentities_.insert(identity).second) {
         emitError(loc) << "ambiguous scoped initializer identity: " << identity;
         return {};
@@ -344,7 +343,8 @@ private:
       SmallVector<int64_t> dims(tensor.dims().begin(), tensor.dims().end());
       auto type = RankedTensorType::get(
           dims, mlirTypeOfBType(btypeOfOnnxDataType(dataType), &context_));
-      auto source = createInitializerSource(tensor, type, scope, options_, loc);
+      auto source = createInitializerSource(
+          tensor, type, initializerScopes_, options_, loc);
       if (failed(source))
         return {};
       initializer =

@@ -51,7 +51,7 @@ static cl::opt<bool> skipAll("skip-all",
     cl::cat(initializerSourceCategory));
 static cl::list<std::string> skipNames("skip-name",
     cl::desc("Leave one fully scoped initializer path unmaterialized"),
-    cl::value_desc("scope/name"), cl::ZeroOrMore,
+    cl::value_desc("name|@scope::@name"), cl::ZeroOrMore,
     cl::cat(initializerSourceCategory));
 static cl::opt<bool> materializeAfter("materialize-after",
     cl::desc("Materialize after importer options and protobuf are destroyed"),
@@ -91,14 +91,13 @@ private:
 };
 #endif
 
-static bool configureLive(onnx::GraphProto &graph, std::string scope,
+static bool configureLive(onnx::GraphProto &graph,
+    std::vector<std::string> scope, MLIRContext *context,
     StringRef defaultBackupModel, ImportOptions &options,
     std::vector<std::unique_ptr<llvm::MemoryBuffer>> &liveOwners,
     bool isMainGraph = false) {
   if (!isMainGraph) {
-    if (!scope.empty())
-      scope += "/";
-    scope += graph.name();
+    scope.push_back(graph.name());
   }
   for (auto &tensor : *graph.mutable_initializer()) {
     uint64_t offset = 0, length = 0;
@@ -178,19 +177,18 @@ static bool configureLive(onnx::GraphProto &graph, std::string scope,
         std::to_string(reinterpret_cast<uintptr_t>(source.live.data())));
     add("length", std::to_string(length));
     if (!omitBackup) {
-      auto identity =
-          scope.empty() ? tensor.name() : scope + "/" + tensor.name();
+      auto identity = getInitializerIdentity(context, scope, tensor.name());
       options.externalInitializerBackups[identity] = source;
     }
   }
   for (auto &node : *graph.mutable_node())
     for (auto &attr : *node.mutable_attribute()) {
-      if (attr.has_g() && !configureLive(*attr.mutable_g(), scope,
+      if (attr.has_g() && !configureLive(*attr.mutable_g(), scope, context,
                               defaultBackupModel, options, liveOwners, false))
         return false;
       for (auto &nested : *attr.mutable_graphs())
-        if (!configureLive(
-                nested, scope, defaultBackupModel, options, liveOwners, false))
+        if (!configureLive(nested, scope, context, defaultBackupModel, options,
+                liveOwners, false))
           return false;
     }
   return true;
@@ -232,8 +230,8 @@ int main(int argc, char **argv) {
     options.externalDataDir =
         llvm::sys::path::parent_path(input.getValue()).str();
     if (sourceMode != "file" &&
-        !configureLive(*model.mutable_graph(), "", input.getValue(), options,
-            liveOwners, true))
+        !configureLive(*model.mutable_graph(), {}, &context, input.getValue(),
+            options, liveOwners, true))
       return 1;
     std::error_code ec;
     if (entry == "raw")
@@ -272,11 +270,12 @@ int main(int argc, char **argv) {
   module->walk([&](ONNXInitializerSourceOp op) {
     auto source = cast<InitializerSourceAttr>(op.getSource());
     auto disk = source.getDisk();
-    auto scope = disk.getAs<StringAttr>("scope").getValue();
-    llvm::outs() << "source ";
-    if (!scope.empty())
-      llvm::outs() << scope << "/";
-    llvm::outs() << disk.getAs<StringAttr>("name").getValue()
+    std::vector<std::string> scope;
+    for (Attribute component : disk.getAs<ArrayAttr>("scope"))
+      scope.push_back(cast<StringAttr>(component).getValue().str());
+    llvm::outs() << "source "
+                 << getInitializerIdentity(&context, scope,
+                        disk.getAs<StringAttr>("name").getValue())
                  << " live=" << (source.getLive().data() != nullptr) << "\n";
   });
   module->walk([&](ONNXConstantOp op) {
