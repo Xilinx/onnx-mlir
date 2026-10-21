@@ -1689,3 +1689,18 @@ func.func @test_multiuse_transpose_split_operand(%arg0: tensor<1x6x8x8xf32> {onn
   %3 = "onnx.Tanh"(%1) : (tensor<1x8x8x3xf32>) -> tensor<1x8x8x3xf32>
   return %0#1, %2, %3 : tensor<1x3x8x8xf32>, tensor<1x8x8x3xf32>, tensor<1x8x8x3xf32>
 }
+
+// -----
+// Test: The constant is fed through Transpose(const, invPerm) for const-prop
+// to fold; payload and quantized result types are kept.
+// CHECK-LABEL: func @test_push_transpose_through_sub_quant_const_inserts_transpose
+func.func @test_push_transpose_through_sub_quant_const_inserts_transpose(%arg0: tensor<1x2x3x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x3x2x!quant.uniform<i8:f32, 3.125000e-02>> {
+  // CHECK: %[[C:.*]] = onnx.Constant {value = dense<{{\[\[\[}}1.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00], [5.000000e+00, 6.000000e+00]]]> : tensor<1x3x2xf32>} : tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>
+  // CHECK: %[[T:.*]] = "onnx.Transpose"(%[[C]]) {perm = [0, 2, 1]} : (tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x2x3x!quant.uniform<i8:f32, 7.812500e-03>>
+  // CHECK: %[[S:.*]] = "onnx.Sub"(%arg0, %[[T]]) {{.*}} -> tensor<1x2x3x!quant.uniform<i8:f32, 3.125000e-02>>
+  // CHECK: "onnx.Transpose"(%[[S]]) {perm = [0, 2, 1]}
+  %0 = "onnx.Transpose"(%arg0) {perm = [0, 2, 1]} : (tensor<1x2x3x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>
+  %1 = onnx.Constant {value = dense<[[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]]> : tensor<1x3x2xf32>} : tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>
+  %2 = "onnx.Sub"(%0, %1) : (tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>, tensor<1x3x2x!quant.uniform<i8:f32, 7.812500e-03>>) -> tensor<1x3x2x!quant.uniform<i8:f32, 3.125000e-02>>
+  return %2 : tensor<1x3x2x!quant.uniform<i8:f32, 3.125000e-02>>
+}
