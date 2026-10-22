@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "llvm/Support/Debug.h"
 
@@ -91,9 +92,10 @@ LogicalResult ONNXDequantizeLinearOpShapeHelper::computeShape() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ONNXDequantizeLinearOp::verify() {
-  // Is tensor known to be a scalar (rank 0 or rank 1 with 1 element)?
-  auto isScalar = [](ShapedType t) -> bool {
-    return t.getRank() == 0 || (t.getRank() == 1 && t.getDimSize(0) == 1);
+  // Is tensor possibly a scalar (rank 0 or rank 1 with 1 or unknown elements)?
+  auto mayBeScalar = [](ShapedType t) -> bool {
+    return t.getRank() == 0 ||
+           (t.getRank() == 1 && (t.isDynamicDim(0) || t.getDimSize(0) == 1));
   };
 
   Value input = getX();
@@ -108,16 +110,16 @@ LogicalResult ONNXDequantizeLinearOp::verify() {
   Value zero = getXZeroPoint();
   if (!isNoneValue(zero)) {
     const auto zeroTy = mlir::cast<ShapedType>(zero.getType());
-    if (zeroTy.hasRank() && scaleTy.hasRank() && !isScalar(zeroTy) &&
-        !isScalar(scaleTy) &&
-        (zeroTy.getRank() != scaleTy.getRank() ||
-            zeroTy.getShape() != scaleTy.getShape())) {
+    // Rank-0 and single-element rank-1 tensors are equivalent scalars,
+    // but a scalar cannot pair with a non-scalar quantization parameter.
+    if (zeroTy.hasRank() && scaleTy.hasRank() &&
+        !(mayBeScalar(zeroTy) && mayBeScalar(scaleTy)) &&
+        failed(verifyCompatibleShape(zeroTy.getShape(), scaleTy.getShape()))) {
       return emitOpError("x_zero_point must have the same shape as x_scale");
     }
 
-    // TODO: Figure out whether to introduce a variant of this check from the
-    // spec ("'x_zero_point' and 'x' must have same type"). It is violated in
-    // in the resnet50-v1-12-qdq model where x, x_zero_point are i8, ui8.
+    // TODO: Add verification of "x_zero_point and x must have same type"
+    // However, some models come with x : i8 and x_zero_point : ui8.
     //
     // if (getElementType(getX().getType()) != getElementType(zero.getType()))
     //   return emitOpError("x and x_zero_point must have the same data type");
@@ -132,14 +134,13 @@ LogicalResult ONNXDequantizeLinearOp::verify() {
     }
 
     const bool isScaleRankKnown = scaleTy.hasRank();
-    const bool isPerAxis = isScaleRankKnown && scaleTy.getRank() == 1 &&
-                           !scaleTy.isDynamicDim(0) &&
-                           scaleTy.getDimSize(0) != 1;
-    if (isPerAxis) {
-      const int64_t d = scaleTy.getDimSize(0);
+    int64_t d = nonScalar1DLen(scaleTy);
+    if (d == ShapedType::kDynamic)
+      d = nonScalar1DLen(zeroTy);
+    if (d != ShapedType::kDynamic) {
       if (auto xTy = mlir::dyn_cast<RankedTensorType>(getX().getType())) {
         int64_t r = xTy.getRank();
-        // axis attribute must be in the range [-r,rShapedType::kDynamic].
+        // axis attribute must be in the range [-r,r].
         int64_t a = getAxis();
         if (a < -r || a >= r)
           return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
