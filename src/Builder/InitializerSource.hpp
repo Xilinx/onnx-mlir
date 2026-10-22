@@ -30,8 +30,10 @@ std::string getInitializerIdentity(
 mlir::FailureOr<mlir::ONNXInitializerSourceOp> createInitializerSource(
     mlir::OpBuilder &builder, const onnx::TensorProto &tensor,
     mlir::RankedTensorType type, llvm::ArrayRef<std::string> scope,
-    const ImportOptions &options, mlir::Location loc);
+    const ImportOptions &options, mlir::Location loc,
+    bool retainTensorReference = false);
 std::unique_ptr<mlir::Pass> createMaterializeInitializerSourcesPass(
-    bool skipAll, llvm::ArrayRef<std::string> skipNames);
+    bool skipAll, llvm::ArrayRef<std::string> skipNames,
+    llvm::ArrayRef<std::string> forceNames = {});
 } // namespace onnx_mlir
 #endif

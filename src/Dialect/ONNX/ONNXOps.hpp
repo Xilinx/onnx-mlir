@@ -27,6 +27,7 @@
 #include "src/Interface/HasOnnxSubgraphOpInterface.hpp"
 #include "src/Interface/ResultTypeInferenceOpInterface.hpp"
 #include "src/Interface/ShapeInferenceOpInterface.hpp"
+#include "src/Interface/StructuralOperandOpInterface.hpp"
 
 namespace mlir {
 // OpSet level supported by onnx-mlir

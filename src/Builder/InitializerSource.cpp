@@ -6,12 +6,15 @@
 #include "mlir/IR/Builders.h"
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/BType.hpp"
+#include "src/Interface/StructuralOperandOpInterface.hpp"
 #include "src/Pass/Passes.hpp"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include <limits>
 #include <map>
+#include <optional>
 
 using namespace mlir;
 namespace onnx_mlir {
@@ -216,8 +219,19 @@ FailureOr<ElementsAttr> resolve(
     return failure();
   }
   ArrayRef<char> callerOwnedData;
-  if (auto attr = op.getCallerOwnedDataAttr())
+  if (auto attr = op.getCallerOwnedDataAttr()) {
+    if (const onnx::TensorProto *tensor = attr.getTensor()) {
+      if (tensor->data_type() != onnxDataTypeOfBType(*btype) ||
+          tensor->data_location() == onnx::TensorProto::EXTERNAL ||
+          !llvm::equal(tensor->dims(), type.getShape())) {
+        op.emitError("caller-owned initializer type, shape, or storage "
+                     "disagrees with source");
+        return failure();
+      }
+      return onnxTensorProtoToElmAttr(op.getContext(), "", *tensor);
+    }
     callerOwnedData = attr.getData();
+  }
   if (callerOwnedData.data()) {
     if (callerOwnedData.size() != *size) {
       op.emitError(
@@ -243,45 +257,82 @@ struct MaterializeInitializerSourcesPass
           MaterializeInitializerSourcesPass> {
   using Base::Base;
   void runOnOperation() final {
-    if (skipAll)
+    SmallVector<ONNXInitializerSourceOp> initialSources;
+    getOperation().walk(
+        [&](ONNXInitializerSourceOp op) { initialSources.push_back(op); });
+    auto resolveNames = [&](const auto &names, StringRef option,
+                            std::set<InitializerIdentity> &identities) {
+      for (const auto &name : names) {
+        SmallVector<ONNXInitializerSourceOp> matches;
+        llvm::copy_if(initialSources, std::back_inserter(matches),
+            [&](ONNXInitializerSourceOp op) {
+              return initializerScope(op).empty() && name == op.getName();
+            });
+        // An exact outer-scope tensor name takes precedence, including names
+        // beginning with '@' that could otherwise parse as a symbol reference.
+        if (matches.empty() && StringRef(name).starts_with("@")) {
+          auto parsed = parseAttribute(name, getOperation().getContext());
+          auto symbol = dyn_cast_or_null<SymbolRefAttr>(parsed);
+          if (!symbol || symbol.getNestedReferences().empty()) {
+            getOperation().emitError("invalid nested initializer source in ")
+                << option << ": " << name;
+            return failure();
+          }
+          llvm::copy_if(initialSources, std::back_inserter(matches),
+              [&](ONNXInitializerSourceOp op) {
+                return matchesNestedIdentity(symbol, op);
+              });
+        }
+        if (matches.empty()) {
+          getOperation().emitWarning("unknown initializer source in ")
+              << option << ": " << name;
+          continue;
+        }
+        for (ONNXInitializerSourceOp match : matches)
+          identities.insert(initializerIdentity(match));
+      }
+      return success();
+    };
+    std::set<InitializerIdentity> forcedIdentities;
+    std::set<InitializerIdentity> skippedIdentities;
+    if (failed(resolveNames(forceNames, "force-names", forcedIdentities)) ||
+        (!skipAll &&
+            failed(resolveNames(skipNames, "skip-names", skippedIdentities)))) {
+      signalPassFailure();
       return;
+    }
+
+    InitializerSourceMaterializer materializer;
+    IRRewriter rewriter(getOperation().getContext());
+
+    llvm::SetVector<ONNXInitializerSourceOp> structuralSources;
+    getOperation().walk([&](StructuralOperandOpInterface op) {
+      for (auto [index, operand] : llvm::enumerate(op->getOperands()))
+        if (op.isStructuralOperand(index))
+          if (auto source = operand.getDefiningOp<ONNXInitializerSourceOp>())
+            structuralSources.insert(source);
+    });
+    for (ONNXInitializerSourceOp source : structuralSources)
+      if (failed(materializer.materialize(source, rewriter))) {
+        signalPassFailure();
+        return;
+      }
+
     SmallVector<ONNXInitializerSourceOp> sources;
     getOperation().walk(
         [&](ONNXInitializerSourceOp op) { sources.push_back(op); });
-    std::set<InitializerIdentity> skippedIdentities;
-    for (const auto &name : skipNames) {
-      SmallVector<ONNXInitializerSourceOp> matches;
-      llvm::copy_if(sources, std::back_inserter(matches),
-          [&](ONNXInitializerSourceOp op) {
-            return initializerScope(op).empty() && name == op.getName();
-          });
-      // An exact outer-scope tensor name takes precedence, including names
-      // beginning with '@' that could otherwise parse as a symbol reference.
-      if (matches.empty() && StringRef(name).starts_with("@")) {
-        auto parsed = parseAttribute(name, getOperation().getContext());
-        auto symbol = dyn_cast_or_null<SymbolRefAttr>(parsed);
-        if (!symbol || symbol.getNestedReferences().empty()) {
-          getOperation().emitError(
-              "invalid nested initializer source in skip-names: ")
-              << name;
-          signalPassFailure();
-          return;
-        }
-        llvm::copy_if(sources, std::back_inserter(matches),
-            [&](ONNXInitializerSourceOp op) {
-              return matchesNestedIdentity(symbol, op);
-            });
+    for (ONNXInitializerSourceOp source : sources)
+      if (forcedIdentities.contains(initializerIdentity(source)) &&
+          failed(materializer.materialize(source, rewriter))) {
+        signalPassFailure();
+        return;
       }
-      if (matches.empty()) {
-        getOperation().emitWarning("unknown initializer source in skip-names: ")
-            << name;
-        continue;
-      }
-      for (auto match : matches)
-        skippedIdentities.insert(initializerIdentity(match));
-    }
-    InitializerSourceMaterializer materializer;
-    IRRewriter rewriter(getOperation().getContext());
+    if (skipAll)
+      return;
+
+    sources.clear();
+    getOperation().walk(
+        [&](ONNXInitializerSourceOp op) { sources.push_back(op); });
     for (auto op : sources) {
       auto identity = initializerIdentity(op);
       if (skippedIdentities.contains(identity))
@@ -321,20 +372,22 @@ FailureOr<ONNXConstantOp> InitializerSourceMaterializer::materialize(
   return constant;
 }
 
-std::unique_ptr<Pass> createMaterializeInitializerSourcesPass(
-    bool skipAll, ArrayRef<std::string> skipNames) {
+std::unique_ptr<Pass> createMaterializeInitializerSourcesPass(bool skipAll,
+    ArrayRef<std::string> skipNames, ArrayRef<std::string> forceNames) {
   MaterializeInitializerSourcesPassOptions options;
   options.skipAll = skipAll;
   llvm::append_range(options.skipNames, skipNames);
+  llvm::append_range(options.forceNames, forceNames);
   return createMaterializeInitializerSourcesPass(std::move(options));
 }
 
 FailureOr<ONNXInitializerSourceOp> createInitializerSource(OpBuilder &opBuilder,
     const onnx::TensorProto &tensor, RankedTensorType type,
-    ArrayRef<std::string> scope, const ImportOptions &options, Location loc) {
+    ArrayRef<std::string> scope, const ImportOptions &options, Location loc,
+    bool retainTensorReference) {
   if (!mlirTypeOfBType(
           btypeOfOnnxDataType(tensor.data_type()), loc.getContext())) {
-    emitError(loc, "unsupported external initializer element type");
+    emitError(loc, "unsupported initializer source element type");
     return failure();
   }
   if (llvm::any_of(type.getShape(), [](int64_t d) { return d < 0; })) {
@@ -346,6 +399,68 @@ FailureOr<ONNXInitializerSourceOp> createInitializerSource(OpBuilder &opBuilder,
     emitError(loc, "invalid or overflowing initializer payload size");
     return failure();
   }
+  Builder builder(loc.getContext());
+  SmallVector<StringRef> scopeRefs;
+  llvm::transform(scope, std::back_inserter(scopeRefs),
+      [](const std::string &component) { return StringRef(component); });
+  auto createSource = [&](StringRef kind, StringRef path,
+                          std::optional<uint64_t> offset,
+                          std::optional<uint64_t> length,
+                          CallerOwnedDataAttr callerOwnedData = {}) {
+    SmallVector<NamedAttribute> fields{
+        builder.getNamedAttr("kind", builder.getStringAttr(kind)),
+        builder.getNamedAttr("path", builder.getStringAttr(path)),
+        builder.getNamedAttr("scope", builder.getStrArrayAttr(scopeRefs)),
+        builder.getNamedAttr("name", builder.getStringAttr(tensor.name()))};
+    if (offset)
+      fields.push_back(
+          builder.getNamedAttr("offset", builder.getI64IntegerAttr(*offset)));
+    if (length)
+      fields.push_back(
+          builder.getNamedAttr("length", builder.getI64IntegerAttr(*length)));
+    OperationState state(loc, ONNXInitializerSourceOp::getOperationName());
+    state.addTypes(type);
+    state.addAttributes(fields);
+    if (callerOwnedData)
+      state.addAttribute("caller_owned_data", callerOwnedData);
+    return cast<ONNXInitializerSourceOp>(opBuilder.create(state));
+  };
+  auto resolveModelPath = [&](StringRef modelPath) -> FailureOr<std::string> {
+    if (modelPath.empty()) {
+      emitError(loc, "embedded initializer source requires a backup model");
+      return failure();
+    }
+    SmallString<256> path;
+    if (llvm::sys::path::is_relative(modelPath)) {
+      if (options.externalDataDir.empty()) {
+        emitError(
+            loc, "relative backup model requires an explicit source base");
+        return failure();
+      }
+      path = options.externalDataDir;
+      llvm::sys::path::append(path, modelPath);
+    } else {
+      path = modelPath;
+    }
+    if (auto ec = llvm::sys::fs::make_absolute(path)) {
+      emitError(loc) << "cannot resolve initializer source path: "
+                     << ec.message();
+      return failure();
+    }
+    return path.str().str();
+  };
+
+  if (tensor.data_location() != onnx::TensorProto::EXTERNAL) {
+    auto path = resolveModelPath(options.initializerSourceModelPath);
+    if (failed(path))
+      return failure();
+    CallerOwnedDataAttr callerOwnedTensor;
+    if (retainTensorReference)
+      callerOwnedTensor = CallerOwnedDataAttr::get(loc.getContext(), &tensor);
+    return createSource(
+        modelSourceKind, *path, std::nullopt, std::nullopt, callerOwnedTensor);
+  }
+
   std::string location;
   bool hasLength = false;
   uint64_t offset = 0, length = 0;
@@ -437,28 +552,14 @@ FailureOr<ONNXInitializerSourceOp> createInitializerSource(OpBuilder &opBuilder,
                    << ec.message();
     return failure();
   }
-  Builder builder(loc.getContext());
-  SmallVector<StringRef> scopeRefs;
-  llvm::transform(scope, std::back_inserter(scopeRefs),
-      [](const std::string &component) { return StringRef(component); });
-  SmallVector<NamedAttribute> fields{
-      builder.getNamedAttr("kind", builder.getStringAttr(kind)),
-      builder.getNamedAttr("path", builder.getStringAttr(absolute)),
-      builder.getNamedAttr("scope", builder.getStrArrayAttr(scopeRefs)),
-      builder.getNamedAttr("name", builder.getStringAttr(tensor.name()))};
-  if (kind == externalDataSourceKind) {
-    fields.push_back(
-        builder.getNamedAttr("offset", builder.getI64IntegerAttr(offset)));
-    fields.push_back(
-        builder.getNamedAttr("length", builder.getI64IntegerAttr(length)));
-  }
-  OperationState state(loc, ONNXInitializerSourceOp::getOperationName());
-  state.addTypes(type);
-  state.addAttributes(fields);
+  CallerOwnedDataAttr callerOwnedDataAttr;
   if (callerOwnedData.data())
-    state.addAttribute("caller_owned_data",
-        CallerOwnedDataAttr::get(loc.getContext(), callerOwnedData));
-  return cast<ONNXInitializerSourceOp>(opBuilder.create(state));
+    callerOwnedDataAttr =
+        CallerOwnedDataAttr::get(loc.getContext(), callerOwnedData);
+  if (kind == externalDataSourceKind)
+    return createSource(kind, absolute, offset, length, callerOwnedDataAttr);
+  return createSource(
+      kind, absolute, std::nullopt, std::nullopt, callerOwnedDataAttr);
 }
 
 std::string getInitializerIdentity(

@@ -183,8 +183,11 @@ using SymbolToOnnxTypeMapping = SymbolMapping<onnx::TypeProto>;
 
 class FrontendGenImpl {
 public:
-  explicit FrontendGenImpl(MLIRContext &context, const ImportOptions &options)
-      : options_(options), context_(context), builder_(&context) {
+  explicit FrontendGenImpl(MLIRContext &context, const ImportOptions &options,
+      bool retainInitializerSourceTensors)
+      : options_(options),
+        retainInitializerSourceTensors_(retainInitializerSourceTensors),
+        context_(context), builder_(&context) {
     module_ = ModuleOp::create(UnknownLoc::get(&context));
     InitHandlerMap();
   }
@@ -220,6 +223,7 @@ public:
 
 private:
   const ImportOptions &options_;
+  bool retainInitializerSourceTensors_;
   std::vector<std::string> initializerScopes_;
   std::unordered_set<const onnx::GraphProto *> ambiguousInitializerScopes_;
   bool initializerScopeIsAmbiguous_ = false;
@@ -367,8 +371,16 @@ private:
     auto loc =
         NameLoc::get(builder_.getStringAttr("Initializer_" + tensor.name()));
     Value initializer;
+    auto dataType = static_cast<onnx::TensorProto_DataType>(tensor.data_type());
+    Type elementType =
+        mlirTypeOfBType(btypeOfOnnxDataType(dataType), &context_);
     if (options_.useInitializerSources &&
-        tensor.data_location() == onnx::TensorProto::EXTERNAL) {
+        tensor.data_location() == onnx::TensorProto::EXTERNAL && !elementType) {
+      emitError(loc, "unsupported external initializer element type");
+      return {};
+    }
+    bool captureSource = options_.useInitializerSources && elementType;
+    if (captureSource) {
       InitializerIdentity identity{initializerScopes_, tensor.name()};
       if (importingModelLocalFunction_) {
         emitError(loc) << "cannot create initializer source for "
@@ -382,18 +394,10 @@ private:
                        << " because its graph-name scope is ambiguous";
         return {};
       }
-      auto dataType =
-          static_cast<onnx::TensorProto_DataType>(tensor.data_type());
-      Type elementType =
-          mlirTypeOfBType(btypeOfOnnxDataType(dataType), &context_);
-      if (!elementType) {
-        emitError(loc, "unsupported external initializer element type");
-        return {};
-      }
       SmallVector<int64_t> dims(tensor.dims().begin(), tensor.dims().end());
       auto type = RankedTensorType::get(dims, elementType);
-      auto source = createInitializerSource(
-          builder_, tensor, type, initializerScopes_, options_, loc);
+      auto source = createInitializerSource(builder_, tensor, type,
+          initializerScopes_, options_, loc, retainInitializerSourceTensors_);
       if (failed(source))
         return {};
       initializer = source->getOutput();
@@ -2272,10 +2276,15 @@ private:
 
 } // namespace detail
 
-[[nodiscard]] std::error_code ImportFrontendModelWithPreProcessing(
+static std::error_code importFrontendModel(const onnx::ModelProto &model,
+    MLIRContext &context, OwningOpRef<ModuleOp> &module,
+    std::string &errorMessage, const ImportOptions &options,
+    bool retainInitializerSourceTensors);
+
+static std::error_code importFrontendModelWithPreProcessing(
     onnx::ModelProto &model, MLIRContext &context,
     OwningOpRef<ModuleOp> &module, const ImportOptions &options,
-    std::string &errorMessage) {
+    std::string &errorMessage, bool retainInitializerSourceTensors) {
   if (options.useInitializerSources && options.invokeOnnxVersionConverter) {
     errorMessage +=
         "Initializer-source import requires ONNX version conversion disabled "
@@ -2324,8 +2333,8 @@ private:
             << e.what() << "\n";
       }
     }
-    return ImportFrontendModel(
-        convertModel, context, module, errorMessage, options);
+    return importFrontendModel(convertModel, context, module, errorMessage,
+        options, /*retainInitializerSourceTensors=*/false);
   } else {
     if (options.runOnnxShapeInference) {
       try {
@@ -2336,9 +2345,18 @@ private:
             << e.what() << "\n";
       }
     }
-    return ImportFrontendModel(model, context, module, errorMessage, options);
+    return importFrontendModel(model, context, module, errorMessage, options,
+        retainInitializerSourceTensors);
   }
   return CompilerSuccess;
+}
+
+[[nodiscard]] std::error_code ImportFrontendModelWithPreProcessing(
+    onnx::ModelProto &model, MLIRContext &context,
+    OwningOpRef<ModuleOp> &module, const ImportOptions &options,
+    std::string &errorMessage) {
+  return importFrontendModelWithPreProcessing(model, context, module, options,
+      errorMessage, /*retainInitializerSourceTensors=*/true);
 }
 
 [[nodiscard]] std::error_code ImportFrontendModelArray(const void *onnxBuffer,
@@ -2351,8 +2369,8 @@ private:
     errorMessage += "Unable to parse onnxBuffer\n";
     return InvalidOnnxFormat;
   }
-  return ImportFrontendModelWithPreProcessing(
-      model, context, module, options, errorMessage);
+  return importFrontendModelWithPreProcessing(model, context, module, options,
+      errorMessage, /*retainInitializerSourceTensors=*/false);
 }
 
 namespace {
@@ -2439,8 +2457,12 @@ namespace {
     errorMessage += "Onnx Model Load Failed for " + model_fname.str();
     return ec;
   }
-  if (auto ec = ImportFrontendModelWithPreProcessing(
-          model, context, module, options, errorMessage)) {
+  ImportOptions fileOptions = options;
+  if (fileOptions.initializerSourceModelPath.empty())
+    fileOptions.initializerSourceModelPath = model_fname.str();
+  if (auto ec = importFrontendModelWithPreProcessing(model, context, module,
+          fileOptions, errorMessage,
+          /*retainInitializerSourceTensors=*/false)) {
     errorMessage += "Onnx Model Import Failed for " + model_fname.str();
     return ec;
   }
@@ -2448,9 +2470,10 @@ namespace {
   return CompilerSuccess;
 }
 
-[[nodiscard]] std::error_code ImportFrontendModel(const onnx::ModelProto &model,
+static std::error_code importFrontendModel(const onnx::ModelProto &model,
     MLIRContext &context, OwningOpRef<ModuleOp> &module,
-    std::string &errorMessage, const ImportOptions &options) {
+    std::string &errorMessage, const ImportOptions &options,
+    bool retainInitializerSourceTensors) {
 
   std::string capturedErrors;
   auto handler = context.getDiagEngine().registerHandler(
@@ -2472,7 +2495,8 @@ namespace {
     }
   };
 
-  detail::FrontendGenImpl myONNXGen(context, options);
+  detail::FrontendGenImpl myONNXGen(
+      context, options, retainInitializerSourceTensors);
   ErrorOr<ModuleOp> importedModule =
       myONNXGen.ImportONNXModel(model, errorMessage);
   if (auto ec = importedModule.getError()) {
@@ -2484,7 +2508,8 @@ namespace {
     PassManager pm(&context);
     pm.addPass(createMaterializeInitializerSourcesPass(
         options.skipAllInitializerMaterialization,
-        options.skipInitializerMaterialization));
+        options.skipInitializerMaterialization,
+        options.forceInitializerMaterialization));
     if (failed(pm.run(*module))) {
       appendCapturedErrors();
       errorMessage += "Failed to materialize ONNX initializer sources\n";
@@ -2492,6 +2517,13 @@ namespace {
     }
   }
   return CompilerSuccess;
+}
+
+[[nodiscard]] std::error_code ImportFrontendModel(const onnx::ModelProto &model,
+    MLIRContext &context, OwningOpRef<ModuleOp> &module,
+    std::string &errorMessage, const ImportOptions &options) {
+  return importFrontendModel(model, context, module, errorMessage, options,
+      /*retainInitializerSourceTensors=*/true);
 }
 
 } // namespace onnx_mlir

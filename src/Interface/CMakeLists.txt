@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
+# Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+# affiliates
 
 add_onnx_mlir_interface(ShapeInferenceOpInterface)
 add_onnx_mlir_interface(ShapeHelperOpInterface)
+add_onnx_mlir_interface(StructuralOperandOpInterface)
 add_onnx_mlir_interface(ResultTypeInferenceOpInterface)
 add_onnx_mlir_interface(HasOnnxSubgraphOpInterface)
 add_onnx_mlir_interface(SpecializedKernelOpInterface)
@@ -29,6 +32,16 @@ add_onnx_mlir_library(OMShapeHelperOpInterface
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRSupport
+  )
+
+add_onnx_mlir_library(OMStructuralOperandOpInterface
+  StructuralOperandOpInterface.cpp
+
+  DEPENDS
+  OMStructuralOperandOpInterfaceIncGen
+
+  LINK_LIBS PUBLIC
+  MLIRIR
   )
 
 add_onnx_mlir_library(OMResultTypeInferenceOpInterface

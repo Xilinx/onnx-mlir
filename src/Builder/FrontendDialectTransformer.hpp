@@ -117,12 +117,15 @@ struct ImportOptions {
 
   std::vector<std::string> functionsToDecompose = {};
 
-  // Experimental external-initializer source support.
+  // Experimental initializer-source support.
   bool useInitializerSources = false;
   bool skipAllInitializerMaterialization = false;
   // Outermost names are unchanged. Nested names use MLIR symbol references,
   // for example @graph::@nested::@name.
   std::vector<std::string> skipInitializerMaterialization;
+  // Scoped initializer names to materialize even when skip-all or skip-names
+  // would otherwise leave them deferred.
+  std::vector<std::string> forceInitializerMaterialization;
 
   // Required for every TensorProto::EXTERNAL initializer whose location is
   // "*/_ORT_MEM_ADDR_/*" when useInitializerSources is enabled. The key is
@@ -135,6 +138,12 @@ struct ImportOptions {
   // matching complete entry.
   std::map<InitializerIdentity, ExternalInitializerSource>
       externalInitializerBackups;
+
+  // Durable ONNX model containing embedded initializer sources. File import
+  // supplies its input path automatically. Array and ModelProto callers must
+  // provide it when selecting an embedded source. Relative paths are resolved
+  // against externalDataDir.
+  std::string initializerSourceModelPath;
 };
 
 // Lifetime contract for ImportFrontendModel* source references:
@@ -145,13 +154,12 @@ struct ImportOptions {
 // MLIRContext passed to the import call is destroyed. Cloning the returned IR
 // copies the non-owning reference and does not extend the storage lifetime.
 //
-// The current external-initializer mode retains only non-owning views of
-// caller-owned data supplied in ExternalInitializerSource; it does not retain
-// the input ModelProto. A source mode that retains a ModelProto, TensorProto,
-// or resolver reference has the same context-lifetime and immutability
-// requirement. File and array entry points parse temporary ModelProto objects
-// and therefore cannot provide such references unless the caller supplies
-// separate long-lived source storage.
+// ModelProto entry points retain non-owning pointers to selected embedded
+// TensorProto initializers. The caller must therefore keep that ModelProto
+// alive and immutable for the context lifetime. File and array entry points
+// parse temporary ModelProto objects and create disk-only sources instead.
+// ExternalInitializerSource supplies the corresponding caller-owned byte view
+// for an _ORT_MEM_ADDR_ initializer.
 
 /*!
  *  Load an ONNX model proto from a file into a protobuf object.

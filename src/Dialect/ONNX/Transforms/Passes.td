@@ -18,7 +18,9 @@ def MaterializeInitializerSourcesPass
     Option<"skipAll", "skip-all", "bool", /*default=*/"false",
            "Leave all initializer sources unresolved.">,
     ListOption<"skipNames", "skip-names", "std::string",
-               "Scoped initializer names to leave unresolved.">
+               "Scoped initializer names to leave unresolved.">,
+    ListOption<"forceNames", "force-names", "std::string",
+               "Scoped initializer names to materialize even when skipped.">
   ];
 }
 
