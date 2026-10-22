@@ -11,6 +11,17 @@
 
 include "mlir/Pass/PassBase.td"
 
+def MaterializeInitializerSourcesPass
+    : Pass<"onnx-materialize-initializer-sources", "::mlir::ModuleOp"> {
+  let summary = "Resolve ONNX initializer sources into disposable constants";
+  let options = [
+    Option<"skipAll", "skip-all", "bool", /*default=*/"false",
+           "Leave all initializer sources unresolved.">,
+    ListOption<"skipNames", "skip-names", "std::string",
+               "Scoped initializer names to leave unresolved.">
+  ];
+}
+
 // Options common to both decompose-onnx and recompose-onnx: same C++ member,
 // same meaning. Declared once and pulled into both passes (and the hybrid pass)
 // so the generated options struct never gets a duplicate member.

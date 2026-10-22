@@ -24,7 +24,12 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Support/FileUtilities.h"
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -32,9 +37,11 @@
 #include "include/onnx-mlir/Compiler/OMCompilerTypes.h"
 #include "src/Builder/FrontendDialectTransformer.hpp"
 #include "src/Builder/ImportONNXUtils.hpp"
+#include "src/Builder/InitializerSource.hpp"
 #include "src/Builder/ModelInputShaper.hpp"
 #include "src/Builder/SymbolTable.hpp"
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
+#include "src/Dialect/ONNX/ElementsAttr/BType.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Interface/HasOnnxSubgraphOpInterface.hpp"
@@ -184,6 +191,9 @@ public:
 
   ErrorOr<ModuleOp> ImportONNXModel(
       const onnx::ModelProto &model, std::string &errorMessage) {
+    if (options_.useInitializerSources) {
+      findAmbiguousInitializerScopes(model.graph());
+    }
     modelInputShaper_.setShapeInformation(options_.shapeInformation);
     opset_map_ = GetOpsetImportsFromProto(model); // Which opsets to use.
     in_model_functions_ = GetModelLocalFunctions(model);
@@ -210,6 +220,10 @@ public:
 
 private:
   const ImportOptions &options_;
+  std::vector<std::string> initializerScopes_;
+  std::unordered_set<const onnx::GraphProto *> ambiguousInitializerScopes_;
+  bool initializerScopeIsAmbiguous_ = false;
+  bool importingModelLocalFunction_ = false;
   MLIRContext &context_;
   ModuleOp module_;
   OpBuilder builder_;
@@ -276,6 +290,41 @@ private:
     return createConstantValue(value, UnknownLoc());
   }
 
+  void findAmbiguousInitializerScopes(const onnx::GraphProto &root) {
+    SmallVector<std::pair<const onnx::GraphProto *, bool>> worklist{
+        {&root, false}};
+    while (!worklist.empty()) {
+      auto [graph, scopeIsAmbiguous] = worklist.pop_back_val();
+      llvm::StringSet<> seenNames;
+      llvm::StringSet<> duplicateNames;
+      auto recordName = [&](StringRef name) {
+        if (!seenNames.insert(name).second)
+          duplicateNames.insert(name);
+      };
+      for (const auto &node : graph->node())
+        for (const auto &attr : node.attribute()) {
+          if (attr.has_g())
+            recordName(attr.g().name());
+          for (const auto &child : attr.graphs())
+            recordName(child.name());
+        }
+      for (const auto &node : graph->node())
+        for (const auto &attr : node.attribute()) {
+          auto enqueue = [&](const onnx::GraphProto &child) {
+            bool ambiguous =
+                scopeIsAmbiguous || duplicateNames.contains(child.name());
+            if (ambiguous)
+              ambiguousInitializerScopes_.insert(&child);
+            worklist.emplace_back(&child, ambiguous);
+          };
+          if (attr.has_g())
+            enqueue(attr.g());
+          for (const auto &child : attr.graphs())
+            enqueue(child);
+        }
+    }
+  }
+
   void AddValueInfo(const onnx::ValueInfoProto &vi, bool allowExist = false) {
     if (allowExist && onnx_type_map.ContainsKey(vi.name()))
       return;
@@ -314,19 +363,53 @@ private:
   }
 
   Value ImportTensor(const onnx::TensorProto &tensor) {
-    mlir::ElementsAttr mlirAttr =
-        onnxTensorProtoToElmAttr(&context_, options_.externalDataDir, tensor);
-    // Use the tensor name as Location.
+    // Construct source metadata before any tensor decoder is called.
     auto loc =
         NameLoc::get(builder_.getStringAttr("Initializer_" + tensor.name()));
-    Value initializer = createConstantValue(mlirAttr, loc);
+    Value initializer;
+    if (options_.useInitializerSources &&
+        tensor.data_location() == onnx::TensorProto::EXTERNAL) {
+      InitializerIdentity identity{initializerScopes_, tensor.name()};
+      if (importingModelLocalFunction_) {
+        emitError(loc) << "cannot create initializer source for "
+                       << getInitializerIdentity(&context_, identity)
+                       << " inside a model-local function";
+        return {};
+      }
+      if (initializerScopeIsAmbiguous_) {
+        emitError(loc) << "cannot create initializer source for "
+                       << getInitializerIdentity(&context_, identity)
+                       << " because its graph-name scope is ambiguous";
+        return {};
+      }
+      auto dataType =
+          static_cast<onnx::TensorProto_DataType>(tensor.data_type());
+      Type elementType =
+          mlirTypeOfBType(btypeOfOnnxDataType(dataType), &context_);
+      if (!elementType) {
+        emitError(loc, "unsupported external initializer element type");
+        return {};
+      }
+      SmallVector<int64_t> dims(tensor.dims().begin(), tensor.dims().end());
+      auto type = RankedTensorType::get(dims, elementType);
+      auto source = createInitializerSource(
+          builder_, tensor, type, initializerScopes_, options_, loc);
+      if (failed(source))
+        return {};
+      initializer = source->getOutput();
+    } else {
+      auto attr =
+          onnxTensorProtoToElmAttr(&context_, options_.externalDataDir, tensor);
+      initializer = createConstantValue(attr, loc);
+    }
     if (options_.addResultNamesAttr) {
       if (auto *constOp = initializer.getDefiningOp()) {
         constOp->setAttr(
             "ResultNames", builder_.getStrArrayAttr({tensor.name()}));
       }
     }
-    num_of_parameters_ += mlirAttr.getShapedType().getNumElements();
+    num_of_parameters_ +=
+        cast<ShapedType>(initializer.getType()).getNumElements();
     return initializer;
   }
 
@@ -955,8 +1038,18 @@ private:
    * @return function type corresponding to the subgraph input/output signature.
    */
   ErrorOr<FunctionType> importSubgraph(const onnx::GraphProto &graph,
-      Region &region, Operation *op, bool useReturn,
-      std::string &errorMessage) {
+      Region &region, Operation *op, bool useReturn, std::string &errorMessage,
+      bool isMainGraph = false) {
+    if (!isMainGraph)
+      initializerScopes_.push_back(graph.name());
+    bool parentScopeIsAmbiguous = initializerScopeIsAmbiguous_;
+    initializerScopeIsAmbiguous_ =
+        parentScopeIsAmbiguous || ambiguousInitializerScopes_.contains(&graph);
+    auto popInitializerScope = llvm::make_scope_exit([&] {
+      initializerScopeIsAmbiguous_ = parentScopeIsAmbiguous;
+      if (!isMainGraph)
+        initializerScopes_.pop_back();
+    });
     frontend_symbols_.pushScope(graph.name());
     onnx_type_map.pushScope(graph.name());
     Block *entryBlock = &region.back();
@@ -966,7 +1059,12 @@ private:
     std::unordered_set<std::string> initializerNames;
     for (const auto &initializer : graph.initializer()) {
       if (!initializerNames.contains(initializer.name())) {
-        BindOnnxName(initializer.name(), ImportTensor(initializer));
+        auto value = ImportTensor(initializer);
+        if (!value) {
+          errorMessage += "Failed to import initializer " + initializer.name();
+          return InvalidOnnxFormat;
+        }
+        BindOnnxName(initializer.name(), value);
         initializerNames.insert(initializer.name());
       }
     }
@@ -1877,6 +1975,12 @@ private:
           node.name() + ":" + node.op_type() + ":" + functionProto.name();
       frontend_symbols_.pushScope(scopeName);
       onnx_type_map.pushScope(scopeName);
+      bool callerImportingModelLocalFunction = importingModelLocalFunction_;
+      importingModelLocalFunction_ =
+          callerImportingModelLocalFunction || modelLocalFunction != nullptr;
+      auto restoreFunctionImport = llvm::make_scope_exit([&] {
+        importingModelLocalFunction_ = callerImportingModelLocalFunction;
+      });
 
       for (const auto &input : graph.input())
         AddValueInfo(input);
@@ -2142,7 +2246,8 @@ private:
 
     ErrorOr<FunctionType> importedFuncType =
         importSubgraph(graph, /*region=*/mainFunc.getBody(),
-            /*op=*/mainFunc.getOperation(), /*useReturn=*/true, errorMessage);
+            /*op=*/mainFunc.getOperation(), /*useReturn=*/true, errorMessage,
+            /*isMainGraph=*/true);
     if (auto ec = importedFuncType.getError()) {
       errorMessage +=
           "Failed to import main graph, could not get its function type\n";
@@ -2171,6 +2276,12 @@ private:
     onnx::ModelProto &model, MLIRContext &context,
     OwningOpRef<ModuleOp> &module, const ImportOptions &options,
     std::string &errorMessage) {
+  if (options.useInitializerSources && options.invokeOnnxVersionConverter) {
+    errorMessage +=
+        "Initializer-source import requires ONNX version conversion disabled "
+        "until its source-preservation behavior is verified";
+    return InvalidOnnxFormat;
+  }
   int originVersion = CURRENT_ONNX_OPSET;
   // Get the version of the model
   // Code copied from onnx/onnx/version_coverter/convert.cc
@@ -2341,13 +2452,45 @@ namespace {
     MLIRContext &context, OwningOpRef<ModuleOp> &module,
     std::string &errorMessage, const ImportOptions &options) {
 
+  std::string capturedErrors;
+  auto handler = context.getDiagEngine().registerHandler(
+      [&](mlir::Diagnostic &diagnostic) {
+        if (diagnostic.getSeverity() == mlir::DiagnosticSeverity::Error) {
+          llvm::raw_string_ostream stream(capturedErrors);
+          stream << diagnostic << "\n";
+        }
+        // Leave the diagnostic available to any caller-installed handler.
+        return failure();
+      });
+  auto removeHandler = llvm::make_scope_exit(
+      [&] { context.getDiagEngine().eraseHandler(handler); });
+  auto appendCapturedErrors = [&] {
+    if (!capturedErrors.empty()) {
+      if (!errorMessage.empty() && errorMessage.back() != '\n')
+        errorMessage += "\n";
+      errorMessage += capturedErrors;
+    }
+  };
+
   detail::FrontendGenImpl myONNXGen(context, options);
   ErrorOr<ModuleOp> importedModule =
       myONNXGen.ImportONNXModel(model, errorMessage);
   if (auto ec = importedModule.getError()) {
+    appendCapturedErrors();
     return ec;
   }
   module = *importedModule;
+  if (options.useInitializerSources) {
+    PassManager pm(&context);
+    pm.addPass(createMaterializeInitializerSourcesPass(
+        options.skipAllInitializerMaterialization,
+        options.skipInitializerMaterialization));
+    if (failed(pm.run(*module))) {
+      appendCapturedErrors();
+      errorMessage += "Failed to materialize ONNX initializer sources\n";
+      return InvalidOnnxFormat;
+    }
+  }
   return CompilerSuccess;
 }
 

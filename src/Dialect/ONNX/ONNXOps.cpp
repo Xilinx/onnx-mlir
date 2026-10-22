@@ -1,5 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
  */
 
 //===------------------ ONNXOps.cpp - ONNX Operations ---------------------===//
@@ -15,7 +17,9 @@
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
 
+#include "src/Dialect/ONNX/ElementsAttr/BType.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/DisposableElementsAttr.hpp"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
 #include "mlir/Dialect/Traits.h"
@@ -76,6 +80,50 @@ Type getBroadcastedRankedType(
 #include "src/Dialect/ONNX/ONNXOps.cpp.inc"
 
 using namespace mlir;
+
+namespace onnx_mlir {
+FailureOr<uint64_t> getInitializerSourcePayloadSize(RankedTensorType type) {
+  uint64_t elements = 1;
+  for (int64_t dim : type.getShape()) {
+    if (dim < 0 || (dim && elements > UINT64_MAX / uint64_t(dim)))
+      return failure();
+    elements *= dim;
+  }
+  uint64_t bits =
+      type.getElementType().isInteger(1) ? 8 : type.getElementTypeBitWidth();
+  if (elements > (uint64_t(INT64_MAX) - 7) / bits)
+    return failure();
+  return (elements * bits + 7) / 8;
+}
+} // namespace onnx_mlir
+
+LogicalResult ONNXInitializerSourceOp::verify() {
+  StringRef kind = getKind();
+  if (kind != "external_data" && kind != "onnx_model")
+    return emitOpError("has unknown source kind ") << kind;
+  if (getPath().empty())
+    return emitOpError("requires a nonempty source path");
+  if (getName().empty())
+    return emitOpError("requires a nonempty initializer name");
+  if (kind == "external_data") {
+    if (!getOffset().has_value() || !getLength().has_value())
+      return emitOpError("external_data source requires offset and length");
+    if (getOffsetAttr().getInt() < 0 || getLengthAttr().getInt() < 0)
+      return emitOpError("requires nonnegative offset/length");
+  } else if (getOffset().has_value() || getLength().has_value()) {
+    return emitOpError("onnx_model source must not contain offset/length");
+  }
+  auto resultType = cast<RankedTensorType>(getOutput().getType());
+  if (!onnx_mlir::btypeOfMlirTypeIfSupported(resultType.getElementType()))
+    return emitOpError("has unsupported source element type ")
+           << resultType.getElementType();
+  auto payloadSize = onnx_mlir::getInitializerSourcePayloadSize(resultType);
+  if (failed(payloadSize))
+    return emitOpError("has invalid or overflowing result shape");
+  if (kind == "external_data" && uint64_t(*getLength()) != *payloadSize)
+    return emitOpError("source length disagrees with tensor payload size");
+  return success();
+}
 
 namespace {
 

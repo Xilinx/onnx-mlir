@@ -1,5 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
  */
 
 //===------------------------- RegisterPasses.cpp -------------------------===//
@@ -37,6 +39,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
 #include "src/Accelerators/Accelerator.hpp"
+#include "src/Builder/InitializerSource.hpp"
 #include "src/Compiler/CompilerPasses.hpp"
 
 #include "mlir/Pass/PassRegistry.h"
@@ -48,6 +51,9 @@ using namespace mlir;
 namespace onnx_mlir {
 
 void registerOMPasses(int optLevel) {
+  mlir::registerPass(
+      []() { return createMaterializeInitializerSourcesPass(); });
+
   // All passes implemented within onnx-mlir should register within this
   // function to make themselves available as a command-line option.
 

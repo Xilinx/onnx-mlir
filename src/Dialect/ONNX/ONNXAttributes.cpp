@@ -1,5 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
  */
 
 //===--------------------- ONNXAttributes.cpp -----------------------------===//
@@ -111,7 +113,7 @@ void ONNXDialect::registerAttributes() {
 #define GET_ATTRDEF_LIST
 #include "src/Dialect/ONNX/ONNXAttributes.cpp.inc"
       >();
-  addAttributes<DisposableElementsAttr>();
+  addAttributes<DisposableElementsAttr, CallerOwnedDataAttr>();
   addInterface<DisposablePool>(getContext());
 }
 
@@ -123,6 +125,8 @@ Attribute ONNXDialect::parseAttribute(
   if (Attribute attr;
       generatedAttributeParser(parser, &attrTag, type, attr).has_value())
     return attr;
+  if (attrTag == "caller_owned_data")
+    return CallerOwnedDataAttr::get(getContext());
   if (attrTag == DisposableElementsAttr::getMnemonic()) {
     auto shapedTy = mlir::cast<ShapedType>(type);
     if (auto membuf = DisposableElementsAttr::parse(parser, shapedTy))
@@ -142,6 +146,10 @@ void ONNXDialect::printAttribute(
   // generatedAttributePrinter is generated in ONNXAttributes.cpp.inc
   if (succeeded(generatedAttributePrinter(attr, printer)))
     return;
+  if (mlir::isa<CallerOwnedDataAttr>(attr)) {
+    printer << "caller_owned_data";
+    return;
+  }
   if (auto elements = mlir::dyn_cast<DisposableElementsAttr>(attr))
     elements.printWithoutType(printer);
 }
