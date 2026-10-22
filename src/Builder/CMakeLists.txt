@@ -13,10 +13,14 @@ add_onnx_mlir_library(OMBuilder
   ImportONNXUtils.cpp
   ModelInputShaper.cpp
 
+  DEPENDS
+  OMONNXTransformsIncGen
+
   LINK_LIBS PUBLIC
   OMHasOnnxSubgraphOpInterface
   OMONNXOps
   OMResultTypeInferenceOpInterface
+  MLIRAsmParser
   MLIRFuncDialect
   MLIRPass
   onnx

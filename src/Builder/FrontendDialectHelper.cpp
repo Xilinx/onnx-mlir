@@ -99,11 +99,9 @@ llvm::ErrorOr<std::shared_ptr<const llvm::MemoryBuffer>>
 getWholeExternalDataFile(const std::string &pathStr) {
   static std::mutex mutex;
   static llvm::StringMap<std::weak_ptr<const llvm::MemoryBuffer>> cache;
-  SmallString<256> normalized(pathStr);
-  if (llvm::sys::path::is_relative(normalized))
-    if (std::error_code ec = llvm::sys::fs::make_absolute(normalized))
-      return ec;
-  llvm::sys::path::remove_dots(normalized, true);
+  SmallString<256> normalized;
+  if (std::error_code ec = llvm::sys::fs::real_path(pathStr, normalized))
+    return ec;
   std::lock_guard<std::mutex> lock(mutex);
   std::weak_ptr<const llvm::MemoryBuffer> &entry = cache[normalized];
   if (std::shared_ptr<const llvm::MemoryBuffer> whole = entry.lock())
@@ -390,10 +388,7 @@ ElementsAttr createStringElmAttr(
 
 llvm::ErrorOr<std::shared_ptr<const llvm::MemoryBuffer>> getExternalDataFile(
     StringRef path) {
-  auto buffer = getWholeExternalDataFile(path.str());
-  if (!buffer)
-    return buffer.getError();
-  return *buffer;
+  return getWholeExternalDataFile(path.str());
 }
 
 ElementsAttr externalTensorBytesToElmAttr(RankedTensorType type, int dataType,

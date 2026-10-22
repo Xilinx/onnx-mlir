@@ -92,8 +92,8 @@ private:
 #endif
 
 static bool configureLive(onnx::GraphProto &graph,
-    std::vector<std::string> scope, MLIRContext *context,
-    StringRef defaultBackupModel, ImportOptions &options,
+    std::vector<std::string> scope, StringRef defaultBackupModel,
+    ImportOptions &options,
     std::vector<std::unique_ptr<llvm::MemoryBuffer>> &liveOwners,
     bool isMainGraph = false) {
   if (!isMainGraph) {
@@ -131,8 +131,8 @@ static bool configureLive(onnx::GraphProto &graph,
         length = (*bytes)->getBufferSize();
       }
     }
-    ExternalInitializerBackup source;
-    source.modelPath =
+    ExternalInitializerSource source;
+    source.backupModelPath =
         backupPath.empty() ? defaultBackupModel.str() : backupPath.getValue();
     std::unique_ptr<llvm::MemoryBuffer> liveOwner;
     if (sourceMode == "guard") {
@@ -161,7 +161,7 @@ static bool configureLive(onnx::GraphProto &graph,
       }
       liveOwner = llvm::MemoryBuffer::getMemBufferCopy((*bytes)->getBuffer());
     }
-    source.live =
+    source.callerOwnedData =
         ArrayRef<char>(liveOwner->getBufferStart(), liveOwner->getBufferSize());
     liveOwners.push_back(std::move(liveOwner));
     tensor.clear_external_data();
@@ -173,22 +173,22 @@ static bool configureLive(onnx::GraphProto &graph,
       field->set_value(value.str());
     };
     add("location", "*/_ORT_MEM_ADDR_/*");
-    add("offset",
-        std::to_string(reinterpret_cast<uintptr_t>(source.live.data())));
+    add("offset", std::to_string(reinterpret_cast<uintptr_t>(
+                      source.callerOwnedData.data())));
     add("length", std::to_string(length));
     if (!omitBackup) {
-      auto identity = getInitializerIdentity(context, scope, tensor.name());
+      InitializerIdentity identity{scope, tensor.name()};
       options.externalInitializerBackups[identity] = source;
     }
   }
   for (auto &node : *graph.mutable_node())
     for (auto &attr : *node.mutable_attribute()) {
-      if (attr.has_g() && !configureLive(*attr.mutable_g(), scope, context,
+      if (attr.has_g() && !configureLive(*attr.mutable_g(), scope,
                               defaultBackupModel, options, liveOwners, false))
         return false;
       for (auto &nested : *attr.mutable_graphs())
-        if (!configureLive(nested, scope, context, defaultBackupModel, options,
-                liveOwners, false))
+        if (!configureLive(
+                nested, scope, defaultBackupModel, options, liveOwners, false))
           return false;
     }
   return true;
@@ -230,8 +230,8 @@ int main(int argc, char **argv) {
     options.externalDataDir =
         llvm::sys::path::parent_path(input.getValue()).str();
     if (sourceMode != "file" &&
-        !configureLive(*model.mutable_graph(), {}, &context, input.getValue(),
-            options, liveOwners, true))
+        !configureLive(*model.mutable_graph(), {}, input.getValue(), options,
+            liveOwners, true))
       return 1;
     std::error_code ec;
     if (entry == "raw")
@@ -268,15 +268,16 @@ int main(int argc, char **argv) {
       return 1;
   }
   module->walk([&](ONNXInitializerSourceOp op) {
-    auto source = cast<InitializerSourceAttr>(op.getSource());
-    auto disk = source.getDisk();
     std::vector<std::string> scope;
-    for (Attribute component : disk.getAs<ArrayAttr>("scope"))
+    for (Attribute component : op.getScope())
       scope.push_back(cast<StringAttr>(component).getValue().str());
     llvm::outs() << "source "
-                 << getInitializerIdentity(&context, scope,
-                        disk.getAs<StringAttr>("name").getValue())
-                 << " live=" << (source.getLive().data() != nullptr) << "\n";
+                 << getInitializerIdentity(&context,
+                        InitializerIdentity{scope, op.getName().str()})
+                 << " live="
+                 << (op.getCallerOwnedDataAttr() &&
+                        op.getCallerOwnedDataAttr().getData().data())
+                 << "\n";
   });
   module->walk([&](ONNXConstantOp op) {
     auto value = op.getValueAttr();

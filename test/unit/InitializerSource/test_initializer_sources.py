@@ -59,6 +59,42 @@ def nested_fixture(folder, ambiguous=False):
     data.write_bytes(struct.pack("<2f", 1.0, 2.0))
 
     def branch(name, offset, output):
+        tensor_name = output if ambiguous else "W"
+        tensor = TensorProto(
+            name=tensor_name,
+            data_type=TensorProto.FLOAT,
+            dims=[1],
+            data_location=TensorProto.EXTERNAL,
+        )
+        for key, value in {
+            "location": data.name,
+            "offset": str(offset),
+            "length": "4",
+        }.items():
+            tensor.external_data.add(key=key, value=value)
+        node = helper.make_node("Identity", [tensor_name], [output])
+        value = helper.make_tensor_value_info(output, TensorProto.FLOAT, [1])
+        return helper.make_graph([node], name, [], [value], initializer=[tensor])
+
+    then_graph = branch("branch" if ambiguous else "then/branch", 0, "then_y")
+    else_graph = branch("branch" if ambiguous else "else_branch", 4, "else_y")
+    cond = helper.make_tensor_value_info("cond", TensorProto.BOOL, [])
+    output = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1])
+    node = helper.make_node(
+        "If", ["cond"], ["Y"], then_branch=then_graph, else_branch=else_graph
+    )
+    graph = helper.make_graph([node], "model", [cond], [output])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    path = folder / ("ambiguous.onnx" if ambiguous else "nested.onnx")
+    path.write_bytes(model.SerializeToString())
+    return path, data
+
+
+def model_local_function_fixture(folder):
+    data = folder / "function.bin"
+    data.write_bytes(struct.pack("<2f", 1.0, 2.0))
+
+    def branch(name, offset, output):
         tensor = TensorProto(
             name="W",
             data_type=TensorProto.FLOAT,
@@ -75,18 +111,36 @@ def nested_fixture(folder, ambiguous=False):
         value = helper.make_tensor_value_info(output, TensorProto.FLOAT, [1])
         return helper.make_graph([node], name, [], [value], initializer=[tensor])
 
-    then_graph = branch("branch" if ambiguous else "then/branch", 0, "then_y")
-    else_graph = branch("branch" if ambiguous else "else_branch", 4, "else_y")
+    if_node = helper.make_node(
+        "If",
+        ["cond"],
+        ["Y"],
+        then_branch=branch("then_branch", 0, "then_y"),
+        else_branch=branch("else_branch", 4, "else_y"),
+    )
+    function = helper.make_function(
+        "test.local",
+        "WithInitializer",
+        ["cond"],
+        ["Y"],
+        [if_node],
+        [helper.make_opsetid("", 18)],
+    )
+    call = helper.make_node("WithInitializer", ["cond"], ["Y"], domain="test.local")
     cond = helper.make_tensor_value_info("cond", TensorProto.BOOL, [])
     output = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1])
-    node = helper.make_node(
-        "If", ["cond"], ["Y"], then_branch=then_graph, else_branch=else_graph
+    graph = helper.make_graph([call], "model", [cond], [output])
+    model = helper.make_model(
+        graph,
+        opset_imports=[
+            helper.make_opsetid("", 18),
+            helper.make_opsetid("test.local", 1),
+        ],
+        functions=[function],
     )
-    graph = helper.make_graph([node], "model", [cond], [output])
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
-    path = folder / ("ambiguous.onnx" if ambiguous else "nested.onnx")
+    path = folder / "model-local-function.onnx"
     path.write_bytes(model.SerializeToString())
-    return path, data
+    return path
 
 
 def embedded_fixture(folder, raw):
@@ -152,13 +206,14 @@ def main(driver):
                 )
                 assert out.count("live=1") == 2
                 checks += 1
+        data.write_bytes(content)
         run(
             driver,
             "--input",
             model,
             "--skip-name=misspelled",
-            error="unknown initializer source in skip-names",
         )
+        data.unlink()
         checks += 1
         # ONNX protobuf shape inference operates on TensorProto metadata and
         # does not resolve EXTERNAL payloads. It remains safe with missing data.
@@ -269,7 +324,7 @@ def main(driver):
                 "--source=guard",
                 "--skip-all",
                 "--omit-backup",
-                error="requires a borrowed live view and explicit backup model",
+                error="requires caller-owned data and an explicit backup model",
             )
             checks += 1
         relative = folder / "relative-backup.mlir"
@@ -452,7 +507,17 @@ def main(driver):
             "--input",
             model,
             "--skip-all",
-            error="ambiguous scoped initializer identity",
+            error="graph-name scope is ambiguous",
+        )
+        checks += 1
+        model = model_local_function_fixture(folder)
+        run(driver, "--input", model, "--legacy")
+        run(
+            driver,
+            "--input",
+            model,
+            "--skip-all",
+            error="inside a model-local function",
         )
         checks += 1
         model, data, _ = fixture(folder)

@@ -113,7 +113,7 @@ void ONNXDialect::registerAttributes() {
 #define GET_ATTRDEF_LIST
 #include "src/Dialect/ONNX/ONNXAttributes.cpp.inc"
       >();
-  addAttributes<DisposableElementsAttr, InitializerSourceAttr>();
+  addAttributes<DisposableElementsAttr, CallerOwnedDataAttr>();
   addInterface<DisposablePool>(getContext());
 }
 
@@ -125,13 +125,8 @@ Attribute ONNXDialect::parseAttribute(
   if (Attribute attr;
       generatedAttributeParser(parser, &attrTag, type, attr).has_value())
     return attr;
-  if (attrTag == "initializer_source") {
-    DictionaryAttr disk;
-    if (failed(parser.parseLess()) || failed(parser.parseAttribute(disk)) ||
-        failed(parser.parseGreater()))
-      return {};
-    return InitializerSourceAttr::get(disk);
-  }
+  if (attrTag == "caller_owned_data")
+    return CallerOwnedDataAttr::get(getContext());
   if (attrTag == DisposableElementsAttr::getMnemonic()) {
     auto shapedTy = mlir::cast<ShapedType>(type);
     if (auto membuf = DisposableElementsAttr::parse(parser, shapedTy))
@@ -151,8 +146,8 @@ void ONNXDialect::printAttribute(
   // generatedAttributePrinter is generated in ONNXAttributes.cpp.inc
   if (succeeded(generatedAttributePrinter(attr, printer)))
     return;
-  if (auto source = mlir::dyn_cast<InitializerSourceAttr>(attr)) {
-    printer << "initializer_source<" << source.getDisk() << ">";
+  if (mlir::isa<CallerOwnedDataAttr>(attr)) {
+    printer << "caller_owned_data";
     return;
   }
   if (auto elements = mlir::dyn_cast<DisposableElementsAttr>(attr))

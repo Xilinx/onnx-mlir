@@ -29,6 +29,7 @@
 #include "mlir/Support/FileUtilities.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/LineIterator.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -190,6 +191,9 @@ public:
 
   ErrorOr<ModuleOp> ImportONNXModel(
       const onnx::ModelProto &model, std::string &errorMessage) {
+    if (options_.useInitializerSources) {
+      findAmbiguousInitializerScopes(model.graph());
+    }
     modelInputShaper_.setShapeInformation(options_.shapeInformation);
     opset_map_ = GetOpsetImportsFromProto(model); // Which opsets to use.
     in_model_functions_ = GetModelLocalFunctions(model);
@@ -217,7 +221,9 @@ public:
 private:
   const ImportOptions &options_;
   std::vector<std::string> initializerScopes_;
-  std::unordered_set<std::string> initializerIdentities_;
+  std::unordered_set<const onnx::GraphProto *> ambiguousInitializerScopes_;
+  bool initializerScopeIsAmbiguous_ = false;
+  bool importingModelLocalFunction_ = false;
   MLIRContext &context_;
   ModuleOp module_;
   OpBuilder builder_;
@@ -284,6 +290,41 @@ private:
     return createConstantValue(value, UnknownLoc());
   }
 
+  void findAmbiguousInitializerScopes(const onnx::GraphProto &root) {
+    SmallVector<std::pair<const onnx::GraphProto *, bool>> worklist{
+        {&root, false}};
+    while (!worklist.empty()) {
+      auto [graph, scopeIsAmbiguous] = worklist.pop_back_val();
+      llvm::StringSet<> seenNames;
+      llvm::StringSet<> duplicateNames;
+      auto recordName = [&](StringRef name) {
+        if (!seenNames.insert(name).second)
+          duplicateNames.insert(name);
+      };
+      for (const auto &node : graph->node())
+        for (const auto &attr : node.attribute()) {
+          if (attr.has_g())
+            recordName(attr.g().name());
+          for (const auto &child : attr.graphs())
+            recordName(child.name());
+        }
+      for (const auto &node : graph->node())
+        for (const auto &attr : node.attribute()) {
+          auto enqueue = [&](const onnx::GraphProto &child) {
+            bool ambiguous =
+                scopeIsAmbiguous || duplicateNames.contains(child.name());
+            if (ambiguous)
+              ambiguousInitializerScopes_.insert(&child);
+            worklist.emplace_back(&child, ambiguous);
+          };
+          if (attr.has_g())
+            enqueue(attr.g());
+          for (const auto &child : attr.graphs())
+            enqueue(child);
+        }
+    }
+  }
+
   void AddValueInfo(const onnx::ValueInfoProto &vi, bool allowExist = false) {
     if (allowExist && onnx_type_map.ContainsKey(vi.name()))
       return;
@@ -328,27 +369,34 @@ private:
     Value initializer;
     if (options_.useInitializerSources &&
         tensor.data_location() == onnx::TensorProto::EXTERNAL) {
-      std::string identity =
-          getInitializerIdentity(&context_, initializerScopes_, tensor.name());
-      if (!initializerIdentities_.insert(identity).second) {
-        emitError(loc) << "ambiguous scoped initializer identity: " << identity;
+      InitializerIdentity identity{initializerScopes_, tensor.name()};
+      if (importingModelLocalFunction_) {
+        emitError(loc) << "cannot create initializer source for "
+                       << getInitializerIdentity(&context_, identity)
+                       << " inside a model-local function";
+        return {};
+      }
+      if (initializerScopeIsAmbiguous_) {
+        emitError(loc) << "cannot create initializer source for "
+                       << getInitializerIdentity(&context_, identity)
+                       << " because its graph-name scope is ambiguous";
         return {};
       }
       auto dataType =
           static_cast<onnx::TensorProto_DataType>(tensor.data_type());
-      if (!isSupportedInitializerSourceDataType(dataType)) {
+      Type elementType =
+          mlirTypeOfBType(btypeOfOnnxDataType(dataType), &context_);
+      if (!elementType) {
         emitError(loc, "unsupported external initializer element type");
         return {};
       }
       SmallVector<int64_t> dims(tensor.dims().begin(), tensor.dims().end());
-      auto type = RankedTensorType::get(
-          dims, mlirTypeOfBType(btypeOfOnnxDataType(dataType), &context_));
+      auto type = RankedTensorType::get(dims, elementType);
       auto source = createInitializerSource(
-          tensor, type, initializerScopes_, options_, loc);
+          builder_, tensor, type, initializerScopes_, options_, loc);
       if (failed(source))
         return {};
-      initializer =
-          builder_.create<ONNXInitializerSourceOp>(loc, type, *source);
+      initializer = source->getOutput();
     } else {
       auto attr =
           onnxTensorProtoToElmAttr(&context_, options_.externalDataDir, tensor);
@@ -994,7 +1042,11 @@ private:
       bool isMainGraph = false) {
     if (!isMainGraph)
       initializerScopes_.push_back(graph.name());
+    bool parentScopeIsAmbiguous = initializerScopeIsAmbiguous_;
+    initializerScopeIsAmbiguous_ =
+        parentScopeIsAmbiguous || ambiguousInitializerScopes_.contains(&graph);
     auto popInitializerScope = llvm::make_scope_exit([&] {
+      initializerScopeIsAmbiguous_ = parentScopeIsAmbiguous;
       if (!isMainGraph)
         initializerScopes_.pop_back();
     });
@@ -1923,6 +1975,12 @@ private:
           node.name() + ":" + node.op_type() + ":" + functionProto.name();
       frontend_symbols_.pushScope(scopeName);
       onnx_type_map.pushScope(scopeName);
+      bool callerImportingModelLocalFunction = importingModelLocalFunction_;
+      importingModelLocalFunction_ =
+          callerImportingModelLocalFunction || modelLocalFunction != nullptr;
+      auto restoreFunctionImport = llvm::make_scope_exit([&] {
+        importingModelLocalFunction_ = callerImportingModelLocalFunction;
+      });
 
       for (const auto &input : graph.input())
         AddValueInfo(input);

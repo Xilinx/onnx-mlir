@@ -14,7 +14,7 @@
 #define ONNX_MLIR_ONNX_ATTRIBUTES_H
 
 #include "mlir/IR/Attributes.h"
-#include "src/Dialect/ONNX/InitializerSourceAttr.hpp"
+#include "src/Dialect/ONNX/CallerOwnedDataAttr.hpp"
 
 #define GET_ATTRDEF_CLASSES
 #include "src/Dialect/ONNX/ONNXAttributes.hpp.inc"

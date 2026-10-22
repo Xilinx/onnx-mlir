@@ -29,6 +29,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "src/Dialect/Mlir/IndexExpr.hpp"
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
+#include "src/Dialect/ONNX/ElementsAttr/BType.hpp"
 #include "src/Dialect/ONNX/ONNXLayoutHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
@@ -1213,58 +1214,11 @@ bool isFloatAttrApprox(mlir::FloatAttr attr, double expected, double epsilon) {
 // TODO: Update Int*/Uint* to emit signed/unsigned MLIR types
 Type convertONNXTypeToMLIRType(
     Builder &builder, onnx::TensorProto_DataType onnxType) {
-  switch (onnxType) {
-  case onnx::TensorProto_DataType::TensorProto_DataType_FLOAT8E4M3FN:
-    return builder.getType<Float8E4M3FNType>();
-  case onnx::TensorProto_DataType::TensorProto_DataType_FLOAT8E4M3FNUZ:
-    return builder.getType<Float8E4M3FNUZType>();
-  case onnx::TensorProto_DataType::TensorProto_DataType_FLOAT8E5M2:
-    return builder.getType<Float8E5M2Type>();
-  case onnx::TensorProto_DataType::TensorProto_DataType_FLOAT8E5M2FNUZ:
-    return builder.getType<Float8E5M2FNUZType>();
-  case onnx::TensorProto_DataType::TensorProto_DataType_BFLOAT16:
-    return builder.getBF16Type();
-  case onnx::TensorProto_DataType::TensorProto_DataType_FLOAT16:
-    return builder.getF16Type();
-  case onnx::TensorProto_DataType::TensorProto_DataType_FLOAT:
-    return builder.getF32Type();
-  case onnx::TensorProto_DataType::TensorProto_DataType_DOUBLE:
-    return builder.getF64Type();
-  case onnx::TensorProto_DataType::TensorProto_DataType_INT8:
-    return builder.getIntegerType(/*width=*/8);
-  case onnx::TensorProto_DataType::TensorProto_DataType_UINT8:
-    return builder.getIntegerType(/*width=*/8, false);
-  case onnx::TensorProto_DataType::TensorProto_DataType_INT16:
-    return builder.getIntegerType(/*width=*/16);
-  case onnx::TensorProto_DataType::TensorProto_DataType_UINT16:
-    return builder.getIntegerType(/*width=*/16, false);
-  case onnx::TensorProto_DataType::TensorProto_DataType_INT32:
-    return builder.getIntegerType(/*width=*/32);
-  case onnx::TensorProto_DataType::TensorProto_DataType_UINT32:
-    return builder.getIntegerType(/*width=*/32, false);
-  case onnx::TensorProto_DataType::TensorProto_DataType_INT64:
-    return builder.getIntegerType(/*width=*/64);
-  case onnx::TensorProto_DataType::TensorProto_DataType_UINT64:
-    return builder.getIntegerType(/*width=*/64, false);
-  case onnx::TensorProto_DataType::TensorProto_DataType_BOOL:
-    return builder.getI1Type();
-  case onnx::TensorProto_DataType::TensorProto_DataType_STRING:
+  if (onnxType == onnx::TensorProto::STRING)
     return ONNXStringType::get(builder.getContext());
-  case onnx::TensorProto_DataType::TensorProto_DataType_INT4:
-    return builder.getIntegerType(/*width=*/4);
-  case onnx::TensorProto_DataType::TensorProto_DataType_UINT4:
-    return builder.getIntegerType(/*width=*/4, false);
-  case onnx::TensorProto_DataType::TensorProto_DataType_COMPLEX64:
-  case onnx::TensorProto_DataType::TensorProto_DataType_COMPLEX128:
-  case onnx::TensorProto_DataType::TensorProto_DataType_FLOAT4E2M1:
-  case onnx::TensorProto_DataType::TensorProto_DataType_FLOAT8E8M0:
-  case onnx::TensorProto_DataType::TensorProto_DataType_INT2:
-  case onnx::TensorProto_DataType::TensorProto_DataType_UINT2:
-  case onnx::TensorProto_DataType::TensorProto_DataType_UNDEFINED:
-    llvm_unreachable("Unsupported data type encountered.");
-    return nullptr;
-  }
-
+  if (Type type =
+          mlirTypeOfBType(btypeOfOnnxDataType(onnxType), builder.getContext()))
+    return type;
   llvm_unreachable("Unsupported data type encountered.");
 }
 

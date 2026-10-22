@@ -30,13 +30,13 @@
 
 namespace onnx_mlir {
 
-// Shared whole-file resolver, also used by eager import. Opening is explicit;
-// callers can report recoverable diagnostics instead of a fatal decoder error.
+// Return a shared, read-only mapping for an external-data file. Concurrent
+// calls reuse the mapping while any returned buffer or tensor slice owns it.
 llvm::ErrorOr<std::shared_ptr<const llvm::MemoryBuffer>> getExternalDataFile(
     llvm::StringRef path);
 
-// Decode an already resolved external byte range using the importer's existing
-// numerical decoders. The shared buffer remains owned by the resulting attr.
+// Decode an external byte range. The shared buffer remains owned by the
+// resulting attribute.
 // Precondition: [offset, offset + length) is within buffer.
 mlir::ElementsAttr externalTensorBytesToElmAttr(mlir::RankedTensorType type,
     int dataType, std::shared_ptr<const llvm::MemoryBuffer> buffer,

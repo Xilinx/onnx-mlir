@@ -6,6 +6,9 @@
 //
 // Basic data types.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef ONNX_MLIR_B_TYPE_H
@@ -200,7 +203,8 @@ constexpr BType toBType = CppTypeTrait<std::decay_t<CPPTY>>::btype;
 // Runtime mapping from mlir type to BType.
 BType btypeOfMlirType(mlir::Type type);
 
-// Runtime mapping from BType to mlir type.
+// Runtime mapping from BType to mlir type. Returns a null type when BType has
+// no MLIR element-type representation.
 mlir::Type mlirTypeOfBType(BType btype, mlir::MLIRContext *ctx);
 
 // Runtime mapping from cpp type to mlir type.

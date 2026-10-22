@@ -6,6 +6,9 @@
 //
 // Basic data types.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "src/Dialect/ONNX/ElementsAttr/BType.hpp"
@@ -62,7 +65,7 @@ Type mlirTypeOfBType(BType btype, MLIRContext *ctx) {
     case BType::FLOAT8E4M3FNUZ : return b.getType<Float8E4M3FNUZType>();
     case BType::FLOAT8E5M2     : return b.getType<Float8E5M2Type>();
     case BType::FLOAT8E5M2FNUZ : return b.getType<Float8E5M2FNUZType>();
-    default: llvm_unreachable("unsupported data type");
+    default: return {};
   }
   // clang-format on
 }
