@@ -1,5 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
  */
 
 //===------------------ GatherElements.cpp - ONNX Operations --------------===//
@@ -12,6 +14,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "src/Dialect/ONNX/ElementsAttr/ElementsAttrHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 
 using namespace mlir;
@@ -81,26 +84,20 @@ LogicalResult ONNXGatherElementsOp::verify() {
         return success(); // Return success to allow the parsing of MLIR with
                           // elided attributes
       }
-      // Iterate the raw APInt values instead of materializing (and uniquing)
-      // an IntegerAttr per element to reduce processing time.
-      for (const APInt &value : valueAttribute.getValues<APInt>()) {
-        if (indicesAreUnsigned) {
-          uint64_t index = value.getZExtValue();
-          if (index < (uint64_t)dataDimAtAxis)
-            continue;
-
+      SmallVector<IntegerElementRange> ranges =
+          getIntegerElementRanges(valueAttribute);
+      if (!ranges.empty()) {
+        if (auto violation = findIntegerRangeViolation(ranges.front(),
+                -dataDimAtAxis, dataDimAtAxis - 1, indicesAreUnsigned)) {
+          int64_t index =
+              indicesAreUnsigned
+                  ? static_cast<int64_t>(violation->value.getZExtValue())
+                  : violation->value.getSExtValue();
           return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
-              *this->getOperation(), "indices", (int64_t)index,
-              onnx_mlir::Diagnostic::Range<int64_t>(0, dataDimAtAxis - 1));
+              *this->getOperation(), "indices", index,
+              onnx_mlir::Diagnostic::Range<int64_t>(
+                  indicesAreUnsigned ? 0 : -dataDimAtAxis, dataDimAtAxis - 1));
         }
-        int64_t index = value.getSExtValue();
-        if (index >= -dataDimAtAxis && index < dataDimAtAxis)
-          continue;
-
-        return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
-            *this->getOperation(), "indices", index,
-            onnx_mlir::Diagnostic::Range<int64_t>(
-                -dataDimAtAxis, dataDimAtAxis - 1));
       }
     }
   }

@@ -1,5 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
  */
 
 //===------------------ GatherND.cpp - ONNX Operations --------------------===//
@@ -12,6 +14,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "src/Dialect/ONNX/ElementsAttr/ElementsAttrHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 
 using namespace mlir;
@@ -152,32 +155,28 @@ LogicalResult ONNXGatherNDOp::verify() {
       return success(); // Return success to allow the parsing of MLIR with
                         // elided attributes
     }
-    int flatIndex = 0;
-    // Iterate the raw APInt values instead of materializing (and uniquing)
-    // an IntegerAttr per element to reduce processing time.
-    for (const APInt &value : valueAttribute.getValues<APInt>()) {
-      int64_t gatherAxis = b + (flatIndex % indicesLastDim);
+    if (indicesLastDim < 0)
+      return success();
+    SmallVector<IntegerElementRange> ranges = getIntegerElementRanges(
+        valueAttribute, static_cast<size_t>(indicesLastDim));
+    for (size_t i = 0; i < ranges.size(); ++i) {
+      const IntegerElementRange &range = ranges[i];
+      int64_t gatherAxis = b + i;
       int64_t dataDimAtAxis = dataShape[gatherAxis];
       if (dataDimAtAxis >= 0) {
-        if (indicesAreUnsigned) {
-          uint64_t indexValue = value.getZExtValue();
-          if (indexValue >= (uint64_t)dataDimAtAxis)
-            return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
-                *this->getOperation(),
-                "indices[" + std::to_string(flatIndex) + "]",
-                (int64_t)indexValue,
-                onnx_mlir::Diagnostic::Range<int64_t>(0, dataDimAtAxis - 1));
-        } else {
-          int64_t indexValue = value.getSExtValue();
-          if (indexValue < -dataDimAtAxis || indexValue > dataDimAtAxis - 1)
-            return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
-                *this->getOperation(),
-                "indices[" + std::to_string(flatIndex) + "]", indexValue,
-                onnx_mlir::Diagnostic::Range<int64_t>(
-                    -dataDimAtAxis, dataDimAtAxis - 1));
+        if (auto violation = findIntegerRangeViolation(
+                range, -dataDimAtAxis, dataDimAtAxis - 1, indicesAreUnsigned)) {
+          int64_t indexValue =
+              indicesAreUnsigned
+                  ? static_cast<int64_t>(violation->value.getZExtValue())
+                  : violation->value.getSExtValue();
+          return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
+              *this->getOperation(),
+              "indices[" + std::to_string(violation->index) + "]", indexValue,
+              onnx_mlir::Diagnostic::Range<int64_t>(
+                  indicesAreUnsigned ? 0 : -dataDimAtAxis, dataDimAtAxis - 1));
         }
       }
-      flatIndex++;
     }
   }
 
