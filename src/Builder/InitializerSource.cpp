@@ -64,8 +64,7 @@ bool matchesNestedIdentity(SymbolRefAttr identity, ONNXInitializerSourceOp op) {
 }
 
 FailureOr<ElementsAttr> resolveFileRange(ONNXInitializerSourceOp op,
-    RankedTensorType type, int dataType, StringRef path, uint64_t offset,
-    uint64_t length) {
+    RankedTensorType type, StringRef path, uint64_t offset, uint64_t length) {
   auto loaded = getExternalDataFile(path);
   if (!loaded) {
     op.emitError("cannot read initializer source ")
@@ -78,7 +77,7 @@ FailureOr<ElementsAttr> resolveFileRange(ONNXInitializerSourceOp op,
     op.emitError("initializer source range exceeds available bytes");
     return failure();
   }
-  return externalTensorBytesToElmAttr(type, dataType, buffer, offset, length);
+  return externalTensorBytesToElmAttr(type, buffer, offset, length);
 }
 
 FailureOr<const onnx::TensorProto *> findInitializerInModel(
@@ -136,7 +135,7 @@ FailureOr<const onnx::TensorProto *> findInitializerInModel(
 }
 
 FailureOr<ElementsAttr> resolveModelTensor(ONNXInitializerSourceOp op,
-    RankedTensorType type, int dataType, uint64_t expectedSize,
+    RankedTensorType type, BType btype, uint64_t expectedSize,
     ModelCache &models) {
   StringRef modelPath = op.getPath();
   auto found = models.find(modelPath.str());
@@ -154,7 +153,7 @@ FailureOr<ElementsAttr> resolveModelTensor(ONNXInitializerSourceOp op,
       findInitializerInModel(op, *found->second, op.getScope(), op.getName());
   if (failed(tensor))
     return failure();
-  if ((*tensor)->data_type() != dataType ||
+  if ((*tensor)->data_type() != onnxDataTypeOfBType(btype) ||
       !llvm::equal((*tensor)->dims(), type.getShape())) {
     op.emitError("backup initializer type or shape disagrees with source");
     return failure();
@@ -198,17 +197,17 @@ FailureOr<ElementsAttr> resolveModelTensor(ONNXInitializerSourceOp op,
   }
   SmallString<256> path(llvm::sys::path::parent_path(modelPath));
   llvm::sys::path::append(path, location);
-  return resolveFileRange(op, type, dataType, path, offset, length);
+  return resolveFileRange(op, type, path, offset, length);
 }
 
 FailureOr<ElementsAttr> resolve(
     ONNXInitializerSourceOp op, ModelCache &models) {
-  int dataType = op.getDataType();
   auto type = cast<RankedTensorType>(op.getOutput().getType());
-  Type sourceType =
-      mlirTypeOfBType(btypeOfOnnxDataType(dataType), op.getContext());
-  if (!sourceType || sourceType != type.getElementType()) {
-    op.emitError("source data_type disagrees with result element type");
+  std::optional<BType> btype =
+      btypeOfMlirTypeIfSupported(type.getElementType());
+  if (!btype) {
+    op.emitError("has unsupported source element type ")
+        << type.getElementType();
     return failure();
   }
   auto size = getInitializerSourcePayloadSize(type);
@@ -225,18 +224,18 @@ FailureOr<ElementsAttr> resolve(
           "initializer source range exceeds available caller-owned data");
       return failure();
     }
-    return externalTensorBytesToElmAttr(type, dataType, callerOwnedData);
+    return externalTensorBytesToElmAttr(type, callerOwnedData);
   }
   StringRef kind = op.getKind();
   if (kind == modelSourceKind)
-    return resolveModelTensor(op, type, dataType, *size, models);
+    return resolveModelTensor(op, type, *btype, *size, models);
   uint64_t offset = *op.getOffset();
   uint64_t length = *op.getLength();
   if (length != *size) {
     op.emitError("source length disagrees with tensor payload size");
     return failure();
   }
-  return resolveFileRange(op, type, dataType, op.getPath(), offset, length);
+  return resolveFileRange(op, type, op.getPath(), offset, length);
 }
 
 struct MaterializeInitializerSourcesPass
@@ -446,9 +445,7 @@ FailureOr<ONNXInitializerSourceOp> createInitializerSource(OpBuilder &opBuilder,
       builder.getNamedAttr("kind", builder.getStringAttr(kind)),
       builder.getNamedAttr("path", builder.getStringAttr(absolute)),
       builder.getNamedAttr("scope", builder.getStrArrayAttr(scopeRefs)),
-      builder.getNamedAttr("name", builder.getStringAttr(tensor.name())),
-      builder.getNamedAttr(
-          "data_type", builder.getI64IntegerAttr(tensor.data_type()))};
+      builder.getNamedAttr("name", builder.getStringAttr(tensor.name()))};
   if (kind == externalDataSourceKind) {
     fields.push_back(
         builder.getNamedAttr("offset", builder.getI64IntegerAttr(offset)));

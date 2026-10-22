@@ -113,13 +113,10 @@ LogicalResult ONNXInitializerSourceOp::verify() {
   } else if (getOffset().has_value() || getLength().has_value()) {
     return emitOpError("onnx_model source must not contain offset/length");
   }
-  Type expected = onnx_mlir::mlirTypeOfBType(
-      onnx_mlir::btypeOfOnnxDataType(getDataType()), getContext());
-  if (!expected)
-    return emitOpError("has unsupported source data_type ") << getDataType();
   auto resultType = cast<RankedTensorType>(getOutput().getType());
-  if (resultType.getElementType() != expected)
-    return emitOpError("source data_type disagrees with result element type");
+  if (!onnx_mlir::btypeOfMlirTypeIfSupported(resultType.getElementType()))
+    return emitOpError("has unsupported source element type ")
+           << resultType.getElementType();
   auto payloadSize = onnx_mlir::getInitializerSourcePayloadSize(resultType);
   if (failed(payloadSize))
     return emitOpError("has invalid or overflowing result shape");

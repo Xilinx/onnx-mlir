@@ -88,7 +88,6 @@ def ONNXInitializerSourceOp : ONNX_Op<"InitializerSource", [Pure]> {
     - `name` is the ONNX initializer name.
     - `scope` contains the names of its enclosing ONNX graphs, excluding the
       outermost graph.
-    - `data_type` is the numeric `TensorProto::DataType` value.
     - `offset` and `length` describe an `external_data` byte range and are
       absent for an `onnx_model` source.
     - `caller_owned_data` is an optional non-owning view of process-local data.
@@ -99,8 +98,8 @@ def ONNXInitializerSourceOp : ONNX_Op<"InitializerSource", [Pure]> {
     See `docs/ExternalInitializerSources.md` for design details.
   }];
   let arguments = (ins StrAttr:$kind, StrAttr:$path, StrAttr:$name,
-      StrArrayAttr:$scope, I64Attr:$data_type,
-      OptionalAttr<I64Attr>:$offset, OptionalAttr<I64Attr>:$length,
+      StrArrayAttr:$scope, OptionalAttr<I64Attr>:$offset,
+      OptionalAttr<I64Attr>:$length,
       OptionalAttr<ONNX_CallerOwnedDataAttr>:$caller_owned_data);
   let results = (outs AnyRankedTensor:$output);
   let hasVerifier = 1;

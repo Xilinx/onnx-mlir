@@ -28,7 +28,6 @@ The operation produces a ranked tensor value. For example:
 
 ```mlir
 %0 = "onnx.InitializerSource"() {
-  data_type = 1 : i64,
   kind = "external_data",
   length = 64 : i64,
   name = "weight",

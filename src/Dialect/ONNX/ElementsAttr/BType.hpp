@@ -21,6 +21,7 @@
 #include "mlir/IR/Types.h"
 #include "llvm/Support/ErrorHandling.h"
 
+#include <optional>
 #include <type_traits>
 
 namespace onnx_mlir {
@@ -201,6 +202,11 @@ template <typename CPPTY>
 constexpr BType toBType = CppTypeTrait<std::decay_t<CPPTY>>::btype;
 
 // Runtime mapping from mlir type to BType.
+// Returns the BType represented by type, or nullopt if type has no supported
+// BType representation.
+std::optional<BType> btypeOfMlirTypeIfSupported(mlir::Type type);
+
+// Precondition: type has a supported BType representation.
 BType btypeOfMlirType(mlir::Type type);
 
 // Runtime mapping from BType to mlir type. Returns a null type when BType has

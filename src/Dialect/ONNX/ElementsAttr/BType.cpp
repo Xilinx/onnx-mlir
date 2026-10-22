@@ -19,7 +19,7 @@ using namespace mlir;
 
 namespace onnx_mlir {
 
-BType btypeOfMlirType(Type type) {
+std::optional<BType> btypeOfMlirTypeIfSupported(Type type) {
   // clang-format off
   if (mlir::isa<Float64Type>(type))        return BType::DOUBLE;
   if (mlir::isa<Float32Type>(type))        return BType::FLOAT;
@@ -29,7 +29,9 @@ BType btypeOfMlirType(Type type) {
   if (mlir::isa<Float8E4M3FNUZType>(type)) return BType::FLOAT8E4M3FNUZ;
   if (mlir::isa<Float8E5M2Type>(type))     return BType::FLOAT8E5M2;
   if (mlir::isa<Float8E5M2FNUZType>(type)) return BType::FLOAT8E5M2FNUZ;
-  auto itype = mlir::cast<IntegerType>(type);
+  auto itype = mlir::dyn_cast<IntegerType>(type);
+  if (!itype)
+    return std::nullopt;
   switch (itype.getWidth()) {
     case  1: return BType::BOOL;
     case  4: return itype.isUnsigned() ? BType::UINT4  : BType::INT4;
@@ -38,8 +40,15 @@ BType btypeOfMlirType(Type type) {
     case 32: return itype.isUnsigned() ? BType::UINT32 : BType::INT32;
     case 64: return itype.isUnsigned() ? BType::UINT64 : BType::INT64;
   }
-  llvm_unreachable("unsupported int or float type");
+  return std::nullopt;
   // clang-format on
+}
+
+BType btypeOfMlirType(Type type) {
+  std::optional<BType> btype = btypeOfMlirTypeIfSupported(type);
+  if (!btype)
+    llvm_unreachable("unsupported int or float type");
+  return *btype;
 }
 
 Type mlirTypeOfBType(BType btype, MLIRContext *ctx) {

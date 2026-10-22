@@ -39,13 +39,13 @@ llvm::ErrorOr<std::shared_ptr<const llvm::MemoryBuffer>> getExternalDataFile(
 // resulting attribute.
 // Precondition: [offset, offset + length) is within buffer.
 mlir::ElementsAttr externalTensorBytesToElmAttr(mlir::RankedTensorType type,
-    int dataType, std::shared_ptr<const llvm::MemoryBuffer> buffer,
-    uint64_t offset, uint64_t length);
+    std::shared_ptr<const llvm::MemoryBuffer> buffer, uint64_t offset,
+    uint64_t length);
 
 // Decode a caller-owned in-memory byte range. The decoder copies the data into
 // the resulting attribute and does not retain the range.
 mlir::ElementsAttr externalTensorBytesToElmAttr(
-    mlir::RankedTensorType type, int dataType, llvm::ArrayRef<char> bytes);
+    mlir::RankedTensorType type, llvm::ArrayRef<char> bytes);
 
 mlir::ElementsAttr onnxTensorProtoToElmAttr(mlir::MLIRContext *ctx,
     const std::string &externalDataDir, const onnx::TensorProto &initializer);

@@ -391,26 +391,28 @@ llvm::ErrorOr<std::shared_ptr<const llvm::MemoryBuffer>> getExternalDataFile(
   return getWholeExternalDataFile(path.str());
 }
 
-ElementsAttr externalTensorBytesToElmAttr(RankedTensorType type, int dataType,
+ElementsAttr externalTensorBytesToElmAttr(RankedTensorType type,
     std::shared_ptr<const llvm::MemoryBuffer> buffer, uint64_t offset,
     uint64_t length) {
   assert(buffer && offset <= buffer->getBufferSize() &&
          length <= buffer->getBufferSize() - offset &&
          "external tensor byte range must be in bounds");
   auto bytes = buffer->getBuffer().substr(offset, length);
-  return dispatchByBType(btypeOfOnnxDataType(dataType), [&](auto btype) {
-    using T = CppType<btype>;
-    return createElementsAttrFromMemoryBuffer_LE<T>(
-        type, std::make_unique<SlicedMemoryBuffer>(buffer, bytes));
-  });
+  return dispatchByBType(
+      btypeOfMlirType(type.getElementType()), [&](auto btype) {
+        using T = CppType<btype>;
+        return createElementsAttrFromMemoryBuffer_LE<T>(
+            type, std::make_unique<SlicedMemoryBuffer>(buffer, bytes));
+      });
 }
 
 ElementsAttr externalTensorBytesToElmAttr(
-    RankedTensorType type, int dataType, ArrayRef<char> bytes) {
-  return dispatchByBType(btypeOfOnnxDataType(dataType), [&](auto btype) {
-    using T = CppType<btype>;
-    return createElmAttrFromRawBytes_LE<T>(type, bytes);
-  });
+    RankedTensorType type, ArrayRef<char> bytes) {
+  return dispatchByBType(
+      btypeOfMlirType(type.getElementType()), [&](auto btype) {
+        using T = CppType<btype>;
+        return createElmAttrFromRawBytes_LE<T>(type, bytes);
+      });
 }
 
 ElementsAttr onnxTensorProtoToElmAttr(MLIRContext *ctx,

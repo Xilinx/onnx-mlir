@@ -585,13 +585,15 @@ def main(driver):
         model, data, _ = fixture(folder)
         saved = folder / "wrong-type.mlir"
         run(driver, "--input", model, "--skip-all", "--output", saved)
-        saved.write_text(saved.read_text().replace("tensor<4xf32>", "tensor<4xi32>"))
+        saved.write_text(
+            saved.read_text().replace("tensor<4xf32>", "tensor<4xcomplex<f32>>")
+        )
         run(
             driver,
             "--input",
             saved,
             "--read-ir",
-            error="source data_type disagrees with result element type",
+            error="unsupported source element type",
         )
         checks += 1
         model, data, _ = fixture(folder)
