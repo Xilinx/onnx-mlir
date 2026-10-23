@@ -10,6 +10,9 @@
 //
 // This file provides definition of ONNX dialect DequantizeLinear operation.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "mlir/IR/BuiltinTypeInterfaces.h"
@@ -51,9 +54,15 @@ LogicalResult ONNXDequantizeLinearOpShapeHelper::computeShape() {
   DimsExpr outputDims;
   createIE->getShapeAsDims(operandAdaptor.getX(), outputDims);
 
+  const auto scaleTy =
+      mlir::cast<ShapedType>(operandAdaptor.getXScale().getType());
+  if (isBlockedLinearQuantization(scaleTy, operandAdaptor.getBlockSize())) {
+    setOutputDims(outputDims);
+    return success();
+  }
+
   // Get d.
-  int64_t d = nonScalar1DLen(
-      mlir::cast<ShapedType>(operandAdaptor.getXScale().getType()));
+  int64_t d = nonScalar1DLen(scaleTy);
   if (d == ShapedType::kDynamic &&
       !isNoneValue(operandAdaptor.getXZeroPoint())) {
     d = nonScalar1DLen(
@@ -91,33 +100,15 @@ LogicalResult ONNXDequantizeLinearOpShapeHelper::computeShape() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ONNXDequantizeLinearOp::verify() {
-  // Is tensor known to be a scalar (rank 0 or rank 1 with 1 element)?
-  auto isScalar = [](ShapedType t) -> bool {
-    return t.getRank() == 0 || (t.getRank() == 1 && t.getDimSize(0) == 1);
-  };
-
-  Value input = getX();
-  const auto inputTy = mlir::cast<ShapedType>(input.getType());
-
-  Value scale = getXScale();
-  const auto scaleTy = mlir::cast<ShapedType>(scale.getType());
-  if (scaleTy.hasRank() && inputTy.hasRank() &&
-      scaleTy.getRank() != inputTy.getRank() && scaleTy.getRank() > 1)
-    return emitOpError("x_scale rank needs to be 0, 1 or match x rank");
+  if (failed(verifyLinearQuantizationParameterShapes(getOperation(), getX(),
+          getXScale(), getXZeroPoint(), getAxis(), getBlockSize())))
+    return failure();
 
   Value zero = getXZeroPoint();
   if (!isNoneValue(zero)) {
     const auto zeroTy = mlir::cast<ShapedType>(zero.getType());
-    if (zeroTy.hasRank() && scaleTy.hasRank() && !isScalar(zeroTy) &&
-        !isScalar(scaleTy) &&
-        (zeroTy.getRank() != scaleTy.getRank() ||
-            zeroTy.getShape() != scaleTy.getShape())) {
-      return emitOpError("x_zero_point must have the same shape as x_scale");
-    }
-
-    // TODO: Figure out whether to introduce a variant of this check from the
-    // spec ("'x_zero_point' and 'x' must have same type"). It is violated in
-    // in the resnet50-v1-12-qdq model where x, x_zero_point are i8, ui8.
+    // TODO: Add verification of "x_zero_point and x must have same type"
+    // However, some models come with x : i8 and x_zero_point : ui8.
     //
     // if (getElementType(getX().getType()) != getElementType(zero.getType()))
     //   return emitOpError("x and x_zero_point must have the same data type");
@@ -129,34 +120,6 @@ LogicalResult ONNXDequantizeLinearOp::verify() {
         if (!ElementsAttrBuilder::allEqual(values, zero))
           return emitOpError("x_zero_point must be 0 for data type int32");
       }
-    }
-
-    const bool isScaleRankKnown = scaleTy.hasRank();
-    const bool isPerAxis = isScaleRankKnown && scaleTy.getRank() == 1 &&
-                           !scaleTy.isDynamicDim(0) &&
-                           scaleTy.getDimSize(0) != 1;
-    if (isPerAxis) {
-      const int64_t d = scaleTy.getDimSize(0);
-      if (auto xTy = mlir::dyn_cast<RankedTensorType>(getX().getType())) {
-        int64_t r = xTy.getRank();
-        // axis attribute must be in the range [-r,rShapedType::kDynamic].
-        int64_t a = getAxis();
-        if (a < -r || a >= r)
-          return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
-              *this->getOperation(), "axis", a,
-              onnx_mlir::Diagnostic::Range<int64_t>(-r, r - 1));
-        if (a < 0)
-          a += r;
-        if (!xTy.isDynamicDim(a) && xTy.getDimSize(a) != d)
-          return emitOpError("x_scale and x_zero_point 1-D tensor length must "
-                             "match the input axis dim size");
-      }
-    }
-
-    const bool isBlock = isScaleRankKnown && scaleTy.getRank() > 1;
-    if (isBlock) {
-      // TODO: Add verifier for block dequantization.
-      return success();
     }
   }
 
