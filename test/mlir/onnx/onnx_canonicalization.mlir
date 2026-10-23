@@ -3,6 +3,106 @@
 
 // -----
 
+// CHECK-LABEL: func.func @test_remove_double_not
+// CHECK-SAME: ([[ARG_0_:%.+]]: tensor<1x10xi1>) -> tensor<1x10xi1> {
+func.func @test_remove_double_not(%arg0: tensor<1x10xi1>) -> tensor<1x10xi1> {
+  %0 = "onnx.Not"(%arg0) : (tensor<1x10xi1>) -> tensor<1x10xi1>
+  %1 = "onnx.Not"(%0) : (tensor<1x10xi1>) -> tensor<1x10xi1>
+  // CHECK-NOT: "onnx.Not"
+  // CHECK: onnx.Return [[ARG_0_]] : tensor<1x10xi1>
+  onnx.Return %1 : tensor<1x10xi1>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_keep_single_not
+// CHECK-SAME: ([[ARG_0_:%.+]]: tensor<1x10xi1>) -> tensor<1x10xi1> {
+func.func @test_keep_single_not(%arg0: tensor<1x10xi1>) -> tensor<1x10xi1> {
+  %0 = "onnx.Not"(%arg0) : (tensor<1x10xi1>) -> tensor<1x10xi1>
+  // CHECK: [[NOT_0:%.+]] = "onnx.Not"([[ARG_0_]]) : (tensor<1x10xi1>) -> tensor<1x10xi1>
+  // CHECK: onnx.Return [[NOT_0]] : tensor<1x10xi1>
+  onnx.Return %0 : tensor<1x10xi1>
+}
+
+// -----
+
+// Cast fusion removes the inner i1 -> i8 -> i1 round trip, then double-Not
+// elimination leaves the boolean-normalizing cast round trip.
+// CHECK-LABEL: func.func @test_simplify_not_not_through_i8_casts
+// CHECK-SAME: ([[ARG_0_:%.+]]: tensor<1x10xi8>) -> tensor<1x10xi8> {
+func.func @test_simplify_not_not_through_i8_casts(%arg0: tensor<1x10xi8>) -> tensor<1x10xi8> {
+  %0 = "onnx.Cast"(%arg0) {to = i1} : (tensor<1x10xi8>) -> tensor<1x10xi1>
+  %1 = "onnx.Not"(%0) : (tensor<1x10xi1>) -> tensor<1x10xi1>
+  %2 = "onnx.Cast"(%1) {to = i8} : (tensor<1x10xi1>) -> tensor<1x10xi8>
+  %3 = "onnx.Cast"(%2) {to = i1} : (tensor<1x10xi8>) -> tensor<1x10xi1>
+  %4 = "onnx.Not"(%3) : (tensor<1x10xi1>) -> tensor<1x10xi1>
+  %5 = "onnx.Cast"(%4) {to = i8} : (tensor<1x10xi1>) -> tensor<1x10xi8>
+  // CHECK: [[CAST_0:%.+]] = "onnx.Cast"([[ARG_0_]])
+  // CHECK: [[CAST_1:%.+]] = "onnx.Cast"([[CAST_0]])
+  // CHECK-NOT: "onnx.Not"
+  // CHECK: onnx.Return [[CAST_1]] : tensor<1x10xi8>
+  onnx.Return %5 : tensor<1x10xi8>
+}
+
+// -----
+
+func.func @test_where_true_constant(
+    %arg0: tensor<1x10xbf16>, %arg1: tensor<1x10xbf16>) -> tensor<1x10xbf16> {
+  %cond = onnx.Constant dense<true> : tensor<i1>
+  %0 = "onnx.Where"(%cond, %arg0, %arg1) :
+      (tensor<i1>, tensor<1x10xbf16>, tensor<1x10xbf16>) -> tensor<1x10xbf16>
+  // CHECK-LABEL: func.func @test_where_true_constant
+  // CHECK-SAME: ([[ARG_0_:%.+]]: tensor<1x10xbf16>, [[ARG_1_:%.+]]: tensor<1x10xbf16>) -> tensor<1x10xbf16> {
+  // CHECK-NOT: "onnx.Where"
+  // CHECK: onnx.Return [[ARG_0_]] : tensor<1x10xbf16>
+  onnx.Return %0 : tensor<1x10xbf16>
+}
+
+// -----
+
+func.func @test_where_false_constant(
+    %arg0: tensor<1x10xbf16>, %arg1: tensor<1x10xbf16>) -> tensor<1x10xbf16> {
+  %cond = onnx.Constant dense<false> : tensor<i1>
+  %0 = "onnx.Where"(%cond, %arg0, %arg1) :
+      (tensor<i1>, tensor<1x10xbf16>, tensor<1x10xbf16>) -> tensor<1x10xbf16>
+  // CHECK-LABEL: func.func @test_where_false_constant
+  // CHECK-SAME: ([[ARG_0_:%.+]]: tensor<1x10xbf16>, [[ARG_1_:%.+]]: tensor<1x10xbf16>) -> tensor<1x10xbf16> {
+  // CHECK-NOT: "onnx.Where"
+  // CHECK: onnx.Return [[ARG_1_]] : tensor<1x10xbf16>
+  onnx.Return %0 : tensor<1x10xbf16>
+}
+
+// -----
+
+// Equal dynamic types do not imply equal runtime shapes.
+// CHECK-LABEL: func.func @test_where_true_dynamic_broadcast
+// CHECK-SAME: ([[X:%.+]]: tensor<?xf32>, [[Y:%.+]]: tensor<?xf32>) -> tensor<?xf32>
+func.func @test_where_true_dynamic_broadcast(%x: tensor<?xf32>, %y: tensor<?xf32>) -> tensor<?xf32> {
+  %cond = onnx.Constant dense<true> : tensor<i1>
+  %result = "onnx.Where"(%cond, %x, %y) :
+      (tensor<i1>, tensor<?xf32>, tensor<?xf32>) -> tensor<?xf32>
+  // CHECK-DAG: [[COND:%.+]] = onnx.Constant dense<true> : tensor<i1>
+  // CHECK-DAG: [[RESULT:%.+]] = "onnx.Where"([[COND]], [[X]], [[Y]])
+  // CHECK: onnx.Return [[RESULT]] : tensor<?xf32>
+  onnx.Return %result : tensor<?xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_where_false_dynamic_broadcast
+// CHECK-SAME: ([[X:%.+]]: tensor<?xf32>, [[Y:%.+]]: tensor<?xf32>) -> tensor<?xf32>
+func.func @test_where_false_dynamic_broadcast(%x: tensor<?xf32>, %y: tensor<?xf32>) -> tensor<?xf32> {
+  %cond = onnx.Constant dense<false> : tensor<i1>
+  %result = "onnx.Where"(%cond, %x, %y) :
+      (tensor<i1>, tensor<?xf32>, tensor<?xf32>) -> tensor<?xf32>
+  // CHECK-DAG: [[COND:%.+]] = onnx.Constant dense<false> : tensor<i1>
+  // CHECK-DAG: [[RESULT:%.+]] = "onnx.Where"([[COND]], [[X]], [[Y]])
+  // CHECK: onnx.Return [[RESULT]] : tensor<?xf32>
+  onnx.Return %result : tensor<?xf32>
+}
+
+// -----
+
 // CHECK-LABEL: func @test_matmul_add_fused(%{{.*}}: tensor<10x10xf32>, %{{.*}}: tensor<10x10xf32>, %{{.*}}: tensor<10x10xf32>) -> tensor<10x10xf32> {
 func.func @test_matmul_add_fused(%a0: tensor<10x10xf32>, %a1: tensor<10x10xf32>, %a2: tensor<10x10xf32>) -> tensor<10x10xf32> {
   // CHECK-NEXT: %{{[0-9]+}} = "onnx.Gemm"(%{{.*}}, %{{.*}}, %{{.*}}) {alpha = 1.000000e+00 : f32, beta = 1.000000e+00 : f32, transA = 0 : si64, transB = 0 : si64} : (tensor<10x10xf32>, tensor<10x10xf32>, tensor<10x10xf32>) -> tensor<10x10xf32>

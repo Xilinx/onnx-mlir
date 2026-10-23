@@ -3422,6 +3422,38 @@ struct PropagateBiasIntoLayerNormRewritePattern
 // Rewrite pattern for Where
 // =============================================================================
 
+class RemoveWhereConstantConditionPattern
+    : public OpRewritePattern<ONNXWhereOp> {
+public:
+  using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXWhereOp whereOp, PatternRewriter &rewriter) const override {
+    auto conditionElements =
+        getDenseOrDisposableConstLikeElements(whereOp.getCondition());
+    if (!conditionElements || !conditionElements.isSplat())
+      return rewriter.notifyMatchFailure(
+          whereOp, "condition is not a boolean splat constant");
+
+    auto conditionType =
+        dyn_cast<IntegerType>(conditionElements.getElementType());
+    if (!conditionType || conditionType.getWidth() != 1)
+      return rewriter.notifyMatchFailure(
+          whereOp, "condition is not a boolean splat constant");
+
+    const bool conditionValue =
+        conditionElements.getSplatValue<APInt>().isOne();
+    Value selectedValue = conditionValue ? whereOp.getX() : whereOp.getY();
+    if (selectedValue.getType() != whereOp.getType() ||
+        !haveSameStaticShape(selectedValue, whereOp.getResult()))
+      return rewriter.notifyMatchFailure(
+          whereOp, "selected branch does not have the same static result type");
+
+    rewriter.replaceOp(whereOp, selectedValue);
+    return success();
+  }
+};
+
 class NotWhereOptPattern : public OpRewritePattern<ONNXWhereOp> {
 public:
   using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
@@ -5477,6 +5509,12 @@ void ONNXMulOp::getCanonicalizationPatterns(
   results.insert<FuseScaleIntoRotaryEmbeddingPattern>(context);
 }
 
+/// on the ONNXNotOp.
+void ONNXNotOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  result.insert<RemoveNotNotPattern>(context);
+}
+
 /// on the ONNXOrOp.
 void ONNXOrOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
@@ -5794,6 +5832,7 @@ void ONNXXorOp::getCanonicalizationPatterns(
 // on the ONNXWhereOp.
 void ONNXWhereOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<RemoveWhereConstantConditionPattern>(context);
   result.insert<AlwaysFalseWherePattern>(context);
   result.insert<RemoveWhereEqualPattern>(context);
   result.insert<NotWhereOptPattern>(context);

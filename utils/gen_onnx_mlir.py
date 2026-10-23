@@ -625,6 +625,7 @@ OpsWithCanonicalizer = [
     "Loop",
     "LSTM",
     "Mul",
+    "Not",
     "Or",
     "Pad",
     "Pow",
