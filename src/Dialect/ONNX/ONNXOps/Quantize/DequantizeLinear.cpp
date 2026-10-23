@@ -10,10 +10,12 @@
 //
 // This file provides definition of ONNX dialect DequantizeLinear operation.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "mlir/IR/BuiltinTypeInterfaces.h"
-#include "mlir/IR/TypeUtilities.h"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "llvm/Support/Debug.h"
 
@@ -52,9 +54,15 @@ LogicalResult ONNXDequantizeLinearOpShapeHelper::computeShape() {
   DimsExpr outputDims;
   createIE->getShapeAsDims(operandAdaptor.getX(), outputDims);
 
+  const auto scaleTy =
+      mlir::cast<ShapedType>(operandAdaptor.getXScale().getType());
+  if (isBlockedLinearQuantization(scaleTy, operandAdaptor.getBlockSize())) {
+    setOutputDims(outputDims);
+    return success();
+  }
+
   // Get d.
-  int64_t d = nonScalar1DLen(
-      mlir::cast<ShapedType>(operandAdaptor.getXScale().getType()));
+  int64_t d = nonScalar1DLen(scaleTy);
   if (d == ShapedType::kDynamic &&
       !isNoneValue(operandAdaptor.getXZeroPoint())) {
     d = nonScalar1DLen(
@@ -92,32 +100,13 @@ LogicalResult ONNXDequantizeLinearOpShapeHelper::computeShape() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ONNXDequantizeLinearOp::verify() {
-  // Is tensor possibly a scalar (rank 0 or rank 1 with 1 or unknown elements)?
-  auto mayBeScalar = [](ShapedType t) -> bool {
-    return t.getRank() == 0 ||
-           (t.getRank() == 1 && (t.isDynamicDim(0) || t.getDimSize(0) == 1));
-  };
-
-  Value input = getX();
-  const auto inputTy = mlir::cast<ShapedType>(input.getType());
-
-  Value scale = getXScale();
-  const auto scaleTy = mlir::cast<ShapedType>(scale.getType());
-  if (scaleTy.hasRank() && inputTy.hasRank() &&
-      scaleTy.getRank() != inputTy.getRank() && scaleTy.getRank() > 1)
-    return emitOpError("x_scale rank needs to be 0, 1 or match x rank");
+  if (failed(verifyLinearQuantizationParameterShapes(getOperation(), getX(),
+          getXScale(), getXZeroPoint(), getAxis(), getBlockSize())))
+    return failure();
 
   Value zero = getXZeroPoint();
   if (!isNoneValue(zero)) {
     const auto zeroTy = mlir::cast<ShapedType>(zero.getType());
-    // Rank-0 and single-element rank-1 tensors are equivalent scalars,
-    // but a scalar cannot pair with a non-scalar quantization parameter.
-    if (zeroTy.hasRank() && scaleTy.hasRank() &&
-        !(mayBeScalar(zeroTy) && mayBeScalar(scaleTy)) &&
-        failed(verifyCompatibleShape(zeroTy.getShape(), scaleTy.getShape()))) {
-      return emitOpError("x_zero_point must have the same shape as x_scale");
-    }
-
     // TODO: Add verification of "x_zero_point and x must have same type"
     // However, some models come with x : i8 and x_zero_point : ui8.
     //
@@ -131,33 +120,6 @@ LogicalResult ONNXDequantizeLinearOp::verify() {
         if (!ElementsAttrBuilder::allEqual(values, zero))
           return emitOpError("x_zero_point must be 0 for data type int32");
       }
-    }
-
-    const bool isScaleRankKnown = scaleTy.hasRank();
-    int64_t d = nonScalar1DLen(scaleTy);
-    if (d == ShapedType::kDynamic)
-      d = nonScalar1DLen(zeroTy);
-    if (d != ShapedType::kDynamic) {
-      if (auto xTy = mlir::dyn_cast<RankedTensorType>(getX().getType())) {
-        int64_t r = xTy.getRank();
-        // axis attribute must be in the range [-r,r].
-        int64_t a = getAxis();
-        if (a < -r || a >= r)
-          return onnx_mlir::Diagnostic::emitAttributeOutOfRangeError(
-              *this->getOperation(), "axis", a,
-              onnx_mlir::Diagnostic::Range<int64_t>(-r, r - 1));
-        if (a < 0)
-          a += r;
-        if (!xTy.isDynamicDim(a) && xTy.getDimSize(a) != d)
-          return emitOpError("x_scale and x_zero_point 1-D tensor length must "
-                             "match the input axis dim size");
-      }
-    }
-
-    const bool isBlock = isScaleRankKnown && scaleTy.getRank() > 1;
-    if (isBlock) {
-      // TODO: Add verifier for block dequantization.
-      return success();
     }
   }
 
