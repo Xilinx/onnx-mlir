@@ -53,6 +53,10 @@ static cl::list<std::string> skipNames("skip-name",
     cl::desc("Leave one fully scoped initializer path unmaterialized"),
     cl::value_desc("name|@scope::@name"), cl::ZeroOrMore,
     cl::cat(initializerSourceCategory));
+static cl::list<std::string> forceNames("force-name",
+    cl::desc("Materialize one scoped initializer even when skipped"),
+    cl::value_desc("name|@scope::@name"), cl::ZeroOrMore,
+    cl::cat(initializerSourceCategory));
 static cl::opt<bool> materializeAfter("materialize-after",
     cl::desc("Materialize after importer options and protobuf are destroyed"),
     cl::init(false), cl::cat(initializerSourceCategory));
@@ -207,13 +211,15 @@ int main(int argc, char **argv) {
   MLIRContext &context = *ownedContext;
   context.loadDialect<ONNXDialect, func::FuncDialect>();
   OwningOpRef<ModuleOp> module;
+  std::unique_ptr<onnx::ModelProto> modelOwner;
   // The test driver acts as the VAIML/FlexML caller and keeps these buffers
   // alive while in-memory initializer sources may be read.
   std::vector<std::unique_ptr<llvm::MemoryBuffer>> liveOwners;
   if (readIR) {
     module = parseSourceFile<ModuleOp>(input, &context);
   } else {
-    onnx::ModelProto model;
+    modelOwner = std::make_unique<onnx::ModelProto>();
+    onnx::ModelProto &model = *modelOwner;
     std::string error;
     if (LoadModelProtoFromFile(input.getValue(), error, model)) {
       llvm::errs() << error << "\n";
@@ -227,8 +233,11 @@ int main(int argc, char **argv) {
     options.skipAllInitializerMaterialization = skipAll;
     options.skipInitializerMaterialization.assign(
         skipNames.begin(), skipNames.end());
+    options.forceInitializerMaterialization.assign(
+        forceNames.begin(), forceNames.end());
     options.externalDataDir =
         llvm::sys::path::parent_path(input.getValue()).str();
+    options.initializerSourceModelPath = input.getValue();
     if (sourceMode != "file" &&
         !configureLive(*model.mutable_graph(), {}, input.getValue(), options,
             liveOwners, true))
@@ -263,7 +272,8 @@ int main(int argc, char **argv) {
     PassManager pm(&context);
     pm.addPass(createMaterializeInitializerSourcesPass(
         readIR ? bool(skipAll) : false,
-        readIR ? ArrayRef<std::string>(skipNames) : ArrayRef<std::string>()));
+        readIR ? ArrayRef<std::string>(skipNames) : ArrayRef<std::string>(),
+        readIR ? ArrayRef<std::string>(forceNames) : ArrayRef<std::string>()));
     if (failed(pm.run(*module)))
       return 1;
   }
@@ -276,7 +286,8 @@ int main(int argc, char **argv) {
                         InitializerIdentity{scope, op.getName().str()})
                  << " live="
                  << (op.getCallerOwnedDataAttr() &&
-                        op.getCallerOwnedDataAttr().getData().data())
+                        (op.getCallerOwnedDataAttr().getData().data() ||
+                            op.getCallerOwnedDataAttr().getTensor()))
                  << "\n";
   });
   module->walk([&](ONNXConstantOp op) {

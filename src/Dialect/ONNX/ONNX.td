@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
 
 //===--- ONNXOps.td -- ONNX Dialect Operation Definitions ----*- tablegen -===//
 //
@@ -26,6 +28,7 @@ include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/Dialect/Quant/IR/QuantBase.td"
 include "src/Interface/ShapeHelperOpInterface.td"
 include "src/Interface/ShapeInferenceOpInterface.td"
+include "src/Interface/StructuralOperandOpInterface.td"
 include "src/Interface/ResultTypeInferenceOpInterface.td"
 include "src/Interface/HasOnnxSubgraphOpInterface.td"
 include "src/IR/AttrBase.td"
