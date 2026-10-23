@@ -101,6 +101,11 @@ def ONNXDecomposePatternOptions {
           "Enable decomposition of static LSTM operations into basic ONNX "
           "operations and bounded onnx.Loop operations.">,
 
+      Option<"enableOneHotDecompose", "enable-onehot-decompose", "bool",
+          /*default=*/"false",
+          "Enable decomposition of OneHot into Range, comparisons, Gather, "
+          "Reshape, and Where operations.">,
+
       Option<"enableReduceL2Decompose", "enable-reducel2-decompose", "bool",
           /*default=*/"true",
           "Enable decomposition of ReduceL2 to Sqrt(ReduceSumSquare(x)).">,

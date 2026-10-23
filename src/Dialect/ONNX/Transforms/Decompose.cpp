@@ -4829,7 +4829,7 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
       // encode head_size as 0
       const int64_t rotaryEmbeddingDim = rotaryDim == headSize ? 0 : rotaryDim;
 
-      OnnxBuilder create(rewriter, loc);
+      onnx_mlir::OnnxBuilder create(rewriter, loc);
       Value ropeQuery =
           create.rotaryEmbedding(query.getType(), query, cosCache, sinCache,
               positionIds, rotaryInterleaved, qNumHeads, rotaryEmbeddingDim);
@@ -5712,6 +5712,133 @@ struct DecomposeGroupNormV18Pattern
   }
 };
 
+// ========================== OneHot Decomposition =============================
+//
+// Decomposes onnx.OneHot into Gather, Range, comparison, Reshape, and Where.
+//
+// Negative indices in [-depth, depth - 1] are normalized to the corresponding
+// non-negative class index. Indices outside that range remain unmatched and
+// therefore produce only off_value.
+// =============================================================================
+struct DecomposeOneHotPattern : public OpRewritePattern<ONNXOneHotOp> {
+  using OpRewritePattern<ONNXOneHotOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXOneHotOp oneHotOp, PatternRewriter &rewriter) const final {
+    Location loc = oneHotOp.getLoc();
+    Value indices = oneHotOp.getIndices();
+    Value depth = oneHotOp.getDepth();
+    Value values = oneHotOp.getValues();
+
+    auto indicesType = dyn_cast<RankedTensorType>(indices.getType());
+    auto depthType = dyn_cast<RankedTensorType>(depth.getType());
+    auto valuesType = dyn_cast<RankedTensorType>(values.getType());
+    if (!indicesType || !depthType || !valuesType)
+      return rewriter.notifyMatchFailure(
+          oneHotOp, "requires ranked indices, depth, and values");
+
+    auto indicesElementType =
+        dyn_cast<IntegerType>(indicesType.getElementType());
+    auto depthElementType = dyn_cast<IntegerType>(depthType.getElementType());
+    if (!indicesElementType || !depthElementType)
+      return rewriter.notifyMatchFailure(
+          oneHotOp, "requires integer indices and depth");
+    // An unsigned 64-bit value cannot be represented exactly in signed i64,
+    // which is used as the common comparison and Range domain.
+    if ((indicesElementType.isUnsigned() &&
+            indicesElementType.getWidth() == 64) ||
+        (depthElementType.isUnsigned() && depthElementType.getWidth() == 64))
+      return rewriter.notifyMatchFailure(
+          oneHotOp, "unsigned 64-bit inputs cannot be converted exactly");
+
+    int64_t axis = oneHotOp.getAxis();
+    int64_t outputRank = indicesType.getRank() + 1;
+    if (axis < 0)
+      axis += outputRank;
+
+    if (axis < 0 || axis >= outputRank)
+      return rewriter.notifyMatchFailure(oneHotOp, "axis is out of range");
+
+    // Shape inference may not have resolved the output type yet. In that case
+    // leave the Range dimension dynamic and let later shape inference refine
+    // it.
+    int64_t depthDim = ShapedType::kDynamic;
+    auto outputType =
+        dyn_cast<RankedTensorType>(oneHotOp.getOutput().getType());
+    if (outputType && outputType.getRank() == outputRank)
+      depthDim = outputType.getDimSize(axis);
+
+    onnx_mlir::OnnxBuilder create(rewriter, loc);
+    Type i64Type = rewriter.getI64Type();
+    auto castToI64 = [&](Value input, RankedTensorType inputType) -> Value {
+      if (inputType.getElementType() == i64Type)
+        return input;
+      return create.cast(input, i64Type);
+    };
+    Value indicesI64 = castToI64(indices, indicesType);
+    Value depthI64 = castToI64(depth, depthType);
+
+    // Normalize depth to a scalar. OneHot permits both scalar depth and a
+    // one-element vector.
+    auto scalarI64Type = RankedTensorType::get({}, i64Type);
+    if (depthType.getRank() == 1)
+      depthI64 = create.reshape(
+          scalarI64Type, depthI64, create.constantInt64(ArrayRef<int64_t>{}));
+
+    auto scalarI64 = [&](int64_t value) {
+      return create.constant(DenseElementsAttr::get(scalarI64Type, value));
+    };
+    Value zero = scalarI64(0);
+    Value one = scalarI64(1);
+
+    auto indicesI64Type = cast<RankedTensorType>(indicesI64.getType());
+    Value isNegative =
+        create.createOpAndInferShapes<ONNXLessOp>(indicesI64, zero);
+    Value wrapped = create.add(indicesI64, depthI64);
+    Value normalized =
+        create.where(indicesI64Type, isNegative, wrapped, indicesI64);
+
+    auto rangeType = RankedTensorType::get({depthDim}, i64Type);
+    Value classes = create.createTypedOpAndInferShapes<ONNXRangeOp>(
+        rangeType, zero, depthI64, one);
+
+    SmallVector<int64_t> expandedIndicesShape(indicesType.getShape());
+    expandedIndicesShape.insert(expandedIndicesShape.begin() + axis, 1);
+    auto expandedIndicesType =
+        RankedTensorType::get(expandedIndicesShape, i64Type);
+    Value axes = create.constantInt64({axis});
+    Value expandedIndices =
+        create.unsqueeze(expandedIndicesType, normalized, axes);
+
+    SmallVector<int64_t> rangeBroadcastShape(outputRank, 1);
+    rangeBroadcastShape[axis] = depthDim;
+    SmallVector<int64_t> rangeReshapeValues(outputRank, 1);
+    rangeReshapeValues[axis] = ShapedType::isDynamic(depthDim) ? -1 : depthDim;
+    auto rangeBroadcastType =
+        RankedTensorType::get(rangeBroadcastShape, i64Type);
+    Value rangeShape = create.constantInt64(rangeReshapeValues);
+    Value broadcastClasses =
+        create.reshape(rangeBroadcastType, classes, rangeShape);
+
+    Value mask = create.createOpAndInferShapes<ONNXEqualOp>(
+        expandedIndices, broadcastClasses);
+
+    auto gatheredValueType =
+        RankedTensorType::get({}, valuesType.getElementType());
+    auto gatherAxis = IntegerAttr::get(
+        IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed), 0);
+    Value offValue = create.createTypedOpAndInferShapes<ONNXGatherOp>(
+        gatheredValueType, values, zero, gatherAxis);
+    Value onValue = create.createTypedOpAndInferShapes<ONNXGatherOp>(
+        gatheredValueType, values, one, gatherAxis);
+
+    Value output =
+        create.where(oneHotOp.getOutput().getType(), mask, onValue, offValue);
+    rewriter.replaceOp(oneHotOp, output);
+    return success();
+  }
+};
+
 // =============================================================================
 // Decompose LpPool to an Lp norm of each pooling window:
 //   Y = (sum(|X|^p))^(1/p)
@@ -6387,7 +6514,8 @@ void DecomposeONNXToONNXPass::runOnOperation() {
       /*disableGenericDecompositions=*/false, enableGatherToSlice,
       enableHardSwishDecompose, enableDepthToSpaceDecompose,
       enableGQAUint16CacheSlotRewrite, enableConvTransposeToResize,
-      enableLstmDecompose, /*lstmDecompositionPredicate=*/{});
+      enableLstmDecompose, /*lstmDecompositionPredicate=*/{},
+      enableOneHotDecompose);
 
 #ifdef ONNX_MLIR_ENABLE_STABLEHLO
   if (this->target == "stablehlo") {
@@ -6460,7 +6588,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool enableHardSwishDecompose, bool enableDepthToSpaceDecompose,
     bool enableGQAUint16CacheSlotRewrite, bool enableConvTransposeToResize,
     bool enableLstmDecompose,
-    LSTMDecompositionPredicate lstmDecompositionPredicate) {
+    LSTMDecompositionPredicate lstmDecompositionPredicate,
+    bool enableOneHotDecompose) {
   MLIRContext *context = patterns.getContext();
   if (!disableGenericDecompositions)
     populateWithGenerated(patterns);
@@ -6486,6 +6615,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     patterns.insert<onnx_mlir::DecomposeEinsumPattern>(context);
   if (enableConcatFuse)
     patterns.insert<ConcatFusePattern>(context);
+  if (enableOneHotDecompose)
+    patterns.insert<DecomposeOneHotPattern>(context);
   if (enableHardSwishDecompose)
     patterns.insert<DecomposeHardSwishPattern>(context);
   if (!disableGenericDecompositions) {

@@ -91,7 +91,8 @@ void getDecomposeONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
     bool enableDepthToSpaceDecompose = false,
     bool enableGQAUint16CacheSlotRewrite = false,
     bool enableConvTransposeToResize = false, bool enableLstmDecompose = false,
-    LSTMDecompositionPredicate lstmDecompositionPredicate = {});
+    LSTMDecompositionPredicate lstmDecompositionPredicate = {},
+    bool enableOneHotDecompose = false);
 
 // Decompose onnx.DepthToSpace (DCR and CRD) into Reshape/Transpose/Reshape
 void populateDecomposeDepthToSpacePattern(mlir::RewritePatternSet &patterns,
