@@ -160,17 +160,39 @@ def embedded_fixture(folder, raw):
 
 
 def structural_fixture(folder):
+    structural_data = folder / "structural.bin"
+    structural_data.write_bytes(struct.pack("<4q", 2, 2, 0, 1))
     shape = helper.make_tensor("shape", TensorProto.INT64, [2], [2, 2])
+    shape.ClearField("int64_data")
+    shape.data_location = TensorProto.EXTERNAL
+    shape.external_data.add(key="location", value=structural_data.name)
+    shape.external_data.add(key="offset", value="0")
+    shape.external_data.add(key="length", value="16")
+    axes = TensorProto(
+        name="axes",
+        data_type=TensorProto.INT64,
+        dims=[2],
+        data_location=TensorProto.EXTERNAL,
+    )
+    axes.external_data.add(key="location", value=structural_data.name)
+    axes.external_data.add(key="offset", value="16")
+    axes.external_data.add(key="length", value="16")
     data = helper.make_tensor("data", TensorProto.FLOAT, [4], [1.0, 2.0, 3.0, 4.0])
     nodes = [
         helper.make_node("Reshape", ["data", "shape"], ["Y"]),
         helper.make_node("Identity", ["shape"], ["S"]),
+        helper.make_node("ReduceSum", ["data", "axes"], ["R"], keepdims=0),
+        helper.make_node("Identity", ["axes"], ["A"]),
     ]
     outputs = [
         helper.make_tensor_value_info("Y", TensorProto.FLOAT, [2, 2]),
         helper.make_tensor_value_info("S", TensorProto.INT64, [2]),
+        helper.make_tensor_value_info("R", TensorProto.FLOAT, []),
+        helper.make_tensor_value_info("A", TensorProto.INT64, [2]),
     ]
-    graph = helper.make_graph(nodes, "model", [], outputs, initializer=[data, shape])
+    graph = helper.make_graph(
+        nodes, "model", [], outputs, initializer=[data, shape, axes]
+    )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
     path = folder / "structural.onnx"
     path.write_bytes(model.SerializeToString())
@@ -192,6 +214,51 @@ def non_initializer_structural_fixture(folder, constant):
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
     kind = "constant" if constant else "runtime"
     path = folder / f"structural-{kind}.onnx"
+    path.write_bytes(model.SerializeToString())
+    return path
+
+
+def loop_structural_fixture(folder):
+    structural_data = folder / "loop-structural.bin"
+    structural_data.write_bytes(struct.pack("<2q", 2, 2))
+    shape = TensorProto(
+        name="shape",
+        data_type=TensorProto.INT64,
+        dims=[2],
+        data_location=TensorProto.EXTERNAL,
+    )
+    shape.external_data.add(key="location", value=structural_data.name)
+    shape.external_data.add(key="offset", value="0")
+    shape.external_data.add(key="length", value="16")
+
+    body_inputs = [
+        helper.make_tensor_value_info("iteration", TensorProto.INT64, []),
+        helper.make_tensor_value_info("cond_in", TensorProto.BOOL, []),
+        helper.make_tensor_value_info("shape_in", TensorProto.INT64, [2]),
+    ]
+    body_outputs = [
+        helper.make_tensor_value_info("cond_out", TensorProto.BOOL, []),
+        helper.make_tensor_value_info("shape_out", TensorProto.INT64, [2]),
+    ]
+    body_data = helper.make_tensor(
+        "body_data_value", TensorProto.FLOAT, [4], [1.0, 2.0, 3.0, 4.0]
+    )
+    body_nodes = [
+        helper.make_node("Constant", [], ["body_data"], value=body_data),
+        helper.make_node("Reshape", ["body_data", "shape_in"], ["reshaped"]),
+        helper.make_node("Identity", ["cond_in"], ["cond_out"]),
+        helper.make_node("Identity", ["shape_in"], ["shape_out"]),
+    ]
+    body = helper.make_graph(body_nodes, "loop_body", body_inputs, body_outputs)
+    inputs = [
+        helper.make_tensor_value_info("M", TensorProto.INT64, []),
+        helper.make_tensor_value_info("cond", TensorProto.BOOL, []),
+    ]
+    output = helper.make_tensor_value_info("final_shape", TensorProto.INT64, [2])
+    loop = helper.make_node("Loop", ["M", "cond", "shape"], ["final_shape"], body=body)
+    graph = helper.make_graph([loop], "model", inputs, [output], initializer=[shape])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    path = folder / "loop-structural.onnx"
     path.write_bytes(model.SerializeToString())
     return path
 
@@ -516,8 +583,8 @@ def main(driver):
             "--skip-all",
         )
         assert "source data live=1" in out
-        assert "source shape" not in out
-        assert len(constants(out)) == 1
+        assert "source shape" not in out and "source axes" not in out
+        assert len(constants(out)) == 2
         checks += 1
         for constant in (False, True):
             non_initializer_model = non_initializer_structural_fixture(folder, constant)
@@ -530,6 +597,14 @@ def main(driver):
             assert "source data live=1" in out
             assert len(constants(out)) == int(constant)
             checks += 1
+        out = run(
+            driver,
+            "--input",
+            loop_structural_fixture(folder),
+            "--skip-all",
+        )
+        assert "source shape" not in out
+        checks += 1
         out = run(
             driver,
             "--input",

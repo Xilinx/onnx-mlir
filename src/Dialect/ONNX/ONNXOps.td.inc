@@ -167,7 +167,7 @@ def ONNXAddOp:ONNX_Op<"Add",
 }
 
 def ONNXAffineGridOp:ONNX_Op<"AffineGrid",
-  [Pure, OpVersionTrait<20>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<20>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX AffineGrid operation";
   let description = [{
   Generates a 2D or 3D flow field (sampling grid), given a batch of affine matrices theta
@@ -220,6 +220,9 @@ def ONNXAffineGridOp:ONNX_Op<"AffineGrid",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1;
+  }
   }];
 }
 
@@ -966,7 +969,7 @@ def ONNXBitwiseXorOp:ONNX_Op<"BitwiseXor",
 }
 
 def ONNXBlackmanWindowOp:ONNX_Op<"BlackmanWindow",
-  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX BlackmanWindow operation";
   let description = [{
   Generates a Blackman window as described in the paper https://ieeexplore.ieee.org/document/1455106.
@@ -993,6 +996,9 @@ def ONNXBlackmanWindowOp:ONNX_Op<"BlackmanWindow",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 0;
+  }
   }];
 }
 
@@ -1203,7 +1209,7 @@ def ONNXCeluOp:ONNX_Op<"Celu",
 }
 
 def ONNXCenterCropPadOp:ONNX_Op<"CenterCropPad",
-  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX CenterCropPad operation";
   let description = [{
   Center crop or pad an input to given dimensions.
@@ -1243,6 +1249,9 @@ def ONNXCenterCropPadOp:ONNX_Op<"CenterCropPad",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1;
+  }
   }];
 }
 
@@ -1383,7 +1392,7 @@ def ONNXClipV6Op:ONNX_Op<"ClipV6",
 }
 
 def ONNXCol2ImOp:ONNX_Op<"Col2Im",
-  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX Col2Im operation";
   let description = [{
   The operator rearranges column blocks back into a multidimensional image
@@ -1422,6 +1431,9 @@ def ONNXCol2ImOp:ONNX_Op<"Col2Im",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1 || index == 2;
+  }
   }];
 }
 
@@ -1874,7 +1886,7 @@ def ONNXCumSumOp:ONNX_Op<"CumSum",
 }
 
 def ONNXDFTOp:ONNX_Op<"DFT",
-  [Pure, OpVersionTrait<20>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<20>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX DFT operation";
   let description = [{
   Computes the discrete Fourier Transform (DFT) of the input.
@@ -1919,11 +1931,14 @@ def ONNXDFTOp:ONNX_Op<"DFT",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1 || index == 2;
+  }
   }];
 }
 
 def ONNXDFTV17Op:ONNX_Op<"DFTV17",
-  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX DFT operation";
   let description = [{
   Computes the discrete Fourier transform of input.
@@ -1952,6 +1967,9 @@ def ONNXDFTV17Op:ONNX_Op<"DFTV17",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1;
+  }
   }];
 }
 
@@ -3571,7 +3589,7 @@ def ONNXGroupNormalizationV18Op:ONNX_Op<"GroupNormalizationV18",
 }
 
 def ONNXHammingWindowOp:ONNX_Op<"HammingWindow",
-  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX HammingWindow operation";
   let description = [{
   Generates a Hamming window as described in the paper https://ieeexplore.ieee.org/document/1455106.
@@ -3598,11 +3616,14 @@ def ONNXHammingWindowOp:ONNX_Op<"HammingWindow",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 0;
+  }
   }];
 }
 
 def ONNXHannWindowOp:ONNX_Op<"HannWindow",
-  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX HannWindow operation";
   let description = [{
   Generates a Hann window as described in the paper https://ieeexplore.ieee.org/document/1455106.
@@ -3629,6 +3650,9 @@ def ONNXHannWindowOp:ONNX_Op<"HannWindow",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 0;
+  }
   }];
 }
 
@@ -4390,7 +4414,7 @@ def ONNXLogSoftmaxOp:ONNX_Op<"LogSoftmax",
 }
 
 def ONNXLoopOp:ONNX_Op<"Loop",
-  [Pure, OpVersionTrait<21>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>, OpInterface<"HasOnnxSubgraphOpInterface">]> {
+  [Pure, OpVersionTrait<21>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>, OpInterface<"HasOnnxSubgraphOpInterface">]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX Loop operation";
   let description = [{
@@ -4560,6 +4584,9 @@ def ONNXLoopOp:ONNX_Op<"Loop",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 0 || index == 1;
+  }
   }];
 }
 
@@ -4968,7 +4995,7 @@ def ONNXMeanVarianceNormalizationOp:ONNX_Op<"MeanVarianceNormalization",
 }
 
 def ONNXMelWeightMatrixOp:ONNX_Op<"MelWeightMatrix",
-  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX MelWeightMatrix operation";
   let description = [{
   Generate a MelWeightMatrix that can be used to re-weight a Tensor containing a linearly sampled frequency spectra (from DFT or STFT) into num_mel_bins frequency information based on the [lower_edge_hertz, upper_edge_hertz] range on the mel scale.
@@ -5005,6 +5032,9 @@ def ONNXMelWeightMatrixOp:ONNX_Op<"MelWeightMatrix",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 0 || index == 1;
+  }
   }];
 }
 
@@ -6786,7 +6816,7 @@ def ONNXReciprocalOp:ONNX_Op<"Reciprocal",
 }
 
 def ONNXReduceL1Op:ONNX_Op<"ReduceL1",
-  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX ReduceL1 operation";
   let description = [{
@@ -6822,6 +6852,9 @@ def ONNXReduceL1Op:ONNX_Op<"ReduceL1",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1;
+  }
   }];
 }
 
@@ -6864,7 +6897,7 @@ def ONNXReduceL1V13Op:ONNX_Op<"ReduceL1V13",
 }
 
 def ONNXReduceL2Op:ONNX_Op<"ReduceL2",
-  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX ReduceL2 operation";
   let description = [{
@@ -6900,6 +6933,9 @@ def ONNXReduceL2Op:ONNX_Op<"ReduceL2",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1;
+  }
   }];
 }
 
@@ -6942,7 +6978,7 @@ def ONNXReduceL2V13Op:ONNX_Op<"ReduceL2V13",
 }
 
 def ONNXReduceLogSumOp:ONNX_Op<"ReduceLogSum",
-  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX ReduceLogSum operation";
   let description = [{
@@ -6988,6 +7024,9 @@ def ONNXReduceLogSumOp:ONNX_Op<"ReduceLogSum",
         assert(sh && "failed to allocate shape helper");
         return sh;
       }
+    bool $cppClass::isStructuralOperand(unsigned index) {
+      return index == 1;
+    }
     }];
 }
 
@@ -7030,7 +7069,7 @@ def ONNXReduceLogSumV13Op:ONNX_Op<"ReduceLogSumV13",
 }
 
 def ONNXReduceLogSumExpOp:ONNX_Op<"ReduceLogSumExp",
-  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX ReduceLogSumExp operation";
   let description = [{
@@ -7066,6 +7105,9 @@ def ONNXReduceLogSumExpOp:ONNX_Op<"ReduceLogSumExp",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1;
+  }
   }];
 }
 
@@ -7108,7 +7150,7 @@ def ONNXReduceLogSumExpV13Op:ONNX_Op<"ReduceLogSumExpV13",
 }
 
 def ONNXReduceMaxOp:ONNX_Op<"ReduceMax",
-  [Pure, OpVersionTrait<20>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<20>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX ReduceMax operation";
   let description = [{
@@ -7156,12 +7198,15 @@ def ONNXReduceMaxOp:ONNX_Op<"ReduceMax",
         assert(sh && "failed to allocate shape helper");
         return sh;
       }
+    bool $cppClass::isStructuralOperand(unsigned index) {
+      return index == 1;
+    }
     }];
     let hasFolder = 1;
 }
 
 def ONNXReduceMaxV18Op:ONNX_Op<"ReduceMaxV18",
-  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX ReduceMax operation";
   let description = [{
@@ -7207,6 +7252,9 @@ def ONNXReduceMaxV18Op:ONNX_Op<"ReduceMaxV18",
         assert(sh && "failed to allocate shape helper");
         return sh;
       }
+    bool $cppClass::isStructuralOperand(unsigned index) {
+      return index == 1;
+    }
     }];
 }
 
@@ -7260,7 +7308,7 @@ def ONNXReduceMaxV13Op:ONNX_Op<"ReduceMaxV13",
 }
 
 def ONNXReduceMeanOp:ONNX_Op<"ReduceMean",
-  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX ReduceMean operation";
   let description = [{
@@ -7296,6 +7344,9 @@ def ONNXReduceMeanOp:ONNX_Op<"ReduceMean",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1;
+  }
   }];
   let hasFolder = 1;
 }
@@ -7340,7 +7391,7 @@ def ONNXReduceMeanV13Op:ONNX_Op<"ReduceMeanV13",
 }
 
 def ONNXReduceMinOp:ONNX_Op<"ReduceMin",
-  [Pure, OpVersionTrait<20>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<20>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX ReduceMin operation";
   let description = [{
@@ -7378,12 +7429,15 @@ def ONNXReduceMinOp:ONNX_Op<"ReduceMin",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1;
+  }
   }];
   let hasFolder = 1;
 }
 
 def ONNXReduceMinV18Op:ONNX_Op<"ReduceMinV18",
-  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX ReduceMin operation";
   let description = [{
@@ -7419,6 +7473,9 @@ def ONNXReduceMinV18Op:ONNX_Op<"ReduceMinV18",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1;
+  }
   }];
 }
 
@@ -7462,7 +7519,7 @@ def ONNXReduceMinV13Op:ONNX_Op<"ReduceMinV13",
 }
 
 def ONNXReduceProdOp:ONNX_Op<"ReduceProd",
-  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX ReduceProd operation";
   let description = [{
@@ -7498,6 +7555,9 @@ def ONNXReduceProdOp:ONNX_Op<"ReduceProd",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1;
+  }
   }];
 }
 
@@ -7540,7 +7600,7 @@ def ONNXReduceProdV13Op:ONNX_Op<"ReduceProdV13",
 }
 
 def ONNXReduceSumOp:ONNX_Op<"ReduceSum",
-  [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<13>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX ReduceSum operation";
   let description = [{
@@ -7586,6 +7646,9 @@ def ONNXReduceSumOp:ONNX_Op<"ReduceSum",
         assert(sh && "failed to allocate shape helper");
         return sh;
       }
+    bool $cppClass::isStructuralOperand(unsigned index) {
+      return index == 1;
+    }
     }];
     let hasFolder = 1;
 }
@@ -7638,7 +7701,7 @@ def ONNXReduceSumV11Op:ONNX_Op<"ReduceSumV11",
 }
 
 def ONNXReduceSumSquareOp:ONNX_Op<"ReduceSumSquare",
-  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<18>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX ReduceSumSquare operation";
   let description = [{
@@ -7684,6 +7747,9 @@ def ONNXReduceSumSquareOp:ONNX_Op<"ReduceSumSquare",
         assert(sh && "failed to allocate shape helper");
         return sh;
       }
+    bool $cppClass::isStructuralOperand(unsigned index) {
+      return index == 1;
+    }
     }];
 }
 
@@ -8345,7 +8411,7 @@ def ONNXRoundOp:ONNX_Op<"Round",
 }
 
 def ONNXSTFTOp:ONNX_Op<"STFT",
-  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX STFT operation";
   let description = [{
   Computes the Short-time Fourier Transform of the signal.
@@ -8374,6 +8440,9 @@ def ONNXSTFTOp:ONNX_Op<"STFT",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1 || index == 3;
+  }
   }];
 }
 
@@ -9839,7 +9908,7 @@ def ONNXSplitV11Op:ONNX_Op<"SplitV11",
 }
 
 def ONNXSplitToSequenceOp:ONNX_Op<"SplitToSequence",
-  [Pure, OpVersionTrait<11>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
+  [Pure, OpVersionTrait<11>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
   let summary = "ONNX SplitToSequence operation";
   let description = [{
   Split a tensor into a sequence of tensors, along the specified 'axis'.
@@ -9878,6 +9947,9 @@ def ONNXSplitToSequenceOp:ONNX_Op<"SplitToSequence",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1;
+  }
   }];
   let hasVerifier = 1;
 }
@@ -10773,7 +10845,7 @@ def ONNXUnsqueezeV11Op:ONNX_Op<"UnsqueezeV11",
 }
 
 def ONNXUpsampleOp:ONNX_Op<"Upsample",
-  [Pure, OpVersionTrait<10>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<10>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX Upsample operation";
   let description = [{
   Upsample the input tensor.
@@ -10802,6 +10874,9 @@ def ONNXUpsampleOp:ONNX_Op<"Upsample",
       assert(sh && "failed to allocate shape helper");
       return sh;
     }
+  bool $cppClass::isStructuralOperand(unsigned index) {
+    return index == 1;
+  }
   }];
   let hasVerifier = 1;
 }

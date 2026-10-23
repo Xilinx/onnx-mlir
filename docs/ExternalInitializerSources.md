@@ -39,10 +39,11 @@ The operation produces a ranked tensor value. For example:
 ```
 
 The operation contains an explicit source kind, the ONNX graph scope and
-initializer name, the ONNX `TensorProto` data type, and an absolute path. The
-scope is an array of nested graph names; it is empty for the outermost
-graph. Keeping the components separate avoids assigning separator semantics to
-ONNX names. An `external_data` source also contains its byte offset and length.
+initializer name, and an absolute path. Its result type records the tensor's
+element type and shape. The scope is an array of nested graph names; it is empty
+for the outermost graph. Keeping the components separate avoids assigning
+separator semantics to ONNX names. An `external_data` source also contains its
+byte offset and length.
 For an ONNX Runtime `_ORT_MEM_ADDR_` initializer, an `onnx_model` source records
 the path of a backup copy of the original ONNX model. This backup model has
 ordinary durable tensor storage instead of process-local addresses. After the
@@ -191,9 +192,9 @@ cache and parsed-model cache.
 ## Protobuf Tensor Lookup
 
 An `onnx_model` source retains the backup model path, structured graph path,
-initializer name, data type, and result type. It does not retain a byte offset
-into the protobuf. Tensor data may be encoded as `raw_data` or typed repeated
-fields, and protobuf wire offsets are not a stable interface.
+initializer name, and result type. It does not retain a byte offset into the
+protobuf. Tensor data may be encoded as `raw_data` or typed repeated fields, and
+protobuf wire offsets are not a stable interface.
 
 Materialization caches the backup model, finds the named initializer, validates
 its data type and shape, and uses the existing tensor decoder. If the located

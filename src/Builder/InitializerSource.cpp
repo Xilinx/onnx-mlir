@@ -52,6 +52,20 @@ InitializerIdentity initializerIdentity(ONNXInitializerSourceOp op) {
   return identity;
 }
 
+ONNXInitializerSourceOp findStructuralInitializerSource(Value value) {
+  while (auto argument = dyn_cast<BlockArgument>(value)) {
+    Block *block = argument.getOwner();
+    auto loop = dyn_cast<ONNXLoopOp>(block->getParentOp());
+    unsigned index = argument.getArgNumber();
+    if (!loop || loop.getRegion().empty() ||
+        block != &loop.getRegion().front() || index == 0 ||
+        index >= loop->getNumOperands())
+      return {};
+    value = loop->getOperand(index);
+  }
+  return value.getDefiningOp<ONNXInitializerSourceOp>();
+}
+
 bool matchesNestedIdentity(SymbolRefAttr identity, ONNXInitializerSourceOp op) {
   auto scope = initializerScope(op);
   auto nested = identity.getNestedReferences();
@@ -309,7 +323,7 @@ struct MaterializeInitializerSourcesPass
     getOperation().walk([&](StructuralOperandOpInterface op) {
       for (auto [index, operand] : llvm::enumerate(op->getOperands()))
         if (op.isStructuralOperand(index))
-          if (auto source = operand.getDefiningOp<ONNXInitializerSourceOp>())
+          if (auto source = findStructuralInitializerSource(operand))
             structuralSources.insert(source);
     });
     for (ONNXInitializerSourceOp source : structuralSources)

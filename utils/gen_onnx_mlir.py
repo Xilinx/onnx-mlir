@@ -548,20 +548,48 @@ special_direct_input_types = {
 # structure. This is onnx-mlir metadata, not an ONNX requirement that the input
 # be constant. Names are resolved against each selected schema version so the
 # generated interface remains independent of operand-number changes.
+#
+# When updating ONNX, audit getInputData/getShapeInput calls under
+# third_party/onnx/onnx/defs, then cross-check onnx-mlir shape helpers and
+# transforms. The importer uses default ShapeInferenceOptions, with data
+# propagation disabled. Do not include values read only for verification or
+# optional optimization.
 structural_inputs = {
+    "AffineGrid": {"size"},
+    "BlackmanWindow": {"size"},
+    "CenterCropPad": {"shape"},
+    "Col2Im": {"image_shape", "block_shape"},
     "ConstantOfShape": {"input"},
+    "DFT": {"dft_length", "axis"},
     "Expand": {"shape"},
+    "HammingWindow": {"size"},
+    "HannWindow": {"size"},
+    "Loop": {"M", "cond"},
+    "MelWeightMatrix": {"num_mel_bins", "dft_length"},
     "OneHot": {"depth"},
     "Pad": {"pads", "axes"},
     "Range": {"start", "limit", "delta"},
+    "ReduceL1": {"axes"},
+    "ReduceL2": {"axes"},
+    "ReduceLogSum": {"axes"},
+    "ReduceLogSumExp": {"axes"},
+    "ReduceMax": {"axes"},
+    "ReduceMean": {"axes"},
+    "ReduceMin": {"axes"},
+    "ReduceProd": {"axes"},
+    "ReduceSum": {"axes"},
+    "ReduceSumSquare": {"axes"},
     "Reshape": {"shape"},
     "Resize": {"roi", "scales", "sizes"},
     "Slice": {"starts", "ends", "axes", "steps"},
     "Split": {"split"},
+    "SplitToSequence": {"split"},
+    "STFT": {"frame_step", "frame_length"},
     "Squeeze": {"axes"},
     "Tile": {"repeats"},
     "TopK": {"K"},
     "Unsqueeze": {"axes"},
+    "Upsample": {"scales"},
 }
 
 # Extra tensor types patched into ops' outputs that are declared with a *direct*
