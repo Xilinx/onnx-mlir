@@ -237,6 +237,11 @@ def HaveSameElementType : Constraint<
           "mlir::dyn_cast<ShapedType>($1.getType()).getElementType())">,
     "have same element types">;
 
+def ElementTypeIsI1 : Constraint<
+    CPred<"mlir::isa<ShapedType>($0.getType()) && "
+          "mlir::cast<ShapedType>($0.getType()).getElementType().isInteger(1)">,
+    "element type is i1">;
+
 def HaveSameElementTypeBitWidth: Constraint<
     CPred<"(mlir::dyn_cast<ShapedType>($0.getType()).getElementTypeBitWidth() == "
           "mlir::dyn_cast<ShapedType>($1.getType()).getElementTypeBitWidth())">,
@@ -566,6 +571,12 @@ def FuseMulConvNullBiasPattern: Pat<
 // ONNX_Op (onnx.Identity (%X)) = ONNX_Op (%X)
 def IdentityEliminationPattern : Pat<(ONNXIdentityOp $arg),
                                      (replaceWithValue $arg)>;
+
+// not(not(%X)) = %X
+def RemoveNotNotPattern : Pat<
+  (ONNXNotOp:$res (ONNXNotOp $val)),
+  (replaceWithValue $val),
+  [(HaveSameShapedType $res, $val), (ElementTypeIsI1 $val)]>;
 
 //===----------------------------------------------------------------------===//
 // Canonicalization for ONNXDropoutOp
