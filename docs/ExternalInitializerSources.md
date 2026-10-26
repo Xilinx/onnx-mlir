@@ -72,8 +72,11 @@ the existing cache and numerical decoders. For a model source, it caches the
 parsed backup model, finds the named `TensorProto`, and decodes its embedded data
 or follows its external-data metadata. It replaces each source with an
 `ONNXConstantOp` containing a `DisposableElementsAttr`. Other transformations
-can use `InitializerSourceMaterializer` to perform the same conversion for one
-source. The materializer keeps the parsed backup-model cache across calls.
+can call `materializeInitializerSource` to perform the same conversion for one
+source, replacing all its uses with the compiler-owned constant. Callers obtain
+an opaque cache from `createInitializerSourceCache` and reuse it across calls
+to avoid reparsing backup models. Payload resolution does not modify IR; only
+materialization creates a constant and replaces the source.
 
 The following options can leave source operations in the module for testing:
 

@@ -243,6 +243,64 @@ def main(driver):
         assert eager == default and len(default) == 2
         assert all("disposable=1" in value for value in default)
         checks += 1
+        # Both import and backup-model resolution default an absent length to
+        # the payload size, while rejecting explicit zero for a nonempty tensor.
+        saved = folder / "metadata-source.mlir"
+        run(
+            driver,
+            "--input",
+            model,
+            "--source=live",
+            "--live-data",
+            data,
+            "--skip-all",
+            "--output",
+            saved,
+        )
+        proto = onnx.load_model(model, load_external_data=False)
+        for tensor in proto.graph.initializer:
+            entries = [field for field in tensor.external_data if field.key != "length"]
+            del tensor.external_data[:]
+            tensor.external_data.extend(entries)
+        model.write_bytes(proto.SerializeToString())
+        assert constants(run(driver, "--input", model)) == default
+        assert constants(run(driver, "--input", saved, "--read-ir")) == default
+        checks += 2
+        tensor = proto.graph.initializer[0]
+        tensor.external_data.add(key="length", value="0")
+        model.write_bytes(proto.SerializeToString())
+        run(
+            driver,
+            "--input",
+            saved,
+            "--read-ir",
+            error="backup initializer length disagrees with source",
+        )
+        checks += 1
+        tensor.external_data[-1].value = "not-a-length"
+        model.write_bytes(proto.SerializeToString())
+        run(
+            driver,
+            "--input",
+            saved,
+            "--read-ir",
+            error="invalid external metadata in backup initializer: length",
+        )
+        checks += 1
+        model, data, _ = fixture(folder)
+        # Materialization preserves attached metadata but removes the source
+        # locator and the caller-owned cache marker from the resulting constant.
+        saved.write_text(
+            saved.read_text().replace(
+                'kind = "onnx_model"', 'test.marker = "kept", kind = "onnx_model"'
+            )
+        )
+        materialized = folder / "metadata-constant.mlir"
+        run(driver, "--input", saved, "--read-ir", "--output", materialized)
+        result = materialized.read_text()
+        assert result.count('test.marker = "kept"') == 2
+        assert "caller_owned_data" not in result and 'kind = "onnx_model"' not in result
+        checks += 1
         selected = run(driver, "--input", model, "--skip-name=W0")
         assert "source W0 live=0" in selected
         assert "source W1" not in selected and len(constants(selected)) == 1

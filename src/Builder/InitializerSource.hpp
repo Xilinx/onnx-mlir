@@ -6,27 +6,27 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "src/Builder/FrontendDialectTransformer.hpp"
-#include "src/Dialect/ONNX/CallerOwnedDataAttr.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
+#include <memory>
 
 namespace onnx_mlir {
-// Converts individual initializer sources on demand. Reusing one instance
-// shares its parsed backup-model cache across materializations.
-class InitializerSourceMaterializer {
-public:
-  InitializerSourceMaterializer();
-  ~InitializerSourceMaterializer();
+struct InitializerSourceCache;
 
-  mlir::FailureOr<mlir::ONNXConstantOp> materialize(
-      mlir::ONNXInitializerSourceOp op, mlir::RewriterBase &rewriter);
+// Reads one source and replaces all its uses with a compiler-owned constant.
+// Preserves discardable metadata. On failure, leaves the source unchanged.
+mlir::FailureOr<mlir::ONNXConstantOp> materializeInitializerSource(
+    mlir::ONNXInitializerSourceOp op, mlir::RewriterBase &rewriter,
+    InitializerSourceCache &cache);
 
-private:
-  struct Impl;
-  std::unique_ptr<Impl> impl;
-};
+// Reuse a cache across materializations to parse each backup model only once.
+// The returned handle owns the cache without exposing its implementation.
+std::shared_ptr<InitializerSourceCache> createInitializerSourceCache();
 
 std::string getInitializerIdentity(
     mlir::MLIRContext *context, const InitializerIdentity &identity);
+
+// Records a durable locator and optional caller-owned data without reading
+// tensor contents. Does not open the external data file or backup model.
 mlir::FailureOr<mlir::ONNXInitializerSourceOp> createInitializerSource(
     mlir::OpBuilder &builder, const onnx::TensorProto &tensor,
     mlir::RankedTensorType type, llvm::ArrayRef<std::string> scope,
