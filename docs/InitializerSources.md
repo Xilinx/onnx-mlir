@@ -1,10 +1,11 @@
 <!--- SPDX-License-Identifier: Apache-2.0 -->
 <!--- Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its affiliates -->
 
-# External Initializer Sources
+# Initializer Sources
 
-This document describes `ONNXInitializerSourceOp`, which represents an external
-ONNX initializer without reading its data during model import.
+This document describes `ONNXInitializerSourceOp`, which represents an ONNX
+initializer without reading its data during model import. The initializer may
+be stored in the model protobuf or in an external data file.
 
 ## Motivation
 
@@ -13,14 +14,14 @@ import. After this conversion, the compiler cannot distinguish an initializer
 from a constant produced by a compiler transformation. Import must also read the
 external data before the compiler knows whether its contents are needed.
 
-`ONNXInitializerSourceOp` preserves the initializer name and external file range
-until an explicit materialization pass. This allows a compiler to keep selected
-initializers available for later processing while using the existing eager
-behavior for the other initializers.
+`ONNXInitializerSourceOp` preserves the initializer name and durable storage
+description until an explicit materialization request. This allows a compiler
+to keep initializers available for later processing without constructing their
+MLIR element values during import.
 
-This feature is experimental and disabled by default. It currently applies only
-to initializers with `TensorProto::EXTERNAL`. Initializers stored in the model
-protobuf continue to use the existing import path.
+This feature is experimental and disabled by default. When enabled, it applies
+to supported dense tensors in the graph initializer list, including both
+`TensorProto::EXTERNAL` tensors and tensors stored in the model protobuf.
 
 ## ONNXInitializerSourceOp
 
@@ -28,6 +29,7 @@ The operation produces a ranked tensor value. For example:
 
 ```mlir
 %0 = "onnx.InitializerSource"() {
+  is_input = false,
   kind = "external_data",
   length = 64 : i64,
   name = "weight",
@@ -38,15 +40,23 @@ The operation produces a ranked tensor value. For example:
 ```
 
 The operation contains an explicit source kind, the ONNX graph scope and
-initializer name, the ONNX `TensorProto` data type, and an absolute path. The
-scope is an array of nested graph names; it is empty for the outermost
-graph. Keeping the components separate avoids assigning separator semantics to
-ONNX names. An `external_data` source also contains its byte offset and length.
+initializer name, and an absolute path. Its result type records the tensor's
+element type and shape. The scope is an array of nested graph names; it is empty
+for the outermost graph. Keeping the components separate avoids assigning
+separator semantics to ONNX names. An `external_data` source also contains its
+byte offset and length.
+
+The Boolean `is_input` flag records whether the initializer's name also appears
+in its owning graph's input list. Optimizations can use this flag when deciding
+whether to materialize the initializer as a constant or specialize on its
+contents. For an initializer that is also an input, such specialization can bake
+its default value into the compiled computation, preventing later overrides.
+
 For an ONNX Runtime `_ORT_MEM_ADDR_` initializer, an `onnx_model` source records
 the path of a backup copy of the original ONNX model. This backup model has
 ordinary durable tensor storage instead of process-local addresses. After the
-IR is serialized and the live memory is unavailable, materialization finds the
-named initializer in that model.
+IR is serialized and the caller-owned data is unavailable, materialization finds
+the named initializer in that model.
 
 The verifier checks the source fields, result element type, tensor shape, and
 the payload length of direct external ranges. A new ONNX data type must have
@@ -68,20 +78,34 @@ external data file.
 By default, import then runs the initializer-source materialization pass before
 returning the module. This preserves the existing behavior for callers that opt
 in only to test the new import path. The pass reads direct external sources with
-the existing cache and numerical decoders. For a model source, it caches the
-parsed backup model, finds the named `TensorProto`, and decodes its embedded data
-or follows its external-data metadata. It replaces each source with an
+the existing cache and numerical decoders. For a model source, it first uses a
+non-owning reference to a caller-owned `TensorProto` when available. Otherwise,
+it caches the parsed source model, finds the named `TensorProto`, and decodes its
+embedded data or follows its external-data metadata. It replaces each source with an
 `ONNXConstantOp` containing a `DisposableElementsAttr`. Other transformations
 can call `materializeInitializerSource` to perform the same conversion for one
 source, replacing all its uses with the compiler-owned constant. Callers obtain
 an opaque cache from `createInitializerSourceCache` and reuse it across calls
-to avoid reparsing backup models. Payload resolution does not modify IR; only
+to avoid reparsing source models. Payload resolution does not modify IR; only
 materialization creates a constant and replaces the source.
+
+Structural operands are operands whose values are inspected for compile-time
+semantics, including result shapes, axes, and control flow. Examples include
+`Reshape`'s `shape` and `CumSum`'s `axis`. Generated standard-domain ONNX
+operations identify these roles through `StructuralOperandOpInterface`.
+The materialization pass consumes an initializer source in such a position even
+when the source would otherwise be skipped. It also traces Loop body arguments
+to their initial operands. This classification describes the operand role; the
+operand is still allowed to be a runtime value or an ordinary constant.
 
 The following options can leave source operations in the module for testing:
 
-- `skipAllInitializerMaterialization` leaves all sources unchanged.
-- `skipInitializerMaterialization` leaves the named sources unchanged.
+- `skipAllInitializerMaterialization` skips sources except those required by
+  structural operands or selected by `forceInitializerMaterialization`.
+- `skipInitializerMaterialization` skips named sources with the same exceptions.
+- `forceInitializerMaterialization` materializes named sources even when one of
+  the skip options applies. It is an escape hatch for downstream code that has
+  not yet adopted initializer sources.
 
 An outermost initializer is selected by its unmodified ONNX name, for example
 `weight`. A nested initializer uses MLIR nested symbol-reference syntax, for
@@ -89,7 +113,8 @@ example `@graph::@nested_graph::@weight`. MLIR quoting makes each component
 unambiguous, such as `@"graph/with/slash"::@weight`. An exact outermost name is
 checked before parsing a nested symbol reference, so an outermost name beginning
 with `@` remains selectable without modification. An unmatched name produces a
-warning. The skip-all option takes precedence over the name list.
+warning. Skip-all makes the skip-name list redundant; force-name still
+materializes a selected source.
 
 The symbol-reference spelling is a selector syntax, not a complete structural
 path through an ONNX protobuf. The current scope records only each nested
@@ -100,7 +125,7 @@ path through an ONNX protobuf. The current scope records only each nested
   ambiguity before creating sources in either graph. A future selector syntax
   may add node and attribute identity for this case.
 - An initializer in a graph nested inside a model-local `FunctionProto` cannot
-  be resolved from a backup model using this path. The importer may expand the
+  be resolved from a source model using this path. The importer may expand the
   same function definition at several call sites, producing several MLIR
   occurrences with the same selector. Source-enabled import rejects such an
   initializer until function and graph-attribute provenance is represented.
@@ -141,30 +166,40 @@ Import checks the address and size metadata without reading the caller-owned
 data. The caller must ensure that the data and the named tensor in the backup
 model contain the same immutable tensor snapshot.
 
-The optional `#onnx.caller_owned_data` attribute stores the view, not its
-storage or a recipe for reconstructing it. The caller must keep that storage
-alive and bytewise immutable until the `MLIRContext` passed to the import entry
-point is destroyed. Cloning the IR copies the same non-owning view and does not
-extend its lifetime. This requirement can be longer than the lifetime of
-buffers managed by `DisposableGarbageCollector`.
+The optional `#onnx.caller_owned_data` attribute stores a non-owning reference
+to raw bytes or an embedded `TensorProto`, not the storage or a recipe for
+reconstructing it. The caller must keep that storage alive and bytewise
+immutable until the `MLIRContext` passed to the import entry point is destroyed.
+Cloning the IR copies the same reference and does not extend its lifetime. This
+requirement can be longer than the lifetime of buffers managed by
+`DisposableGarbageCollector`.
 
-## Caller Lifetime Requirement
+## Embedded Initializers and Caller Lifetime
 
-All `ImportFrontendModel*` entry points borrow `ImportOptions` and their ordinary
-input buffer or protobuf only for the duration of the call. Process-local source
-references have a longer lifetime. A caller that supplies caller-owned
-initializer data must keep the referenced model snapshot alive and bytewise
-immutable until the `MLIRContext` passed to the import call is destroyed. This
-includes backing data reached through a future model resolver or retained
-`const TensorProto *`.
+All `ImportFrontendModel*` entry points reference `ImportOptions` and their
+ordinary input buffer only for the duration of the call. Process-local
+initializer-source references have a longer lifetime. The entry points that take a caller-owned
+`ModelProto` store non-owning references to its embedded `TensorProto`
+initializers. The caller must keep that model alive and bytewise immutable until
+the `MLIRContext` passed to the import call is destroyed.
 
-The implementation retains only non-owning views of caller-owned data in
-`ImportOptions::externalInitializerBackups`; it does not retain the input
-`ModelProto`. Model sources retain a path and parse the backup model when their
-contents are requested. A future process-local model or tensor resolver would
-use the same lifetime contract. The file and array import entry points parse
-temporary protobuf objects, so they cannot expose pointers into those objects
-as deferred sources.
+File and array entry points parse temporary protobuf objects and therefore
+create disk-only sources. A file entry point supplies its absolute input path as
+the source model path. Input filenames are resolved against the working
+directory; explicitly supplied relative `initializerSourceModelPath` values are
+resolved against `externalDataDir`. An array caller must provide
+`initializerSourceModelPath` when embedded initializers are selected. ModelProto
+callers must also provide this path so assembly and bytecode have a durable
+fallback after process-local references are discarded. Import from standard
+input requires an explicit source model path for embedded initializers.
+
+The source model must contain the same immutable initializer snapshot as the
+imported model: scoped names, types, shapes, and values must agree. This applies
+to embedded initializers as well as `_ORT_MEM_ADDR_` backups. Import does not read
+payloads to verify equality. Materialization checks the located tensor's type
+and shape, but cannot detect different values with matching metadata. Callers
+must ensure snapshot equality before import and keep both representations
+unchanged while referenced.
 
 ## Assembly and Bytecode
 
@@ -172,40 +207,44 @@ Assembly and bytecode serialize `#onnx.caller_owned_data` as an empty marker.
 They do not contain the process-local address, caller-owned data, or tensor
 data. Parsing the saved IR creates an empty marker, which behaves like an absent
 attribute and makes the operation use its durable metadata. A different process
-can therefore load a direct external range or find a named tensor in the backup
+can therefore load a direct external range or find a named tensor in the source
 model after the original caller-owned data is gone.
 
-External files and backup models must not change while referenced by a
+External files and source models must not change while referenced by a
 compilation. This is also required by the existing whole-file external-data
 cache and parsed-model cache.
 
 ## Protobuf Tensor Lookup
 
-An `onnx_model` source retains the backup model path, structured graph path,
-initializer name, data type, and result type. It does not retain a byte offset
-into the protobuf. Tensor data may be encoded as `raw_data` or typed repeated
-fields, and protobuf wire offsets are not a stable interface.
+An `onnx_model` source records the source model path, structured graph path,
+initializer name, and result type. It does not record a byte offset into the
+protobuf. Tensor data may be encoded as `raw_data` or typed repeated fields, and
+protobuf wire offsets are not a stable interface.
 
-Materialization caches the backup model, finds the named initializer, validates
+Materialization caches the source model, finds the named initializer, validates
 its data type and shape, and uses the existing tensor decoder. If the located
-tensor is external, its location is resolved relative to the backup model. A
+tensor is external, its location is resolved relative to the source model. A
 second `_ORT_MEM_ADDR_` marker is rejected because it is not a durable fallback.
-Direct deferred import of an initializer originally stored in the protobuf is
-future work; current model sources provide the durable fallback for live memory.
+The same lookup supports initializers that were originally stored in the model
+protobuf and `_ORT_MEM_ADDR_` tensors whose durable representation is the named
+tensor in the source model.
 
 ## Current Limitations
 
-The new import path handles dense tensors in the model graph's initializer
-lists, subject to the nested-scope restrictions above. Tensor-valued node
+The new import path handles supported dense numeric and Boolean tensors in the
+model graph's initializer lists, subject to the nested-scope restrictions above.
+String initializers continue to use eager import. Tensor-valued node
 attributes, including attributes of ONNX `Constant` nodes, continue to use
 eager import. Sparse initializers are not handled by this path. Initializers in
 graphs nested inside model-local functions and tensor-valued attributes in
 those functions cannot be deferred; source-enabled import rejects the former
 and imports the latter eagerly.
 
-Selecting initializers stored in the model protobuf for deferred import,
-evaluation of constant-foldable expressions containing initializer sources,
-weights packing, and standalone weights repacking are future work.
+Evaluation of constant-foldable expressions containing initializer sources,
+weights packing, and standalone weights repacking are future work. Structural
+materialization recognizes directly connected sources and sources reached via
+Loop body arguments' initial operands. It does not walk through foldable
+expressions or prove that loop-carried values are constant across iterations.
 
 See the generated [ONNX dialect reference](Dialects/onnx.md) for the operation
 definition. See

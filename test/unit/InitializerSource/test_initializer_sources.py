@@ -17,8 +17,10 @@ except ModuleNotFoundError:
     sys.exit(77)
 
 
-def run(driver, *args, error=None):
-    result = subprocess.run([driver, *map(str, args)], capture_output=True, text=True)
+def run(driver, *args, error=None, cwd=None):
+    result = subprocess.run(
+        [driver, *map(str, args)], capture_output=True, text=True, cwd=cwd
+    )
     if error is None:
         assert result.returncode == 0, (args, result.returncode, result.stderr)
     else:
@@ -159,6 +161,123 @@ def embedded_fixture(folder, raw):
     return path, live
 
 
+def structural_fixture(folder):
+    structural_data = folder / "structural.bin"
+    structural_data.write_bytes(struct.pack("<5q", 2, 2, 0, 1, 0))
+    shape = helper.make_tensor("shape", TensorProto.INT64, [2], [2, 2])
+    shape.ClearField("int64_data")
+    shape.data_location = TensorProto.EXTERNAL
+    shape.external_data.add(key="location", value=structural_data.name)
+    shape.external_data.add(key="offset", value="0")
+    shape.external_data.add(key="length", value="16")
+    axes = TensorProto(
+        name="axes",
+        data_type=TensorProto.INT64,
+        dims=[2],
+        data_location=TensorProto.EXTERNAL,
+    )
+    axes.external_data.add(key="location", value=structural_data.name)
+    axes.external_data.add(key="offset", value="16")
+    axes.external_data.add(key="length", value="16")
+    axis = TensorProto(
+        name="axis",
+        data_type=TensorProto.INT64,
+        dims=[],
+        data_location=TensorProto.EXTERNAL,
+    )
+    axis.external_data.add(key="location", value=structural_data.name)
+    axis.external_data.add(key="offset", value="32")
+    axis.external_data.add(key="length", value="8")
+    data = helper.make_tensor("data", TensorProto.FLOAT, [4], [1.0, 2.0, 3.0, 4.0])
+    nodes = [
+        helper.make_node("Reshape", ["data", "shape"], ["Y"]),
+        helper.make_node("Identity", ["shape"], ["S"]),
+        helper.make_node("ReduceSum", ["data", "axes"], ["R"], keepdims=0),
+        helper.make_node("Identity", ["axes"], ["A"]),
+        helper.make_node("CumSum", ["data", "axis"], ["C"]),
+        helper.make_node("Identity", ["axis"], ["CA"]),
+    ]
+    outputs = [
+        helper.make_tensor_value_info("Y", TensorProto.FLOAT, [2, 2]),
+        helper.make_tensor_value_info("S", TensorProto.INT64, [2]),
+        helper.make_tensor_value_info("R", TensorProto.FLOAT, []),
+        helper.make_tensor_value_info("A", TensorProto.INT64, [2]),
+        helper.make_tensor_value_info("C", TensorProto.FLOAT, [4]),
+        helper.make_tensor_value_info("CA", TensorProto.INT64, []),
+    ]
+    graph = helper.make_graph(
+        nodes, "model", [], outputs, initializer=[data, shape, axes, axis]
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    path = folder / "structural.onnx"
+    path.write_bytes(model.SerializeToString())
+    return path
+
+
+def non_initializer_structural_fixture(folder, constant):
+    data = helper.make_tensor("data", TensorProto.FLOAT, [4], [1.0, 2.0, 3.0, 4.0])
+    inputs = []
+    nodes = []
+    if constant:
+        shape = helper.make_tensor("shape_value", TensorProto.INT64, [2], [2, 2])
+        nodes.append(helper.make_node("Constant", [], ["shape"], value=shape))
+    else:
+        inputs.append(helper.make_tensor_value_info("shape", TensorProto.INT64, [2]))
+    nodes.append(helper.make_node("Reshape", ["data", "shape"], ["Y"]))
+    output = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [None, None])
+    graph = helper.make_graph(nodes, "model", inputs, [output], initializer=[data])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    kind = "constant" if constant else "runtime"
+    path = folder / f"structural-{kind}.onnx"
+    path.write_bytes(model.SerializeToString())
+    return path
+
+
+def loop_structural_fixture(folder):
+    structural_data = folder / "loop-structural.bin"
+    structural_data.write_bytes(struct.pack("<2q", 2, 2))
+    shape = TensorProto(
+        name="shape",
+        data_type=TensorProto.INT64,
+        dims=[2],
+        data_location=TensorProto.EXTERNAL,
+    )
+    shape.external_data.add(key="location", value=structural_data.name)
+    shape.external_data.add(key="offset", value="0")
+    shape.external_data.add(key="length", value="16")
+
+    body_inputs = [
+        helper.make_tensor_value_info("iteration", TensorProto.INT64, []),
+        helper.make_tensor_value_info("cond_in", TensorProto.BOOL, []),
+        helper.make_tensor_value_info("shape_in", TensorProto.INT64, [2]),
+    ]
+    body_outputs = [
+        helper.make_tensor_value_info("cond_out", TensorProto.BOOL, []),
+        helper.make_tensor_value_info("shape_out", TensorProto.INT64, [2]),
+    ]
+    body_data = helper.make_tensor(
+        "body_data_value", TensorProto.FLOAT, [4], [1.0, 2.0, 3.0, 4.0]
+    )
+    body_nodes = [
+        helper.make_node("Constant", [], ["body_data"], value=body_data),
+        helper.make_node("Reshape", ["body_data", "shape_in"], ["reshaped"]),
+        helper.make_node("Identity", ["cond_in"], ["cond_out"]),
+        helper.make_node("Identity", ["shape_in"], ["shape_out"]),
+    ]
+    body = helper.make_graph(body_nodes, "loop_body", body_inputs, body_outputs)
+    inputs = [
+        helper.make_tensor_value_info("M", TensorProto.INT64, []),
+        helper.make_tensor_value_info("cond", TensorProto.BOOL, []),
+    ]
+    output = helper.make_tensor_value_info("final_shape", TensorProto.INT64, [2])
+    loop = helper.make_node("Loop", ["M", "cond", "shape"], ["final_shape"], body=body)
+    graph = helper.make_graph([loop], "model", inputs, [output], initializer=[shape])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    path = folder / "loop-structural.onnx"
+    path.write_bytes(model.SerializeToString())
+    return path
+
+
 def constants(output):
     return [line for line in output.splitlines() if line.startswith("constant ")]
 
@@ -168,6 +287,61 @@ def main(driver):
     with tempfile.TemporaryDirectory(prefix="initializer-source-") as temporary:
         folder = pathlib.Path(temporary)
         model, data, payload = fixture(folder)
+        # Record graph input membership independently of the model IR version.
+        input_model = onnx.load(model, load_external_data=False)
+        input_model.graph.input.append(
+            helper.make_tensor_value_info("W0", TensorProto.FLOAT, [4])
+        )
+        input_path = folder / "initializer-input.onnx"
+        for ir_version in (4, onnx.IR_VERSION):
+            input_model.ir_version = ir_version
+            input_path.write_bytes(input_model.SerializeToString())
+            for entry in ("raw", "preprocessed", "array", "file"):
+                out = run(driver, "--input", input_path, "--entry", entry, "--skip-all")
+                source_lines = [
+                    line for line in out.splitlines() if line.startswith("source ")
+                ]
+                assert len(source_lines) == 2
+                assert any(
+                    line.startswith("source W0 ") and line.endswith("is_input=1")
+                    for line in source_lines
+                )
+                assert any(
+                    line.startswith("source W1 ") and line.endswith("is_input=0")
+                    for line in source_lines
+                )
+                checks += 1
+        for fmt in ("assembly", "bytecode"):
+            saved = folder / f"initializer-input-{fmt}.mlir"
+            run(
+                driver,
+                "--input",
+                input_path,
+                "--skip-all",
+                "--format",
+                fmt,
+                "--output",
+                saved,
+            )
+            out = run(driver, "--input", saved, "--read-ir", "--skip-all")
+            assert "is_input=1" in out and "is_input=0" in out
+            checks += 1
+            if fmt == "assembly":
+                # Older IR without the flag still parses and defaults to false.
+                saved.write_text(saved.read_text().replace("is_input = true, ", ""))
+                out = run(driver, "--input", saved, "--read-ir", "--skip-all")
+                assert out.count("is_input=0") == 2 and "is_input=1" not in out
+                checks += 1
+        # A same-named input in the outer graph is not an input of a nested graph.
+        nested_path, _ = nested_fixture(folder)
+        nested_model = onnx.load(nested_path, load_external_data=False)
+        nested_model.graph.input.append(
+            helper.make_tensor_value_info("W", TensorProto.FLOAT, [1])
+        )
+        nested_path.write_bytes(nested_model.SerializeToString())
+        out = run(driver, "--input", nested_path, "--skip-all")
+        assert out.count("is_input=0") == 2 and "is_input=1" not in out
+        checks += 1
         content = data.read_bytes()
         data.unlink()
         for entry in ("raw", "preprocessed", "array", "file"):
@@ -206,15 +380,6 @@ def main(driver):
                 )
                 assert out.count("live=1") == 2
                 checks += 1
-        data.write_bytes(content)
-        run(
-            driver,
-            "--input",
-            model,
-            "--skip-name=misspelled",
-        )
-        data.unlink()
-        checks += 1
         # ONNX protobuf shape inference operates on TensorProto metadata and
         # does not resolve EXTERNAL payloads. It remains safe with missing data.
         out = run(
@@ -238,6 +403,23 @@ def main(driver):
         )
         checks += 1
         data.write_bytes(content)
+        out = run(
+            driver,
+            "--input",
+            model,
+            "--skip-name=misspelled",
+        )
+        assert "source W" not in out and len(constants(out)) == 2
+        checks += 1
+        out = run(
+            driver,
+            "--input",
+            model,
+            "--skip-all",
+            "--force-name=misspelled",
+        )
+        assert out.count("source W") == 2
+        checks += 1
         eager = constants(run(driver, "--input", model, "--legacy"))
         default = constants(run(driver, "--input", model))
         assert eager == default and len(default) == 2
@@ -274,7 +456,7 @@ def main(driver):
             "--input",
             saved,
             "--read-ir",
-            error="backup initializer length disagrees with source",
+            error="initializer length disagrees with source",
         )
         checks += 1
         tensor.external_data[-1].value = "not-a-length"
@@ -284,7 +466,7 @@ def main(driver):
             "--input",
             saved,
             "--read-ir",
-            error="invalid external metadata in backup initializer: length",
+            error="invalid external metadata in source initializer: length",
         )
         checks += 1
         model, data, _ = fixture(folder)
@@ -371,7 +553,7 @@ def main(driver):
             "--input",
             missing_saved,
             "--read-ir",
-            error="cannot read initializer backup model",
+            error="cannot read initializer source model",
         )
         checks += 1
         if sys.platform != "win32":
@@ -471,7 +653,7 @@ def main(driver):
                     )
                     checks += 1
         model, data, _ = fixture(folder)
-        # Embedded initializers deliberately keep the ordinary constant path.
+        # Embedded initializers follow the same source path as external ones.
         proto = onnx.load_model(model, load_external_data=False)
         proto.graph.initializer.append(
             helper.make_tensor("embedded", TensorProto.FLOAT, [1], [7.0])
@@ -479,9 +661,155 @@ def main(driver):
         model.write_bytes(proto.SerializeToString())
         data.unlink()
         out = run(driver, "--input", model, "--skip-all")
-        assert out.count("source W") == 2 and len(constants(out)) == 1
+        assert out.count("source W") == 2
+        assert "source embedded live=1" in out and not constants(out)
+        checks += 1
+        for raw in (True, False):
+            embedded_model, _ = embedded_fixture(folder, raw)
+            expected = constants(run(driver, "--input", embedded_model, "--legacy"))
+            out = run(
+                driver,
+                "--input",
+                embedded_model,
+                "--skip-all",
+            )
+            assert "source W live=1" in out and not constants(out)
+            checks += 1
+            for api in ("raw", "preprocessed", "array", "file"):
+                out = run(
+                    driver, "--input", embedded_model, f"--entry={api}", "--skip-all"
+                )
+                assert f"source W live={int(api in ('raw', 'preprocessed'))}" in out
+                assert not constants(out)
+                checks += 1
+            # The file API supplies its own durable locator when none is given.
+            # Exercise a basename and a path containing a directory, with and
+            # without the external-data base that previously doubled the path.
+            for cwd, relative in (
+                (folder, embedded_model.name),
+                (folder.parent, pathlib.Path(folder.name) / embedded_model.name),
+            ):
+                for omit_base in (False, True):
+                    args = ["--omit-external-data-dir"] if omit_base else []
+                    saved = folder / "relative-source.mlir"
+                    out = run(
+                        driver,
+                        "--input",
+                        relative,
+                        "--entry=file",
+                        "--omit-source-model-path",
+                        "--skip-all",
+                        "--output",
+                        saved,
+                        *args,
+                        cwd=cwd,
+                    )
+                    assert "source W live=0" in out and not constants(out)
+                    assert (
+                        constants(run(driver, "--input", saved, "--read-ir"))
+                        == expected
+                    )
+                    assert (
+                        constants(
+                            run(
+                                driver,
+                                "--input",
+                                relative,
+                                "--entry=file",
+                                "--omit-source-model-path",
+                                *args,
+                                cwd=cwd,
+                            )
+                        )
+                        == expected
+                    )
+                    checks += 1
+            for fmt in ("assembly", "bytecode"):
+                saved = folder / f"protobuf-{raw}.{fmt}"
+                run(
+                    driver,
+                    "--input",
+                    embedded_model,
+                    "--skip-all",
+                    "--format",
+                    fmt,
+                    "--output",
+                    saved,
+                )
+                disk_only = run(driver, "--input", saved, "--read-ir", "--skip-all")
+                assert "source W live=0" in disk_only
+                assert constants(run(driver, "--input", saved, "--read-ir")) == expected
+                checks += 1
+
+        # A structural use consumes the source globally, including its ordinary
+        # data use, while an unrelated embedded data initializer stays deferred.
+        structural_model = structural_fixture(folder)
+        out = run(
+            driver,
+            "--input",
+            structural_model,
+            "--skip-all",
+        )
+        assert "source data live=1" in out
+        assert (
+            "source shape" not in out
+            and "source axes" not in out
+            and "source axis" not in out
+        )
+        assert len(constants(out)) == 3
+        checks += 1
+        out = run(
+            driver,
+            "--input",
+            structural_model,
+            "--skip-name=data",
+            "--skip-name=shape",
+            "--skip-name=axes",
+            "--skip-name=axis",
+        )
+        assert "source data live=1" in out
+        assert len(constants(out)) == 3
+        checks += 1
+        for constant in (False, True):
+            non_initializer_model = non_initializer_structural_fixture(folder, constant)
+            out = run(
+                driver,
+                "--input",
+                non_initializer_model,
+                "--skip-all",
+            )
+            assert "source data live=1" in out
+            assert len(constants(out)) == int(constant)
+            checks += 1
+        out = run(
+            driver,
+            "--input",
+            loop_structural_fixture(folder),
+            "--skip-all",
+        )
+        assert "source shape" not in out
+        checks += 1
+        out = run(
+            driver,
+            "--input",
+            embedded_model,
+            "--skip-all",
+            "--force-name=W",
+        )
+        assert "source W" not in out and len(constants(out)) == 1
         checks += 1
         model, data, _ = fixture(folder)
+        out = run(
+            driver,
+            "--input",
+            model,
+            "--skip-name=W0",
+            "--skip-name=W1",
+            "--force-name=W0",
+        )
+        assert "source W0" not in out and "source W1" in out
+        assert len(constants(out)) == 1
+        checks += 1
         proto = onnx.load_model(model, load_external_data=False)
         for field in proto.graph.initializer[0].external_data:
             if field.key == "offset":
@@ -599,7 +927,7 @@ def main(driver):
             "--input",
             saved,
             "--read-ir",
-            error="cannot find initializer in backup model",
+            error="cannot find initializer in source model",
         )
         checks += 1
         model, data, _ = fixture(folder)
@@ -623,7 +951,7 @@ def main(driver):
             "--input",
             saved,
             "--read-ir",
-            error="backup initializer type or shape disagrees with source",
+            error="initializer type or shape disagrees with source",
         )
         checks += 1
         model, data, _ = fixture(folder)

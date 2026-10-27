@@ -43,13 +43,14 @@ class ModuleOp;
 
 namespace onnx_mlir {
 
-// callerOwnedData is a non-owning view of the raw tensor payload at the address
-// encoded by _ORT_MEM_ADDR_. The caller keeps it valid and bytewise immutable
-// until the MLIRContext passed to ImportFrontendModel* is destroyed.
-// backupModelPath names an on-disk model containing the same tensor. Assembly
-// and bytecode retain that path instead of callerOwnedData, allowing reloaded
-// IR to materialize the tensor after the caller-owned data is unavailable.
-// See docs/ExternalInitializerSources.md for the complete source contract.
+// callerOwnedData is a non-owning reference to the raw tensor payload at the
+// address encoded by _ORT_MEM_ADDR_. The caller keeps it valid and bytewise
+// immutable until the MLIRContext passed to ImportFrontendModel* is destroyed.
+// backupModelPath names an on-disk model with the same immutable tensor
+// snapshot. Assembly and bytecode record that path instead of callerOwnedData,
+// allowing reloaded IR to materialize the tensor after caller-owned data is
+// unavailable.
+// See docs/InitializerSources.md for the complete source contract.
 struct ExternalInitializerSource {
   llvm::ArrayRef<char> callerOwnedData;
   std::string backupModelPath;
@@ -117,41 +118,53 @@ struct ImportOptions {
 
   std::vector<std::string> functionsToDecompose = {};
 
-  // Experimental external-initializer source support.
+  // Experimental initializer-source support.
   bool useInitializerSources = false;
+  // Structural operands and forced names take precedence over both skip
+  // options.
   bool skipAllInitializerMaterialization = false;
   // Outermost names are unchanged. Nested names use MLIR symbol references,
   // for example @graph::@nested::@name.
   std::vector<std::string> skipInitializerMaterialization;
+  // Scoped initializer names to materialize even when skip-all or skip-names
+  // would otherwise leave them deferred.
+  std::vector<std::string> forceInitializerMaterialization;
 
   // Required for every TensorProto::EXTERNAL initializer whose location is
   // "*/_ORT_MEM_ADDR_/*" when useInitializerSources is enabled. The key is
   // the initializer's structured graph scope and ONNX tensor name. The
   // value supplies caller-owned raw tensor data beginning at the address
   // encoded in the TensorProto and a durable backup-model path containing
-  // the same scoped tensor. ONNX-MLIR keeps a non-owning view of the data; the
-  // lifetime requirement below applies. Relative backup paths are resolved
+  // the same scoped tensor. ONNX-MLIR keeps a non-owning reference to the data;
+  // the lifetime requirement below applies. Relative backup paths are resolved
   // against externalDataDir. Import fails if an in-memory initializer has no
   // matching complete entry.
   std::map<InitializerIdentity, ExternalInitializerSource>
       externalInitializerBackups;
+
+  // Durable ONNX model containing the same immutable initializer snapshot as
+  // the imported model, including initializer values, types, shapes, and scoped
+  // names. Import does not read payloads to check that the snapshots agree.
+  // File import supplies its absolute input path automatically. Array and
+  // ModelProto callers must provide this path for embedded sources. Explicit
+  // relative paths are resolved against externalDataDir.
+  std::string initializerSourceModelPath;
 };
 
 // Lifetime contract for ImportFrontendModel* source references:
 //
-// ImportOptions and ordinary input buffers are borrowed only for the duration
+// ImportOptions and ordinary input buffers are referenced only for the duration
 // of an import call. Storage referenced by a process-local initializer source
 // is different: the caller must keep it alive and bytewise immutable until the
 // MLIRContext passed to the import call is destroyed. Cloning the returned IR
 // copies the non-owning reference and does not extend the storage lifetime.
 //
-// The current external-initializer mode retains only non-owning views of
-// caller-owned data supplied in ExternalInitializerSource; it does not retain
-// the input ModelProto. A source mode that retains a ModelProto, TensorProto,
-// or resolver reference has the same context-lifetime and immutability
-// requirement. File and array entry points parse temporary ModelProto objects
-// and therefore cannot provide such references unless the caller supplies
-// separate long-lived source storage.
+// ModelProto entry points store non-owning references to selected embedded
+// TensorProto initializers. The caller must therefore keep that ModelProto
+// alive and immutable for the context lifetime. File and array entry points
+// parse temporary ModelProto objects and create disk-only sources instead.
+// ExternalInitializerSource supplies the corresponding caller-owned byte view
+// for an _ORT_MEM_ADDR_ initializer.
 
 /*!
  *  Load an ONNX model proto from a file into a protobuf object.
@@ -195,7 +208,7 @@ struct ImportOptions {
  *  @param model the onnx model protobuf.
  *  @param MLIR::module generated for the ONNX model.
  *  @pre Process-local source storage in model or options obeys the lifetime
- *  contract above if the selected source mode retains references to it.
+ *  contract above whenever a source references caller-owned storage.
  */
 [[nodiscard]] std::error_code ImportFrontendModelWithPreProcessing(
     onnx::ModelProto &model, mlir::MLIRContext &context,
@@ -207,7 +220,7 @@ struct ImportOptions {
  *  @param model the onnx model protobuf.
  *  @param MLIR::module generated for the ONNX model.
  *  @pre Process-local source storage in model or options obeys the lifetime
- *  contract above if the selected source mode retains references to it.
+ *  contract above whenever a source references caller-owned storage.
  */
 [[nodiscard]] std::error_code ImportFrontendModel(const onnx::ModelProto &model,
     mlir::MLIRContext &context, mlir::OwningOpRef<mlir::ModuleOp> &module,

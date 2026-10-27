@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+# affiliates
 
 # After modifying this file, the script will need to run to rebuild the
 # onnx-mlir ONNX Dialect. This is performed by calling
@@ -539,6 +542,56 @@ special_type_constraints = {
 special_direct_input_types = {
     "GatherND": {"indices": ["tensor(uint16)", "tensor(uint32)"]},
     "ScatterND": {"indices": ["tensor(uint16)", "tensor(uint32)"]},
+}
+
+# Standard ONNX inputs whose values are inspected for compile-time semantics,
+# including result shapes, axes, and control flow. This is onnx-mlir metadata,
+# not an ONNX requirement that the input be constant. Names are resolved against
+# each selected schema version so the generated interface remains independent
+# of operand-number changes.
+#
+# When updating ONNX, audit getInputData/getShapeInput calls under
+# third_party/onnx/onnx/defs, then cross-check onnx-mlir shape helpers and
+# transforms. The importer uses default ShapeInferenceOptions, with data
+# propagation disabled. Do not include values read only for verification or
+# optional optimization.
+structural_inputs = {
+    "AffineGrid": {"size"},
+    "BlackmanWindow": {"size"},
+    "CenterCropPad": {"shape"},
+    "Col2Im": {"image_shape", "block_shape"},
+    "ConstantOfShape": {"input"},
+    "CumSum": {"axis"},
+    "DFT": {"dft_length", "axis"},
+    "Expand": {"shape"},
+    "HammingWindow": {"size"},
+    "HannWindow": {"size"},
+    "Loop": {"M", "cond"},
+    "MelWeightMatrix": {"num_mel_bins", "dft_length"},
+    "OneHot": {"depth"},
+    "Pad": {"pads", "axes"},
+    "Range": {"start", "limit", "delta"},
+    "ReduceL1": {"axes"},
+    "ReduceL2": {"axes"},
+    "ReduceLogSum": {"axes"},
+    "ReduceLogSumExp": {"axes"},
+    "ReduceMax": {"axes"},
+    "ReduceMean": {"axes"},
+    "ReduceMin": {"axes"},
+    "ReduceProd": {"axes"},
+    "ReduceSum": {"axes"},
+    "ReduceSumSquare": {"axes"},
+    "Reshape": {"shape"},
+    "Resize": {"roi", "scales", "sizes"},
+    "Slice": {"starts", "ends", "axes", "steps"},
+    "Split": {"split"},
+    "SplitToSequence": {"split"},
+    "STFT": {"frame_step", "frame_length"},
+    "Squeeze": {"axes"},
+    "Tile": {"repeats"},
+    "TopK": {"K"},
+    "Unsqueeze": {"axes"},
+    "Upsample": {"scales"},
 }
 
 # Extra tensor types patched into ops' outputs that are declared with a *direct*
@@ -1847,6 +1900,15 @@ def gen_op_def(schema, with_version=False):
     # Error will be report if these operations are encountered at runtime.
     traits.append("DeclareOpInterfaceMethods<ShapeInferenceOpInterface>")
     traits.append("DeclareOpInterfaceMethods<ShapeHelperOpInterface>")
+    input_names = [input.name for input in schema.inputs]
+    structural_names = (
+        structural_inputs.get(schema.name, set()) if domain == "" else set()
+    )
+    structural_indices = [
+        index for index, name in enumerate(input_names) if name in structural_names
+    ]
+    if structural_indices:
+        traits.append("DeclareOpInterfaceMethods<StructuralOperandOpInterface>")
     if mlir_op_name in OpsWithResultTypeInference:
         traits.append("DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>")
     if len(regions):
@@ -2031,6 +2093,12 @@ def gen_op_def(schema, with_version=False):
     # Generate shape helper code
     s = gen_shape_helper_code(s, indent, opName, schema.domain)
 
+    if structural_indices:
+        conditions = " || ".join("index == {}".format(i) for i in structural_indices)
+        s += indent + "bool $cppClass::isStructuralOperand(unsigned index) {\n"
+        s += inc_indent(indent) + "return {};\n".format(conditions)
+        s += indent + "}\n"
+
     s += indent + "}];\n"
 
     if mlir_op_name in custom_definition_misc:
@@ -2195,6 +2263,25 @@ def build_operator_schemas(custom_ops=None):
     return operator_schemas, opsets
 
 
+def validate_structural_inputs(operator_schemas):
+    available_inputs = defaultdict(set)
+    for domain, support_map in operator_schemas:
+        if domain != "":
+            continue
+        for _, name_map in support_map:
+            for _, schema, _ in name_map:
+                available_inputs[schema.name].update(inp.name for inp in schema.inputs)
+
+    for op_name, input_names in structural_inputs.items():
+        unknown = input_names - available_inputs[op_name]
+        if unknown:
+            raise RuntimeError(
+                "structural_inputs for {} names unknown inputs: {}".format(
+                    op_name, ", ".join(sorted(unknown))
+                )
+            )
+
+
 def main(args):  # type: (Type[Args]) -> None
     if list_operation_version:
         pprint.pprint(version_dict)
@@ -2246,7 +2333,16 @@ def main(args):  # type: (Type[Args]) -> None
     autogen_warning = autogen_warning.format(curr_utc_time)
 
     op_def = args.op_def
+    op_def.write("// SPDX-License-Identifier: Apache-2.0\n")
+    op_def.write(
+        "// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its\n"
+    )
+    op_def.write("// affiliates\n\n")
     op_def.write(autogen_warning)
+    # The .td.inc suffix makes git-clang-format parse this generated TableGen
+    # as C++, which can corrupt embedded C++ blocks. The generator is the sole
+    # formatter for this file.
+    op_def.write("// clang-format off\n\n")
 
     op_importer = args.op_importer
     op_importer.write(autogen_warning)
@@ -2259,6 +2355,7 @@ def main(args):  # type: (Type[Args]) -> None
 
     new_version_dict = defaultdict(dict)
     operator_schemas, operation_opsets = build_operator_schemas(custom_ops)
+    validate_structural_inputs(operator_schemas)
 
     # Open separate files for custom domains
     custom_domain_files = {}
@@ -2322,6 +2419,8 @@ def main(args):  # type: (Type[Args]) -> None
                     else:
                         op_def.write(r)
                     previous_name = schema.name
+
+    op_def.write("// clang-format on\n")
 
     # Close custom domain files and generate corresponding C++ stubs
     for domain, file_handle in custom_domain_files.items():
