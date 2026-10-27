@@ -78,7 +78,7 @@ bool isInMemoryExternal(std::string_view location) {
 class SlicedMemoryBuffer : public llvm::MemoryBuffer {
 public:
   SlicedMemoryBuffer(
-      std::shared_ptr<llvm::MemoryBuffer> whole, llvm::StringRef slice)
+      std::shared_ptr<const llvm::MemoryBuffer> whole, llvm::StringRef slice)
       : whole(std::move(whole)) {
     init(slice.begin(), slice.end(), /*RequiresNullTerminator=*/false);
   }
@@ -88,29 +88,31 @@ public:
   BufferKind getBufferKind() const override { return whole->getBufferKind(); }
 
 private:
-  std::shared_ptr<llvm::MemoryBuffer> whole;
+  std::shared_ptr<const llvm::MemoryBuffer> whole;
 };
 
 // Returns a read-only buffer (mmap'ed if large) for a whole external data
 // file. A model typically stores thousands of tensors in one data file, and
 // opening it once per tensor is costly on network filesystems. The mapping is
 // cached only while some tensor slice still references it.
-std::shared_ptr<llvm::MemoryBuffer> getWholeExternalDataFile(
-    const std::string &pathStr) {
+llvm::ErrorOr<std::shared_ptr<const llvm::MemoryBuffer>>
+getWholeExternalDataFile(const std::string &pathStr) {
   static std::mutex mutex;
-  static llvm::StringMap<std::weak_ptr<llvm::MemoryBuffer>> cache;
+  static llvm::StringMap<std::weak_ptr<const llvm::MemoryBuffer>> cache;
+  SmallString<256> normalized;
+  if (std::error_code ec = llvm::sys::fs::real_path(pathStr, normalized))
+    return ec;
   std::lock_guard<std::mutex> lock(mutex);
-  std::weak_ptr<llvm::MemoryBuffer> &entry = cache[pathStr];
-  if (std::shared_ptr<llvm::MemoryBuffer> whole = entry.lock())
+  std::weak_ptr<const llvm::MemoryBuffer> &entry = cache[normalized];
+  if (std::shared_ptr<const llvm::MemoryBuffer> whole = entry.lock())
     return whole;
-  auto bufferOrError = llvm::MemoryBuffer::getFile(pathStr, /*IsText=*/false,
-      /*RequiresNullTerminator=*/false, /*IsVolatile=*/false);
-  if (std::error_code ec = bufferOrError.getError()) {
-    llvm::errs() << "Error " << ec.message() << " reading from file " << pathStr
-                 << "\n";
-    llvm::report_fatal_error("Cannot read external data file");
-  }
-  std::shared_ptr<llvm::MemoryBuffer> whole = std::move(bufferOrError.get());
+  auto bufferOrError = llvm::MemoryBuffer::getFile(normalized,
+      /*IsText=*/false, /*RequiresNullTerminator=*/false,
+      /*IsVolatile=*/false);
+  if (std::error_code ec = bufferOrError.getError())
+    return ec;
+  std::shared_ptr<const llvm::MemoryBuffer> whole =
+      std::move(bufferOrError.get());
   entry = whole;
   return whole;
 }
@@ -128,7 +130,13 @@ std::unique_ptr<llvm::MemoryBuffer> readExternalData_LE(
   llvm::sys::path::append(path, loc.location);
   const std::string pathStr(path.data(), path.size());
 
-  std::shared_ptr<llvm::MemoryBuffer> whole = getWholeExternalDataFile(pathStr);
+  auto wholeOrError = getWholeExternalDataFile(pathStr);
+  if (!wholeOrError) {
+    llvm::errs() << "Error " << wholeOrError.getError().message()
+                 << " reading from file " << pathStr << "\n";
+    llvm::report_fatal_error("Cannot read external data file");
+  }
+  std::shared_ptr<const llvm::MemoryBuffer> whole = *wholeOrError;
   const uint64_t fileSize = whole->getBufferSize();
   const uint64_t length =
       loc.length == uint64_t(-1) ? fileSize - loc.offset : loc.length;
@@ -377,6 +385,35 @@ ElementsAttr createStringElmAttr(
 }
 
 } // namespace
+
+llvm::ErrorOr<std::shared_ptr<const llvm::MemoryBuffer>> getExternalDataFile(
+    StringRef path) {
+  return getWholeExternalDataFile(path.str());
+}
+
+ElementsAttr externalTensorBytesToElmAttr(RankedTensorType type,
+    std::shared_ptr<const llvm::MemoryBuffer> buffer, uint64_t offset,
+    uint64_t length) {
+  assert(buffer && offset <= buffer->getBufferSize() &&
+         length <= buffer->getBufferSize() - offset &&
+         "external tensor byte range must be in bounds");
+  auto bytes = buffer->getBuffer().substr(offset, length);
+  return dispatchByBType(
+      btypeOfMlirType(type.getElementType()), [&](auto btype) {
+        using T = CppType<btype>;
+        return createElementsAttrFromMemoryBuffer_LE<T>(
+            type, std::make_unique<SlicedMemoryBuffer>(buffer, bytes));
+      });
+}
+
+ElementsAttr externalTensorBytesToElmAttr(
+    RankedTensorType type, ArrayRef<char> bytes) {
+  return dispatchByBType(
+      btypeOfMlirType(type.getElementType()), [&](auto btype) {
+        using T = CppType<btype>;
+        return createElmAttrFromRawBytes_LE<T>(type, bytes);
+      });
+}
 
 ElementsAttr onnxTensorProtoToElmAttr(MLIRContext *ctx,
     const std::string &externalDataDir, const onnx::TensorProto &tp) {

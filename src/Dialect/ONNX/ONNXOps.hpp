@@ -10,6 +10,9 @@
 //
 // This file defines ONNX operations in the MLIR operation set.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef ONNX_MLIR_ONNX_OPS_H
@@ -34,4 +37,9 @@ static constexpr int CURRENT_ONNX_OPSET = 22;
 
 #define GET_OP_CLASSES
 #include "src/Dialect/ONNX/ONNXOps.hpp.inc"
+
+namespace onnx_mlir {
+mlir::FailureOr<uint64_t> getInitializerSourcePayloadSize(
+    mlir::RankedTensorType type);
+} // namespace onnx_mlir
 #endif
