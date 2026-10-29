@@ -59,8 +59,9 @@ func.func @fuse_constant_pads(%arg0: tensor<2x3xf32>) -> tensor<6x7xf32> {
 
 // CHECK-LABEL: func.func @fuse_constant_pads
 // CHECK-DAG: %[[PADS:.*]] = onnx.Constant dense<[1, 1, 3, 3]> : tensor<4xi64>
+// CHECK-DAG: %[[ZERO:.*]] = onnx.Constant dense<0.000000e+00> : tensor<f32>
 // CHECK-DAG: %[[NONE:.*]] = "onnx.NoValue"() {value} : () -> none
-// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], %[[NONE]], %[[NONE]]) {mode = "constant"} : (tensor<2x3xf32>, tensor<4xi64>, none, none) -> tensor<6x7xf32>
+// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], %[[ZERO]], %[[NONE]]) {mode = "constant"} : (tensor<2x3xf32>, tensor<4xi64>, tensor<f32>, none) -> tensor<6x7xf32>
 // CHECK-NOT: onnx.Pad
 // CHECK: return %[[PAD]] : tensor<6x7xf32>
 
@@ -167,7 +168,7 @@ func.func @fuse_pad_chain_with_axes(
 // CHECK-LABEL: func.func @fuse_pad_chain_with_axes
 // CHECK-DAG: %[[PADS:.*]] = onnx.Constant dense<[0, 2, 0, 2]> : tensor<4xi64>
 // CHECK-DAG: %[[AXES:.*]] = "onnx.NoValue"() {value} : () -> none
-// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], {{.*}}, %[[AXES]]) {mode = "constant"} : (tensor<2x4xf32>, tensor<4xi64>, none, none) -> tensor<2x8xf32>
+// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], {{.*}}, %[[AXES]]) {mode = "constant"} : (tensor<2x4xf32>, tensor<4xi64>, tensor<f32>, none) -> tensor<2x8xf32>
 // CHECK-NOT: onnx.Pad
 // CHECK: return %[[PAD]] : tensor<2x8xf32>
 
@@ -193,7 +194,7 @@ func.func @fuse_pad_chain_on_different_axes(
 // CHECK-LABEL: func.func @fuse_pad_chain_on_different_axes
 // CHECK-DAG: %[[PADS:.*]] = onnx.Constant dense<[1, 3, 2, 4]> : tensor<4xi64>
 // CHECK-DAG: %[[AXES:.*]] = "onnx.NoValue"() {value} : () -> none
-// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], {{.*}}, %[[AXES]]) {mode = "constant"} : (tensor<2x3xf32>, tensor<4xi64>, none, none) -> tensor<5x10xf32>
+// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], {{.*}}, %[[AXES]]) {mode = "constant"} : (tensor<2x3xf32>, tensor<4xi64>, tensor<f32>, none) -> tensor<5x10xf32>
 // CHECK-NOT: onnx.Pad
 // CHECK: return %[[PAD]] : tensor<5x10xf32>
 
@@ -217,7 +218,7 @@ func.func @fuse_pad_chain_mixed_axes(
 
 // CHECK-LABEL: func.func @fuse_pad_chain_mixed_axes
 // CHECK-DAG: %[[PADS:.*]] = onnx.Constant dense<[1, 1, 1, 2]> : tensor<4xi64>
-// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], {{.*}}) {mode = "constant"} : (tensor<2x3xf32>, tensor<4xi64>, none, none) -> tensor<4x6xf32>
+// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], {{.*}}) {mode = "constant"} : (tensor<2x3xf32>, tensor<4xi64>, tensor<f32>, none) -> tensor<4x6xf32>
 // CHECK-NOT: onnx.Pad
 // CHECK: return %[[PAD]] : tensor<4x6xf32>
 
@@ -243,6 +244,50 @@ func.func @fuse_pad_chain_with_negative_axis(
 // CHECK-LABEL: func.func @fuse_pad_chain_with_negative_axis
 // CHECK-DAG: %[[PADS:.*]] = onnx.Constant dense<[2, 1, 3, 1]> : tensor<4xi64>
 // CHECK-DAG: %[[AXES:.*]] = "onnx.NoValue"() {value} : () -> none
-// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], {{.*}}, %[[AXES]]) {mode = "constant"} : (tensor<2x4xf32>, tensor<4xi64>, none, none) -> tensor<7x6xf32>
+// CHECK: %[[PAD:.*]] = "onnx.Pad"(%arg0, %[[PADS]], {{.*}}, %[[AXES]]) {mode = "constant"} : (tensor<2x4xf32>, tensor<4xi64>, tensor<f32>, none) -> tensor<7x6xf32>
 // CHECK-NOT: onnx.Pad
 // CHECK: return %[[PAD]] : tensor<7x6xf32>
+
+// -----
+
+// An absent constant_value of a constant-mode Pad is materialized as zero.
+func.func @materialize_absent_constant_value(%arg0: tensor<4xi8>) -> tensor<6xi8> {
+  %pads = onnx.Constant dense<[1, 1]> : tensor<2xi64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %result = "onnx.Pad"(%arg0, %pads, %none, %none) {mode = "constant"} : (tensor<4xi8>, tensor<2xi64>, none, none) -> tensor<6xi8>
+  return %result : tensor<6xi8>
+}
+
+// CHECK-LABEL: func.func @materialize_absent_constant_value
+// CHECK-DAG: %[[PADS:.*]] = onnx.Constant dense<1> : tensor<2xi64>
+// CHECK-DAG: %[[ZERO:.*]] = onnx.Constant dense<0> : tensor<i8>
+// CHECK-DAG: %[[NONE:.*]] = "onnx.NoValue"() {value} : () -> none
+// CHECK: "onnx.Pad"(%arg0, %[[PADS]], %[[ZERO]], %[[NONE]]) {mode = "constant"} : (tensor<4xi8>, tensor<2xi64>, tensor<i8>, none) -> tensor<6xi8>
+
+// -----
+
+// Non-constant modes ignore constant_value, so it stays absent.
+func.func @preserve_absent_constant_value_reflect(%arg0: tensor<4xf32>) -> tensor<6xf32> {
+  %pads = onnx.Constant dense<[1, 1]> : tensor<2xi64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %result = "onnx.Pad"(%arg0, %pads, %none, %none) {mode = "reflect"} : (tensor<4xf32>, tensor<2xi64>, none, none) -> tensor<6xf32>
+  return %result : tensor<6xf32>
+}
+
+// CHECK-LABEL: func.func @preserve_absent_constant_value_reflect
+// CHECK: %[[NONE:.*]] = "onnx.NoValue"() {value} : () -> none
+// CHECK: "onnx.Pad"(%arg0, {{.*}}, %[[NONE]], %[[NONE]]) {mode = "reflect"}
+
+// -----
+
+// Quantized element types have no builtin zero, so constant_value stays absent.
+func.func @preserve_absent_constant_value_quantized(%arg0: tensor<4x!quant.uniform<u8:f32, 5.000000e-01:128>>) -> tensor<6x!quant.uniform<u8:f32, 5.000000e-01:128>> {
+  %pads = onnx.Constant dense<[1, 1]> : tensor<2xi64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %result = "onnx.Pad"(%arg0, %pads, %none, %none) {mode = "constant"} : (tensor<4x!quant.uniform<u8:f32, 5.000000e-01:128>>, tensor<2xi64>, none, none) -> tensor<6x!quant.uniform<u8:f32, 5.000000e-01:128>>
+  return %result : tensor<6x!quant.uniform<u8:f32, 5.000000e-01:128>>
+}
+
+// CHECK-LABEL: func.func @preserve_absent_constant_value_quantized
+// CHECK: %[[NONE:.*]] = "onnx.NoValue"() {value} : () -> none
+// CHECK: "onnx.Pad"(%arg0, {{.*}}, %[[NONE]], %[[NONE]]) {mode = "constant"}
