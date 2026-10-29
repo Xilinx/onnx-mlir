@@ -103,6 +103,237 @@ func.func @test_where_false_dynamic_broadcast(%x: tensor<?xf32>, %y: tensor<?xf3
 
 // -----
 
+// CHECK-LABEL: func.func @test_where_true_static_discarded_broadcast
+// CHECK-SAME: ([[X:%.+]]: tensor<2x3xf32>, [[Y:%.+]]: tensor<3xf32>)
+func.func @test_where_true_static_discarded_broadcast(%x: tensor<2x3xf32>, %y: tensor<3xf32>) -> tensor<2x3xf32> {
+  %cond = onnx.Constant dense<true> : tensor<i1>
+  %result = "onnx.Where"(%cond, %x, %y) : (tensor<i1>, tensor<2x3xf32>, tensor<3xf32>) -> tensor<2x3xf32>
+  // CHECK-NOT: "onnx.Where"
+  // CHECK: onnx.Return [[X]] : tensor<2x3xf32>
+  onnx.Return %result : tensor<2x3xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_where_true_static_selected_broadcast
+// CHECK-SAME: ([[X:%.+]]: tensor<3xf32>, [[Y:%.+]]: tensor<2x3xf32>)
+func.func @test_where_true_static_selected_broadcast(%x: tensor<3xf32>, %y: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  %cond = onnx.Constant dense<true> : tensor<i1>
+  %result = "onnx.Where"(%cond, %x, %y) : (tensor<i1>, tensor<3xf32>, tensor<2x3xf32>) -> tensor<2x3xf32>
+  // CHECK: [[SHAPE:%.+]] = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  // CHECK: [[RESULT:%.+]] = "onnx.Expand"([[X]], [[SHAPE]]) : (tensor<3xf32>, tensor<2xi64>) -> tensor<2x3xf32>
+  // CHECK-NOT: "onnx.Where"
+  // CHECK: onnx.Return [[RESULT]] : tensor<2x3xf32>
+  onnx.Return %result : tensor<2x3xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_where_false_static_discarded_broadcast
+// CHECK-SAME: ([[X:%.+]]: tensor<3xf32>, [[Y:%.+]]: tensor<2x3xf32>)
+func.func @test_where_false_static_discarded_broadcast(%x: tensor<3xf32>, %y: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  %cond = onnx.Constant dense<false> : tensor<i1>
+  %result = "onnx.Where"(%cond, %x, %y) : (tensor<i1>, tensor<3xf32>, tensor<2x3xf32>) -> tensor<2x3xf32>
+  // CHECK-NOT: "onnx.Where"
+  // CHECK: onnx.Return [[Y]] : tensor<2x3xf32>
+  onnx.Return %result : tensor<2x3xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_where_false_static_selected_broadcast
+// CHECK-SAME: ([[X:%.+]]: tensor<2x3xf32>, [[Y:%.+]]: tensor<3xf32>)
+func.func @test_where_false_static_selected_broadcast(%x: tensor<2x3xf32>, %y: tensor<3xf32>) -> tensor<2x3xf32> {
+  %cond = onnx.Constant dense<false> : tensor<i1>
+  %result = "onnx.Where"(%cond, %x, %y) : (tensor<i1>, tensor<2x3xf32>, tensor<3xf32>) -> tensor<2x3xf32>
+  // CHECK: [[SHAPE:%.+]] = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  // CHECK: [[RESULT:%.+]] = "onnx.Expand"([[Y]], [[SHAPE]]) : (tensor<3xf32>, tensor<2xi64>) -> tensor<2x3xf32>
+  // CHECK-NOT: "onnx.Where"
+  // CHECK: onnx.Return [[RESULT]] : tensor<2x3xf32>
+  onnx.Return %result : tensor<2x3xf32>
+}
+
+// -----
+
+// The condition itself can expand the selected branch.
+// CHECK-LABEL: func.func @test_where_condition_static_broadcast
+// CHECK-SAME: ([[X:%.+]]: tensor<3xf32>, [[Y:%.+]]: tensor<3xf32>)
+func.func @test_where_condition_static_broadcast(%x: tensor<3xf32>, %y: tensor<3xf32>) -> tensor<2x3xf32> {
+  %cond = onnx.Constant dense<true> : tensor<2x3xi1>
+  %result = "onnx.Where"(%cond, %x, %y) : (tensor<2x3xi1>, tensor<3xf32>, tensor<3xf32>) -> tensor<2x3xf32>
+  // CHECK: [[SHAPE:%.+]] = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  // CHECK: [[RESULT:%.+]] = "onnx.Expand"([[X]], [[SHAPE]]) : (tensor<3xf32>, tensor<2xi64>) -> tensor<2x3xf32>
+  // CHECK-NOT: "onnx.Where"
+  // CHECK: onnx.Return [[RESULT]] : tensor<2x3xf32>
+  onnx.Return %result : tensor<2x3xf32>
+}
+
+// -----
+
+// A provably false condition preserves the selected branch's broadcast via Expand.
+// CHECK-LABEL: func.func @test_always_false_where_static_broadcast
+// CHECK-SAME: ([[INPUT:%.+]]: tensor<?x?xi64>, [[X:%.+]]: tensor<2x2xi64>, [[Y:%.+]]: tensor<2xi64>)
+func.func @test_always_false_where_static_broadcast(%input: tensor<?x?xi64>, %x: tensor<2x2xi64>, %y: tensor<2xi64>) -> tensor<2x2xi64> {
+  %negative = onnx.Constant dense<-1> : tensor<2xi64>
+  %d0 = "onnx.Dim"(%input) {axis = 0 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %d1 = "onnx.Dim"(%input) {axis = 1 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %dims = "onnx.Concat"(%d0, %d1) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>) -> tensor<2xi64>
+  %cond = "onnx.Equal"(%dims, %negative) : (tensor<2xi64>, tensor<2xi64>) -> tensor<2xi1>
+  %result = "onnx.Where"(%cond, %x, %y) : (tensor<2xi1>, tensor<2x2xi64>, tensor<2xi64>) -> tensor<2x2xi64>
+  // CHECK: [[SHAPE:%.+]] = onnx.Constant dense<2> : tensor<2xi64>
+  // CHECK: [[RESULT:%.+]] = "onnx.Expand"([[Y]], [[SHAPE]]) : (tensor<2xi64>, tensor<2xi64>) -> tensor<2x2xi64>
+  // CHECK-NOT: "onnx.Where"
+  // CHECK: onnx.Return [[RESULT]] : tensor<2x2xi64>
+  onnx.Return %result : tensor<2x2xi64>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_where_true_same_rank
+// CHECK-SAME: ([[X:%.+]]: tensor<1x3xf32>, [[Y:%.+]]: tensor<2x3xf32>)
+func.func @test_where_true_same_rank(%x: tensor<1x3xf32>, %y: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  %cond = onnx.Constant dense<true> : tensor<i1>
+  %result = "onnx.Where"(%cond, %x, %y) : (tensor<i1>, tensor<1x3xf32>, tensor<2x3xf32>) -> tensor<2x3xf32>
+  // CHECK: [[SHAPE:%.+]] = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  // CHECK: [[RESULT:%.+]] = "onnx.Expand"([[X]], [[SHAPE]]) : (tensor<1x3xf32>, tensor<2xi64>) -> tensor<2x3xf32>
+  // CHECK-NOT: "onnx.Where"
+  // CHECK: onnx.Return [[RESULT]] : tensor<2x3xf32>
+  onnx.Return %result : tensor<2x3xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_where_false_same_rank
+// CHECK-SAME: ([[X:%.+]]: tensor<2x3xf32>, [[Y:%.+]]: tensor<2x1xf32>)
+func.func @test_where_false_same_rank(%x: tensor<2x3xf32>, %y: tensor<2x1xf32>) -> tensor<2x3xf32> {
+  %cond = onnx.Constant dense<false> : tensor<i1>
+  %result = "onnx.Where"(%cond, %x, %y) : (tensor<i1>, tensor<2x3xf32>, tensor<2x1xf32>) -> tensor<2x3xf32>
+  // CHECK: [[SHAPE:%.+]] = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  // CHECK: [[RESULT:%.+]] = "onnx.Expand"([[Y]], [[SHAPE]]) : (tensor<2x1xf32>, tensor<2xi64>) -> tensor<2x3xf32>
+  // CHECK-NOT: "onnx.Where"
+  // CHECK: onnx.Return [[RESULT]] : tensor<2x3xf32>
+  onnx.Return %result : tensor<2x3xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_where_true_scalar
+// CHECK-SAME: ([[X:%.+]]: tensor<f32>, [[Y:%.+]]: tensor<2x3xf32>)
+func.func @test_where_true_scalar(%x: tensor<f32>, %y: tensor<2x3xf32>) -> tensor<2x3xf32> {
+  %cond = onnx.Constant dense<true> : tensor<i1>
+  %result = "onnx.Where"(%cond, %x, %y) : (tensor<i1>, tensor<f32>, tensor<2x3xf32>) -> tensor<2x3xf32>
+  // CHECK: [[SHAPE:%.+]] = onnx.Constant dense<[2, 3]> : tensor<2xi64>
+  // CHECK: [[RESULT:%.+]] = "onnx.Expand"([[X]], [[SHAPE]]) : (tensor<f32>, tensor<2xi64>) -> tensor<2x3xf32>
+  // CHECK-NOT: "onnx.Where"
+  // CHECK: onnx.Return [[RESULT]] : tensor<2x3xf32>
+  onnx.Return %result : tensor<2x3xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_where_false_zero_extent
+// CHECK-SAME: ([[X:%.+]]: tensor<0x3xf32>, [[Y:%.+]]: tensor<1x3xf32>)
+func.func @test_where_false_zero_extent(%x: tensor<0x3xf32>, %y: tensor<1x3xf32>) -> tensor<0x3xf32> {
+  %cond = onnx.Constant dense<false> : tensor<i1>
+  %result = "onnx.Where"(%cond, %x, %y) : (tensor<i1>, tensor<0x3xf32>, tensor<1x3xf32>) -> tensor<0x3xf32>
+  // CHECK: [[SHAPE:%.+]] = onnx.Constant dense<[0, 3]> : tensor<2xi64>
+  // CHECK: [[RESULT:%.+]] = "onnx.Expand"([[Y]], [[SHAPE]]) : (tensor<1x3xf32>, tensor<2xi64>) -> tensor<0x3xf32>
+  // CHECK-NOT: "onnx.Where"
+  // CHECK: onnx.Return [[RESULT]] : tensor<0x3xf32>
+  onnx.Return %result : tensor<0x3xf32>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_equal_dim_sizes_negative
+func.func @test_equal_dim_sizes_negative(%input: tensor<?x?xi64>, %unknown: tensor<1xi64>) -> tensor<2xi1> {
+  %negative = onnx.Constant dense<-1> : tensor<2xi64>
+  %d0 = "onnx.Dim"(%input) {axis = 0 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %d1 = "onnx.Dim"(%input) {axis = 1 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %dims = "onnx.Concat"(%d0, %d1) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>) -> tensor<2xi64>
+  %result = "onnx.Equal"(%dims, %negative) : (tensor<2xi64>, tensor<2xi64>) -> tensor<2xi1>
+  // CHECK: [[FALSE:%.+]] = onnx.Constant dense<false> : tensor<2xi1>
+  // CHECK-NOT: "onnx.Equal"
+  // CHECK: onnx.Return [[FALSE]]
+  onnx.Return %result : tensor<2xi1>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_equal_dim_sizes_negative_reversed
+func.func @test_equal_dim_sizes_negative_reversed(%input: tensor<?x?xi64>, %unknown: tensor<1xi64>) -> tensor<2xi1> {
+  %negative = onnx.Constant dense<-1> : tensor<2xi64>
+  %d0 = "onnx.Dim"(%input) {axis = 0 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %d1 = "onnx.Dim"(%input) {axis = 1 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %dims = "onnx.Concat"(%d0, %d1) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>) -> tensor<2xi64>
+  %result = "onnx.Equal"(%negative, %dims) : (tensor<2xi64>, tensor<2xi64>) -> tensor<2xi1>
+  // CHECK: [[FALSE:%.+]] = onnx.Constant dense<false> : tensor<2xi1>
+  // CHECK-NOT: "onnx.Equal"
+  // CHECK: onnx.Return [[FALSE]]
+  onnx.Return %result : tensor<2xi1>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_equal_dim_sizes_negative_broadcast
+func.func @test_equal_dim_sizes_negative_broadcast(%input: tensor<?x?xi64>, %unknown: tensor<1xi64>) -> tensor<2x2xi1> {
+  %negative = onnx.Constant dense<-1> : tensor<2x2xi64>
+  %d0 = "onnx.Dim"(%input) {axis = 0 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %d1 = "onnx.Dim"(%input) {axis = 1 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %c = onnx.Constant dense<0> : tensor<1xi64>
+  %dims = "onnx.Concat"(%d0, %c) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>) -> tensor<2xi64>
+  %result = "onnx.Equal"(%dims, %negative) : (tensor<2xi64>, tensor<2x2xi64>) -> tensor<2x2xi1>
+  // CHECK: [[FALSE:%.+]] = onnx.Constant dense<false> : tensor<2x2xi1>
+  // CHECK-NOT: "onnx.Equal"
+  // CHECK: onnx.Return [[FALSE]]
+  onnx.Return %result : tensor<2x2xi1>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_equal_dim_sizes_nonnegative
+func.func @test_equal_dim_sizes_nonnegative(%input: tensor<?x?xi64>, %unknown: tensor<1xi64>) -> tensor<2xi1> {
+  %negative = onnx.Constant dense<0> : tensor<2xi64>
+  %d0 = "onnx.Dim"(%input) {axis = 0 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %d1 = "onnx.Dim"(%input) {axis = 1 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %dims = "onnx.Concat"(%d0, %d1) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>) -> tensor<2xi64>
+  %result = "onnx.Equal"(%dims, %negative) : (tensor<2xi64>, tensor<2xi64>) -> tensor<2xi1>
+  // CHECK: [[EQ:%.+]] = "onnx.Equal"
+  // CHECK: onnx.Return [[EQ]]
+  onnx.Return %result : tensor<2xi1>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_equal_dim_sizes_unknown_concat
+func.func @test_equal_dim_sizes_unknown_concat(%input: tensor<?x?xi64>, %unknown: tensor<1xi64>) -> tensor<2xi1> {
+  %negative = onnx.Constant dense<-1> : tensor<2xi64>
+  %d0 = "onnx.Dim"(%input) {axis = 0 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %d1 = "onnx.Dim"(%input) {axis = 1 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %dims = "onnx.Concat"(%d0, %unknown) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>) -> tensor<2xi64>
+  %result = "onnx.Equal"(%dims, %negative) : (tensor<2xi64>, tensor<2xi64>) -> tensor<2xi1>
+  // CHECK: [[EQ:%.+]] = "onnx.Equal"
+  // CHECK: onnx.Return [[EQ]]
+  onnx.Return %result : tensor<2xi1>
+}
+
+// -----
+
+// CHECK-LABEL: func.func @test_equal_dim_sizes_negative_concat
+func.func @test_equal_dim_sizes_negative_concat(%input: tensor<?x?xi64>, %unknown: tensor<1xi64>) -> tensor<2xi1> {
+  %negative = onnx.Constant dense<-1> : tensor<2xi64>
+  %d0 = "onnx.Dim"(%input) {axis = 0 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %d1 = "onnx.Dim"(%input) {axis = 1 : si64} : (tensor<?x?xi64>) -> tensor<1xi64>
+  %c = onnx.Constant dense<-1> : tensor<1xi64>
+  %dims = "onnx.Concat"(%d0, %c) {axis = 0 : si64} : (tensor<1xi64>, tensor<1xi64>) -> tensor<2xi64>
+  %result = "onnx.Equal"(%dims, %negative) : (tensor<2xi64>, tensor<2xi64>) -> tensor<2xi1>
+  // CHECK: [[EQ:%.+]] = "onnx.Equal"
+  // CHECK: onnx.Return [[EQ]]
+  onnx.Return %result : tensor<2xi1>
+}
+
+// -----
+
 // CHECK-LABEL: func @test_matmul_add_fused(%{{.*}}: tensor<10x10xf32>, %{{.*}}: tensor<10x10xf32>, %{{.*}}: tensor<10x10xf32>) -> tensor<10x10xf32> {
 func.func @test_matmul_add_fused(%a0: tensor<10x10xf32>, %a1: tensor<10x10xf32>, %a2: tensor<10x10xf32>) -> tensor<10x10xf32> {
   // CHECK-NEXT: %{{[0-9]+}} = "onnx.Gemm"(%{{.*}}, %{{.*}}, %{{.*}}) {alpha = 1.000000e+00 : f32, beta = 1.000000e+00 : f32, transA = 0 : si64, transB = 0 : si64} : (tensor<10x10xf32>, tensor<10x10xf32>, tensor<10x10xf32>) -> tensor<10x10xf32>

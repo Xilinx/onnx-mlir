@@ -514,7 +514,7 @@ bool areAllDimSizes(ValueRange vals) {
       if (!valAttr)
         return false;
       int64_t v = (*valAttr.getValues<APInt>().begin()).getSExtValue();
-      return (v > 0);
+      return (v >= 0);
     }
     return false;
   });
@@ -3419,6 +3419,40 @@ struct PropagateBiasIntoLayerNormRewritePattern
 };
 
 // =============================================================================
+// Rewrite pattern for Equal
+// =============================================================================
+
+// Fold equality between nonnegative dimension sizes and a negative splat.
+// Materialize the full result shape, including any broadcasting in Equal.
+class FoldEqualDimSizesNegativePattern : public OpRewritePattern<ONNXEqualOp> {
+public:
+  using OpRewritePattern<ONNXEqualOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXEqualOp equalOp, PatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<RankedTensorType>(equalOp.getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return failure();
+
+    auto matches = [](Value dims, Value negative) {
+      auto concatOp = dims.getDefiningOp<ONNXConcatOp>();
+      return concatOp && areAllDimSizes(concatOp.getOperands()) &&
+             isNegativeSplatConstant(negative);
+    };
+    if (!matches(equalOp.getOperand(0), equalOp.getOperand(1)) &&
+        !matches(equalOp.getOperand(1), equalOp.getOperand(0)))
+      return failure();
+
+    auto valueAttr =
+        DenseElementsAttr::get(resultType, rewriter.getBoolAttr(false));
+    auto constantOp = rewriter.create<ONNXConstantOp>(
+        equalOp.getLoc(), Attribute(), valueAttr);
+    rewriter.replaceOp(equalOp, constantOp.getResult());
+    return success();
+  }
+};
+
+// =============================================================================
 // Rewrite pattern for Where
 // =============================================================================
 
@@ -3444,10 +3478,23 @@ public:
     const bool conditionValue =
         conditionElements.getSplatValue<APInt>().isOne();
     Value selectedValue = conditionValue ? whereOp.getX() : whereOp.getY();
-    if (selectedValue.getType() != whereOp.getType() ||
-        !haveSameStaticShape(selectedValue, whereOp.getResult()))
-      return rewriter.notifyMatchFailure(
-          whereOp, "selected branch does not have the same static result type");
+    auto selectedType = dyn_cast<RankedTensorType>(selectedValue.getType());
+    auto resultType = dyn_cast<RankedTensorType>(whereOp.getType());
+    if (!selectedType || !resultType || !selectedType.hasStaticShape() ||
+        !resultType.hasStaticShape() ||
+        selectedType.getElementType() != resultType.getElementType() ||
+        selectedType.getRank() > resultType.getRank())
+      return rewriter.notifyMatchFailure(whereOp,
+          "selected branch and result must have compatible static types");
+
+    if (selectedType == resultType) {
+      rewriter.replaceOp(whereOp, selectedValue);
+      return success();
+    }
+
+    MultiDialectBuilder<OnnxBuilder> create(rewriter, whereOp.getLoc());
+    selectedValue = create.onnx.expand(resultType, selectedValue,
+        create.onnx.constantInt64(resultType.getShape()));
 
     rewriter.replaceOp(whereOp, selectedValue);
     return success();
@@ -5398,6 +5445,7 @@ void ONNXDimOp::getCanonicalizationPatterns(
 /// on the ONNXEqualOp.
 void ONNXEqualOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<FoldEqualDimSizesNegativePattern>(context);
   result.insert<BinaryOpBroadcastAxisPattern<ONNXEqualOp>>(context);
 }
 
@@ -5833,7 +5881,6 @@ void ONNXXorOp::getCanonicalizationPatterns(
 void ONNXWhereOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<RemoveWhereConstantConditionPattern>(context);
-  result.insert<AlwaysFalseWherePattern>(context);
   result.insert<RemoveWhereEqualPattern>(context);
   result.insert<NotWhereOptPattern>(context);
 }
