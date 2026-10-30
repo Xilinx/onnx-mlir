@@ -55,11 +55,10 @@ include "src/IR/AttrBase.td"
   for ONNXUnimplementedOpShapeHelper is always a possibility.
 */
 
-// A non-owning view of caller-owned, process-local tensor bytes. Cloning the
-// attribute preserves the same view and does not extend the bytes' lifetime.
-// Assembly prints and bytecode stores only an empty marker. Parsing either form
-// creates an empty view, so the owning operation must retain enough durable
-// metadata to reconstruct the tensor.
+// A non-owning reference to caller-owned tensor bytes or a TensorProto. Cloning
+// preserves the reference without extending its lifetime. Assembly prints and
+// bytecode stores only an empty marker, so parsed IR must use durable metadata
+// on the owning operation to reconstruct the tensor.
 def ONNX_CallerOwnedDataAttr : Attr<
     CPred<"::mlir::isa<::mlir::CallerOwnedDataAttr>($_self)">,
     "caller-owned process-local data"> {
@@ -74,33 +73,36 @@ def ONNXInitializerSourceOp : ONNX_Op<"InitializerSource", [Pure]> {
   let summary = "Reference an ONNX initializer without reading it";
   let description = [{
     Represents immutable ONNX initializer contents by either an external-data
-    range or a named tensor in a backup ONNX model, plus an optional non-owning
-    view of caller-owned process-local data. The caller must keep that data valid
-    and immutable for the lifetime of the owning MLIR context. The operation
+    range or a named tensor in a source ONNX model, plus an optional non-owning
+    reference to caller-owned process-local data. The caller must keep that data
+    valid and immutable for the lifetime of the owning MLIR context. The operation
     itself does not read the source. It is deliberately not `ConstantLike` and
     has no fold hook; materialization is an explicit pass boundary.
 
     The source is described by these attributes:
 
     - `kind` is `external_data` for a byte range in an external file or
-      `onnx_model` for a named tensor in a backup ONNX model.
-    - `path` is the absolute path to that external file or backup model.
+      `onnx_model` for a named tensor in a source ONNX model.
+    - `path` is the absolute path to that external file or source model.
     - `name` is the ONNX initializer name.
     - `scope` contains the names of its enclosing ONNX graphs, excluding the
       outermost graph.
+    - `is_input` records whether the initializer also appears in its owning
+      graph's input list.
     - `offset` and `length` describe an `external_data` byte range and are
       absent for an `onnx_model` source.
-    - `caller_owned_data` is an optional non-owning view of process-local data.
-      Cloning preserves the same view without extending its lifetime. Assembly
-      and bytecode contain only an empty marker, so the parsed attribute has no
-      data and the durable attributes above are used to recover the tensor.
+    - `caller_owned_data` optionally references raw bytes or a `TensorProto`.
+      Cloning preserves the same reference without extending its lifetime.
+      Assembly and bytecode contain only an empty marker, so parsed IR uses the
+      durable attributes above to recover the tensor.
 
-    See `docs/ExternalInitializerSources.md` for design details.
+    See `docs/InitializerSources.md` for design details.
   }];
   let arguments = (ins StrAttr:$kind, StrAttr:$path, StrAttr:$name,
       StrArrayAttr:$scope, OptionalAttr<I64Attr>:$offset,
       OptionalAttr<I64Attr>:$length,
-      OptionalAttr<ONNX_CallerOwnedDataAttr>:$caller_owned_data);
+      OptionalAttr<ONNX_CallerOwnedDataAttr>:$caller_owned_data,
+      DefaultValuedAttr<BoolAttr, "false">:$is_input);
   let results = (outs AnyRankedTensor:$output);
   let hasVerifier = 1;
 }

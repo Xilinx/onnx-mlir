@@ -40,6 +40,12 @@ static cl::opt<std::string> liveData("live-data",
 static cl::opt<std::string> backupPath("backup-path",
     cl::desc("Durable backup ONNX model for live initializers"),
     cl::value_desc("path"), cl::cat(initializerSourceCategory));
+static cl::opt<bool> omitSourceModelPath("omit-source-model-path",
+    cl::desc("Leave initializerSourceModelPath unset to test API defaults"),
+    cl::init(false), cl::cat(initializerSourceCategory));
+static cl::opt<bool> omitExternalDataDir("omit-external-data-dir",
+    cl::desc("Leave externalDataDir unset"), cl::init(false),
+    cl::cat(initializerSourceCategory));
 static cl::opt<std::string> format("format", cl::init("assembly"),
     cl::desc("Output format: assembly or bytecode"), cl::value_desc("format"),
     cl::cat(initializerSourceCategory));
@@ -47,14 +53,18 @@ static cl::opt<bool> readIR("read-ir",
     cl::desc("Parse --input as MLIR and materialize its sources"),
     cl::init(false), cl::cat(initializerSourceCategory));
 static cl::opt<bool> skipAll("skip-all",
-    cl::desc("Leave every initializer source unmaterialized"), cl::init(false),
-    cl::cat(initializerSourceCategory));
+    cl::desc("Skip sources except structural operands and forced names"),
+    cl::init(false), cl::cat(initializerSourceCategory));
 static cl::list<std::string> skipNames("skip-name",
-    cl::desc("Leave one fully scoped initializer path unmaterialized"),
+    cl::desc("Skip a scoped initializer unless structural or forced"),
+    cl::value_desc("name|@scope::@name"), cl::ZeroOrMore,
+    cl::cat(initializerSourceCategory));
+static cl::list<std::string> forceNames("force-name",
+    cl::desc("Materialize one scoped initializer even when skipped"),
     cl::value_desc("name|@scope::@name"), cl::ZeroOrMore,
     cl::cat(initializerSourceCategory));
 static cl::opt<bool> materializeAfter("materialize-after",
-    cl::desc("Materialize after importer options and protobuf are destroyed"),
+    cl::desc("Materialize after importer options are destroyed"),
     cl::init(false), cl::cat(initializerSourceCategory));
 static cl::opt<bool> omitBackup("omit-backup",
     cl::desc("Do not register a durable backup for live initializers"),
@@ -207,13 +217,15 @@ int main(int argc, char **argv) {
   MLIRContext &context = *ownedContext;
   context.loadDialect<ONNXDialect, func::FuncDialect>();
   OwningOpRef<ModuleOp> module;
+  std::unique_ptr<onnx::ModelProto> modelOwner;
   // The test driver acts as the VAIML/FlexML caller and keeps these buffers
   // alive while in-memory initializer sources may be read.
   std::vector<std::unique_ptr<llvm::MemoryBuffer>> liveOwners;
   if (readIR) {
     module = parseSourceFile<ModuleOp>(input, &context);
   } else {
-    onnx::ModelProto model;
+    modelOwner = std::make_unique<onnx::ModelProto>();
+    onnx::ModelProto &model = *modelOwner;
     std::string error;
     if (LoadModelProtoFromFile(input.getValue(), error, model)) {
       llvm::errs() << error << "\n";
@@ -227,8 +239,13 @@ int main(int argc, char **argv) {
     options.skipAllInitializerMaterialization = skipAll;
     options.skipInitializerMaterialization.assign(
         skipNames.begin(), skipNames.end());
-    options.externalDataDir =
-        llvm::sys::path::parent_path(input.getValue()).str();
+    options.forceInitializerMaterialization.assign(
+        forceNames.begin(), forceNames.end());
+    if (!omitExternalDataDir)
+      options.externalDataDir =
+          llvm::sys::path::parent_path(input.getValue()).str();
+    if (!omitSourceModelPath)
+      options.initializerSourceModelPath = input.getValue();
     if (sourceMode != "file" &&
         !configureLive(*model.mutable_graph(), {}, input.getValue(), options,
             liveOwners, true))
@@ -254,7 +271,7 @@ int main(int argc, char **argv) {
       llvm::errs() << error << "\n";
       return 1;
     }
-  } // Caller options and the original protobuf die here; liveOwners remains.
+  } // Caller options die here; modelOwner and liveOwners outlive the context.
   if (!module || failed(verify(*module)))
     return 1;
   if (cloneBeforeLoad)
@@ -263,7 +280,8 @@ int main(int argc, char **argv) {
     PassManager pm(&context);
     pm.addPass(createMaterializeInitializerSourcesPass(
         readIR ? bool(skipAll) : false,
-        readIR ? ArrayRef<std::string>(skipNames) : ArrayRef<std::string>()));
+        readIR ? ArrayRef<std::string>(skipNames) : ArrayRef<std::string>(),
+        readIR ? ArrayRef<std::string>(forceNames) : ArrayRef<std::string>()));
     if (failed(pm.run(*module)))
       return 1;
   }
@@ -276,8 +294,9 @@ int main(int argc, char **argv) {
                         InitializerIdentity{scope, op.getName().str()})
                  << " live="
                  << (op.getCallerOwnedDataAttr() &&
-                        op.getCallerOwnedDataAttr().getData().data())
-                 << "\n";
+                        (op.getCallerOwnedDataAttr().getData().data() ||
+                            op.getCallerOwnedDataAttr().getTensor()))
+                 << " is_input=" << op.getIsInput() << "\n";
   });
   module->walk([&](ONNXConstantOp op) {
     auto value = op.getValueAttr();

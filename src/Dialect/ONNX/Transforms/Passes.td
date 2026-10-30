@@ -16,9 +16,11 @@ def MaterializeInitializerSourcesPass
   let summary = "Resolve ONNX initializer sources into disposable constants";
   let options = [
     Option<"skipAll", "skip-all", "bool", /*default=*/"false",
-           "Leave all initializer sources unresolved.">,
+           "Skip materialization except for structural operands and forced names.">,
     ListOption<"skipNames", "skip-names", "std::string",
-               "Scoped initializer names to leave unresolved.">
+               "Scoped initializer names to skip unless structural or forced.">,
+    ListOption<"forceNames", "force-names", "std::string",
+               "Scoped initializer names to materialize even when skipped.">
   ];
 }
 

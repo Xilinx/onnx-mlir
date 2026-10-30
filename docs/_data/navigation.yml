@@ -52,8 +52,8 @@ toc:
         url:  Instrumentation.html
       - page: Constant Propagation
         url:  ConstPropagationPass.html
-      - page: External Initializer Sources
-        url:  ExternalInitializerSources.html
+      - page: Initializer Sources
+        url:  InitializerSources.html
       - page: Add an Accelerator
         url:  AddCustomAccelerators.html
   - title: Tools
