@@ -30,6 +30,7 @@ static ONNXHybridTransformPassOptions getDecomposeOnlyOptions(
   options.qdqConstProp = false;
   options.quantConstFold = false;
   options.dequantConstFold = false;
+  options.dequantConstFoldWeights = false;
   options.decomposition = true;
   options.recomposition = false;
   options.quarkQuantizedOpsLegalization = false;
@@ -106,7 +107,9 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
       pm.addNestedPass<func::FuncOp>(onnx_mlir::createConstPropONNXToONNXPass(
           {.enableQDQ = opts.hybrid.qdqConstProp,
               .enableQuantConstFold = opts.hybrid.quantConstFold,
-              .enableDequantConstFold = opts.hybrid.dequantConstFold}));
+              .enableDequantConstFold = opts.hybrid.dequantConstFold,
+              .enableDequantConstFoldWeights =
+                  opts.hybrid.dequantConstFoldWeights}));
     }
   } else {
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createShapeInferencePass());
@@ -123,7 +126,9 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
     pm.addNestedPass<func::FuncOp>(onnx_mlir::createConstPropONNXToONNXPass(
         {.enableQDQ = opts.hybrid.qdqConstProp,
             .enableQuantConstFold = opts.hybrid.quantConstFold,
-            .enableDequantConstFold = opts.hybrid.dequantConstFold}));
+            .enableDequantConstFold = opts.hybrid.dequantConstFold,
+            .enableDequantConstFoldWeights =
+                opts.hybrid.dequantConstFoldWeights}));
     if (opts.onnxOpTransformThreshold > 0) {
       // Dynamic iterate in ONNXOpTransformPass
       pm.addPass(onnx_mlir::createONNXOpTransformPass(
@@ -138,7 +143,9 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
         pm.addNestedPass<func::FuncOp>(onnx_mlir::createConstPropONNXToONNXPass(
             {.enableQDQ = opts.hybrid.qdqConstProp,
                 .enableQuantConstFold = opts.hybrid.quantConstFold,
-                .enableDequantConstFold = opts.hybrid.dequantConstFold}));
+                .enableDequantConstFold = opts.hybrid.dequantConstFold,
+                .enableDequantConstFoldWeights =
+                    opts.hybrid.dequantConstFoldWeights}));
       }
     }
   }

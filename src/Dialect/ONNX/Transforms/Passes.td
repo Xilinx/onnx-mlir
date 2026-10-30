@@ -211,6 +211,10 @@ def ONNXHybridTransformOptions {
            "bool", /*default=*/"false",
            "Enable folding of a constant DequantizeLinear into a float "
            "constant.">,
+    Option<"dequantConstFoldWeights", "dequant-const-fold-weights",
+           "bool", /*default=*/"false",
+           "Allow folding of quantized weights and biases, not just constant "
+           "islands. Implies dequant-const-fold.">,
     Option<"decomposition", "decomposition",
            "bool", /*default=*/"true",
            "Enable decomposition in hybrid transform.">,
@@ -279,6 +283,10 @@ def ConstPropONNXToONNXPass : Pass<"constprop-onnx", "::mlir::func::FuncOp"> {
            "Enable constant folding of quantized operations.">,
     Option<"enableDequantConstFold", "enable-dequant-const-fold", "bool", "false",
            "Enable constant folding of dequantized operations.">,
+    Option<"enableDequantConstFoldWeights", "enable-dequant-const-fold-weights",
+           "bool", "false",
+           "Allow folding of quantized weights and biases, not just constant "
+           "islands. Implies enable-dequant-const-fold.">,
     Option<"maxLoopUnrollCount", "max-loop-unroll-count", "int64_t", "64",
            "Maximum constant onnx.Loop trip count to unroll.">
   ];

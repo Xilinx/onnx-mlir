@@ -1,5 +1,6 @@
 // RUN: onnx-mlir-opt --split-input-file %s -constprop-onnx=enable-dequant-const-fold | FileCheck %s
 // RUN: onnx-mlir-opt --split-input-file %s -constprop-onnx | FileCheck %s --check-prefix=DISABLED
+// RUN: onnx-mlir-opt --split-input-file %s -constprop-onnx=enable-dequant-const-fold-weights | FileCheck %s --check-prefix=WEIGHTS
 
 //===----------------------------------------------------------------------===//
 // Positive cases.
@@ -302,3 +303,39 @@ func.func @no_fold_weight_requantize_into_matmul(%act: tensor<2x2xf32>) -> tenso
 // CHECK: onnx.Constant dense<{{\[}}[10, 20], [30, 40]]> : tensor<2x2xui8>
 // CHECK: onnx.QuantizeLinear
 // CHECK: onnx.MatMul
+
+// -----
+
+//===----------------------------------------------------------------------===//
+// enable-dequant-const-fold-weights: fold weights outside a constant island.
+//===----------------------------------------------------------------------===//
+
+// A quantized linear layer: an i8 weight and an i32 bias, both per-tensor,
+// feeding MatMul+Add on a runtime activation. That is not a constant island,
+// so only the weights flag folds them.
+// w = [[2,4],[6,8]]*0.5 = [[1,2],[3,4]]; bias = [4,8]*0.25 = [1,2].
+func.func @fold_weight_and_bias_into_matmul_add(%act: tensor<2x2xf32>) -> tensor<2x2xf32> {
+  %w = onnx.Constant dense<[[2, 4], [6, 8]]> : tensor<2x2xi8>
+  %w_scale = onnx.Constant dense<5.000000e-01> : tensor<f32>
+  %w_zp = onnx.Constant dense<0> : tensor<i8>
+  %w_dq = "onnx.DequantizeLinear"(%w, %w_scale, %w_zp) {axis = 0 : si64, block_size = 0 : si64} : (tensor<2x2xi8>, tensor<f32>, tensor<i8>) -> tensor<2x2xf32>
+  %b = onnx.Constant dense<[4, 8]> : tensor<2xi32>
+  %b_scale = onnx.Constant dense<2.500000e-01> : tensor<f32>
+  %b_zp = onnx.Constant dense<0> : tensor<i32>
+  %b_dq = "onnx.DequantizeLinear"(%b, %b_scale, %b_zp) {axis = 0 : si64, block_size = 0 : si64} : (tensor<2xi32>, tensor<f32>, tensor<i32>) -> tensor<2xf32>
+  %mm = "onnx.MatMul"(%act, %w_dq) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+  %out = "onnx.Add"(%mm, %b_dq) : (tensor<2x2xf32>, tensor<2xf32>) -> tensor<2x2xf32>
+  return %out : tensor<2x2xf32>
+}
+
+// WEIGHTS-LABEL: @fold_weight_and_bias_into_matmul_add
+// WEIGHTS-DAG: onnx.Constant dense<{{\[}}[1.000000e+00, 2.000000e+00], [3.000000e+00, 4.000000e+00]]> : tensor<2x2xf32>
+// WEIGHTS-DAG: onnx.Constant dense<[1.000000e+00, 2.000000e+00]> : tensor<2xf32>
+// WEIGHTS-NOT: onnx.DequantizeLinear
+
+// The island-only flag leaves both quantized: the MatMul mixes in %act.
+// CHECK-LABEL: @fold_weight_and_bias_into_matmul_add
+// CHECK: onnx.DequantizeLinear
+
+// DISABLED-LABEL: @fold_weight_and_bias_into_matmul_add
+// DISABLED: onnx.DequantizeLinear
