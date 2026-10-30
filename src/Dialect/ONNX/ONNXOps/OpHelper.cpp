@@ -1208,6 +1208,124 @@ bool isFloatAttrApprox(mlir::FloatAttr attr, double expected, double epsilon) {
   return std::fabs(attr.getValueAsDouble() - expected) <= epsilon;
 }
 
+// Rank-0 and single-element tensors are equivalent scalar quantization
+// parameters, so any tensor that may have exactly one element may be a scalar.
+static bool mayBeScalarQuantizationParameter(ShapedType t) {
+  return !t.hasRank() || llvm::all_of(t.getShape(), [](int64_t dim) {
+    return dim == 1 || ShapedType::isDynamic(dim);
+  });
+}
+
+bool isBlockedLinearQuantization(
+    ShapedType scaleType, int64_t blockSize, ShapedType zeroPointType) {
+  if (mayBeScalarQuantizationParameter(scaleType) &&
+      (!zeroPointType || mayBeScalarQuantizationParameter(zeroPointType)))
+    return false;
+  auto hasRankAboveOne = [](ShapedType t) {
+    return t && t.hasRank() && t.getRank() > 1;
+  };
+  return blockSize != 0 || hasRankAboveOne(scaleType) ||
+         hasRankAboveOne(zeroPointType);
+}
+
+LogicalResult verifyLinearQuantizationParameterShapes(Operation *op,
+    Value input, Value scale, Value zeroPoint, int64_t axis,
+    int64_t blockSize) {
+  // Known length if t is a non-scalar 1-D vector, otherwise kDynamic.
+  auto nonScalar1DLen = [](ShapedType t) -> int64_t {
+    if (!t.hasRank() || t.getRank() != 1 || t.isDynamicDim(0) ||
+        t.getDimSize(0) == 1)
+      return ShapedType::kDynamic;
+    return t.getDimSize(0);
+  };
+  // Use each op's operand names in diagnostics.
+  bool isQuantize = isa<ONNXQuantizeLinearOp>(op);
+  StringRef scaleName = isQuantize ? "y_scale" : "x_scale";
+  StringRef zeroPointName = isQuantize ? "y_zero_point" : "x_zero_point";
+  const auto inputTy = mlir::cast<ShapedType>(input.getType());
+  const auto scaleTy = mlir::cast<ShapedType>(scale.getType());
+  if (scaleTy.hasRank() && inputTy.hasRank() &&
+      scaleTy.getRank() != inputTy.getRank() && scaleTy.getRank() > 1 &&
+      !mayBeScalarQuantizationParameter(scaleTy))
+    return op->emitOpError()
+           << scaleName << " rank needs to be 0, 1 or match x rank";
+
+  ShapedType zeroTy;
+  int64_t len = nonScalar1DLen(scaleTy);
+  if (!isNoneValue(zeroPoint)) {
+    zeroTy = mlir::cast<ShapedType>(zeroPoint.getType());
+    // A scalar cannot pair with a non-scalar quantization parameter.
+    if (zeroTy.hasRank() && scaleTy.hasRank() &&
+        !(mayBeScalarQuantizationParameter(zeroTy) &&
+            mayBeScalarQuantizationParameter(scaleTy)) &&
+        failed(verifyCompatibleShape(zeroTy.getShape(), scaleTy.getShape())))
+      return op->emitOpError()
+             << zeroPointName << " must have the same shape as " << scaleName;
+    if (len == ShapedType::kDynamic)
+      len = nonScalar1DLen(zeroTy);
+  }
+
+  if (isBlockedLinearQuantization(scaleTy, blockSize, zeroTy)) {
+    if (blockSize <= 0)
+      return op->emitOpError(
+          "block_size must be positive for blocked quantization");
+    if (!inputTy.hasRank())
+      return success();
+    int64_t rank = inputTy.getRank();
+    if (axis < -rank || axis >= rank)
+      return Diagnostic::emitAttributeOutOfRangeError(
+          *op, "axis", axis, Diagnostic::Range<int64_t>(-rank, rank - 1));
+    if (axis < 0)
+      axis += rank;
+    auto verifyBlockedShape = [&](ShapedType parameterTy,
+                                  StringRef parameterName) -> LogicalResult {
+      if (!parameterTy || !parameterTy.hasRank())
+        return success();
+      if (parameterTy.getRank() != rank)
+        return op->emitOpError()
+               << parameterName
+               << " rank must match x rank for blocked quantization";
+      for (int64_t i = 0; i < rank; ++i) {
+        if (inputTy.isDynamicDim(i) || parameterTy.isDynamicDim(i))
+          continue;
+        int64_t inputDim = inputTy.getDimSize(i);
+        if (i == axis) {
+          // Avoid overflow from adding blockSize - 1 before division.
+          int64_t blockCount =
+              inputDim / blockSize + (inputDim % blockSize != 0);
+          if (parameterTy.getDimSize(i) != blockCount)
+            return op->emitOpError()
+                   << parameterName
+                   << " axis dim size must equal ceil(input axis dim size / "
+                      "block_size)";
+        } else if (parameterTy.getDimSize(i) != inputDim) {
+          return op->emitOpError()
+                 << parameterName << " dim " << i
+                 << " must match the input dim size outside the blocking axis";
+        }
+      }
+      return success();
+    };
+    if (failed(verifyBlockedShape(scaleTy, scaleName)))
+      return failure();
+    return verifyBlockedShape(zeroTy, zeroPointName);
+  }
+
+  if (len != ShapedType::kDynamic && inputTy.hasRank()) {
+    int64_t rank = inputTy.getRank();
+    if (axis < -rank || axis >= rank)
+      return Diagnostic::emitAttributeOutOfRangeError(
+          *op, "axis", axis, Diagnostic::Range<int64_t>(-rank, rank - 1));
+    if (axis < 0)
+      axis += rank;
+    if (!inputTy.isDynamicDim(axis) && inputTy.getDimSize(axis) != len)
+      return op->emitOpError()
+             << scaleName << " and " << zeroPointName
+             << " 1-D tensor length must match the input axis dim size";
+  }
+  return success();
+}
+
 // Convert type to MLIR type.
 // A complete list of types can be found in:
 // <onnx-mlir-build-folder>/third_party/onnx/onnx/onnx.pb.h

@@ -413,6 +413,22 @@ bool isFloatAttrApprox(mlir::FloatAttr attr, double expected, double epsilon);
 mlir::Type convertONNXTypeToMLIRType(
     mlir::Builder &builder, onnx::TensorProto_DataType onnxType);
 
+/// Whether a linear quantization op with these parameter types and block size
+/// uses blocked quantization: nonzero blockSize or scale/zero-point rank > 1.
+/// If neither the scale nor the optional zero point rules out a scalar, the op
+/// is per-tensor regardless of blockSize.
+bool isBlockedLinearQuantization(mlir::ShapedType scaleType, int64_t blockSize,
+    mlir::ShapedType zeroPointType = {});
+
+/// Verify scale and optional zero-point shapes for linear quantization ops.
+/// Rank-0 and single-element tensors are equivalent scalars. Per-axis
+/// parameter lengths must match the input axis. Blocked quantization (see
+/// isBlockedLinearQuantization) requires blockSize > 0 and parameter dimensions
+/// compatible with the input, with ceil(input / blockSize) along the axis.
+mlir::LogicalResult verifyLinearQuantizationParameterShapes(mlir::Operation *op,
+    mlir::Value input, mlir::Value scale, mlir::Value zeroPoint, int64_t axis,
+    int64_t blockSize);
+
 template <typename OP>
 mlir::Type getResultElementTypeFromDtypeWithFallBackToInputType(OP op) {
   assert(op->getNumOperands() == 1 && "Expecting one input operand");

@@ -730,6 +730,7 @@ OpsWithVerifier = [
     "PRelu",
     "Pad",
     "Pow",
+    "QuantizeLinear",
     "RandomNormal",
     "RandomNormalLike",
     "RandomUniform",

@@ -6428,6 +6428,7 @@ def ONNXQuantizeLinearOp:ONNX_Op<"QuantizeLinear",
       return sh;
     }
   }];
+  let hasVerifier = 1;
 }
 
 def ONNXRNNOp:ONNX_Op<"RNN",
