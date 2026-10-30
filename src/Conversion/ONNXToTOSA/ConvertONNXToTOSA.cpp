@@ -197,6 +197,10 @@ void FrontendToTosaLoweringPass::runOnOperation() {
   target.addLegalDialect<mlir::tosa::TosaDialect, func::FuncDialect,
       mlir::arith::ArithDialect, mlir::shape::ShapeDialect,
       mlir::affine::AffineDialect>();
+  // Make ONNXNoneOp legal so that patterns can create ONNX ops with optional
+  // operands (e.g. onnx.Pad axes) that are lowered recursively. Dangling
+  // ONNXNoneOps are removed by later DCE/canonicalization.
+  target.addLegalOp<ONNXNoneOp>();
 
   for (const std::string &opName : excludedOps)
     target.addLegalOp(OperationName("onnx." + opName, context));

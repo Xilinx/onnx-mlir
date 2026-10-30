@@ -517,10 +517,14 @@ std::unique_ptr<Transform> PadOpTensorNameInference::inferTensorNameTransform(
   // Only mode = "constant" is supported
   if (padOp.getMode() != "constant")
     return nullptr;
-  auto constOp = padOp.getConstantValue().getDefiningOp<ONNXConstantOp>();
-  if (!constOp)
-    return nullptr;
-  Attribute constant = constOp.getValueAttr();
+  // An absent constant_value pads with zero.
+  Attribute constant;
+  if (isNoneValue(padOp.getConstantValue()))
+    constant =
+        Builder(op->getContext())
+            .getZeroAttr(RankedTensorType::get({}, inType.getElementType()));
+  else
+    constant = getDenseOrDisposableConstLikeElements(padOp.getConstantValue());
   if (!constant)
     return nullptr;
 
