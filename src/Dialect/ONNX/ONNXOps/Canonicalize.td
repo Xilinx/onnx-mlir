@@ -278,16 +278,6 @@ def IsNotFromONNXConstantOp: Constraint<
     CPred<"!(llvm::dyn_cast_or_null<ONNXConstantOp>($0.getDefiningOp()))">,
     "Is a value not from ONNXConstantOp">;
 
-def IsNegativeSplatConstant: Constraint<
-  CPred<"onnx_mlir::isNegativeSplatConstant($_self)">,
-  "Is a splat constant with a negative value."
->;
-
-def AreAllDimSizes: Constraint<
-  CPred<"onnx_mlir::areAllDimSizes($_self)">,
-  "All values in the input ValueRange are dimension sizes."
->;
-
 def AreTheSameAxesConstant: Constraint<
     CPred<"onnx_mlir::AreTheSameAxesConstant("
           "(onnx_mlir::hasShapeAndRank($0) ? mlir::cast<ShapedType>($0.getType()).getRank() : 0),"
@@ -566,6 +556,12 @@ def FuseMulConvNullBiasPattern: Pat<
 // ONNX_Op (onnx.Identity (%X)) = ONNX_Op (%X)
 def IdentityEliminationPattern : Pat<(ONNXIdentityOp $arg),
                                      (replaceWithValue $arg)>;
+
+// not(not(%X)) = %X
+def RemoveNotNotPattern : Pat<
+  (ONNXNotOp:$res (ONNXNotOp $val)),
+  (replaceWithValue $val),
+  [(HaveSameShapedType $res, $val)]>;
 
 //===----------------------------------------------------------------------===//
 // Canonicalization for ONNXDropoutOp
@@ -1225,23 +1221,6 @@ def ShapeTransformComposePattern : Pat<
   (ONNXShapeTransformOp (ONNXShapeTransformOp $arg, $map1), $map2),
   (ONNXShapeTransformOp $arg, (GetComposedMap $map2, $map1)),
   []
->;
-
-//===----------------------------------------------------------------------===//
-// Canonicalization for ONNXWhere
-//===----------------------------------------------------------------------===//
-
-// In this pattern, the condition in onnx.Where is always false, so we can replace
-// onnx.Where by its "false" value.
-// Condition in this pattern is a comparison between dimension sizes and negative values.
-// Since dimension sizes are always positive, the condition is evaluated to false.
-
-// This pattern was found in xlm-roberta-base-language-detection model in HuggingFace.
-
-def AlwaysFalseWherePattern : Pat<
- (ONNXWhereOp (ONNXEqualOp (ONNXConcatOp $dims, $_), $negative_constant), $true_val, $false_val),
- (replaceWithValue $false_val),
- [(IsNegativeSplatConstant:$negative_constant), (AreAllDimSizes:$dims)]
 >;
 
 //===----------------------------------------------------------------------===//
