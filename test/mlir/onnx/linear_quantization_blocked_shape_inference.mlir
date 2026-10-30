@@ -35,3 +35,12 @@ func.func @dequantize_blocked_dynamic(%x: tensor<?xui8>, %scale: tensor<2xf32>) 
   %y = "onnx.DequantizeLinear"(%x, %scale, %none) {axis = 0 : si64, block_size = 2 : si64} : (tensor<?xui8>, tensor<2xf32>, none) -> tensor<*xf32>
   return %y : tensor<*xf32>
 }
+
+// -----
+
+// CHECK-LABEL: func.func @dequantize_dynamic_scalar_block_size
+// CHECK-SAME: -> tensor<?x7xf32>
+func.func @dequantize_dynamic_scalar_block_size(%x: tensor<?x7xui8>, %scale: tensor<?xf32>, %zp: tensor<ui8>) -> tensor<*xf32> {
+  %y = "onnx.DequantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<?x7xui8>, tensor<?xf32>, tensor<ui8>) -> tensor<*xf32>
+  return %y : tensor<*xf32>
+}

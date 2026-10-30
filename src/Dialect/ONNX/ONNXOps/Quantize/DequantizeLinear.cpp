@@ -56,7 +56,11 @@ LogicalResult ONNXDequantizeLinearOpShapeHelper::computeShape() {
 
   const auto scaleTy =
       mlir::cast<ShapedType>(operandAdaptor.getXScale().getType());
-  if (isBlockedLinearQuantization(scaleTy, operandAdaptor.getBlockSize())) {
+  ShapedType zeroTy;
+  if (!isNoneValue(operandAdaptor.getXZeroPoint()))
+    zeroTy = mlir::cast<ShapedType>(operandAdaptor.getXZeroPoint().getType());
+  if (isBlockedLinearQuantization(
+          scaleTy, operandAdaptor.getBlockSize(), zeroTy)) {
     setOutputDims(outputDims);
     return success();
   }

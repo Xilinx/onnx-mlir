@@ -465,3 +465,193 @@ func.func @DequantizeLinear_single_element_rank2_scalar_zero_point_valid(%x: ten
   %y = "onnx.DequantizeLinear"(%x, %scale, %zp) {axis = 1 : si64} : (tensor<5x7xui8>, tensor<1x1xf32>, tensor<ui8>) -> tensor<5x7xf32>
   return %y : tensor<5x7xf32>
 }
+
+// -----
+
+func.func @QuantizeLinear_dynamic_scalar_block_size(%x: tensor<5x7xf32>, %scale: tensor<?xf32>, %zp: tensor<ui8>) -> tensor<5x7xui8> {
+  %y = "onnx.QuantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xf32>, tensor<?xf32>, tensor<ui8>) -> tensor<5x7xui8>
+  return %y : tensor<5x7xui8>
+}
+
+// -----
+
+func.func @QuantizeLinear_dynamic_single_element_block_size(%x: tensor<5x7xf32>, %scale: tensor<?xf32>, %zp: tensor<1xui8>) -> tensor<5x7xui8> {
+  %y = "onnx.QuantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xf32>, tensor<?xf32>, tensor<1xui8>) -> tensor<5x7xui8>
+  return %y : tensor<5x7xui8>
+}
+
+// -----
+
+func.func @QuantizeLinear_dynamic_possible_scalar_block_size(%x: tensor<5x7xf32>, %scale: tensor<?xf32>, %zp: tensor<?xui8>) -> tensor<5x7xui8> {
+  %y = "onnx.QuantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xf32>, tensor<?xf32>, tensor<?xui8>) -> tensor<5x7xui8>
+  return %y : tensor<5x7xui8>
+}
+
+// -----
+
+func.func @QuantizeLinear_dynamic_block_axis_invalid(%x: tensor<4xf32>, %scale: tensor<?xf32>, %zp: tensor<3xui8>) -> tensor<4xui8> {
+  // expected-error @+1 {{y_zero_point axis dim size must equal ceil(input axis dim size / block_size)}}
+  %y = "onnx.QuantizeLinear"(%x, %scale, %zp) {axis = 0 : si64, block_size = 2 : si64} : (tensor<4xf32>, tensor<?xf32>, tensor<3xui8>) -> tensor<4xui8>
+  return %y : tensor<4xui8>
+}
+
+// -----
+
+func.func @QuantizeLinear_dynamic_block_other_dim_invalid(%x: tensor<5x7xf32>, %scale: tensor<?x?xf32>, %zp: tensor<4x4xui8>) -> tensor<5x7xui8> {
+  // expected-error @+1 {{y_zero_point dim 0 must match the input dim size outside the blocking axis}}
+  %y = "onnx.QuantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xf32>, tensor<?x?xf32>, tensor<4x4xui8>) -> tensor<5x7xui8>
+  return %y : tensor<5x7xui8>
+}
+
+// -----
+
+func.func @QuantizeLinear_dynamic_block_valid(%x: tensor<4xf32>, %scale: tensor<?xf32>, %zp: tensor<2xui8>) -> tensor<4xui8> {
+  %y = "onnx.QuantizeLinear"(%x, %scale, %zp) {axis = 0 : si64, block_size = 2 : si64} : (tensor<4xf32>, tensor<?xf32>, tensor<2xui8>) -> tensor<4xui8>
+  return %y : tensor<4xui8>
+}
+
+// -----
+
+func.func @DequantizeLinear_dynamic_scalar_block_size(%x: tensor<5x7xui8>, %scale: tensor<?xf32>, %zp: tensor<ui8>) -> tensor<5x7xf32> {
+  %y = "onnx.DequantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xui8>, tensor<?xf32>, tensor<ui8>) -> tensor<5x7xf32>
+  return %y : tensor<5x7xf32>
+}
+
+// -----
+
+func.func @DequantizeLinear_dynamic_single_element_block_size(%x: tensor<5x7xui8>, %scale: tensor<?xf32>, %zp: tensor<1xui8>) -> tensor<5x7xf32> {
+  %y = "onnx.DequantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xui8>, tensor<?xf32>, tensor<1xui8>) -> tensor<5x7xf32>
+  return %y : tensor<5x7xf32>
+}
+
+// -----
+
+func.func @DequantizeLinear_dynamic_possible_scalar_block_size(%x: tensor<5x7xui8>, %scale: tensor<?xf32>, %zp: tensor<?xui8>) -> tensor<5x7xf32> {
+  %y = "onnx.DequantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xui8>, tensor<?xf32>, tensor<?xui8>) -> tensor<5x7xf32>
+  return %y : tensor<5x7xf32>
+}
+
+// -----
+
+func.func @DequantizeLinear_dynamic_block_axis_invalid(%x: tensor<4xui8>, %scale: tensor<?xf32>, %zp: tensor<3xui8>) -> tensor<4xf32> {
+  // expected-error @+1 {{x_zero_point axis dim size must equal ceil(input axis dim size / block_size)}}
+  %y = "onnx.DequantizeLinear"(%x, %scale, %zp) {axis = 0 : si64, block_size = 2 : si64} : (tensor<4xui8>, tensor<?xf32>, tensor<3xui8>) -> tensor<4xf32>
+  return %y : tensor<4xf32>
+}
+
+// -----
+
+func.func @DequantizeLinear_dynamic_block_other_dim_invalid(%x: tensor<5x7xui8>, %scale: tensor<?x?xf32>, %zp: tensor<4x4xui8>) -> tensor<5x7xf32> {
+  // expected-error @+1 {{x_zero_point dim 0 must match the input dim size outside the blocking axis}}
+  %y = "onnx.DequantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xui8>, tensor<?x?xf32>, tensor<4x4xui8>) -> tensor<5x7xf32>
+  return %y : tensor<5x7xf32>
+}
+
+// -----
+
+func.func @DequantizeLinear_dynamic_block_valid(%x: tensor<4xui8>, %scale: tensor<?xf32>, %zp: tensor<2xui8>) -> tensor<4xf32> {
+  %y = "onnx.DequantizeLinear"(%x, %scale, %zp) {axis = 0 : si64, block_size = 2 : si64} : (tensor<4xui8>, tensor<?xf32>, tensor<2xui8>) -> tensor<4xf32>
+  return %y : tensor<4xf32>
+}
+
+// -----
+
+func.func @QuantizeLinear_dynamic_scalar_no_zero_point_block_size(%x: tensor<5x7xf32>, %scale: tensor<?xf32>) -> tensor<5x7xui8> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %y = "onnx.QuantizeLinear"(%x, %scale, %none) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xf32>, tensor<?xf32>, none) -> tensor<5x7xui8>
+  return %y : tensor<5x7xui8>
+}
+
+// -----
+
+func.func @DequantizeLinear_dynamic_scalar_no_zero_point_block_size(%x: tensor<5x7xui8>, %scale: tensor<?xf32>) -> tensor<5x7xf32> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %y = "onnx.DequantizeLinear"(%x, %scale, %none) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xui8>, tensor<?xf32>, none) -> tensor<5x7xf32>
+  return %y : tensor<5x7xf32>
+}
+
+// -----
+
+func.func @QuantizeLinear_unranked_scale_scalar_zero_point_block_size(%x: tensor<5x7xf32>, %scale: tensor<*xf32>, %zp: tensor<ui8>) -> tensor<5x7xui8> {
+  %y = "onnx.QuantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xf32>, tensor<*xf32>, tensor<ui8>) -> tensor<5x7xui8>
+  return %y : tensor<5x7xui8>
+}
+
+// -----
+
+func.func @QuantizeLinear_unranked_scale_block_zero_point_without_block_size(%x: tensor<5x7xf32>, %scale: tensor<*xf32>, %zp: tensor<5x4xui8>) -> tensor<5x7xui8> {
+  // expected-error @+1 {{block_size must be positive for blocked quantization}}
+  %y = "onnx.QuantizeLinear"(%x, %scale, %zp) {axis = 1 : si64} : (tensor<5x7xf32>, tensor<*xf32>, tensor<5x4xui8>) -> tensor<5x7xui8>
+  return %y : tensor<5x7xui8>
+}
+
+// -----
+
+func.func @QuantizeLinear_unranked_scale_block_axis_invalid(%x: tensor<5x7xf32>, %scale: tensor<*xf32>, %zp: tensor<5x3xui8>) -> tensor<5x7xui8> {
+  // expected-error @+1 {{y_zero_point axis dim size must equal ceil(input axis dim size / block_size)}}
+  %y = "onnx.QuantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xf32>, tensor<*xf32>, tensor<5x3xui8>) -> tensor<5x7xui8>
+  return %y : tensor<5x7xui8>
+}
+
+// -----
+
+func.func @DequantizeLinear_unranked_scale_scalar_zero_point_block_size(%x: tensor<5x7xui8>, %scale: tensor<*xf32>, %zp: tensor<ui8>) -> tensor<5x7xf32> {
+  %y = "onnx.DequantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xui8>, tensor<*xf32>, tensor<ui8>) -> tensor<5x7xf32>
+  return %y : tensor<5x7xf32>
+}
+
+// -----
+
+func.func @DequantizeLinear_unranked_scale_block_zero_point_without_block_size(%x: tensor<5x7xui8>, %scale: tensor<*xf32>, %zp: tensor<5x4xui8>) -> tensor<5x7xf32> {
+  // expected-error @+1 {{block_size must be positive for blocked quantization}}
+  %y = "onnx.DequantizeLinear"(%x, %scale, %zp) {axis = 1 : si64} : (tensor<5x7xui8>, tensor<*xf32>, tensor<5x4xui8>) -> tensor<5x7xf32>
+  return %y : tensor<5x7xf32>
+}
+
+// -----
+
+func.func @DequantizeLinear_unranked_scale_block_axis_invalid(%x: tensor<5x7xui8>, %scale: tensor<*xf32>, %zp: tensor<5x3xui8>) -> tensor<5x7xf32> {
+  // expected-error @+1 {{x_zero_point axis dim size must equal ceil(input axis dim size / block_size)}}
+  %y = "onnx.DequantizeLinear"(%x, %scale, %zp) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xui8>, tensor<*xf32>, tensor<5x3xui8>) -> tensor<5x7xf32>
+  return %y : tensor<5x7xf32>
+}
+
+// -----
+
+func.func @DequantizeLinear_dynamic_rank2_maybe_scalar(%x: tensor<5x7xui8>, %scale: tensor<?x?xf32>) -> tensor<5x7xf32> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %y = "onnx.DequantizeLinear"(%x, %scale, %none) {axis = 1 : si64} : (tensor<5x7xui8>, tensor<?x?xf32>, none) -> tensor<5x7xf32>
+  return %y : tensor<5x7xf32>
+}
+
+// -----
+
+func.func @QuantizeLinear_partially_dynamic_maybe_scalar_block_size(%x: tensor<5x7xf32>, %scale: tensor<?x1xf32>) -> tensor<5x7xui8> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %y = "onnx.QuantizeLinear"(%x, %scale, %none) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xf32>, tensor<?x1xf32>, none) -> tensor<5x7xui8>
+  return %y : tensor<5x7xui8>
+}
+
+// -----
+
+func.func @QuantizeLinear_scalar_scale_dynamic_rank2_zero_point(%x: tensor<5x7xf32>, %scale: tensor<f32>, %zp: tensor<?x?xui8>) -> tensor<5x7xui8> {
+  %y = "onnx.QuantizeLinear"(%x, %scale, %zp) {axis = 1 : si64} : (tensor<5x7xf32>, tensor<f32>, tensor<?x?xui8>) -> tensor<5x7xui8>
+  return %y : tensor<5x7xui8>
+}
+
+// -----
+
+func.func @DequantizeLinear_single_element_scale_rank_differs_from_input(%x: tensor<2x5x7xui8>, %scale: tensor<1x1xf32>) -> tensor<2x5x7xf32> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %y = "onnx.DequantizeLinear"(%x, %scale, %none) {axis = 1 : si64} : (tensor<2x5x7xui8>, tensor<1x1xf32>, none) -> tensor<2x5x7xf32>
+  return %y : tensor<2x5x7xf32>
+}
+
+// -----
+
+func.func @QuantizeLinear_partially_dynamic_block_axis_invalid(%x: tensor<5x7xf32>, %scale: tensor<?x3xf32>) -> tensor<5x7xui8> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  // expected-error @+1 {{y_scale axis dim size must equal ceil(input axis dim size / block_size)}}
+  %y = "onnx.QuantizeLinear"(%x, %scale, %none) {axis = 1 : si64, block_size = 2 : si64} : (tensor<5x7xf32>, tensor<?x3xf32>, none) -> tensor<5x7xui8>
+  return %y : tensor<5x7xui8>
+}
