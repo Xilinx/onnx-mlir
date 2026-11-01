@@ -1,3 +1,5 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
+
 // RUN: onnx-mlir-opt --onnx-hybrid-transform %s -split-input-file | FileCheck %s
 
 // -----
@@ -27,6 +29,42 @@ func.func @test_fuse_conv1x1_basic(
 // CHECK:           onnx.Return [[VAR_2_]] : tensor<1x8x6x6xf32>
 // CHECK:         }
 }
+
+// -----
+
+func.func @test_fuse_conv1x1_deferred_weights_and_biases(
+    %x: tensor<1x3x8x8xf32>) -> tensor<1x8x6x6xf32> {
+  %w1 = "onnx.InitializerSource"() {kind = "onnx_model", name = "w1", path = "model.onnx", scope = []} : () -> tensor<4x3x1x1xf32>
+  %b1 = "onnx.InitializerSource"() {kind = "onnx_model", name = "b1", path = "model.onnx", scope = []} : () -> tensor<4xf32>
+  %w2 = "onnx.InitializerSource"() {kind = "onnx_model", name = "w2", path = "model.onnx", scope = []} : () -> tensor<8x4x3x3xf32>
+  %b2 = "onnx.InitializerSource"() {kind = "onnx_model", name = "b2", path = "model.onnx", scope = []} : () -> tensor<8xf32>
+  %c1 = "onnx.Conv"(%x, %w1, %b1) {
+      auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64,
+      kernel_shape = [1, 1], pads = [0, 0, 0, 0], strides = [1, 1]} :
+      (tensor<1x3x8x8xf32>, tensor<4x3x1x1xf32>, tensor<4xf32>) -> tensor<1x4x8x8xf32>
+  %c2 = "onnx.Conv"(%c1, %w2, %b2) {
+      auto_pad = "NOTSET", dilations = [1, 1], group = 1 : si64,
+      kernel_shape = [3, 3], pads = [0, 0, 0, 0], strides = [1, 1]} :
+      (tensor<1x4x8x8xf32>, tensor<8x4x3x3xf32>, tensor<8xf32>) -> tensor<1x8x6x6xf32>
+  onnx.Return %c2 : tensor<1x8x6x6xf32>
+}
+
+// CHECK-LABEL:  func.func @test_fuse_conv1x1_deferred_weights_and_biases
+// CHECK-DAG:       [[W1:%.+]] = "onnx.InitializerSource"() {{.*}}name = "w1"
+// CHECK-DAG:       [[B1:%.+]] = "onnx.InitializerSource"() {{.*}}name = "b1"
+// CHECK-DAG:       [[W2:%.+]] = "onnx.InitializerSource"() {{.*}}name = "w2"
+// CHECK-DAG:       [[B2:%.+]] = "onnx.InitializerSource"() {{.*}}name = "b2"
+// CHECK:           [[W1_FLAT:%.+]] = "onnx.Reshape"([[W1]], {{%.+}})
+// CHECK:           [[W2_FLAT:%.+]] = "onnx.Reshape"([[W2]], {{%.+}})
+// CHECK:           [[W2_T:%.+]] = "onnx.Transpose"([[W2_FLAT]])
+// CHECK:           [[WF_FLAT:%.+]] = "onnx.MatMul"([[W2_T]], [[W1_FLAT]])
+// CHECK:           [[WF_PERM:%.+]] = "onnx.Transpose"([[WF_FLAT]])
+// CHECK:           [[WF:%.+]] = "onnx.Reshape"([[WF_PERM]], {{%.+}})
+// CHECK:           [[WSUM:%.+]] = "onnx.ReduceSum"([[W2]], {{%.+}})
+// CHECK:           [[B1_CONTRIB:%.+]] = "onnx.MatMul"([[WSUM]], [[B1]])
+// CHECK:           [[BF:%.+]] = "onnx.Add"([[B1_CONTRIB]], [[B2]])
+// CHECK-COUNT-1:   "onnx.Conv"
+// CHECK-SAME:      ([[PARAM_0_]], [[WF]], [[BF]])
 
 // -----
 
