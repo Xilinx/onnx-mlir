@@ -13,10 +13,14 @@
 // This pass is to set onnx_node_name attribute for ONNX operations if the
 // attribute is absent.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/Debug.h"
@@ -57,6 +61,7 @@ private:
 void SetONNXNodeNamePass::runOnOperation() {
   ModuleOp moduleOp = getOperation();
   MLIRContext *context = &getContext();
+  llvm::DenseMap<Value, bool> knownConstantFoldability;
 
   // Collect
   // - all onnx_node_name strings and
@@ -65,8 +70,14 @@ void SetONNXNodeNamePass::runOnOperation() {
     // Only deal with ONNX ops.
     if (op->getDialect()->getNamespace() != ONNXDialect::getDialectNamespace())
       return WalkResult::advance();
-    // No need onnx_node_name for these ops.
+    // Constant expressions do not represent model nodes and may disappear
+    // when their payloads become available.
     if (isa<ONNXEntryPointOp, ONNXReturnOp, ONNXConstantOp>(op))
+      return WalkResult::advance();
+    if (op->getNumResults() != 0 &&
+        llvm::all_of(op->getResults(), [&](Value result) {
+          return isConstantFoldable(result, knownConstantFoldability);
+        }))
       return WalkResult::advance();
     StringAttr nodeName = op->getAttrOfType<mlir::StringAttr>(nodeNameAttr);
     if (nodeName && !nodeName.getValue().empty()) {
