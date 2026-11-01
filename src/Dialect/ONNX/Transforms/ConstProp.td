@@ -1395,7 +1395,8 @@ def SplatTileofConst : NamedPat<"SplatTileofConst",
     (ONNXTileOp:$resOp $input, $repeats),
     (CreateTileOfConst $resOp, $input),
     [(IsFromSplatDenseConstLike:$input), (IsIntOrFloatType:$input),
-     (HasStaticShape:$resOp), (ValuesHaveSameDType $resOp, $input)],
+     (HasStaticShape:$resOp), (ValuesHaveSameDType $resOp, $input),
+     (SatisfiesMaxTileFoldSize:$resOp)],
     [], (addBenefit 1)>;
 
 //===----------------------------------------------------------------------===//

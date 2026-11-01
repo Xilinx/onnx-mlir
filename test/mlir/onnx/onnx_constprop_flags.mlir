@@ -1,3 +1,5 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
+
 // RUN: onnx-mlir-opt --constprop-onnx --onnx-const-prop-expansion-bound=2 %s -split-input-file | FileCheck --check-prefix=EXPANSIONBOUND2 %s
 // RUN: onnx-mlir-opt --constprop-onnx --onnx-const-prop-round-fp-to-int=true %s -split-input-file | FileCheck --check-prefix=ROUND %s
 // RUN: onnx-mlir-opt --constprop-onnx --onnx-const-prop-round-fp-to-int=false %s -split-input-file | FileCheck --check-prefix=TRUNCATE %s
@@ -148,3 +150,20 @@ func.func @test_tile_doesnt_fold_over_max_size() -> tensor<4x2xf32> {
 }
 // MAXTILE16-LABEL: @test_tile_doesnt_fold_over_max_size() -> tensor<4x2xf32>
 // MAXTILE16:        "onnx.Tile"({{.*}}) : (tensor<1x2xf32>, tensor<2xi64>) -> tensor<4x2xf32>
+
+// -----
+
+// A splat has compact MLIR storage, but materializing this Tile still produces
+// a 32-byte tensor in the weights, so it obeys the same size limit.
+func.func @test_splat_tile_doesnt_fold_over_max_size() -> tensor<4x2xf32> {
+  %data = onnx.Constant dense<1.0> : tensor<1x2xf32>
+  %repeats = onnx.Constant dense<[4, 1]> : tensor<2xi64>
+  %1 = "onnx.Tile"(%data, %repeats) : (tensor<1x2xf32>, tensor<2xi64>) -> tensor<4x2xf32>
+  onnx.Return %1 : tensor<4x2xf32>
+}
+// MAXTILE16-LABEL: @test_splat_tile_doesnt_fold_over_max_size() -> tensor<4x2xf32>
+// MAXTILE16:        "onnx.Tile"({{.*}}) : (tensor<1x2xf32>, tensor<2xi64>) -> tensor<4x2xf32>
+//
+// NOBOUND-LABEL: @test_splat_tile_doesnt_fold_over_max_size() -> tensor<4x2xf32>
+// NOBOUND:       onnx.Constant {{.*}} : tensor<4x2xf32>
+// NOBOUND-NOT:   onnx.Tile
