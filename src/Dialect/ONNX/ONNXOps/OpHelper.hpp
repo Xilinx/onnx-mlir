@@ -35,6 +35,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -207,6 +208,15 @@ mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 
 [[nodiscard]] bool isConstLikeOperation(mlir::Operation *op);
 
+// Return true when `value` is a ConstantLike value, an initializer source, or
+// the result of a pure, regionless operation whose operands are all recursively
+// constant-foldable. This predicate does not read or fold tensor payloads.
+[[nodiscard]] bool isConstantFoldable(mlir::Value value);
+
+// As above, reusing classifications accumulated by earlier queries. The cache
+// is valid only while the defining operation graph remains unchanged.
+[[nodiscard]] bool isConstantFoldable(
+    mlir::Value value, llvm::DenseMap<mlir::Value, bool> &knownValues);
 bool compareValueFromElementAttribute(
     mlir::ElementsAttr &attr1, mlir::ElementsAttr &attr2);
 
