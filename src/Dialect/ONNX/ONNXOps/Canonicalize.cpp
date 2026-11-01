@@ -5105,13 +5105,13 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
       return rewriter.notifyMatchFailure(
           conv2, "quantized Conv fusion is not supported");
 
-    // ---- Require constant weights for fold-ability ------------------
-    if (!isDenseONNXConstant(W1))
+    // ---- Require constant-foldable weights --------------------------
+    if (!isConstantFoldable(W1))
       return rewriter.notifyMatchFailure(
-          conv2, "conv1 weight is not a dense ONNX constant");
-    if (!isDenseONNXConstant(W2))
+          conv2, "conv1 weight is not constant-foldable");
+    if (!isConstantFoldable(W2))
       return rewriter.notifyMatchFailure(
-          conv2, "conv2 weight is not a dense ONNX constant");
+          conv2, "conv2 weight is not constant-foldable");
 
     // ---- Bias constraints -------------------------------------------
     // The b1 contribution is spatially uniform only when conv2 pads are all
@@ -5122,12 +5122,12 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
           "conv2 has nonzero pads and conv1 has nonzero bias: "
           "bias fold would require a spatially-varying correction");
 
-    if (!isNoneOrZero(b1) && !isDenseONNXConstant(b1))
+    if (!isNoneValue(b1) && !isConstantFoldable(b1))
       return rewriter.notifyMatchFailure(
-          conv1, "conv1 bias is not a dense ONNX constant");
-    if (!isNoneOrZero(b2) && !isDenseONNXConstant(b2))
+          conv1, "conv1 bias is not constant-foldable");
+    if (!isNoneValue(b2) && !isConstantFoldable(b2))
       return rewriter.notifyMatchFailure(
-          conv2, "conv2 bias is not a dense ONNX constant");
+          conv2, "conv2 bias is not constant-foldable");
 
     // ---- Build fused weight -----------------------------------------
     // Wf[Cout,Cin,K...] = einsum("mc,nm...->nc...", W1_flat, W2)
@@ -5186,8 +5186,8 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
       // b1 contributes nothing; carry b2 through unchanged (may be None).
       bf = b2;
     } else {
-      // conv2PadsAllZero and dense constant biases are guaranteed by previous
-      // guards.
+      // conv2PadsAllZero and constant-foldable biases are guaranteed by the
+      // previous guards.
       // S[Cout, Cmid] = ReduceSum(W2, axes=[2,3,...]) over all spatial
       // dims.
       SmallVector<int64_t> spatialAxes;
