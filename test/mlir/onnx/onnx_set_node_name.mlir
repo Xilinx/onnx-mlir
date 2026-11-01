@@ -1,3 +1,5 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
+
 // RUN: onnx-mlir-opt --set-onnx-node-name --split-input-file %s | FileCheck %s
 
 module { 
@@ -45,5 +47,22 @@ func.func @duplicated_onnx_node_name(%arg0: tensor<3x2xf32>, %arg1: tensor<3x2xf
 // CHECK:           [[VAR_1_:%.+]] = "onnx.Add"([[VAR_0_]], [[PARAM_1_]]) {onnx_node_name = "residual/add1_0"} : (tensor<3x2xf32>, tensor<3x2xf32>) -> tensor<3x2xf32>
 // CHECK:           onnx.Return [[VAR_1_]] : tensor<3x2xf32>
 // CHECK:         }
+}
+
+// -----
+
+func.func @skip_constant_foldable_expression(%arg0: tensor<2x2xf32>) -> tensor<2x2xf32> {
+  %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+  %transposed = "onnx.Transpose"(%weight) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+  %result = "onnx.Add"(%arg0, %transposed) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+  onnx.Return %result : tensor<2x2xf32>
+
+// CHECK-LABEL:  func.func @skip_constant_foldable_expression
+// CHECK:           [[WEIGHT:%.+]] = "onnx.InitializerSource"() {{.*}} : () -> tensor<2x2xf32>
+// CHECK-NOT:       onnx_node_name
+// CHECK:           [[TRANSPOSED:%.+]] = "onnx.Transpose"([[WEIGHT]]) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+// CHECK-NOT:       onnx_node_name
+// CHECK:           [[RESULT:%.+]] = "onnx.Add"(%arg0, [[TRANSPOSED]]) {onnx_node_name = "onnx.Add_0"}
+// CHECK:           onnx.Return [[RESULT]]
 }
 
