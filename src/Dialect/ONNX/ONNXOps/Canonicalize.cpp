@@ -830,7 +830,7 @@ public:
           expandShape = expandOp.getShape();
         }
       }
-      if (isDenseONNXConstant(res) && isScalarTensor(res))
+      if (isConstantFoldable(res) && isScalarTensor(res))
         return res;
       return nullptr;
     };
@@ -927,7 +927,7 @@ public:
 
   LogicalResult matchAndRewrite(
       ONNXAddOp addOp, PatternRewriter &r) const override {
-    if (!isConstLikeValue(addOp.getB()))
+    if (!isConstantFoldable(addOp.getB()))
       return r.notifyMatchFailure(addOp, "not a constant rhs operand");
 
     auto transposeOp =
@@ -2533,11 +2533,13 @@ struct RecomposeConcatPattern : public OpRewritePattern<ONNXConcatOp> {
       return false;
     if (concatOp.getAxis() != axis || !concatOp.getResult().hasOneUse())
       return false;
-    // Do not flatten an inner concat whose operands are all dense constants:
+    // Do not flatten an inner concat whose operands are all constant-foldable:
     // those groupings are intentionally created by
     // GroupConsecutiveConstantConcatOperandsPattern and will later be
-    // constant-folded to a single constant operand.
-    if (llvm::all_of(concatOp.getOperands(), isDenseONNXConstant))
+    // constant-folded to a single constant operand after any deferred sources
+    // are materialized.
+    if (llvm::all_of(concatOp.getOperands(),
+            [](Value v) { return isConstantFoldable(v); }))
       return false;
     return true;
   }
@@ -2981,9 +2983,9 @@ struct EliminateCarveOutAroundRotaryEmbeddingPattern
   }
 };
 
-// Pull each run of two or more consecutive dense constants into its own Concat
-// so later const-prop can fold that run. Skips all-constant Concat ops (those
-// are already foldable as a whole).
+// Pull each run of two or more consecutive constant-foldable operands into its
+// own Concat so later const-prop can fold that run after any deferred sources
+// are materialized. Skips Concat ops that are already wholly foldable.
 struct GroupConsecutiveConstantConcatOperandsPattern
     : public OpRewritePattern<ONNXConcatOp> {
   using OpRewritePattern<ONNXConcatOp>::OpRewritePattern;
@@ -2991,19 +2993,19 @@ struct GroupConsecutiveConstantConcatOperandsPattern
   LogicalResult matchAndRewrite(
       ONNXConcatOp concatOp, PatternRewriter &rewriter) const final {
     ValueRange inputs = concatOp.getOperands();
-    if (llvm::all_of(inputs, isDenseONNXConstant))
+    if (llvm::all_of(inputs, [](Value v) { return isConstantFoldable(v); }))
       return failure();
 
     SmallVector<Value> newInputs;
     bool grouped = false;
     for (size_t i = 0, e = inputs.size(); i < e;) {
-      if (!isDenseONNXConstant(inputs[i])) {
+      if (!isConstantFoldable(inputs[i])) {
         newInputs.push_back(inputs[i]);
         ++i;
         continue;
       }
       size_t j = i + 1;
-      while (j < e && isDenseONNXConstant(inputs[j]))
+      while (j < e && isConstantFoldable(inputs[j]))
         ++j;
       if (j - i >= 2) {
         ValueRange run = inputs.slice(i, j - i);
