@@ -9,6 +9,7 @@
 #include "mlir/Pass/PassManager.h"
 #include "src/Builder/InitializerSource.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/DisposableElementsAttr.hpp"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
@@ -213,21 +214,30 @@ int main(int argc, char **argv) {
       "fixtures and invokes this command in separate processes.\n");
   if (sourceMode != "file" && sourceMode != "live" && sourceMode != "guard")
     return 2;
+  // Declare caller-owned protobuf storage before the context so it is destroyed
+  // after every attribute that may reference it.
+  std::unique_ptr<onnx::ModelProto> modelOwner;
   auto ownedContext = std::make_unique<MLIRContext>();
   MLIRContext &context = *ownedContext;
   context.loadDialect<ONNXDialect, func::FuncDialect>();
   OwningOpRef<ModuleOp> module;
-  std::unique_ptr<onnx::ModelProto> modelOwner;
   // The test driver acts as the VAIML/FlexML caller and keeps these buffers
   // alive while in-memory initializer sources may be read.
   std::vector<std::unique_ptr<llvm::MemoryBuffer>> liveOwners;
   if (readIR) {
     module = parseSourceFile<ModuleOp>(input, &context);
   } else {
+    llvm::SmallString<256> absoluteInput(input.getValue());
+    if (std::error_code ec = llvm::sys::fs::make_absolute(absoluteInput)) {
+      llvm::errs() << "cannot make input path absolute: " << ec.message()
+                   << "\n";
+      return 1;
+    }
+    llvm::sys::path::remove_dots(absoluteInput, true);
     modelOwner = std::make_unique<onnx::ModelProto>();
     onnx::ModelProto &model = *modelOwner;
     std::string error;
-    if (LoadModelProtoFromFile(input.getValue(), error, model)) {
+    if (LoadModelProtoFromFile(absoluteInput, error, model)) {
       llvm::errs() << error << "\n";
       return 1;
     }
@@ -243,12 +253,11 @@ int main(int argc, char **argv) {
         forceNames.begin(), forceNames.end());
     if (!omitExternalDataDir)
       options.externalDataDir =
-          llvm::sys::path::parent_path(input.getValue()).str();
+          llvm::sys::path::parent_path(absoluteInput).str();
     if (!omitSourceModelPath)
-      options.initializerSourceModelPath = input.getValue();
-    if (sourceMode != "file" &&
-        !configureLive(*model.mutable_graph(), {}, input.getValue(), options,
-            liveOwners, true))
+      options.initializerSourceModelPath = absoluteInput.str().str();
+    if (sourceMode != "file" && !configureLive(*model.mutable_graph(), {},
+                                    absoluteInput, options, liveOwners, true))
       return 1;
     std::error_code ec;
     if (entry == "raw")

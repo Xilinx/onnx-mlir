@@ -2289,7 +2289,7 @@ static std::error_code importFrontendModel(const onnx::ModelProto &model,
     std::string &errorMessage, const ImportOptions &options,
     bool referenceCallerOwnedTensors);
 
-static std::error_code importFrontendModelWithPreProcessing(
+static std::error_code internalImportFrontendModelWithPreProcessing(
     onnx::ModelProto &model, MLIRContext &context,
     OwningOpRef<ModuleOp> &module, const ImportOptions &options,
     std::string &errorMessage, bool referenceCallerOwnedTensors) {
@@ -2363,8 +2363,8 @@ static std::error_code importFrontendModelWithPreProcessing(
     onnx::ModelProto &model, MLIRContext &context,
     OwningOpRef<ModuleOp> &module, const ImportOptions &options,
     std::string &errorMessage) {
-  return importFrontendModelWithPreProcessing(model, context, module, options,
-      errorMessage, /*referenceCallerOwnedTensors=*/true);
+  return internalImportFrontendModelWithPreProcessing(model, context, module,
+      options, errorMessage, /*referenceCallerOwnedTensors=*/true);
 }
 
 [[nodiscard]] std::error_code ImportFrontendModelArray(const void *onnxBuffer,
@@ -2377,8 +2377,8 @@ static std::error_code importFrontendModelWithPreProcessing(
     errorMessage += "Unable to parse onnxBuffer\n";
     return InvalidOnnxFormat;
   }
-  return importFrontendModelWithPreProcessing(model, context, module, options,
-      errorMessage, /*referenceCallerOwnedTensors=*/false);
+  return internalImportFrontendModelWithPreProcessing(model, context, module,
+      options, errorMessage, /*referenceCallerOwnedTensors=*/false);
 }
 
 namespace {
@@ -2478,8 +2478,8 @@ namespace {
     }
     fileOptions.initializerSourceModelPath = sourceModelPath.str().str();
   }
-  if (auto ec = importFrontendModelWithPreProcessing(model, context, module,
-          fileOptions, errorMessage,
+  if (auto ec = internalImportFrontendModelWithPreProcessing(model, context,
+          module, fileOptions, errorMessage,
           /*referenceCallerOwnedTensors=*/false)) {
     errorMessage += "Onnx Model Import Failed for " + model_fname.str();
     return ec;

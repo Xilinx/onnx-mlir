@@ -92,7 +92,12 @@ ONNXInitializerSourceOp findStructuralInitializerSource(Value value) {
         block != &loop.getRegion().front() || index == 0 ||
         index >= loop->getNumOperands())
       return {};
-    // Body argument 0 is the iteration counter, not the trip-count operand.
+    // TODO: Replace this ONNXLoopOp-specific mapping when ONNXLoopOp
+    // implements RegionBranchOpInterface. The core lookup would then be:
+    //   auto branch = cast<RegionBranchOpInterface>(block->getParentOp());
+    //   value = branch.getEntrySuccessorOperands(loop.getRegion())[index - 1];
+    // The iteration counter is produced by the loop and therefore excluded
+    // from the entry successor operands; it does not map to the trip count.
     // The condition and loop-carried arguments align with the initial operands;
     // materializing those operands does not make later iterations constant.
     value = loop->getOperand(index);

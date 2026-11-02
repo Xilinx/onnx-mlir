@@ -24,6 +24,10 @@ struct CallerOwnedDataAttributeStorage : AttributeStorage {
     llvm::ArrayRef<char> bytes;
     const onnx::TensorProto *tensor = nullptr;
 
+    // Attributes are uniqued by the referenced object, not by tensor contents.
+    // Comparing or hashing contents would read data that import deliberately
+    // leaves deferred, while pointer identity preserves the exact reference
+    // that getData() or getTensor() must return.
     bool operator==(const CallerOwnedData &other) const {
       return bytes.data() == other.bytes.data() &&
              bytes.size() == other.bytes.size() && tensor == other.tensor;
@@ -32,6 +36,7 @@ struct CallerOwnedDataAttributeStorage : AttributeStorage {
   using KeyTy = CallerOwnedData;
   CallerOwnedDataAttributeStorage(CallerOwnedData callerOwnedData)
       : callerOwnedData(callerOwnedData) {}
+  // Required by StorageUniquer to compare existing storage with a lookup key.
   bool operator==(const KeyTy &key) const { return callerOwnedData == key; }
   static llvm::hash_code hashKey(const KeyTy &key) {
     return llvm::hash_combine(key.bytes.data(), key.bytes.size(), key.tensor);

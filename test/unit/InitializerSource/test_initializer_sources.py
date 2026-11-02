@@ -188,7 +188,7 @@ def structural_fixture(folder):
     axis.external_data.add(key="location", value=structural_data.name)
     axis.external_data.add(key="offset", value="32")
     axis.external_data.add(key="length", value="8")
-    data = helper.make_tensor("data", TensorProto.FLOAT, [4], [1.0, 2.0, 3.0, 4.0])
+    data = helper.make_tensor("data", TensorProto.FLOAT, [2, 2], [1.0, 2.0, 3.0, 4.0])
     nodes = [
         helper.make_node("Reshape", ["data", "shape"], ["Y"]),
         helper.make_node("Identity", ["shape"], ["S"]),
@@ -202,7 +202,7 @@ def structural_fixture(folder):
         helper.make_tensor_value_info("S", TensorProto.INT64, [2]),
         helper.make_tensor_value_info("R", TensorProto.FLOAT, []),
         helper.make_tensor_value_info("A", TensorProto.INT64, [2]),
-        helper.make_tensor_value_info("C", TensorProto.FLOAT, [4]),
+        helper.make_tensor_value_info("C", TensorProto.FLOAT, [2, 2]),
         helper.make_tensor_value_info("CA", TensorProto.INT64, []),
     ]
     graph = helper.make_graph(
