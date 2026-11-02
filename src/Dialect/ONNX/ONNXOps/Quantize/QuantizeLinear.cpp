@@ -10,6 +10,9 @@
 //
 // This file provides definition of ONNX dialect QuantizeLinear operation.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
@@ -39,7 +42,10 @@ LogicalResult ONNXQuantizeLinearOpShapeHelper::computeShape() {
 //===----------------------------------------------------------------------===//
 // Verify
 //===----------------------------------------------------------------------===//
-// TODO: Add verifier
+LogicalResult ONNXQuantizeLinearOp::verify() {
+  return verifyLinearQuantizationParameterShapes(getOperation(), getX(),
+      getYScale(), getYZeroPoint(), getAxis(), getBlockSize());
+}
 //===----------------------------------------------------------------------===//
 // Shape Inference
 //===----------------------------------------------------------------------===//
