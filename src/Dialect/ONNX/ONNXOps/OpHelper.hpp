@@ -276,9 +276,9 @@ std::optional<ONNXAxisValueSpec> getONNXAxisValueSpec(mlir::Operation *op);
 // the value is not a 1-element i64 constant.
 [[nodiscard]] bool extractI64Scalar(mlir::Value v, int64_t &out);
 
-// Destructure a single-axis onnx.Slice into (axis, start, end, step). Returns
-// false if any of starts/ends/axes/steps is not a single-element i64 constant
-// or if axes/steps were NoneType.
+// Destructure a single-axis onnx.Slice into (axis, start, end, step). Accepts
+// either scalar operands or canonical full-rank operands whose other axes are
+// identity intervals. Returns false for dynamic or multi-axis slices.
 [[nodiscard]] bool extractSlice1DConst(mlir::ONNXSliceOp sliceOp, int64_t &axis,
     int64_t &start, int64_t &end, int64_t &step);
 
