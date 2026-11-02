@@ -5748,8 +5748,7 @@ struct DecomposeLpPoolPattern : public OpRewritePattern<ONNXLpPoolOp> {
     for (Attribute attr : kernelAttr) {
       auto kernelDim = dyn_cast<IntegerAttr>(attr);
       if (!kernelDim)
-        return rewriter.notifyMatchFailure(
-            op, "kernel_shape must be integers");
+        return rewriter.notifyMatchFailure(op, "kernel_shape must be integers");
       int64_t size = kernelDim.getInt();
       if (size <= 0)
         return rewriter.notifyMatchFailure(
