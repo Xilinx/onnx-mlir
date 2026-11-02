@@ -14,7 +14,8 @@ namespace onnx_mlir {
 // Exports the ConstPropONNXToONNXPass patterns.
 void getConstPropONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
     bool enableQDQ = false, bool enableQuantConstFold = false,
-    int64_t maxLoopUnrollCount = 64, bool enableDequantConstFold = false);
+    int64_t maxLoopUnrollCount = 64, bool enableDequantConstFold = false,
+    bool enableDequantConstFoldWeights = false);
 
 } // namespace onnx_mlir
 #endif

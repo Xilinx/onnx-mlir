@@ -5496,6 +5496,7 @@ def ONNXNonZeroOp:ONNX_Op<"NonZero",
 
 def ONNXNotOp:ONNX_Op<"Not",
   [Pure, OpVersionTrait<1>, SameOperandsAndResultShape, ONNXElementwiseTrait, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Not operation";
   let description = [{
   Returns the negation of the input tensor element-wise.
@@ -6487,6 +6488,7 @@ def ONNXQuantizeLinearOp:ONNX_Op<"QuantizeLinear",
       return sh;
     }
   }];
+  let hasVerifier = 1;
 }
 
 def ONNXRNNOp:ONNX_Op<"RNN",

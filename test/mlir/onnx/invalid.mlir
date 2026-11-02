@@ -143,7 +143,7 @@ func.func @test_dequantize_linear_verifier_1(%arg0 : tensor<5x5x1xi32>, %arg1 : 
 // -----
 
 func.func @test_dequantize_linear_verifier_2(%arg0 : tensor<5x5x1xi32>, %arg1 : tensor<?xf32>, %arg2 : tensor<3xi32>) -> tensor<*xf32> {
-  // expected-error @+1 {{'onnx.DequantizeLinear' op x_zero_point must have the same shape as x_scale}}
+  // expected-error @+1 {{'onnx.DequantizeLinear' op x_scale and x_zero_point 1-D tensor length must match the input axis dim size}}
   %1 = "onnx.DequantizeLinear"(%arg0, %arg1, %arg2) {} : (tensor<5x5x1xi32>, tensor<?xf32>, tensor<3xi32>)  -> tensor<*xf32>
   "onnx.Return"(%1) : (tensor<*xf32>) -> ()
 }

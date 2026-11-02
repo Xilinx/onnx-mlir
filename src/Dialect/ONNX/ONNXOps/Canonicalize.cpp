@@ -514,7 +514,7 @@ bool areAllDimSizes(ValueRange vals) {
       if (!valAttr)
         return false;
       int64_t v = (*valAttr.getValues<APInt>().begin()).getSExtValue();
-      return (v > 0);
+      return (v >= 0);
     }
     return false;
   });
@@ -1424,6 +1424,32 @@ struct RemoveZeroPadCanonicalizationPattern
       return failure();
 
     rewriter.replaceOp(padOp, padOp.getData());
+    return success();
+  }
+};
+
+/// Materialize the implicit zero fill of a constant-mode Pad whose
+/// constant_value operand is absent (None).
+struct MaterializeAbsentPadConstantValuePattern
+    : public OpRewritePattern<ONNXPadOp> {
+  using OpRewritePattern<ONNXPadOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXPadOp padOp, PatternRewriter &rewriter) const override {
+    if (padOp.getMode() != "constant")
+      return rewriter.notifyMatchFailure(padOp, "not constant mode");
+    if (!isNoneValue(padOp.getConstantValue()))
+      return rewriter.notifyMatchFailure(padOp, "constant_value is present");
+
+    // Quantized, string and complex element types have no builtin zero.
+    Attribute zero = rewriter.getZeroAttr(
+        RankedTensorType::get({}, getElementType(padOp.getData().getType())));
+    if (!zero)
+      return rewriter.notifyMatchFailure(padOp, "element type has no zero");
+
+    Value constantValue = OnnxBuilder(rewriter, padOp.getLoc()).constant(zero);
+    rewriter.modifyOpInPlace(
+        padOp, [&] { padOp.getConstantValueMutable().assign(constantValue); });
     return success();
   }
 };
@@ -3419,8 +3445,87 @@ struct PropagateBiasIntoLayerNormRewritePattern
 };
 
 // =============================================================================
+// Rewrite pattern for Equal
+// =============================================================================
+
+// Fold equality between nonnegative dimension sizes and a negative splat.
+// Materialize the full result shape, including any broadcasting in Equal.
+class FoldEqualDimSizesNegativePattern : public OpRewritePattern<ONNXEqualOp> {
+public:
+  using OpRewritePattern<ONNXEqualOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXEqualOp equalOp, PatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<RankedTensorType>(equalOp.getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return failure();
+
+    auto matches = [](Value dims, Value negative) {
+      auto concatOp = dims.getDefiningOp<ONNXConcatOp>();
+      return concatOp && areAllDimSizes(concatOp.getOperands()) &&
+             isNegativeSplatConstant(negative);
+    };
+    if (!matches(equalOp.getOperand(0), equalOp.getOperand(1)) &&
+        !matches(equalOp.getOperand(1), equalOp.getOperand(0)))
+      return failure();
+
+    auto valueAttr =
+        DenseElementsAttr::get(resultType, rewriter.getBoolAttr(false));
+    auto constantOp = rewriter.create<ONNXConstantOp>(
+        equalOp.getLoc(), Attribute(), valueAttr);
+    rewriter.replaceOp(equalOp, constantOp.getResult());
+    return success();
+  }
+};
+
+// =============================================================================
 // Rewrite pattern for Where
 // =============================================================================
+
+class RemoveWhereConstantConditionPattern
+    : public OpRewritePattern<ONNXWhereOp> {
+public:
+  using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXWhereOp whereOp, PatternRewriter &rewriter) const override {
+    auto conditionElements =
+        getDenseOrDisposableConstLikeElements(whereOp.getCondition());
+    if (!conditionElements || !conditionElements.isSplat())
+      return rewriter.notifyMatchFailure(
+          whereOp, "condition is not a boolean splat constant");
+
+    auto conditionType =
+        dyn_cast<IntegerType>(conditionElements.getElementType());
+    if (!conditionType || conditionType.getWidth() != 1)
+      return rewriter.notifyMatchFailure(
+          whereOp, "condition is not a boolean splat constant");
+
+    const bool conditionValue =
+        conditionElements.getSplatValue<APInt>().isOne();
+    Value selectedValue = conditionValue ? whereOp.getX() : whereOp.getY();
+    auto selectedType = dyn_cast<RankedTensorType>(selectedValue.getType());
+    auto resultType = dyn_cast<RankedTensorType>(whereOp.getType());
+    if (!selectedType || !resultType || !selectedType.hasStaticShape() ||
+        !resultType.hasStaticShape() ||
+        selectedType.getElementType() != resultType.getElementType() ||
+        selectedType.getRank() > resultType.getRank())
+      return rewriter.notifyMatchFailure(whereOp,
+          "selected branch and result must have compatible static types");
+
+    if (selectedType == resultType) {
+      rewriter.replaceOp(whereOp, selectedValue);
+      return success();
+    }
+
+    MultiDialectBuilder<OnnxBuilder> create(rewriter, whereOp.getLoc());
+    selectedValue = create.onnx.expand(resultType, selectedValue,
+        create.onnx.constantInt64(resultType.getShape()));
+
+    rewriter.replaceOp(whereOp, selectedValue);
+    return success();
+  }
+};
 
 class NotWhereOptPattern : public OpRewritePattern<ONNXWhereOp> {
 public:
@@ -5366,6 +5471,7 @@ void ONNXDimOp::getCanonicalizationPatterns(
 /// on the ONNXEqualOp.
 void ONNXEqualOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<FoldEqualDimSizesNegativePattern>(context);
   result.insert<BinaryOpBroadcastAxisPattern<ONNXEqualOp>>(context);
 }
 
@@ -5477,6 +5583,12 @@ void ONNXMulOp::getCanonicalizationPatterns(
   results.insert<FuseScaleIntoRotaryEmbeddingPattern>(context);
 }
 
+/// on the ONNXNotOp.
+void ONNXNotOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  result.insert<RemoveNotNotPattern>(context);
+}
+
 /// on the ONNXOrOp.
 void ONNXOrOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
@@ -5487,6 +5599,7 @@ void ONNXOrOp::getCanonicalizationPatterns(
 void ONNXPadOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<RemoveZeroPadCanonicalizationPattern>(context);
+  results.insert<MaterializeAbsentPadConstantValuePattern>(context);
   results.insert<FusePadPadPattern>(context);
 }
 
@@ -5794,7 +5907,7 @@ void ONNXXorOp::getCanonicalizationPatterns(
 // on the ONNXWhereOp.
 void ONNXWhereOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  result.insert<AlwaysFalseWherePattern>(context);
+  result.insert<RemoveWhereConstantConditionPattern>(context);
   result.insert<RemoveWhereEqualPattern>(context);
   result.insert<NotWhereOptPattern>(context);
 }
