@@ -5721,6 +5721,97 @@ struct DecomposeGroupNormV18Pattern
 };
 
 // =============================================================================
+// Decompose LpPool to an Lp norm of each pooling window:
+//   Y = (sum(|X|^p))^(1/p)
+//     = (AveragePool(|X|^p, count_include_pad=1) * kernel_volume)^(1/p)
+// p = 2 is Mul(x, x) and Sqrt. Other p uses Abs and, when p is not 1, Pow.
+// AveragePool and LpPool share conv/pool shape inference, so kernel, pads,
+// strides, dilations, ceil_mode, and auto_pad are copied unchanged. Padded
+// taps contribute 0 and are part of the Lp sum, which is count_include_pad=1.
+// =============================================================================
+struct DecomposeLpPoolPattern : public OpRewritePattern<ONNXLpPoolOp> {
+  using OpRewritePattern<ONNXLpPoolOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXLpPoolOp op, PatternRewriter &rewriter) const final {
+    Value input = op.getX();
+    auto inputType = dyn_cast<ShapedType>(input.getType());
+    if (!inputType || !isa<FloatType>(inputType.getElementType()))
+      return rewriter.notifyMatchFailure(
+          op, "LpPool decomposition requires a float tensor");
+
+    ArrayAttr kernelAttr = op.getKernelShape();
+    if (!kernelAttr || kernelAttr.empty())
+      return rewriter.notifyMatchFailure(op, "kernel_shape is required");
+
+    int64_t volume = 1;
+    for (Attribute attr : kernelAttr) {
+      auto kernelDim = dyn_cast<IntegerAttr>(attr);
+      if (!kernelDim)
+        return rewriter.notifyMatchFailure(
+            op, "kernel_shape must be integers");
+      int64_t size = kernelDim.getInt();
+      if (size <= 0)
+        return rewriter.notifyMatchFailure(
+            op, "kernel_shape entries must be positive");
+      if (volume > std::numeric_limits<int64_t>::max() / size)
+        return rewriter.notifyMatchFailure(op, "kernel volume overflows");
+      volume *= size;
+    }
+
+    if (inputType.hasRank() &&
+        inputType.getRank() != static_cast<int64_t>(kernelAttr.size()) + 2)
+      return rewriter.notifyMatchFailure(
+          op, "input rank does not match kernel_shape");
+
+    int64_t p = op.getP();
+    if (p <= 0)
+      return rewriter.notifyMatchFailure(op, "p must be positive");
+
+    Location loc = op.getLoc();
+    Type elementType = inputType.getElementType();
+    onnx_mlir::OnnxBuilder create(rewriter, loc);
+    auto scalar = [&](double value) {
+      auto tensorType = RankedTensorType::get({}, elementType);
+      return create.constant(DenseElementsAttr::get(
+          tensorType, FloatAttr::get(elementType, value)));
+    };
+
+    Value powered = input;
+    if (p == 2) {
+      powered = create.mul(input, input);
+    } else {
+      powered = create.abs(input);
+      if (p != 1)
+        powered = rewriter.create<ONNXPowOp>(
+            loc, powered, scalar(static_cast<double>(p)));
+    }
+
+    auto si64 =
+        IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed);
+    auto avgPool = rewriter.create<ONNXAveragePoolOp>(loc,
+        UnrankedTensorType::get(elementType), powered, op.getAutoPadAttr(),
+        op.getCeilModeAttr(), IntegerAttr::get(si64, 1), op.getDilationsAttr(),
+        kernelAttr, op.getPadsAttr(), op.getStridesAttr());
+    if (failed(avgPool.inferShapes([](Region &) {})))
+      return rewriter.notifyMatchFailure(
+          op, "AveragePool shape inference failed");
+
+    Value scaled =
+        create.mul(avgPool.getResult(), scalar(static_cast<double>(volume)));
+    Value result = scaled;
+    if (p == 2)
+      result = create.sqrt(scaled);
+    else if (p != 1)
+      result = rewriter.create<ONNXPowOp>(
+          loc, scaled, scalar(1.0 / static_cast<double>(p)));
+
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+// =============================================================================
 // Decompose ReduceL2 to Sqrt(ReduceSumSquare(x))
 // =============================================================================
 struct DecomposeReduceL2Pattern : public OpRewritePattern<ONNXReduceL2Op> {
@@ -6413,6 +6504,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     patterns.insert<CanonicalizeScatterNDWithMultiAxis>(context);
     patterns.insert<SoftmaxCrossEntropyPattern>(context);
     patterns.insert<SumToAddPattern>(context);
+    patterns.insert<DecomposeLpPoolPattern>(context);
   }
   if (enableSplitToSliceDecompose)
     patterns.insert<SplitToSlicePattern>(context);
