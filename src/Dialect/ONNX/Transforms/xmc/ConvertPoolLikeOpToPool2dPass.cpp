@@ -218,36 +218,6 @@ std::optional<PoolParameters> calculateSpatialPoolParameters(
   return PoolParameters{{N, outer, kernelH, kernelW}, kernelH, kernelW};
 }
 
-/// Calculate pool parameters for CHANNEL reduction (reshape trick)
-/// Layout: NCHW - channels are moved to spatial dimension for pooling
-std::tuple<SmallVector<int64_t>, int64_t, int64_t>
-calculateChannelPoolParameters(
-    ArrayRef<int64_t> inputShape, ArrayRef<int64_t> reductionAxes) {
-  int64_t rank = inputShape.size();
-
-  // For channel reduction in NCHW: [N, C, H, W] → [1, 1, H*W*N, C] then pool
-  int64_t C = 1; // Dimensions to reduce become the kernel width
-  int64_t W = 1; // All other dimensions go here
-
-  for (int64_t idx = 0; idx < rank; ++idx) {
-    bool isReductionAxis = std::find(reductionAxes.begin(), reductionAxes.end(),
-                               idx) != reductionAxes.end();
-
-    if (isReductionAxis) {
-      C *= inputShape[idx]; // Dimensions to reduce → becomes kernel
-    } else {
-      W *= inputShape[idx]; // Other dimensions → width
-    }
-  }
-
-  // Pool shape in NCHW: [1, 1, W, C] - pool across last dimension
-  // Kernel: [1, C] - takes max/avg across all reduced values
-  int64_t kernelH = 1;
-  int64_t kernelW = C;
-
-  return {{1, 1, W, C}, kernelH, kernelW};
-}
-
 /// Create a reshape operation
 Value createReshapeOp(PatternRewriter &rewriter, Location loc, Value input,
     ArrayRef<int64_t> newShape, Type elementType) {
@@ -534,9 +504,12 @@ struct LowerReduceMaxToMaxPoolSpatialPattern
     if (axes.size() == 1 && axes.back() == rank - 1)
       return failure();
 
-    // This pattern handles SPATIAL reduction only
+    // Only SPATIAL reduction is lowered. Batch / channel reductions stay
+    // ReduceMax: in NCHW the channel elements are strided by H * W, which a
+    // pool cannot cover without a transpose, and the backend handles
+    // qlinear_reduction_max better than a [1, C] pool.
     if (!areAxesValidForSpatialPooling(axes, rank)) {
-      return failure(); // Let channel pattern handle it
+      return failure();
     }
 
     auto poolParameters = calculateSpatialPoolParameters(inputShape, axes);
@@ -579,134 +552,6 @@ struct LowerReduceMaxToMaxPoolSpatialPattern
 
     Value result = maxPoolOp.getResult();
 
-    if (poolOutputShape != outputType.getShape()) {
-      result = createReshapeOp(rewriter, loc, result, outputType.getShape(),
-          outputType.getElementType());
-    }
-
-    rewriter.replaceOp(reduceOp, result);
-    return success();
-  }
-};
-
-//===----------------------------------------------------------------------===//
-/// Pattern: ReduceMax → MaxPool (Channel Reduction via Reshape Trick)
-//===----------------------------------------------------------------------===//
-
-struct LowerReduceMaxToMaxPoolChannelPattern
-    : public OpRewritePattern<ONNXReduceMaxOp> {
-
-  /// Lower priority than spatial pattern
-  LowerReduceMaxToMaxPoolChannelPattern(MLIRContext *context)
-      : OpRewritePattern<ONNXReduceMaxOp>(context, /*benefit=*/1) {}
-  /// match and rewrite the ReduceMax op to MaxPool op (channel reduction via
-  /// reshape trick)
-  LogicalResult matchAndRewrite(
-      ONNXReduceMaxOp reduceOp, PatternRewriter &rewriter) const override {
-    Location loc = reduceOp.getLoc();
-
-    auto inputType = dyn_cast<RankedTensorType>(reduceOp.getData().getType());
-    auto outputType = dyn_cast<RankedTensorType>(reduceOp.getType());
-
-    if (!inputType || !outputType || !inputType.hasStaticShape()) {
-      return failure();
-    }
-
-    ArrayRef<int64_t> inputShape = inputType.getShape();
-    int64_t rank = inputShape.size();
-
-    if (rank > 4 || rank < 3) {
-      return failure();
-    }
-
-    // Extract axes
-    auto axesOpt = extractAxesFromInput(reduceOp.getAxes());
-    if (!axesOpt)
-      return failure();
-
-    SmallVector<int64_t> axes = *axesOpt;
-    normalizeAxes(axes, rank);
-    axes = removeTrivialAxes(axes, inputShape);
-
-    if (axes.empty()) {
-      return failure(); // Handled by spatial pattern
-    }
-
-    if (axes.size() == 1 && axes.back() == rank - 1)
-      return failure();
-
-    // This pattern handles reduction that INCLUDES channel dimension
-    // or reduction on batch dimension (anything not pure spatial)
-    if (areAxesValidForSpatialPooling(axes, rank)) {
-      return failure(); // Let spatial pattern handle it
-    }
-
-    // Check if axes are continuous (required for reshape trick)
-    if (!areAxesContinuous(axes)) {
-      return failure(); // Non-continuous axes can't use reshape trick
-    }
-
-    // The reshape trick makes the reduced elements the innermost dim, which
-    // only matches the row-major layout when every dim after the reduced axes
-    // is 1 (in NCHW, H * W == 1 for a channel reduction). Otherwise each pool
-    // window would cover consecutive W elements of one channel.
-    for (int64_t idx = axes.back() + 1; idx < rank; ++idx) {
-      if (inputShape[idx] != 1)
-        return failure();
-    }
-
-    // Calculate reshape parameters
-    // Move reduction dimensions to channel position, then pool
-    auto [poolShape, kernelH, kernelW] =
-        calculateChannelPoolParameters(inputShape, axes);
-
-    // Check kernel size limit
-    if (kernelW > MAX_KERNEL_SIZE) {
-      // Kernel too large - might need multi-pass or CPU fallback
-      return failure();
-    }
-
-    /*
-     * Transformation:
-     *
-     * Input: [N, C, 1, 1] with ReduceMax(axis=1)
-     *   ↓
-     * Reshape: [1, 1, N, C]  (move all non-reduced to H, reduced to W)
-     *   ↓
-     * MaxPool: kernel=[1, C], stride=[1, C]
-     *   ↓
-     * Output: [1, 1, N, 1]
-     *   ↓
-     * Reshape: [N, 1, 1, 1] (original output shape)
-     */
-
-    Value poolInput = createReshapeOp(rewriter, loc, reduceOp.getData(),
-        poolShape, inputType.getElementType());
-
-    auto kernelShapeAttr = rewriter.getI64ArrayAttr({kernelH, kernelW});
-    auto stridesAttr = rewriter.getI64ArrayAttr({kernelH, kernelW});
-    auto padsAttr = rewriter.getI64ArrayAttr({0, 0, 0, 0});
-
-    // NCHW: Pool output after pooling across reduced dimension
-    // poolShape = [1, 1, W, C] where C is the dimension being reduced
-    int64_t outH = poolShape[2]; // one row per output element
-    int64_t outW = 1;
-    SmallVector<int64_t> poolOutputShape = {1, 1, outH, outW};
-    auto poolOutputType =
-        RankedTensorType::get(poolOutputShape, inputType.getElementType());
-
-    // Create signed i64 type for ONNX attributes (si64)
-    auto si64Type =
-        IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed);
-
-    auto maxPoolOp = rewriter.create<ONNXMaxPoolSingleOutOp>(loc,
-        poolOutputType, poolInput, rewriter.getStringAttr("NOTSET"),
-        IntegerAttr::get(si64Type, 0), nullptr, kernelShapeAttr, padsAttr,
-        IntegerAttr::get(si64Type, 0), stridesAttr);
-
-    Value result = maxPoolOp.getResult();
-
-    // Reshape to expected output shape
     if (poolOutputShape != outputType.getShape()) {
       result = createReshapeOp(rewriter, loc, result, outputType.getShape(),
           outputType.getElementType());
@@ -883,10 +728,8 @@ struct LowerReduceToPoolPass
     // ReduceMean → AveragePool (operand-based axes)
     patterns.add<LowerReduceMeanToAvgPoolPattern>(context);
 
-    // ReduceMax → MaxPool (spatial) - higher priority
+    // ReduceMax → MaxPool (spatial only)
     patterns.add<LowerReduceMaxToMaxPoolSpatialPattern>(context);
-    // ReduceMax → MaxPool (channel via reshape) - lower priority
-    patterns.add<LowerReduceMaxToMaxPoolChannelPattern>(context);
 
     GreedyRewriteConfig config;
     config.setMaxIterations(3);
