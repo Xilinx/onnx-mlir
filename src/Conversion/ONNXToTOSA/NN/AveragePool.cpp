@@ -4,7 +4,7 @@
 
 //===------------- ONNXAveragePoolOp.cpp - ONNXAveragePoolOp --------------===//
 //
-// Copyright (c) 2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -51,19 +51,14 @@ LogicalResult handleIncludePadAttr(
           cast<mlir::TensorType>(input.getType()).getShape(), shapeHelper,
           /*ceilMode*/ 0, {0, 1, 2, 3});
 
-  // Create Padding and ConstPad tosa::ConstOp's
-  TosaBuilder tosaBuilder(rewriter, loc);
-  Value padding = tosa::buildOnnxToTosaPaddingConstOp(
-      rewriter, pads, loc, {0, 0, 0, 0}, {});
-  auto constTosaTensor =
-      tosaBuilder.getSplattedConst(0.0, inputType.getElementType(), 0);
-
-  auto padOp = tosa::CreateOpAndInfer<mlir::tosa::PadOp>(rewriter, loc,
-      mlir::RankedTensorType::get(
-          llvm::SmallVector<int64_t, 4>(
-              inputType.getShape().size(), ShapedType::kDynamic),
-          inputType.getElementType()),
-      input, padding, constTosaTensor);
+  // ONNX Pad uses [N_begin, C_begin, H_begin, W_begin, N_end, C_end,
+  // H_end, W_end], with no padding on the batch or channel dimensions.
+  OnnxBuilder onnxBuilder(rewriter, loc);
+  Value padding = onnxBuilder.constantInt64(
+      {0, 0, pads[0], pads[1], 0, 0, pads[2], pads[3]});
+  auto zeroType = RankedTensorType::get({}, inputType.getElementType());
+  Value zero = onnxBuilder.constant(rewriter.getZeroAttr(zeroType));
+  Value padOp = onnxBuilder.pad(input, padding, zero, "constant");
 
   // In-place update of AveragePool by setting operand to PadOp
   // and pads attribute to {0, 0, 0, 0}.
@@ -85,11 +80,11 @@ public:
     // that have an impact on the padding of the TOSA AveragePoolOp. The only
     // configuration that is natively supported by TOSA is if both are 0. In
     // that case we will have a 1-1 conversion. If only 'countIncludePad' is
-    // set, we pull the padding out of the averagepool op into its own TOSA
-    // padOp wih the padding value 0. That way the averagepool treats the padded
-    // values as native input values. The padding attribute is then set to 0. If
-    // 'ceilMode' is set, we add padding in the pad attribute of the TOSA
-    // AveragePoolOp if necessary. Looking into
+    // set, we pull the padding out of the averagepool op into its own ONNX
+    // Pad op with the padding value 0. That way the averagepool treats the
+    // padded values as native input values. The padding attribute is then set
+    // to 0. If 'ceilMode' is set, we add padding in the pad attribute of the
+    // TOSA AveragePoolOp if necessary. Looking into
     // https://github.com/pytorch/pytorch/blob/efc7c366f4fbccf649454726a96df291c8a9df43/aten/src/ATen/native/cuda/AveragePool2d.cu#L243
     // 'ceilMode' does not seem to add implicit padding but just changes the
     // output size. If both are set, we first pull out the padding into its own
@@ -98,7 +93,7 @@ public:
     const int64_t includePad = adaptor.getCountIncludePad();
 
     if (includePad != 0) {
-      // When attribute include_pad is set, create a tosa::PadOp before lowering
+      // When attribute include_pad is set, create an ONNXPadOp before lowering
       // AveragePool to TOSA. We use ONNX format for it so that the AveragePool
       // lowering still generates transposes between ONNX and TOSA formats, and
       // implementation doesn't diverge much. This will modify the original onnx

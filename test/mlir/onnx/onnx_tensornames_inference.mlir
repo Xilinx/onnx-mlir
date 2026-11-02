@@ -59,6 +59,35 @@ func.func @pad_result(%arg0: tensor<1x3xf32> {onnx.name = "input"}) -> tensor<1x
 // CHECK-SAME: ResultNames = [
 // CHECK-SAME: ["input", ["Pad", [1, 3], [4], [1], [1], dense<0.000000e+00> : tensor<f32>, [1, 8]]]]
 
+// Check tensor name inference reads Pad constant_value from ConstantLike ops
+// beyond onnx.Constant.
+func.func @pad_tosa_const_value(%arg0: tensor<1x3xf32> {onnx.name = "input"}) -> tensor<1x8xf32> {
+  %0 = "tosa.const"() {value = dense<0.000000e+00> : tensor<f32>} : () -> tensor<f32>
+  %1 = onnx.Constant dense<[4, 1]> : tensor<2xi64>
+  %2 = onnx.Constant dense<-1> : tensor<1xi64>
+  %3 = "onnx.Pad"(%arg0, %1, %0, %2) {mode = "constant"} : (tensor<1x3xf32>, tensor<2xi64>, tensor<f32>, tensor<1xi64>) -> tensor<1x8xf32>
+  return %3 : tensor<1x8xf32>
+}
+
+// CHECK-LABEL: @pad_tosa_const_value
+// CHECK: onnx.Pad
+// CHECK-SAME: ResultNames = [
+// CHECK-SAME: ["input", ["Pad", [1, 3], [4], [1], [1], dense<0.000000e+00> : tensor<f32>, [1, 8]]]]
+
+// Check tensor name inference treats an absent Pad constant_value as zero.
+func.func @pad_absent_const_value(%arg0: tensor<1x3xf32> {onnx.name = "input"}) -> tensor<1x8xf32> {
+  %0 = "onnx.NoValue"() {value} : () -> none
+  %1 = onnx.Constant dense<[4, 1]> : tensor<2xi64>
+  %2 = onnx.Constant dense<-1> : tensor<1xi64>
+  %3 = "onnx.Pad"(%arg0, %1, %0, %2) {mode = "constant"} : (tensor<1x3xf32>, tensor<2xi64>, none, tensor<1xi64>) -> tensor<1x8xf32>
+  return %3 : tensor<1x8xf32>
+}
+
+// CHECK-LABEL: @pad_absent_const_value
+// CHECK: onnx.Pad
+// CHECK-SAME: ResultNames = [
+// CHECK-SAME: ["input", ["Pad", [1, 3], [4], [1], [1], dense<0.000000e+00> : tensor<f32>, [1, 8]]]]
+
 func.func @pad_operand(%arg0: tensor<1x3xf32>) -> tensor<1x8xf32> {
   %0 = "onnx.Identity"(%arg0) : (tensor<1x3xf32>) -> tensor<1x3xf32>
   %1 = onnx.Constant dense<0.0> : tensor<f32>

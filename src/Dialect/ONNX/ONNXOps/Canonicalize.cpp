@@ -1428,6 +1428,32 @@ struct RemoveZeroPadCanonicalizationPattern
   }
 };
 
+/// Materialize the implicit zero fill of a constant-mode Pad whose
+/// constant_value operand is absent (None).
+struct MaterializeAbsentPadConstantValuePattern
+    : public OpRewritePattern<ONNXPadOp> {
+  using OpRewritePattern<ONNXPadOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXPadOp padOp, PatternRewriter &rewriter) const override {
+    if (padOp.getMode() != "constant")
+      return rewriter.notifyMatchFailure(padOp, "not constant mode");
+    if (!isNoneValue(padOp.getConstantValue()))
+      return rewriter.notifyMatchFailure(padOp, "constant_value is present");
+
+    // Quantized, string and complex element types have no builtin zero.
+    Attribute zero = rewriter.getZeroAttr(
+        RankedTensorType::get({}, getElementType(padOp.getData().getType())));
+    if (!zero)
+      return rewriter.notifyMatchFailure(padOp, "element type has no zero");
+
+    Value constantValue = OnnxBuilder(rewriter, padOp.getLoc()).constant(zero);
+    rewriter.modifyOpInPlace(
+        padOp, [&] { padOp.getConstantValueMutable().assign(constantValue); });
+    return success();
+  }
+};
+
 /// Fuse two non-negative constant-mode Pads with the same fill.
 struct FusePadPadPattern : public OpRewritePattern<ONNXPadOp> {
   using OpRewritePattern<ONNXPadOp>::OpRewritePattern;
@@ -5573,6 +5599,7 @@ void ONNXOrOp::getCanonicalizationPatterns(
 void ONNXPadOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<RemoveZeroPadCanonicalizationPattern>(context);
+  results.insert<MaterializeAbsentPadConstantValuePattern>(context);
   results.insert<FusePadPadPattern>(context);
 }
 
