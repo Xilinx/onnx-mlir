@@ -1355,6 +1355,49 @@ struct RecomposeHardSwishFromMulPattern : public OpRewritePattern<ONNXMulOp> {
   }
 };
 
+/// Recomposes Mul(x, Tanh(Softplus(x))) back into Mish.
+struct RecomposeMishFromMulPattern : public OpRewritePattern<ONNXMulOp> {
+  using OpRewritePattern<ONNXMulOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXMulOp mulOp, PatternRewriter &rewriter) const final {
+    if (!isa<FloatType>(getElementTypeOrSelf(mulOp.getType())))
+      return rewriter.notifyMatchFailure(
+          mulOp, "Mish recompose requires floating point data");
+
+    // Match either operand order, requiring the same input SSA value.
+    Value x = mulOp.getOperand(0);
+    auto tanhOp = mulOp.getOperand(1).getDefiningOp<ONNXTanhOp>();
+    if (!tanhOp) {
+      x = mulOp.getOperand(1);
+      tanhOp = mulOp.getOperand(0).getDefiningOp<ONNXTanhOp>();
+    }
+    if (!tanhOp)
+      return rewriter.notifyMatchFailure(mulOp, "expected a Tanh operand");
+
+    auto softplusOp = tanhOp.getInput().getDefiningOp<ONNXSoftplusOp>();
+    if (!softplusOp || softplusOp.getX() != x)
+      return rewriter.notifyMatchFailure(
+          mulOp, "expected x * tanh(softplus(x))");
+
+    if (!tanhOp.getResult().hasOneUse() || !softplusOp.getResult().hasOneUse())
+      return rewriter.notifyMatchFailure(
+          mulOp, "Tanh and Softplus must have no other users");
+
+    if (!isa<FloatType>(getElementTypeOrSelf(x.getType())) ||
+        !isa<FloatType>(getElementTypeOrSelf(softplusOp.getType())) ||
+        !isa<FloatType>(getElementTypeOrSelf(tanhOp.getType())))
+      return rewriter.notifyMatchFailure(
+          mulOp, "Mish recompose requires floating point data");
+
+    rewriter.replaceOpWithNewOp<ONNXMishOp>(mulOp,
+        ArrayRef<Location>{
+            mulOp.getLoc(), tanhOp.getLoc(), softplusOp.getLoc()},
+        mulOp.getType(), x);
+    return success();
+  }
+};
+
 struct RecomposeGeluFromMulPattern : public OpRewritePattern<ONNXMulOp> {
   using OpRewritePattern<ONNXMulOp>::OpRewritePattern;
 
@@ -2671,6 +2714,7 @@ void onnx_mlir::getRecomposeONNXToONNXPatterns(
   MLIRContext *context = patterns.getContext();
   patterns.insert<RecomposeTfHalfPixelForNnResize>(context);
   patterns.insert<RecomposeHardSwishFromMulPattern>(context);
+  patterns.insert<RecomposeMishFromMulPattern>(context);
   patterns.insert<RecomposeHardSigmoidFromMulClipPattern>(context);
   patterns.insert<RecomposeHardSigmoidFromReluPattern>(context);
   patterns.insert<RecomposeHardSigmoidFromClipMulPattern>(context);
