@@ -207,25 +207,20 @@ func.func @reduce_max_lifted_rank3_channel(%arg0: tensor<1x1x16x160x!quant.unifo
 // -----
 
 //===----------------------------------------------------------------------===//
-// ReduceMax → MaxPool (Channel via Reshape) Tests
+// ReduceMax over batch / channel axes: kept as a reduction (NOT pooled)
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: @reduce_max_channel_axis
-// NCHW: tensor<2x8x1x1> - reduce axis [1] (C). Every dim after C is 1, so the
-// reduced elements are innermost and the reshape trick applies.
-func.func @reduce_max_channel_axis(%arg0: tensor<2x8x1x1x!quant.uniform<i8:f32, 0.05:0>>) -> tensor<2x1x1x1x!quant.uniform<i8:f32, 0.05:0>> {
+// CHECK-LABEL: @reduce_max_channel_axis_not_pooled
+// NCHW: tensor<2x8x1x1> - reduce axis [1] (C). Even with H * W == 1 the
+// reduction stays ReduceMax so it lowers to qlinear_reduction_max.
+func.func @reduce_max_channel_axis_not_pooled(%arg0: tensor<2x8x1x1x!quant.uniform<i8:f32, 0.05:0>>) -> tensor<2x1x1x1x!quant.uniform<i8:f32, 0.05:0>> {
     %0 = onnx.Constant dense<[1]> : tensor<1xi64>
     %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<2x8x1x1x!quant.uniform<i8:f32, 0.05:0>>, tensor<1xi64>) -> tensor<2x1x1x1x!quant.uniform<i8:f32, 0.05:0>>
     return %1 : tensor<2x1x1x1x!quant.uniform<i8:f32, 0.05:0>>
 }
-// CHECK: "onnx.Reshape"(%arg0
-// CHECK-SAME: -> tensor<1x1x2x8x
-// CHECK: "onnx.MaxPoolSingleOut"
-// CHECK-SAME: kernel_shape = [1, 8]
-// CHECK-SAME: (tensor<1x1x2x8x{{.*}}>) -> tensor<1x1x2x1x
-// CHECK: "onnx.Reshape"
-// CHECK-SAME: -> tensor<2x1x1x1x
-// CHECK-NOT: onnx.ReduceMax
+// CHECK: "onnx.ReduceMax"
+// CHECK-NOT: onnx.Reshape
+// CHECK-NOT: onnx.MaxPoolSingleOut
 
 // -----
 
