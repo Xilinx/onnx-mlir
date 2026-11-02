@@ -157,38 +157,53 @@ bool isGlobalAveragePoolEquivalent(ArrayRef<int64_t> axes,
   return outputShape[2] == 1 && outputShape[3] == 1;
 }
 
+/// Pool input shape (NCHW) and kernel [kernelH, kernelW].
+using PoolParameters = std::tuple<SmallVector<int64_t>, int64_t, int64_t>;
+
 /// Calculate pool parameters for SPATIAL reduction
 /// Layout: NCHW - [batch, channels, height, width]
-std::tuple<SmallVector<int64_t>, int64_t, int64_t>
-calculateSpatialPoolParameters(
+///
+/// `reductionAxes` must be continuous spatial axes. The row-major input is
+/// viewed as [N, outer, reduced, inner]: `outer` is C times any non-reduced
+/// spatial dims before the reduced axes, `inner` is the product of the dims
+/// after them.
+/// - inner > 1: the reduced elements of one output are strided by `inner`, so
+///   the pool must run down the H dim of [N, outer, reduced, inner] with
+///   kernel [reduced, 1]. Folding `inner` into the reduced dims (or squaring
+///   the kernel) would pool unrelated elements or change the element count.
+/// - inner == 1: the reduced elements are contiguous, so any [kernelH,
+///   kernelW] factorization of them is a global pool.
+/// Returns std::nullopt when the reduction does not fit the pool kernel.
+std::optional<PoolParameters> calculateSpatialPoolParameters(
     ArrayRef<int64_t> inputShape, ArrayRef<int64_t> reductionAxes) {
   int64_t rank = inputShape.size();
-  // NCHW: C is at index 1
-  int64_t N = inputShape[0];
-  int64_t C = (rank > 1) ? inputShape[1] : 1;
-  int64_t H = 1;
-  int64_t W = 1;
-  int64_t kernelH = 1;
-  int64_t kernelW = 1;
-
+  int64_t firstAxis = reductionAxes.front();
   int64_t lastAxis = reductionAxes.back();
 
-  // Process spatial dimensions (indices 2 and beyond)
-  for (int64_t idx = 2; idx < rank; ++idx) {
-    bool isReductionAxis = std::find(reductionAxes.begin(), reductionAxes.end(),
-                               idx) != reductionAxes.end();
+  auto product = [&](int64_t begin, int64_t end) {
+    int64_t result = 1;
+    for (int64_t idx = begin; idx < end; ++idx)
+      result *= inputShape[idx];
+    return result;
+  };
+  int64_t N = inputShape[0];
+  int64_t outer = product(1, firstAxis);
+  int64_t inner = product(lastAxis + 1, rank);
 
-    if (isReductionAxis) {
-      if (kernelH * inputShape[idx] <= MAX_KERNEL_SIZE) {
-        H *= inputShape[idx];
-        kernelH *= inputShape[idx];
-      } else {
-        W *= inputShape[idx];
-        kernelW *= inputShape[idx];
-      }
-    } else if (idx > lastAxis) {
-      W *= inputShape[idx];
-    }
+  if (inner > 1) {
+    int64_t reduced = product(firstAxis, lastAxis + 1);
+    if (reduced > MAX_KERNEL_SIZE)
+      return std::nullopt;
+    return PoolParameters{{N, outer, reduced, inner}, reduced, 1};
+  }
+
+  int64_t kernelH = 1;
+  int64_t kernelW = 1;
+  for (auto axis : reductionAxes) {
+    if (kernelH * inputShape[axis] <= MAX_KERNEL_SIZE)
+      kernelH *= inputShape[axis];
+    else
+      kernelW *= inputShape[axis];
   }
 
   // Try square kernel
@@ -197,12 +212,10 @@ calculateSpatialPoolParameters(
       static_cast<int64_t>(std::sqrt(static_cast<double>(totalKernel)));
   if (sqrtInt * sqrtInt == totalKernel && sqrtInt <= MAX_SQUARE_KERNEL_DIM) {
     kernelH = kernelW = sqrtInt;
-    H = kernelH;
-    W = kernelW;
   }
 
   // Return shape in NCHW format
-  return {{N, C, H, W}, kernelH, kernelW};
+  return PoolParameters{{N, outer, kernelH, kernelW}, kernelH, kernelW};
 }
 
 /// Calculate pool parameters for CHANNEL reduction (reshape trick)
@@ -335,8 +348,10 @@ struct LowerReduceMeanV13ToAvgPoolPattern
       return success();
     }
 
-    auto [poolShape, kernelH, kernelW] =
-        calculateSpatialPoolParameters(inputShape, axes);
+    auto poolParameters = calculateSpatialPoolParameters(inputShape, axes);
+    if (!poolParameters)
+      return failure();
+    auto [poolShape, kernelH, kernelW] = *poolParameters;
 
     Value poolInput = reduceOp.getData();
     if (inputShape != ArrayRef<int64_t>(poolShape)) {
@@ -432,8 +447,10 @@ struct LowerReduceMeanToAvgPoolPattern
       return success();
     }
 
-    auto [poolShape, kernelH, kernelW] =
-        calculateSpatialPoolParameters(inputShape, axes);
+    auto poolParameters = calculateSpatialPoolParameters(inputShape, axes);
+    if (!poolParameters)
+      return failure();
+    auto [poolShape, kernelH, kernelW] = *poolParameters;
 
     Value poolInput = reduceOp.getData();
     if (inputShape != ArrayRef<int64_t>(poolShape)) {
@@ -522,8 +539,10 @@ struct LowerReduceMaxToMaxPoolSpatialPattern
       return failure(); // Let channel pattern handle it
     }
 
-    auto [poolShape, kernelH, kernelW] =
-        calculateSpatialPoolParameters(inputShape, axes);
+    auto poolParameters = calculateSpatialPoolParameters(inputShape, axes);
+    if (!poolParameters)
+      return failure();
+    auto [poolShape, kernelH, kernelW] = *poolParameters;
 
     Value poolInput = reduceOp.getData();
     if (inputShape != ArrayRef<int64_t>(poolShape)) {
@@ -627,6 +646,15 @@ struct LowerReduceMaxToMaxPoolChannelPattern
       return failure(); // Non-continuous axes can't use reshape trick
     }
 
+    // The reshape trick makes the reduced elements the innermost dim, which
+    // only matches the row-major layout when every dim after the reduced axes
+    // is 1 (in NCHW, H * W == 1 for a channel reduction). Otherwise each pool
+    // window would cover consecutive W elements of one channel.
+    for (int64_t idx = axes.back() + 1; idx < rank; ++idx) {
+      if (inputShape[idx] != 1)
+        return failure();
+    }
+
     // Calculate reshape parameters
     // Move reduction dimensions to channel position, then pool
     auto [poolShape, kernelH, kernelW] =
@@ -641,15 +669,15 @@ struct LowerReduceMaxToMaxPoolChannelPattern
     /*
      * Transformation:
      *
-     * Input: [N, H, W, C] with ReduceMax(axis=3)
+     * Input: [N, C, 1, 1] with ReduceMax(axis=1)
      *   ↓
-     * Reshape: [1, 1, N*H*W, C]  (move all non-reduced to W, reduced to C)
+     * Reshape: [1, 1, N, C]  (move all non-reduced to H, reduced to W)
      *   ↓
      * MaxPool: kernel=[1, C], stride=[1, C]
      *   ↓
-     * Output: [1, 1, N*H*W, 1]
+     * Output: [1, 1, N, 1]
      *   ↓
-     * Reshape: [N, H, W, 1] (original output shape)
+     * Reshape: [N, 1, 1, 1] (original output shape)
      */
 
     Value poolInput = createReshapeOp(rewriter, loc, reduceOp.getData(),
@@ -661,8 +689,8 @@ struct LowerReduceMaxToMaxPoolChannelPattern
 
     // NCHW: Pool output after pooling across reduced dimension
     // poolShape = [1, 1, W, C] where C is the dimension being reduced
-    int64_t outH = 1;
-    int64_t outW = poolShape[2]; // W stays same
+    int64_t outH = poolShape[2]; // one row per output element
+    int64_t outW = 1;
     SmallVector<int64_t> poolOutputShape = {1, 1, outH, outW};
     auto poolOutputType =
         RankedTensorType::get(poolOutputShape, inputType.getElementType());
@@ -738,8 +766,10 @@ struct LowerReduceSumToAvgPoolPattern
       reductionCount *= inputShape[axis];
     }
 
-    auto [poolShape, kernelH, kernelW] =
-        calculateSpatialPoolParameters(inputShape, axes);
+    auto poolParameters = calculateSpatialPoolParameters(inputShape, axes);
+    if (!poolParameters)
+      return failure();
+    auto [poolShape, kernelH, kernelW] = *poolParameters;
 
     Value poolInput = reduceOp.getData();
     if (inputShape != ArrayRef<int64_t>(poolShape)) {
