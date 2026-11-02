@@ -237,6 +237,12 @@ LogicalResult ONNXGroupNormalizationV18Op::verify() {
 template <class OP_TYPE>
 LogicalResult verifyShapeForLayerNorm(OP_TYPE *op) {
   typename OP_TYPE::Adaptor operandAdaptor(*op);
+  auto getExpressedType = [](Type elementType) -> Type {
+    if (auto quantType =
+            mlir::dyn_cast<mlir::quant::QuantizedType>(elementType))
+      return quantType.getExpressedType();
+    return elementType;
+  };
 
   // Get attributes.
   int64_t axis = op->getAxis();
@@ -254,7 +260,7 @@ LogicalResult verifyShapeForLayerNorm(OP_TYPE *op) {
   ShapedType XType = mlir::cast<ShapedType>(X.getType());
   ArrayRef<int64_t> XShape = XType.getShape();
   int64_t XRank = XShape.size();
-  Type XElementType = XType.getElementType();
+  Type XElementType = getExpressedType(XType.getElementType());
 
   // Axis attribute (if specified) must be in the range [-r,r), where r =
   // rank(input).
@@ -268,14 +274,13 @@ LogicalResult verifyShapeForLayerNorm(OP_TYPE *op) {
     ArrayRef<int64_t> bShape = bType.getShape();
     SmallVector<int64_t> BBroadcastShape;
     if (!OpTrait::util::getBroadcastedShape(XShape, bShape, BBroadcastShape))
-      op->emitOpError(
+      return op->emitOpError(
           "LayerNormalization op with incompatible B shapes (broadcast)");
     if (static_cast<int64_t>(BBroadcastShape.size()) != XRank)
-      op->emitOpError("LayerNormalization op with incompatible B shapes "
-                      "(unidirectional broadcast)");
-    if (!mlir::isa<mlir::quant::QuantizedType>(XElementType) &&
-        bType.getElementType() != XElementType)
-      op->emitOpError("LayerNormalization op with incompatible B type");
+      return op->emitOpError("LayerNormalization op with incompatible B shapes "
+                             "(unidirectional broadcast)");
+    if (getExpressedType(bType.getElementType()) != XElementType)
+      return op->emitOpError("LayerNormalization op with incompatible B type");
   }
 
   // Check scale.
@@ -286,14 +291,15 @@ LogicalResult verifyShapeForLayerNorm(OP_TYPE *op) {
     SmallVector<int64_t> scaleBroadcastShape;
     if (!OpTrait::util::getBroadcastedShape(
             XShape, scaleShape, scaleBroadcastShape))
-      op->emitOpError(
+      return op->emitOpError(
           "LayerNormalization op with incompatible scale shapes (broadcast)");
     if (static_cast<int64_t>(scaleBroadcastShape.size()) != XRank)
-      op->emitOpError("LayerNormalization op with incompatible scale shapes "
-                      "(unidirectional broadcast)");
-    if (!mlir::isa<mlir::quant::QuantizedType>(XElementType) &&
-        scaleType.getElementType() != XElementType)
-      op->emitOpError("LayerNormalization op with incompatible scale type");
+      return op->emitOpError(
+          "LayerNormalization op with incompatible scale shapes "
+          "(unidirectional broadcast)");
+    if (getExpressedType(scaleType.getElementType()) != XElementType)
+      return op->emitOpError(
+          "LayerNormalization op with incompatible scale type");
   }
 
   return success();
