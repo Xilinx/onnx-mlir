@@ -1,6 +1,6 @@
 // Copyright (C) 2025 Advanced Micro Devices, Inc. All rights reserved.
 
-// RUN: onnx-mlir-opt --split-input-file --transfer-resize-linear-to-dwconv %s | FileCheck %s
+// RUN: onnx-mlir-opt --split-input-file --transfer-resize-linear-to-dwconv %s | FileCheck %s --implicit-check-not=onnx.Conv
 
 // CHECK-LABEL: resize_subgraph_1
 func.func @resize_subgraph_1(%arg0: tensor<1x1x4x4x4xf32>) -> tensor<1x1x8x8x8xf32> {
@@ -10,7 +10,7 @@ func.func @resize_subgraph_1(%arg0: tensor<1x1x4x4x4xf32>) -> tensor<1x1x8x8x8xf
     return %2 : tensor<1x1x8x8x8xf32>
   }
 
-// CHECK: onnx.ConvTranspose
+// CHECK: onnx.Resize
 
 // CHECK-LABEL: resize_subgraph_2
 func.func @resize_subgraph_2(%arg0: tensor<1x3x64x64xf32>) -> tensor<1x3x128x128xf32> {
@@ -25,7 +25,7 @@ func.func @resize_subgraph_2(%arg0: tensor<1x3x64x64xf32>) -> tensor<1x3x128x128
 
   }
 
-// CHECK: onnx.ConvTranspose
+// CHECK: onnx.Resize
 
 // CHECK-LABEL: resize_subgraph_3
 func.func @resize_subgraph_3(%arg0: tensor<1x1x1x4x4xf32>) -> tensor<1x1x1x8x8xf32> {
@@ -45,7 +45,7 @@ func.func @resize_subgraph_3(%arg0: tensor<1x1x1x4x4xf32>) -> tensor<1x1x1x8x8xf
     return %2 : tensor<1x1x1x8x8xf32>
   }
 
-// CHECK: onnx.ConvTranspose
+// CHECK: onnx.Resize
 
 // CHECK-LABEL: resize_subgraph_4
 func.func @resize_subgraph_4(%arg0: tensor<1x1x8x8xf32>) -> tensor<1x1x4x4xf32> {
@@ -65,7 +65,7 @@ func.func @resize_subgraph_4(%arg0: tensor<1x1x8x8xf32>) -> tensor<1x1x4x4xf32> 
     return %2 : tensor<1x1x4x4xf32>
   }
 
-// CHECK: onnx.Conv
+// CHECK: onnx.Resize
 
 // CHECK-LABEL: resize_subgraph_5
 func.func @resize_subgraph_5(%arg0: tensor<1x1x8x8x8xf32>) -> tensor<1x1x4x4x4xf32> {
@@ -85,7 +85,7 @@ func.func @resize_subgraph_5(%arg0: tensor<1x1x8x8x8xf32>) -> tensor<1x1x4x4x4xf
     return %2 : tensor<1x1x4x4x4xf32>
   }
 
-// CHECK: onnx.Conv
+// CHECK: onnx.Resize
 
 // -----
 // FP16 linear Resize is supported natively by xcompiler and must NOT be
