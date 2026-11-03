@@ -23,6 +23,7 @@
 
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
 #include "mlir/Dialect/Traits.h"
+#include "onnx/onnx_pb.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CheckedArithmetic.h"
 #include "llvm/Support/MathExtras.h"
@@ -84,14 +85,12 @@ Type getBroadcastedRankedType(
 using namespace mlir;
 
 namespace onnx_mlir {
-FailureOr<uint64_t> getONNXTensorPayloadSize(RankedTensorType type) {
-  std::optional<BType> btype =
-      btypeOfMlirTypeIfSupported(type.getElementType());
-  if (!btype)
-    return failure();
-
+namespace {
+template <typename ShapeRange>
+FailureOr<uint64_t> getONNXTensorPayloadSize(
+    const ShapeRange &shape, uint64_t bits) {
   uint64_t elements = 1;
-  for (int64_t dim : type.getShape()) {
+  for (int64_t dim : shape) {
     if (dim < 0)
       return failure();
     auto next = llvm::checkedMulUnsigned(elements, uint64_t(dim));
@@ -100,7 +99,6 @@ FailureOr<uint64_t> getONNXTensorPayloadSize(RankedTensorType type) {
     elements = *next;
   }
 
-  uint64_t bits = *btype == BType::BOOL ? 8 : type.getElementTypeBitWidth();
   std::optional<uint64_t> bytes;
   if (bits < 8) {
     if (8 % bits)
@@ -114,6 +112,27 @@ FailureOr<uint64_t> getONNXTensorPayloadSize(RankedTensorType type) {
   if (!bytes || *bytes > uint64_t(INT64_MAX))
     return failure();
   return *bytes;
+}
+
+} // namespace
+
+FailureOr<uint64_t> getONNXTensorPayloadSize(RankedTensorType type) {
+  std::optional<BType> btype =
+      btypeOfMlirTypeIfSupported(type.getElementType());
+  if (!btype)
+    return failure();
+  std::optional<unsigned> bits = storageBitwidthOfBType(*btype);
+  if (!bits)
+    return failure();
+  return getONNXTensorPayloadSize(type.getShape(), *bits);
+}
+
+FailureOr<uint64_t> getONNXTensorPayloadSize(const onnx::TensorProto &tensor) {
+  std::optional<unsigned> bits =
+      storageBitwidthOfBType(btypeOfOnnxDataType(tensor.data_type()));
+  if (!bits)
+    return failure();
+  return getONNXTensorPayloadSize(tensor.dims(), *bits);
 }
 } // namespace onnx_mlir
 

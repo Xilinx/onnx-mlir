@@ -29,6 +29,10 @@
 #include "src/Interface/ShapeInferenceOpInterface.hpp"
 #include "src/Interface/StructuralOperandOpInterface.hpp"
 
+namespace onnx {
+class TensorProto;
+}
+
 namespace mlir {
 // OpSet level supported by onnx-mlir
 // To update all occurrence of the current ONNX opset, please grep
@@ -45,5 +49,7 @@ namespace onnx_mlir {
 // unsupported element types, dynamic or overflowing shapes, or a result that
 // cannot be represented by ONNX's signed length metadata.
 mlir::FailureOr<uint64_t> getONNXTensorPayloadSize(mlir::RankedTensorType type);
+mlir::FailureOr<uint64_t> getONNXTensorPayloadSize(
+    const onnx::TensorProto &tensor);
 } // namespace onnx_mlir
 #endif
