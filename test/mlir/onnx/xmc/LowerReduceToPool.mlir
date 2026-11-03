@@ -112,7 +112,12 @@ func.func @reduce_max_spatial_hw(%arg0: tensor<1x3x4x4x!quant.uniform<i8:f32, 0.
     %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<1x3x4x4x!quant.uniform<i8:f32, 0.05:0>>, tensor<2xi64>) -> tensor<1x3x1x1x!quant.uniform<i8:f32, 0.05:0>>
     return %1 : tensor<1x3x1x1x!quant.uniform<i8:f32, 0.05:0>>
 }
-// CHECK: "onnx.MaxPoolSingleOut"
+// CHECK-NOT: onnx.Reshape
+// CHECK: "onnx.MaxPoolSingleOut"(%arg0)
+// CHECK-SAME: kernel_shape = [4, 4]
+// CHECK-SAME: strides = [4, 4]
+// CHECK-SAME: (tensor<1x3x4x4x{{.*}}>) -> tensor<1x3x1x1x
+// CHECK-NOT: onnx.Reshape
 // CHECK-NOT: onnx.ReduceMax
 
 // -----
@@ -124,26 +129,139 @@ func.func @reduce_max_single_spatial_axis(%arg0: tensor<1x3x8x4x!quant.uniform<i
     %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<1x3x8x4x!quant.uniform<i8:f32, 0.05:0>>, tensor<1xi64>) -> tensor<1x3x1x4x!quant.uniform<i8:f32, 0.05:0>>
     return %1 : tensor<1x3x1x4x!quant.uniform<i8:f32, 0.05:0>>
 }
-// CHECK: "onnx.MaxPoolSingleOut"
+// CHECK-NOT: onnx.Reshape
+// CHECK: "onnx.MaxPoolSingleOut"(%arg0)
+// CHECK-SAME: kernel_shape = [8, 1]
+// CHECK-SAME: strides = [8, 1]
+// CHECK-SAME: (tensor<1x3x8x4x{{.*}}>) -> tensor<1x3x1x4x
+// CHECK-NOT: onnx.Reshape
+// CHECK-NOT: onnx.ReduceMax
+
+// -----
+
+// CHECK-LABEL: @reduce_max_h_square_extent_with_trailing_w
+// NCHW: tensor<1x16x16x160> - reduce axis [2] (H). H = 16 is a perfect square,
+// but W follows the reduced axis, so the kernel must stay [16, 1] on the
+// original shape. Squaring it to [4, 4] would reshape 1x16x16x160 to 1x16x4x4.
+func.func @reduce_max_h_square_extent_with_trailing_w(%arg0: tensor<1x16x16x160x!quant.uniform<u8:f32, 0.05:0>>) -> tensor<1x16x1x160x!quant.uniform<u8:f32, 0.05:0>> {
+    %0 = onnx.Constant dense<[2]> : tensor<1xi64>
+    %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<1x16x16x160x!quant.uniform<u8:f32, 0.05:0>>, tensor<1xi64>) -> tensor<1x16x1x160x!quant.uniform<u8:f32, 0.05:0>>
+    return %1 : tensor<1x16x1x160x!quant.uniform<u8:f32, 0.05:0>>
+}
+// CHECK-NOT: onnx.Reshape
+// CHECK: "onnx.MaxPoolSingleOut"(%arg0)
+// CHECK-SAME: kernel_shape = [16, 1]
+// CHECK-SAME: strides = [16, 1]
+// CHECK-SAME: (tensor<1x16x16x160x{{.*}}>) -> tensor<1x16x1x160x
+// CHECK-NOT: onnx.Reshape
+// CHECK-NOT: onnx.ReduceMax
+
+// -----
+
+// CHECK-LABEL: @reduce_max_h_small_square_extent_with_trailing_w
+// NCHW: tensor<1x16x4x160> - reduce axis [2] (H = 4, a perfect square).
+func.func @reduce_max_h_small_square_extent_with_trailing_w(%arg0: tensor<1x16x4x160x!quant.uniform<u8:f32, 0.05:0>>) -> tensor<1x16x1x160x!quant.uniform<u8:f32, 0.05:0>> {
+    %0 = onnx.Constant dense<[2]> : tensor<1xi64>
+    %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<1x16x4x160x!quant.uniform<u8:f32, 0.05:0>>, tensor<1xi64>) -> tensor<1x16x1x160x!quant.uniform<u8:f32, 0.05:0>>
+    return %1 : tensor<1x16x1x160x!quant.uniform<u8:f32, 0.05:0>>
+}
+// CHECK-NOT: onnx.Reshape
+// CHECK: "onnx.MaxPoolSingleOut"(%arg0)
+// CHECK-SAME: kernel_shape = [4, 1]
+// CHECK-SAME: (tensor<1x16x4x160x{{.*}}>) -> tensor<1x16x1x160x
+// CHECK-NOT: onnx.Reshape
+// CHECK-NOT: onnx.ReduceMax
+
+// -----
+
+// CHECK-LABEL: @reduce_max_h_exceeds_kernel_limit_not_pooled
+// NCHW: tensor<1x16x96x160> - reduce axis [2] (H = 96 > MAX_KERNEL_SIZE) with a
+// trailing W. Flattening to 1x16x1x15360 with kernel [1, 96] would pool 96
+// consecutive W elements instead of a column, so the ReduceMax is kept.
+func.func @reduce_max_h_exceeds_kernel_limit_not_pooled(%arg0: tensor<1x16x96x160x!quant.uniform<u8:f32, 0.05:0>>) -> tensor<1x16x1x160x!quant.uniform<u8:f32, 0.05:0>> {
+    %0 = onnx.Constant dense<[2]> : tensor<1xi64>
+    %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<1x16x96x160x!quant.uniform<u8:f32, 0.05:0>>, tensor<1xi64>) -> tensor<1x16x1x160x!quant.uniform<u8:f32, 0.05:0>>
+    return %1 : tensor<1x16x1x160x!quant.uniform<u8:f32, 0.05:0>>
+}
+// CHECK: "onnx.ReduceMax"
+// CHECK-NOT: onnx.Reshape
+// CHECK-NOT: onnx.MaxPoolSingleOut
+
+// -----
+
+// CHECK-LABEL: @reduce_max_lifted_rank3_channel
+// A rank-3 [N, C, L] ReduceMax over C reaches this pass as [1, N, C, L] over
+// axis 2 (ReplaceQDQReductionPass pads rank < 4 with leading 1s).
+func.func @reduce_max_lifted_rank3_channel(%arg0: tensor<1x1x16x160x!quant.uniform<u8:f32, 0.05:0>>) -> tensor<1x1x1x160x!quant.uniform<u8:f32, 0.05:0>> {
+    %0 = onnx.Constant dense<[2]> : tensor<1xi64>
+    %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<1x1x16x160x!quant.uniform<u8:f32, 0.05:0>>, tensor<1xi64>) -> tensor<1x1x1x160x!quant.uniform<u8:f32, 0.05:0>>
+    return %1 : tensor<1x1x1x160x!quant.uniform<u8:f32, 0.05:0>>
+}
+// CHECK-NOT: onnx.Reshape
+// CHECK: "onnx.MaxPoolSingleOut"(%arg0)
+// CHECK-SAME: kernel_shape = [16, 1]
+// CHECK-SAME: (tensor<1x1x16x160x{{.*}}>) -> tensor<1x1x1x160x
+// CHECK-NOT: onnx.Reshape
 // CHECK-NOT: onnx.ReduceMax
 
 // -----
 
 //===----------------------------------------------------------------------===//
-// ReduceMax → MaxPool (Channel via Reshape) Tests
+// ReduceMax over batch / channel axes: kept as a reduction (NOT pooled)
 //===----------------------------------------------------------------------===//
 
-// CHECK-LABEL: @reduce_max_channel_axis
-// NCHW: tensor<1x8x4x4> - reduce axis [1] (C)
-func.func @reduce_max_channel_axis(%arg0: tensor<1x8x4x4x!quant.uniform<i8:f32, 0.05:0>>) -> tensor<1x1x4x4x!quant.uniform<i8:f32, 0.05:0>> {
+// CHECK-LABEL: @reduce_max_channel_axis_not_pooled
+// NCHW: tensor<2x8x1x1> - reduce axis [1] (C). Even with H * W == 1 the
+// reduction stays ReduceMax so it lowers to qlinear_reduction_max.
+func.func @reduce_max_channel_axis_not_pooled(%arg0: tensor<2x8x1x1x!quant.uniform<i8:f32, 0.05:0>>) -> tensor<2x1x1x1x!quant.uniform<i8:f32, 0.05:0>> {
+    %0 = onnx.Constant dense<[1]> : tensor<1xi64>
+    %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<2x8x1x1x!quant.uniform<i8:f32, 0.05:0>>, tensor<1xi64>) -> tensor<2x1x1x1x!quant.uniform<i8:f32, 0.05:0>>
+    return %1 : tensor<2x1x1x1x!quant.uniform<i8:f32, 0.05:0>>
+}
+// CHECK: "onnx.ReduceMax"
+// CHECK-NOT: onnx.Reshape
+// CHECK-NOT: onnx.MaxPoolSingleOut
+
+// -----
+
+// CHECK-LABEL: @reduce_max_channel_axis_with_spatial_not_pooled
+// NCHW: tensor<1x8x4x4> - reduce axis [1] (C). H and W follow C, so reshaping
+// to [1, 1, H*W, C] would pool consecutive W elements of one channel.
+func.func @reduce_max_channel_axis_with_spatial_not_pooled(%arg0: tensor<1x8x4x4x!quant.uniform<i8:f32, 0.05:0>>) -> tensor<1x1x4x4x!quant.uniform<i8:f32, 0.05:0>> {
     %0 = onnx.Constant dense<[1]> : tensor<1xi64>
     %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<1x8x4x4x!quant.uniform<i8:f32, 0.05:0>>, tensor<1xi64>) -> tensor<1x1x4x4x!quant.uniform<i8:f32, 0.05:0>>
     return %1 : tensor<1x1x4x4x!quant.uniform<i8:f32, 0.05:0>>
 }
-// CHECK: "onnx.Reshape"
-// CHECK: "onnx.MaxPoolSingleOut"
-// CHECK: "onnx.Reshape"
-// CHECK-NOT: onnx.ReduceMax
+// CHECK: "onnx.ReduceMax"
+// CHECK-NOT: onnx.Reshape
+// CHECK-NOT: onnx.MaxPoolSingleOut
+
+// -----
+
+// CHECK-LABEL: @reduce_max_channel_axis_large_spatial_not_pooled
+// NCHW: tensor<1x16x96x160> - reduce axis [1] (C = 16). Previously reshaped to
+// 1x1x15360x16 and emitted a pool whose declared result type was transposed.
+func.func @reduce_max_channel_axis_large_spatial_not_pooled(%arg0: tensor<1x16x96x160x!quant.uniform<u8:f32, 0.05:0>>) -> tensor<1x1x96x160x!quant.uniform<u8:f32, 0.05:0>> {
+    %0 = onnx.Constant dense<[1]> : tensor<1xi64>
+    %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<1x16x96x160x!quant.uniform<u8:f32, 0.05:0>>, tensor<1xi64>) -> tensor<1x1x96x160x!quant.uniform<u8:f32, 0.05:0>>
+    return %1 : tensor<1x1x96x160x!quant.uniform<u8:f32, 0.05:0>>
+}
+// CHECK: "onnx.ReduceMax"
+// CHECK-NOT: onnx.Reshape
+// CHECK-NOT: onnx.MaxPoolSingleOut
+
+// -----
+
+// CHECK-LABEL: @reduce_max_rank3_channel_axis_not_pooled
+// Rank-3 [N, C, L] ReduceMax over C (L > 1 follows C): kept as a reduction.
+func.func @reduce_max_rank3_channel_axis_not_pooled(%arg0: tensor<1x16x160x!quant.uniform<u8:f32, 0.05:0>>) -> tensor<1x1x160x!quant.uniform<u8:f32, 0.05:0>> {
+    %0 = onnx.Constant dense<[1]> : tensor<1xi64>
+    %1 = "onnx.ReduceMax"(%arg0, %0) {keepdims = 1 : si64} : (tensor<1x16x160x!quant.uniform<u8:f32, 0.05:0>>, tensor<1xi64>) -> tensor<1x1x160x!quant.uniform<u8:f32, 0.05:0>>
+    return %1 : tensor<1x1x160x!quant.uniform<u8:f32, 0.05:0>>
+}
+// CHECK: "onnx.ReduceMax"
+// CHECK-NOT: onnx.Reshape
+// CHECK-NOT: onnx.MaxPoolSingleOut
 
 // -----
 
