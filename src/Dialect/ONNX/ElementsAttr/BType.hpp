@@ -78,6 +78,10 @@ enum class BType : int8_t {
   UINT4 = 21, // Unsigned integer in range [0, 15]
   INT4 = 22,  // Signed integer in range [-8, 7], using two's-complement
               // representation
+  FLOAT4E2M1 = 23,
+  FLOAT8E8M0 = 24,
+  UINT2 = 25,
+  INT2 = 26,
 
   // Storage-only types for a DisposableElementsAttr buffer that holds two
   // UINT4/INT4 values per byte, in the layout of ONNX's packed int4/uint4 data.
@@ -85,8 +89,7 @@ enum class BType : int8_t {
   // mapping; only DisposableElementsAttr interprets them.
   //
   // They sit at the top of the int8_t range because BType is cast to and from
-  // onnx::TensorProto_DataType, and newer ONNX versions give the values after
-  // INT4 (FLOAT4E2M1=23, FLOAT8E8M0=24, UINT2=25, INT2=26) to real data types.
+  // onnx::TensorProto_DataType.
   PACKED_UINT4 = 125,
   PACKED_INT4 = 126,
 };
@@ -244,6 +247,12 @@ bool isUnsignedIntBType(BType);
 
 // == mlirTypeOfBType(btype, ctx).getIntOrFloatBitWidth()
 unsigned bitwidthOfBType(BType);
+
+// Returns the number of bits occupied by one element in an ONNX tensor payload.
+// Unlike bitwidthOfBType, this covers types without an MLIR element type and
+// reports that ONNX stores BOOL as one byte. Returns nullopt for types without
+// fixed-width payload elements, such as STRING and UNDEFINED.
+std::optional<unsigned> storageBitwidthOfBType(BType);
 
 // == getIntOrFloatByteWidth(mlirTypeOfBType(btype, ctx))
 unsigned bytewidthOfBType(BType);
