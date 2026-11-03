@@ -118,7 +118,10 @@ struct ImportOptions {
 
   std::vector<std::string> functionsToDecompose = {};
 
-  // Experimental initializer-source support.
+  // Experimental initializer-source support, disabled by default. When false,
+  // initializers are decoded eagerly and no source-model path, backup entries,
+  // or extended caller-storage lifetime is required. When true, source
+  // requirements apply even if all sources are materialized before return.
   bool useInitializerSources = false;
   // Structural operands and forced names take precedence over both skip
   // options.
@@ -146,23 +149,29 @@ struct ImportOptions {
   // the imported model, including initializer values, types, shapes, and scoped
   // names. Import does not read payloads to check that the snapshots agree.
   // File import supplies its absolute input path automatically. Array and
-  // ModelProto callers must provide this path for embedded sources. Explicit
-  // relative paths are resolved against externalDataDir.
+  // ModelProto callers must provide this path for embedded sources when
+  // useInitializerSources is enabled, even if all sources are materialized
+  // before return. Explicit relative paths are resolved against
+  // externalDataDir.
   std::string initializerSourceModelPath;
 };
 
 // Lifetime contract for ImportFrontendModel* source references:
 //
 // ImportOptions and ordinary input buffers are referenced only for the duration
-// of an import call. Storage referenced by a process-local initializer source
-// is different: the caller must keep it alive and bytewise immutable until the
-// MLIRContext passed to the import call is destroyed. Cloning the returned IR
-// copies the non-owning reference and does not extend the storage lifetime.
+// of an import call. When useInitializerSources is false, the input ModelProto
+// and initializer data are also needed only for the duration of the call.
+// When useInitializerSources is true, storage referenced by a process-local
+// initializer source must remain alive and bytewise immutable until the
+// MLIRContext passed to the import call is destroyed, even if all sources are
+// materialized before return. Cloning the returned IR copies the non-owning
+// reference and does not extend the storage lifetime.
 //
-// ModelProto entry points store non-owning references to selected embedded
-// TensorProto initializers. The caller must therefore keep that ModelProto
-// alive and immutable for the context lifetime. File and array entry points
-// parse temporary ModelProto objects and create disk-only sources instead.
+// When useInitializerSources is enabled, ModelProto entry points store
+// non-owning references to selected embedded TensorProto initializers. The
+// caller must therefore keep that ModelProto alive and immutable for the
+// context lifetime. File and array entry points parse temporary ModelProto
+// objects and create disk-only sources instead.
 // ExternalInitializerSource supplies the corresponding caller-owned byte view
 // for an _ORT_MEM_ADDR_ initializer.
 
