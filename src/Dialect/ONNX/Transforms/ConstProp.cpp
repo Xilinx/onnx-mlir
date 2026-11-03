@@ -2429,11 +2429,14 @@ static bool onlyFeedsConstantIsland(Value value, bool sawCompute = false) {
 // inverse of ConstFoldQuantizeLinearOnConst, gated by
 // enable-dequant-const-fold. Per-tensor and per-axis are handled; blocked
 // quantization is out of scope. Confined to constant islands so quantized
-// weights are not dequantized.
+// weights are not dequantized, unless `foldWeights` lifts that restriction.
 class ConstFoldDequantizeLinearOnConst
     : public OpRewritePattern<ONNXDequantizeLinearOp> {
 public:
-  using OpRewritePattern<ONNXDequantizeLinearOp>::OpRewritePattern;
+  ConstFoldDequantizeLinearOnConst(
+      MLIRContext *context, bool foldWeights = false)
+      : OpRewritePattern<ONNXDequantizeLinearOp>(context),
+        foldWeights(foldWeights) {}
 
   LogicalResult matchAndRewrite(
       ONNXDequantizeLinearOp dqOp, PatternRewriter &rewriter) const override {
@@ -2465,8 +2468,7 @@ public:
     if (!floatType)
       return rewriter.notifyMatchFailure(dqOp, "non-floating-point output");
 
-    // Only fold inside a constant island, not ordinary quantized weights.
-    if (!onlyFeedsConstantIsland(dqOp.getY()))
+    if (!foldWeights && !onlyFeedsConstantIsland(dqOp.getY()))
       return rewriter.notifyMatchFailure(
           dqOp, "not confined to a constant island");
 
@@ -2544,6 +2546,9 @@ public:
         dqOp, createReplacingConstantOp(rewriter, dqOp.getY(), dequantized));
     return success();
   }
+
+private:
+  bool foldWeights;
 };
 
 // Drop an idempotent Q-DQ pair sitting on a bare integer constant. Pattern:
@@ -2692,7 +2697,8 @@ void ConstPropONNXToONNXPass::runOnOperation() {
 
   RewritePatternSet patterns(context);
   getConstPropONNXToONNXPatterns(patterns, enableQDQ, enableQuantConstFold,
-      maxLoopUnrollCount, enableDequantConstFold);
+      maxLoopUnrollCount, enableDequantConstFold,
+      enableDequantConstFoldWeights);
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
           GreedyRewriteConfig().setListener(&rnUpdater))))
@@ -2703,7 +2709,7 @@ void ConstPropONNXToONNXPass::runOnOperation() {
 
 void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
     bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount,
-    bool enableDequantConstFold) {
+    bool enableDequantConstFold, bool enableDequantConstFoldWeights) {
   if (isConstantPropagationDisabled())
     return;
   populateWithGenerated(patterns);
@@ -2727,8 +2733,9 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
   }
   if (enableQuantConstFold)
     patterns.add<ConstFoldQuantizeLinearOnConst>(patterns.getContext());
-  if (enableDequantConstFold)
-    patterns.add<ConstFoldDequantizeLinearOnConst>(patterns.getContext());
+  if (enableDequantConstFold || enableDequantConstFoldWeights)
+    patterns.add<ConstFoldDequantizeLinearOnConst>(
+        patterns.getContext(), enableDequantConstFoldWeights);
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,

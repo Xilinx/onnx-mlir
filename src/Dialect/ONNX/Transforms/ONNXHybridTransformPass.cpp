@@ -119,7 +119,8 @@ struct ONNXHybridTransformPass
 
     if (constantPropagation) {
       getConstPropONNXToONNXPatterns(cumulativePatterns, qdqConstProp,
-          quantConstFold, /*maxLoopUnrollCount=*/64, dequantConstFold);
+          quantConstFold, /*maxLoopUnrollCount=*/64, dequantConstFold,
+          dequantConstFoldWeights);
     }
 
     if (decomposition) {
