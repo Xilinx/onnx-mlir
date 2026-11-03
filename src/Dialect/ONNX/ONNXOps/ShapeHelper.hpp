@@ -888,6 +888,7 @@ using ONNXBatchNormalizationOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::O
 using ONNXBatchNormalizationV9OpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXBatchNormalizationV9Op>;
 using ONNXBatchNormalizationInferenceModeOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXBatchNormalizationInferenceModeOp>;
 using ONNXCategoryMapperOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXCategoryMapperOp>;
+using ONNXCol2ImOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXCol2ImOp>;
 using ONNXCompressOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXCompressOp>;
 using ONNXConcatOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXConcatOp>;
 using ONNXConcatShapeTransposeOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXConcatShapeTransposeOp>;

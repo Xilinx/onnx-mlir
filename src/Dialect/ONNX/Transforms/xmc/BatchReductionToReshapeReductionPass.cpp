@@ -144,6 +144,101 @@ struct BatchReductionToReshapeReductionPattern
   }
 };
 
+static bool hasStaticPositiveShape(RankedTensorType type) {
+  return llvm::all_of(type.getShape(),
+      [](int64_t d) { return !ShapedType::isDynamic(d) && d > 0; });
+}
+
+// Rewrites a quantized ReduceSum over axis 1 of a [B, R, 1, C] tensor with
+// B > 1 so that the backend sees a batch of 1:
+//   [B, R, 1, C] -> Reshape [1, B, R, C]
+//                -> ReduceSum(axes = [2], keepdims = 1) [1, B, 1, C]
+//                -> Reshape original output shape
+// Dimension 2 being 1 makes [B, R, 1, C] and [1, B, R, C] share the same
+// row-major layout, and reducing R per (b, c) is unchanged.
+struct BatchMiddleAxisReductionToReshapeReductionPattern
+    : public OpRewritePattern<ONNXReduceSumOp> {
+  using OpRewritePattern<ONNXReduceSumOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXReduceSumOp reduceOp, PatternRewriter &rewriter) const override {
+    constexpr int64_t kInputRank = 4;
+    Location loc = reduceOp.getLoc();
+
+    Value inputValue = reduceOp.getData();
+    auto inputType = dyn_cast<RankedTensorType>(inputValue.getType());
+    if (!inputType || inputType.getRank() != kInputRank ||
+        !hasStaticPositiveShape(inputType))
+      return failure();
+    if (!isa<quant::UniformQuantizedType>(inputType.getElementType()))
+      return failure();
+
+    ArrayRef<int64_t> inputShape = inputType.getShape();
+    int64_t batch = inputShape[0];
+    int64_t reduceDim = inputShape[1];
+    int64_t channels = inputShape[3];
+    if (batch <= 1 || inputShape[2] != 1)
+      return failure();
+
+    Value axesValue = reduceOp.getAxes();
+    if (!axesValue)
+      return failure();
+    ElementsAttr axesAttr =
+        onnx_mlir::getDenseOrDisposableConstLikeElements(axesValue);
+    if (!axesAttr || !axesAttr.getElementType().isIntOrIndex() ||
+        axesAttr.size() != 1)
+      return failure();
+    int64_t axis = (*axesAttr.getValues<APInt>().begin()).getSExtValue();
+    if (axis < 0)
+      axis += kInputRank;
+    if (axis != 1)
+      return failure();
+
+    auto outputType =
+        dyn_cast<RankedTensorType>(reduceOp.getResult().getType());
+    if (!outputType || !hasStaticPositiveShape(outputType))
+      return failure();
+    if (!isa<quant::UniformQuantizedType>(outputType.getElementType()))
+      return failure();
+
+    // The original result must be [B, 1, 1, C] (keepdims = 1) or [B, 1, C]
+    // (keepdims = 0); it is restored by the final reshape.
+    SmallVector<int64_t, 4> expectedOutputShape =
+        reduceOp.getKeepdims() != 0
+            ? SmallVector<int64_t, 4>{batch, 1, 1, channels}
+            : SmallVector<int64_t, 4>{batch, 1, channels};
+    if (outputType.getShape() != ArrayRef<int64_t>(expectedOutputShape))
+      return failure();
+
+    SmallVector<int64_t, 4> preReshapeShape = {1, batch, reduceDim, channels};
+    SmallVector<int64_t, 4> reduceShape = {1, batch, 1, channels};
+
+    rewriter.setInsertionPoint(reduceOp);
+    onnx_mlir::OnnxBuilder onnxBuilder(rewriter, loc);
+    Value preShapeConst = onnxBuilder.constantInt64(preReshapeShape);
+    auto preReshapeType =
+        RankedTensorType::get(preReshapeShape, inputType.getElementType());
+    Value preReshape = rewriter.create<ONNXReshapeOp>(
+        loc, preReshapeType, inputValue, preShapeConst);
+
+    // The reduced axis moves from 1 to 2, so the original axes operand cannot
+    // be reused. ResultNames is intentionally not copied: the updater infers
+    // the inner names (with the inverse reshape) from the final reshape.
+    Value newAxes = onnxBuilder.constantInt64({2});
+    auto reduceType =
+        RankedTensorType::get(reduceShape, outputType.getElementType());
+    Value newReduce = rewriter.create<ONNXReduceSumOp>(loc, reduceType,
+        preReshape, newAxes, /*keepdims=*/1, reduceOp.getNoopWithEmptyAxes());
+
+    Value postShapeConst = onnxBuilder.constantInt64(outputType.getShape());
+    Value postReshape = rewriter.create<ONNXReshapeOp>(
+        loc, outputType, newReduce, postShapeConst);
+
+    rewriter.replaceOp(reduceOp, postReshape);
+    return success();
+  }
+};
+
 } // namespace
 
 namespace onnx_mlir {
@@ -162,7 +257,8 @@ struct BatchReductionToReshapeReductionPass
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
-    patterns.add<BatchReductionToReshapeReductionPattern>(context);
+    patterns.add<BatchReductionToReshapeReductionPattern,
+        BatchMiddleAxisReductionToReshapeReductionPattern>(context);
 
     GreedyRewriteConfig config;
     config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps);
