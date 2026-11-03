@@ -5290,44 +5290,46 @@ struct FoldConsecutiveCastPattern : public OpRewritePattern<ONNXCastOp> {
 };
 
 // Element-type policies for unary canonicalization patterns.
-struct AnyElementType {
-  static bool accepts(Type type) { return true; }
+struct IntegerElementType {
+  static bool accepts(Type type) { return isa<IntegerType>(type); }
+};
+
+struct BoolElementType {
+  static bool accepts(Type type) { return type.isSignlessInteger(1); }
 };
 
 struct FloatElementType {
   static bool accepts(Type type) { return isa<FloatType>(type); }
 };
 
-struct NonQuantizedElementType {
-  static bool accepts(Type type) { return !isa<quant::QuantizedType>(type); }
-};
-
-// Idempotent unary operations retain the inner result, including any shape
-// refinement it carries. Only the inner and outer result types must match.
-template <typename Op, typename ElementTypeGuard = AnyElementType>
-struct RemoveIdempotentUnaryPattern : public OpRewritePattern<Op> {
-  using OpRewritePattern<Op>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(
-      Op op, PatternRewriter &rewriter) const override {
-    auto inner = op->getOperand(0).template getDefiningOp<Op>();
-    if (!inner)
-      return failure();
-    Value result = inner->getResult(0);
-    auto type = dyn_cast<ShapedType>(result.getType());
-    if (!type || !ElementTypeGuard::accepts(type.getElementType()) ||
-        op->getResult(0).getType() != result.getType())
-      return failure();
-    rewriter.replaceOp(op, result);
-    return success();
+struct FloatOrSignedIntegerElementType {
+  static bool accepts(Type type) {
+    if (isa<FloatType>(type))
+      return true;
+    auto integerType = dyn_cast<IntegerType>(type);
+    // ONNX signed integers are commonly represented by signless MLIR types.
+    return integerType && !integerType.isUnsigned() &&
+           integerType.getWidth() > 1;
   }
 };
 
-// Cancel unary pairs only when replacing the result preserves its complete
-// tensor type. In particular, do not discard shape refinements or rank changes.
-template <typename OuterOp, typename InnerOp,
-    typename ElementTypeGuard = AnyElementType>
-struct RemoveUnaryUnaryPattern : public OpRewritePattern<OuterOp> {
+// Explicit numeric types exclude quantized types: their storage arithmetic
+// can introduce rounding/saturation, so real-number identities do not suffice.
+struct FloatOrIntegerElementType {
+  static bool accepts(Type type) { return isa<FloatType, IntegerType>(type); }
+};
+
+enum class UnaryChainKeep { Inner, Outer, None };
+
+// Folds Outer(Inner(x)) using the identity registered for the op pair:
+//   Inner: Outer(Inner(x)) == Inner(x),    e.g. Abs(Abs(x)) => Abs(x)
+//   Outer: Outer(Inner(x)) == Outer(x),    e.g. Abs(Neg(x)) => Abs(x)
+//   None:  Outer(Inner(x)) == x,           e.g. Neg(Neg(x)) => x
+// The replacement must have exactly the outer result type, so shape
+// refinements are never dropped.
+template <typename OuterOp, typename InnerOp, UnaryChainKeep Keep,
+    typename ElementTypeGuard>
+struct SimplifyUnaryChainPattern : public OpRewritePattern<OuterOp> {
   using OpRewritePattern<OuterOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
@@ -5335,13 +5337,25 @@ struct RemoveUnaryUnaryPattern : public OpRewritePattern<OuterOp> {
     auto inner = op->getOperand(0).template getDefiningOp<InnerOp>();
     if (!inner)
       return failure();
+
     Value x = inner->getOperand(0);
-    auto type = dyn_cast<ShapedType>(x.getType());
-    if (!type || !ElementTypeGuard::accepts(type.getElementType()) ||
-        inner->getResult(0).getType() != x.getType() ||
-        op->getResult(0).getType() != x.getType())
+    Value innerResult = inner->getResult(0);
+    Type resultType = op->getResult(0).getType();
+    if (!ElementTypeGuard::accepts(getElementTypeOrSelf(innerResult)))
       return failure();
-    rewriter.replaceOp(op, x);
+
+    if constexpr (Keep == UnaryChainKeep::Inner) {
+      if (resultType != innerResult.getType())
+        return failure();
+      rewriter.replaceOp(op, innerResult);
+    } else {
+      if (innerResult.getType() != x.getType() || resultType != x.getType())
+        return failure();
+      if constexpr (Keep == UnaryChainKeep::Outer)
+        rewriter.modifyOpInPlace(op, [&]() { op->setOperand(0, x); });
+      else
+        rewriter.replaceOp(op, x);
+    }
     return success();
   }
 };
@@ -5391,9 +5405,10 @@ struct MoveNegToMulConstantPattern : public OpRewritePattern<ONNXMulOp> {
 /// on the ONNXAbsOp.
 void ONNXAbsOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
-  results
-      .insert<RemoveIdempotentUnaryPattern<ONNXAbsOp, NonQuantizedElementType>>(
-          context);
+  results.insert<SimplifyUnaryChainPattern<ONNXAbsOp, ONNXAbsOp,
+      UnaryChainKeep::Inner, FloatOrIntegerElementType>>(context);
+  results.insert<SimplifyUnaryChainPattern<ONNXAbsOp, ONNXNegOp,
+      UnaryChainKeep::Outer, FloatOrSignedIntegerElementType>>(context);
 }
 
 /// on the ONNXArgMaxOp.
@@ -5478,8 +5493,8 @@ void ONNXBatchNormalizationV9Op::getCanonicalizationPatterns(
 /// on the ONNXBitwiseNotOp.
 void ONNXBitwiseNotOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
-  results.insert<RemoveUnaryUnaryPattern<ONNXBitwiseNotOp, ONNXBitwiseNotOp>>(
-      context);
+  results.insert<SimplifyUnaryChainPattern<ONNXBitwiseNotOp, ONNXBitwiseNotOp,
+      UnaryChainKeep::None, IntegerElementType>>(context);
 }
 
 /// on the ONNXCastOp.
@@ -5496,8 +5511,12 @@ void ONNXCastOp::getCanonicalizationPatterns(
 /// on the ONNXCeilOp.
 void ONNXCeilOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
-  results.insert<RemoveIdempotentUnaryPattern<ONNXCeilOp, FloatElementType>>(
-      context);
+  results.insert<SimplifyUnaryChainPattern<ONNXCeilOp, ONNXCeilOp,
+      UnaryChainKeep::Inner, FloatElementType>>(context);
+  results.insert<SimplifyUnaryChainPattern<ONNXCeilOp, ONNXFloorOp,
+      UnaryChainKeep::Inner, FloatElementType>>(context);
+  results.insert<SimplifyUnaryChainPattern<ONNXCeilOp, ONNXRoundOp,
+      UnaryChainKeep::Inner, FloatElementType>>(context);
 }
 
 /// on the ONNXConcatOp.
@@ -5569,9 +5588,8 @@ void ONNXExpOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   // Exp/Log cancellation assumes real arithmetic, including its domain.
   if (enableUnsafeMath)
-    results.insert<
-        RemoveUnaryUnaryPattern<ONNXExpOp, ONNXLogOp, FloatElementType>>(
-        context);
+    results.insert<SimplifyUnaryChainPattern<ONNXExpOp, ONNXLogOp,
+        UnaryChainKeep::None, FloatElementType>>(context);
 }
 
 /// on the ONNXExpandOp.
@@ -5586,8 +5604,12 @@ void ONNXExpandOp::getCanonicalizationPatterns(
 /// on the ONNXFloorOp.
 void ONNXFloorOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
-  results.insert<RemoveIdempotentUnaryPattern<ONNXFloorOp, FloatElementType>>(
-      context);
+  results.insert<SimplifyUnaryChainPattern<ONNXFloorOp, ONNXFloorOp,
+      UnaryChainKeep::Inner, FloatElementType>>(context);
+  results.insert<SimplifyUnaryChainPattern<ONNXFloorOp, ONNXCeilOp,
+      UnaryChainKeep::Inner, FloatElementType>>(context);
+  results.insert<SimplifyUnaryChainPattern<ONNXFloorOp, ONNXRoundOp,
+      UnaryChainKeep::Inner, FloatElementType>>(context);
 }
 
 /// on the ONNXGatherElementsOp.
@@ -5659,9 +5681,8 @@ void ONNXLessOp::getCanonicalizationPatterns(
 void ONNXLogOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   if (enableUnsafeMath)
-    results.insert<
-        RemoveUnaryUnaryPattern<ONNXLogOp, ONNXExpOp, FloatElementType>>(
-        context);
+    results.insert<SimplifyUnaryChainPattern<ONNXLogOp, ONNXExpOp,
+        UnaryChainKeep::None, FloatElementType>>(context);
 }
 
 /// on the ONNXLoopOp.
@@ -5702,15 +5723,15 @@ void ONNXMulOp::getCanonicalizationPatterns(
 /// on the ONNXNegOp.
 void ONNXNegOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
-  results
-      .insert<RemoveUnaryUnaryPattern<ONNXNegOp, ONNXNegOp, FloatElementType>>(
-          context);
+  results.insert<SimplifyUnaryChainPattern<ONNXNegOp, ONNXNegOp,
+      UnaryChainKeep::None, FloatOrSignedIntegerElementType>>(context);
 }
 
 /// on the ONNXNotOp.
 void ONNXNotOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  result.insert<RemoveUnaryUnaryPattern<ONNXNotOp, ONNXNotOp>>(context);
+  result.insert<SimplifyUnaryChainPattern<ONNXNotOp, ONNXNotOp,
+      UnaryChainKeep::None, BoolElementType>>(context);
 }
 
 /// on the ONNXOrOp.
@@ -5854,8 +5875,8 @@ void ONNXReduceSumV11Op::getCanonicalizationPatterns(
 /// on the ONNXReluOp.
 void ONNXReluOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
-  results.insert<RemoveIdempotentUnaryPattern<ONNXReluOp, FloatElementType>>(
-      context);
+  results.insert<SimplifyUnaryChainPattern<ONNXReluOp, ONNXReluOp,
+      UnaryChainKeep::Inner, FloatOrSignedIntegerElementType>>(context);
 }
 
 /// on the ONNXReshapeOp.
@@ -5887,8 +5908,12 @@ void ONNXRNNOp::getCanonicalizationPatterns(
 /// on the ONNXRoundOp.
 void ONNXRoundOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
-  results.insert<RemoveIdempotentUnaryPattern<ONNXRoundOp, FloatElementType>>(
-      context);
+  results.insert<SimplifyUnaryChainPattern<ONNXRoundOp, ONNXRoundOp,
+      UnaryChainKeep::Inner, FloatElementType>>(context);
+  results.insert<SimplifyUnaryChainPattern<ONNXRoundOp, ONNXFloorOp,
+      UnaryChainKeep::Inner, FloatElementType>>(context);
+  results.insert<SimplifyUnaryChainPattern<ONNXRoundOp, ONNXCeilOp,
+      UnaryChainKeep::Inner, FloatElementType>>(context);
 }
 
 /// on the ONNXShapeOp.

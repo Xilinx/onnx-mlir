@@ -1,5 +1,5 @@
 // Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
-// RUN: onnx-mlir-opt --unsafe-math-optimizations=false --canonicalize="test-convergence=true" %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --unsafe-math-optimizations=false --canonicalize="test-convergence=true" %s --split-input-file | FileCheck %s
 
 func.func @exp_log_strict(%x: tensor<2xf32>) -> tensor<2xf32> {
   %0 = "onnx.Log"(%x) : (tensor<2xf32>) -> tensor<2xf32>

@@ -1,5 +1,5 @@
 // Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
-// RUN: onnx-mlir-opt --unsafe-math-optimizations=true --canonicalize="test-convergence=true" %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --unsafe-math-optimizations=true --canonicalize="test-convergence=true" %s --split-input-file | FileCheck %s
 
 func.func @exp_log_f16(%x: tensor<2x3xf16>) -> tensor<2x3xf16> {
   %0 = "onnx.Log"(%x) : (tensor<2x3xf16>) -> tensor<2x3xf16>
@@ -176,9 +176,9 @@ func.func @neg_neg_integer(%x: tensor<2x3xi32>) -> tensor<2x3xi32> {
 }
 
 // CHECK-LABEL: func.func @neg_neg_integer(
-// CHECK: [[N:%[^ ]+]] = "onnx.Neg"
-// CHECK: [[R:%[^ ]+]] = "onnx.Neg"([[N]])
-// CHECK: return [[R]]
+// CHECK-SAME: [[X:%[^ ]+]]: tensor<2x3xi32>
+// CHECK-NOT: "onnx.Neg"
+// CHECK: return [[X]]
 
 // -----
 
