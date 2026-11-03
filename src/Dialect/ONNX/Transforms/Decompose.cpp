@@ -5532,17 +5532,9 @@ public:
     // The output type will be the same as the target_type or the second input
     Type targetType = mlir::cast<ShapedType>(target.getType()).getElementType();
 
-    // Replace
-    Value res;
-    if (mlir::cast<ShapedType>(output.getType()).hasRank())
-      res = onnx_mlir::OnnxBuilder(rewriter, loc)
-                .cast(input, saturate, TypeAttr::get(targetType));
-    else {
-      Type resultType = UnrankedTensorType::get(targetType);
-      res = onnx_mlir::OnnxBuilder(rewriter, loc)
-                .cast(resultType, input, saturate, TypeAttr::get(targetType),
-                    false);
-    }
+    Value res = onnx_mlir::OnnxBuilder(rewriter, loc)
+                    .cast(output.getType(), input, saturate,
+                        TypeAttr::get(targetType), false);
     rewriter.replaceOp(castLikeOp, res);
     return success();
   }

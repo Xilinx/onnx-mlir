@@ -571,9 +571,7 @@ struct VectorBuilder final : DialectBuilder {
       mlir::ArrayRef<IndexExpr> indices = {},
       mlir::ValueRange offsets = {}) const;
 
-  // Splat: a single value is copied.
-  mlir::Value splat(mlir::VectorType vecType, mlir::Value val) const;
-  // Broadcast: possibly a N dim vector is copied to M>N dim vector.
+  // Broadcast: copy a scalar or an N dim vector to an M>=N dim vector.
   mlir::Value broadcast(mlir::VectorType vecType, mlir::Value val) const;
   // Shuffle: use mask to determine which value to write to the output.
   mlir::Value shuffle(mlir::Value lhs, mlir::Value rhs,

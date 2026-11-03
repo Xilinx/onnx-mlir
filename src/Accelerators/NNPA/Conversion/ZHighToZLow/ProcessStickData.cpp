@@ -82,9 +82,9 @@ void emitDynamicQuantizationLinearMinMaxFromStickifiedInput(
 
   // Init min and max.
   Value minInit = create.math.positiveInf(f32Type);
-  Value splatMinInit = create.vec.splat(vec8xF32Type, minInit);
+  Value splatMinInit = create.vec.broadcast(vec8xF32Type, minInit);
   Value maxInit = create.math.negativeInf(f32Type);
-  Value splatMaxInit = create.vec.splat(vec8xF32Type, maxInit);
+  Value splatMaxInit = create.vec.broadcast(vec8xF32Type, maxInit);
   // Could parallelize init, here main thread do it all. Use SIMD of 8x.
   for (int64_t u = 0; u < tmpSize; u += 8) {
     IndexExpr offset = LitIE(u);
