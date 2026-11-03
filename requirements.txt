@@ -1,5 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+# affiliates
+
 lit~=15.0
 numpy==2.0.2
+# Keep current_onnx_version in utils/gen_onnx_mlir.py in sync with this pin.
 onnx==1.22.0
 protobuf==6.33.5
 pyyaml==6.0.3

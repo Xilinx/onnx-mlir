@@ -27,6 +27,11 @@
 #include "src/Interface/HasOnnxSubgraphOpInterface.hpp"
 #include "src/Interface/ResultTypeInferenceOpInterface.hpp"
 #include "src/Interface/ShapeInferenceOpInterface.hpp"
+#include "src/Interface/StructuralOperandOpInterface.hpp"
+
+namespace onnx {
+class TensorProto;
+}
 
 namespace mlir {
 // OpSet level supported by onnx-mlir
@@ -39,7 +44,12 @@ static constexpr int CURRENT_ONNX_OPSET = 22;
 #include "src/Dialect/ONNX/ONNXOps.hpp.inc"
 
 namespace onnx_mlir {
-mlir::FailureOr<uint64_t> getInitializerSourcePayloadSize(
-    mlir::RankedTensorType type);
+// Returns the ONNX raw_data/external_data payload size. BOOL occupies one byte
+// per element and sub-byte integers are packed across elements. Fails for
+// unsupported element types, dynamic or overflowing shapes, or a result that
+// cannot be represented by ONNX's signed length metadata.
+mlir::FailureOr<uint64_t> getONNXTensorPayloadSize(mlir::RankedTensorType type);
+mlir::FailureOr<uint64_t> getONNXTensorPayloadSize(
+    const onnx::TensorProto &tensor);
 } // namespace onnx_mlir
 #endif

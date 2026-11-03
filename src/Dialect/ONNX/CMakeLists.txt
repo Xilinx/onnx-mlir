@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+# Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+# affiliates
 
 if (${CMAKE_SYSTEM_PROCESSOR} STREQUAL "s390x")
   # currently needed for a bug on Z for the ONNXOps.cpp.inc file
@@ -127,6 +129,7 @@ add_onnx_mlir_library(OMONNXOps
   OMONNXCanonicalizeIncGen
   OMResultTypeInferenceOpInterfaceIncGen
   OMShapeInferenceOpInterfaceIncGen
+  OMStructuralOperandOpInterfaceIncGen
   OMTensorNameInferenceIncGen
 
   LINK_LIBS PRIVATE
@@ -136,6 +139,7 @@ add_onnx_mlir_library(OMONNXOps
   OMMlirDialects
   OMMlirUtilities
   OMShapeHelperOpInterface
+  OMStructuralOperandOpInterface
   OMTensorNameInference
   OMONNXElementsAttr
   onnx

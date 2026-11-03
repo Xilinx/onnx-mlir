@@ -109,6 +109,51 @@ unsigned bitwidthOfBType(BType d) {
       d, [](auto btype) { return BTypeTrait<btype>::bitwidth; });
 }
 
+std::optional<unsigned> storageBitwidthOfBType(BType d) {
+  // clang-format off
+  switch (d) {
+  case BType::UINT2:
+  case BType::INT2:
+    return 2;
+  case BType::UINT4:
+  case BType::INT4:
+  case BType::FLOAT4E2M1:
+    return 4;
+  case BType::UINT8:
+  case BType::INT8:
+  case BType::BOOL:
+  case BType::FLOAT8E4M3FN:
+  case BType::FLOAT8E4M3FNUZ:
+  case BType::FLOAT8E5M2:
+  case BType::FLOAT8E5M2FNUZ:
+  case BType::FLOAT8E8M0:
+    return 8;
+  case BType::UINT16:
+  case BType::INT16:
+  case BType::FLOAT16:
+  case BType::BFLOAT16:
+    return 16;
+  case BType::FLOAT:
+  case BType::INT32:
+  case BType::UINT32:
+    return 32;
+  case BType::INT64:
+  case BType::DOUBLE:
+  case BType::UINT64:
+  case BType::COMPLEX64:
+    return 64;
+  case BType::COMPLEX128:
+    return 128;
+  case BType::UNDEFINED:
+  case BType::STRING:
+  case BType::PACKED_UINT4:
+  case BType::PACKED_INT4:
+    return std::nullopt;
+  }
+  // clang-format on
+  return std::nullopt;
+}
+
 unsigned bytewidthOfBType(BType d) {
   return dispatchByBType(
       d, [](auto btype) { return BTypeTrait<btype>::bytewidth; });

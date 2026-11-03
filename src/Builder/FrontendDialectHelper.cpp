@@ -28,6 +28,7 @@
 #include "llvm/Support/SwapByteOrder.h"
 
 #include "src/Dialect/ONNX/ElementsAttr/BType.hpp"
+#include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
 #include "src/Support/Arrays.hpp"
@@ -352,10 +353,10 @@ ElementsAttr createElmAttr(RankedTensorType tensorType,
     // from the tensor shape and element type so we add support for this "as
     // an extension".
     if (loc.length == 0) {
-      const auto numElements =
-          static_cast<uint64_t>(tensorType.getNumElements());
-      loc.length = isAnyInt4Type<T> ? llvm::divideCeil(numElements, 2)
-                                    : numElements * CppTypeTrait<T>::bytewidth;
+      auto payloadSize = getONNXTensorPayloadSize(tensorType);
+      if (failed(payloadSize))
+        return {};
+      loc.length = *payloadSize;
     }
     return createElementsAttrFromMemoryBuffer_LE<T>(
         tensorType, readExternalData_LE(externalDataDir, loc));

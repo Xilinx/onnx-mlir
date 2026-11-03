@@ -10,24 +10,25 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <cassert>
-#include <cstdint>
-#include <cstring>
-#include <functional>
-#include <iostream>
-#include <vector>
-#include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/StringRef.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/Path.h"
-#include "llvm/Support/raw_ostream.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "onnx/onnx_pb.h"
 #include "src/Builder/FrontendDialectHelper.hpp"
 #include "src/Dialect/ONNX/ONNXDialect.hpp"
+#include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Support/Int4.hpp"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Support/raw_ostream.h"
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <iostream>
+#include <vector>
 
 using namespace mlir;
 using namespace onnx_mlir;
@@ -222,6 +223,35 @@ private:
 public:
   FrontendDialectHelperTest() { ctx.getOrLoadDialect<ONNXDialect>(); }
 
+  bool testTensorProtoPayloadSize() {
+    auto check = [](onnx::TensorProto::DataType dataType,
+                     std::initializer_list<int64_t> dims, uint64_t expected) {
+      onnx::TensorProto tensor;
+      tensor.set_data_type(dataType);
+      for (int64_t dim : dims)
+        tensor.add_dims(dim);
+      FailureOr<uint64_t> size = getONNXTensorPayloadSize(tensor);
+      return succeeded(size) && *size == expected;
+    };
+    if (!check(onnx::TensorProto::FLOAT, {2, 3}, 24) ||
+        !check(onnx::TensorProto::BOOL, {2, 3}, 6) ||
+        !check(onnx::TensorProto::INT4, {5}, 3) ||
+        !check(onnx::TensorProto::UINT2, {5}, 2) ||
+        !check(onnx::TensorProto::FLOAT8E8M0, {5}, 5))
+      return false;
+
+    onnx::TensorProto unsupported;
+    unsupported.set_data_type(onnx::TensorProto::STRING);
+    unsupported.add_dims(1);
+    if (succeeded(getONNXTensorPayloadSize(unsupported)))
+      return false;
+
+    onnx::TensorProto invalidShape;
+    invalidShape.set_data_type(onnx::TensorProto::FLOAT);
+    invalidShape.add_dims(-1);
+    return failed(getONNXTensorPayloadSize(invalidShape));
+  }
+
   // --- In-memory external data (location "*/_ORT_MEM_ADDR_/*") -------------
 
   bool testInMemoryExternalDataFloat32() {
@@ -309,6 +339,7 @@ public:
   bool runAllTests() {
     bool allPassed = true;
 
+    allPassed = testTensorProtoPayloadSize() && allPassed;
     allPassed = testInMemoryExternalDataFloat32() && allPassed;
     allPassed = testInMemoryExternalDataBool() && allPassed;
     allPassed = testInMemoryExternalDataInt4() && allPassed;
