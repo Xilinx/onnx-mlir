@@ -642,6 +642,26 @@ bool isIdentityReshape(mlir::Value input, mlir::Value output,
 bool isDequantQuantSame(mlir::ONNXDequantizeLinearOp dqOp,
     mlir::ONNXQuantizeLinearOp qOp, int64_t maxRoundTripDiff = 0);
 
+/// True when folding QuantizeLinear(DequantizeLinear(producer)) onto producer
+/// would replace one ONNX result tensor with a different one. Producer must
+/// be a QuantizeLinear, and the two ops must carry different ResultNames.
+/// VAIP deletes every ONNX node whose output tensor the compiler claims, so
+/// collapsing those names drops a live producer (graph.cpp:485).
+bool collapsesDistinctOnnxQuantTensors(
+    mlir::Value producer, mlir::ONNXQuantizeLinearOp foldedQuant);
+
+/// True when erasing \p rewrittenOp and with it the whole producer chain of
+/// \p operand would detach a surviving ONNX tensor from one of its consumers.
+/// Walks the chain that dies with \p operand and reports the first value whose
+/// producer keeps other uses and names an ONNX result.
+///
+/// VAIP claims every ONNX node on a path between the inputs and outputs this
+/// compiler reports and deletes it from the ORT graph. A consumer that only
+/// this compiler drops still exists there, so the claimed producer must stay
+/// visible or that consumer loses its input (graph.cpp:485).
+bool droppingOperandOrphansOnnxConsumer(
+    mlir::Operation *rewrittenOp, mlir::Value operand);
+
 /// Return true if the (element) type carries a `quant::QuantizedType`.
 /// Convenient for guarding rewrite patterns that are not valid on quantized
 /// values. Accepts either a raw `Type` (in which case `getElementTypeOrSelf`

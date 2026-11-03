@@ -36,6 +36,13 @@ struct FoldQDQPattern : public OpRewritePattern<ONNXQuantizeLinearOp> {
       return failure();
     if (!isDequantQuantSame(dqOp, qOp, maxRoundTripDiff))
       return failure();
+    // Q(DQ(otherQuant)) is numerically the other quant, but the two
+    // QuantizeLinear ops name different ONNX tensors. Folding erases the
+    // outer tensor and rewrites the inner quant's ResultNames, so VAIP drops
+    // the inner producer while an original consumer of that tensor remains.
+    if (collapsesDistinctOnnxQuantTensors(dqOp.getX(), qOp))
+      return rewriter.notifyMatchFailure(qOp,
+          "QuantizeLinear(DequantizeLinear(quant)) collapses two ONNX tensors");
     rewriter.replaceOp(qOp, dqOp.getX());
     return success();
   }
