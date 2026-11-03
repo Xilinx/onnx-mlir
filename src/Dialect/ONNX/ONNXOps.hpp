@@ -40,7 +40,10 @@ static constexpr int CURRENT_ONNX_OPSET = 22;
 #include "src/Dialect/ONNX/ONNXOps.hpp.inc"
 
 namespace onnx_mlir {
-mlir::FailureOr<uint64_t> getInitializerSourcePayloadSize(
-    mlir::RankedTensorType type);
+// Returns the ONNX raw_data/external_data payload size. BOOL occupies one byte
+// per element and sub-byte integers are packed across elements. Fails for
+// unsupported element types, dynamic or overflowing shapes, or a result that
+// cannot be represented by ONNX's signed length metadata.
+mlir::FailureOr<uint64_t> getONNXTensorPayloadSize(mlir::RankedTensorType type);
 } // namespace onnx_mlir
 #endif

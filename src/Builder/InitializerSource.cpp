@@ -4,11 +4,13 @@
 #include "src/Builder/InitializerSource.hpp"
 #include "mlir/AsmParser/AsmParser.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "src/Dialect/ONNX/CallerOwnedDataAttr.hpp"
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/BType.hpp"
 #include "src/Interface/StructuralOperandOpInterface.hpp"
 #include "src/Pass/Passes.hpp"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/FileSystem.h"
@@ -83,26 +85,75 @@ InitializerIdentity getSourceIdentity(ONNXInitializerSourceOp op) {
   return identity;
 }
 
-ONNXInitializerSourceOp findStructuralInitializerSource(Value value) {
-  while (auto argument = dyn_cast<BlockArgument>(value)) {
-    Block *block = argument.getOwner();
-    auto loop = dyn_cast<ONNXLoopOp>(block->getParentOp());
-    unsigned index = argument.getArgNumber();
-    if (!loop || loop.getRegion().empty() ||
-        block != &loop.getRegion().front() || index == 0 ||
-        index >= loop->getNumOperands())
-      return {};
-    // TODO: Replace this ONNXLoopOp-specific mapping when ONNXLoopOp
-    // implements RegionBranchOpInterface. The core lookup would then be:
-    //   auto branch = cast<RegionBranchOpInterface>(block->getParentOp());
-    //   value = branch.getEntrySuccessorOperands(loop.getRegion())[index - 1];
-    // The iteration counter is produced by the loop and therefore excluded
-    // from the entry successor operands; it does not map to the trip count.
-    // The condition and loop-carried arguments align with the initial operands;
-    // materializing those operands does not make later iterations constant.
-    value = loop->getOperand(index);
+Value getLoopEntryValue(BlockArgument argument) {
+  Block *block = argument.getOwner();
+  auto loop = dyn_cast<ONNXLoopOp>(block->getParentOp());
+  unsigned index = argument.getArgNumber();
+  if (!loop || loop.getRegion().empty() || block != &loop.getRegion().front() ||
+      index == 0 || index >= loop->getNumOperands())
+    return {};
+  // TODO: Replace this ONNXLoopOp-specific mapping when ONNXLoopOp implements
+  // RegionBranchOpInterface. The core lookup would then be:
+  //   auto branch = cast<RegionBranchOpInterface>(block->getParentOp());
+  //   return branch.getEntrySuccessorOperands(loop.getRegion())[index - 1];
+  // The iteration counter is produced by the loop and therefore excluded from
+  // the entry successor operands; it does not map to the trip count.
+  return loop->getOperand(index);
+}
+
+bool canBeInStructuralConstantExpression(Operation *op) {
+  // This pass runs on imported ONNX IR and does not infer constant semantics
+  // for operations from other dialects.
+  if (!isa<ONNXDialect>(op->getDialect()))
+    return false;
+  if (!isPure(op))
+    return false;
+  // ConstantLike operations were handled before this check. Another
+  // zero-operand operation is a runtime source, not a constant expression.
+  if (op->getNumOperands() == 0)
+    return false;
+  // Region control flow requires path-sensitive predecessor analysis.
+  if (op->getNumRegions() != 0)
+    return false;
+  return true;
+}
+
+// Collects initializer sources only when the complete expression is
+// semantically constant after those sources are materialized.
+bool collectStructuralInitializerSources(Value value,
+    llvm::SetVector<ONNXInitializerSourceOp> &sources,
+    DenseMap<Value, bool> &knownConstant) {
+  bool inserted = knownConstant.try_emplace(value, false).second;
+  if (!inserted)
+    return knownConstant.lookup(value);
+
+  if (auto argument = dyn_cast<BlockArgument>(value)) {
+    Value entryValue = getLoopEntryValue(argument);
+    bool isConstant = entryValue && collectStructuralInitializerSources(
+                                        entryValue, sources, knownConstant);
+    knownConstant[value] = isConstant;
+    return isConstant;
   }
-  return value.getDefiningOp<ONNXInitializerSourceOp>();
+
+  Operation *op = value.getDefiningOp();
+  if (!op)
+    return false;
+  if (auto source = dyn_cast<ONNXInitializerSourceOp>(op)) {
+    sources.insert(source);
+    knownConstant[value] = true;
+    return true;
+  }
+  if (op->hasTrait<OpTrait::ConstantLike>()) {
+    knownConstant[value] = true;
+    return true;
+  }
+  if (!canBeInStructuralConstantExpression(op))
+    return false;
+  for (Value operand : op->getOperands())
+    if (!collectStructuralInitializerSources(operand, sources, knownConstant))
+      return false;
+  knownConstant[value] = true;
+  return true;
 }
 
 bool matchesNestedIdentity(SymbolRefAttr identity, ONNXInitializerSourceOp op) {
@@ -255,7 +306,7 @@ FailureOr<ElementsAttr> resolveInitializerContents(
         << type.getElementType();
     return failure();
   }
-  auto size = getInitializerSourcePayloadSize(type);
+  auto size = getONNXTensorPayloadSize(type);
   if (failed(size)) {
     op.emitError("has invalid or overflowing result shape");
     return failure();
@@ -473,10 +524,16 @@ struct MaterializeInitializerSourcesPass
 
     llvm::SetVector<ONNXInitializerSourceOp> structuralSources;
     getOperation().walk([&](StructuralOperandOpInterface op) {
-      for (auto [index, operand] : llvm::enumerate(op->getOperands()))
-        if (op.isStructuralOperand(index))
-          if (auto source = findStructuralInitializerSource(operand))
+      for (auto [index, operand] : llvm::enumerate(op->getOperands())) {
+        if (!op.isStructuralOperand(index))
+          continue;
+        llvm::SetVector<ONNXInitializerSourceOp> candidateSources;
+        DenseMap<Value, bool> knownConstant;
+        if (collectStructuralInitializerSources(
+                operand, candidateSources, knownConstant))
+          for (ONNXInitializerSourceOp source : candidateSources)
             structuralSources.insert(source);
+      }
     });
     for (ONNXInitializerSourceOp source : structuralSources)
       if (failed(materializeInitializerSource(source, rewriter, *cache))) {
@@ -547,7 +604,7 @@ FailureOr<ONNXInitializerSourceOp> createInitializerSource(OpBuilder &builder,
     emitError(loc, "negative initializer dimension");
     return failure();
   }
-  auto size = getInitializerSourcePayloadSize(type);
+  auto size = getONNXTensorPayloadSize(type);
   if (failed(size)) {
     emitError(loc, "invalid or overflowing initializer payload size");
     return failure();

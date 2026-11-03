@@ -167,7 +167,7 @@ def ONNXAddOp:ONNX_Op<"Add",
 }
 
 def ONNXAffineGridOp:ONNX_Op<"AffineGrid",
-  [Pure, OpVersionTrait<20>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
+  [OpVersionTrait<20>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX AffineGrid operation";
   let description = [{
   Generates a 2D or 3D flow field (sampling grid), given a batch of affine matrices theta
@@ -758,7 +758,7 @@ def ONNXBatchNormalizationV9Op:ONNX_Op<"BatchNormalizationV9",
 }
 
 def ONNXBernoulliOp:ONNX_Op<"Bernoulli",
-  [Pure, OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
+  [OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
   let summary = "ONNX Bernoulli operation";
   let description = [{
   Draws binary random numbers (0 or 1) from a Bernoulli distribution. The input tensor should be a tensor
@@ -969,7 +969,7 @@ def ONNXBitwiseXorOp:ONNX_Op<"BitwiseXor",
 }
 
 def ONNXBlackmanWindowOp:ONNX_Op<"BlackmanWindow",
-  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
+  [OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX BlackmanWindow operation";
   let description = [{
   Generates a Blackman window as described in the paper https://ieeexplore.ieee.org/document/1455106.
@@ -2205,7 +2205,7 @@ def ONNXDivOp:ONNX_Op<"Div",
 }
 
 def ONNXDropoutOp:ONNX_Op<"Dropout",
-  [Pure, OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX Dropout operation";
   let description = [{
@@ -3592,7 +3592,7 @@ def ONNXGroupNormalizationV18Op:ONNX_Op<"GroupNormalizationV18",
 }
 
 def ONNXHammingWindowOp:ONNX_Op<"HammingWindow",
-  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
+  [OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX HammingWindow operation";
   let description = [{
   Generates a Hamming window as described in the paper https://ieeexplore.ieee.org/document/1455106.
@@ -3626,7 +3626,7 @@ def ONNXHammingWindowOp:ONNX_Op<"HammingWindow",
 }
 
 def ONNXHannWindowOp:ONNX_Op<"HannWindow",
-  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
+  [OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX HannWindow operation";
   let description = [{
   Generates a Hann window as described in the paper https://ieeexplore.ieee.org/document/1455106.
@@ -3801,7 +3801,7 @@ def ONNXIdentityOp:ONNX_Op<"Identity",
 }
 
 def ONNXIfOp:ONNX_Op<"If",
-  [Pure, OpVersionTrait<21>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>, OpInterface<"HasOnnxSubgraphOpInterface">]> {
+  [OpVersionTrait<21>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>, OpInterface<"HasOnnxSubgraphOpInterface">]> {
   let summary = "ONNX If operation";
   let description = [{
   If conditional
@@ -4417,7 +4417,7 @@ def ONNXLogSoftmaxOp:ONNX_Op<"LogSoftmax",
 }
 
 def ONNXLoopOp:ONNX_Op<"Loop",
-  [Pure, OpVersionTrait<21>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>, OpInterface<"HasOnnxSubgraphOpInterface">]> {
+  [OpVersionTrait<21>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>, OpInterface<"HasOnnxSubgraphOpInterface">]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX Loop operation";
   let description = [{
@@ -5213,7 +5213,7 @@ def ONNXMulOp:ONNX_Op<"Mul",
 }
 
 def ONNXMultinomialOp:ONNX_Op<"Multinomial",
-  [Pure, OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
   let summary = "ONNX Multinomial operation";
   let description = [{
   Generate a tensor of samples from a multinomial distribution according to the probabilities
@@ -6574,7 +6574,7 @@ def ONNXRNNOp:ONNX_Op<"RNN",
 }
 
 def ONNXRandomNormalOp:ONNX_Op<"RandomNormal",
-  [Pure, OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
+  [OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
   let summary = "ONNX RandomNormal operation";
   let description = [{
   Generate a tensor with random values drawn from a normal distribution. The shape
@@ -6614,7 +6614,7 @@ def ONNXRandomNormalOp:ONNX_Op<"RandomNormal",
 }
 
 def ONNXRandomNormalLikeOp:ONNX_Op<"RandomNormalLike",
-  [Pure, OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
+  [OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
   let summary = "ONNX RandomNormalLike operation";
   let description = [{
   Generate a tensor with random values drawn from a normal distribution.
@@ -6654,7 +6654,7 @@ def ONNXRandomNormalLikeOp:ONNX_Op<"RandomNormalLike",
 }
 
 def ONNXRandomUniformOp:ONNX_Op<"RandomUniform",
-  [Pure, OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
+  [OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
   let summary = "ONNX RandomUniform operation";
   let description = [{
   Generate a tensor with random values drawn from a uniform distribution. The shape
@@ -6693,7 +6693,7 @@ def ONNXRandomUniformOp:ONNX_Op<"RandomUniform",
 }
 
 def ONNXRandomUniformLikeOp:ONNX_Op<"RandomUniformLike",
-  [Pure, OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
+  [OpVersionTrait<22>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>]> {
   let summary = "ONNX RandomUniformLike operation";
   let description = [{
   Generate a tensor with random values drawn from a uniform distribution.
@@ -6733,7 +6733,7 @@ def ONNXRandomUniformLikeOp:ONNX_Op<"RandomUniformLike",
 }
 
 def ONNXRangeOp:ONNX_Op<"Range",
-  [Pure, OpVersionTrait<11>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
+  [OpVersionTrait<11>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<StructuralOperandOpInterface>]> {
   let summary = "ONNX Range operation";
   let description = [{
   Generate a tensor containing a sequence of numbers that begin at `start` and extends by increments of `delta`
@@ -8452,7 +8452,7 @@ def ONNXSTFTOp:ONNX_Op<"STFT",
 }
 
 def ONNXScanOp:ONNX_Op<"Scan",
-  [Pure, OpVersionTrait<21>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>, OpInterface<"HasOnnxSubgraphOpInterface">]> {
+  [OpVersionTrait<21>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>, OpInterface<"HasOnnxSubgraphOpInterface">]> {
   let summary = "ONNX Scan operation";
   let description = [{
   Scan can be used to iterate over one or more scan_input tensors,
@@ -9126,7 +9126,7 @@ def ONNXSequenceLengthOp:ONNX_Op<"SequenceLength",
 }
 
 def ONNXSequenceMapOp:ONNX_Op<"SequenceMap",
-  [Pure, OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>, OpInterface<"HasOnnxSubgraphOpInterface">]> {
+  [OpVersionTrait<17>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>, DeclareOpInterfaceMethods<ResultTypeInferenceOpInterface>, OpInterface<"HasOnnxSubgraphOpInterface">]> {
   let summary = "ONNX SequenceMap operation";
   let description = [{
   Applies a sub-graph to each sample in the input sequence(s).

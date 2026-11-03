@@ -19,6 +19,30 @@ func.func @wrong_length() {
 
 // -----
 
+func.func @valid_packed_int4_and_bool_lengths() {
+  %0 = "onnx.InitializerSource"() {kind = "external_data", length = 3 : i64, name = "I4", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<5xi4>
+  %1 = "onnx.InitializerSource"() {kind = "external_data", length = 5 : i64, name = "B", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<5xi1>
+  return
+}
+
+// -----
+
+func.func @dynamic_shape() {
+  // expected-error @+1 {{has invalid or overflowing result shape}}
+  %0 = "onnx.InitializerSource"() {kind = "onnx_model", name = "W", path = "/model.onnx", scope = []} : () -> tensor<?xf32>
+  return
+}
+
+// -----
+
+func.func @overflowing_shape() {
+  // expected-error @+1 {{has invalid or overflowing result shape}}
+  %0 = "onnx.InitializerSource"() {kind = "onnx_model", name = "W", path = "/model.onnx", scope = []} : () -> tensor<9223372036854775807x2xi8>
+  return
+}
+
+// -----
+
 func.func @unknown_source_kind() {
   // expected-error @+1 {{has unknown source kind unknown}}
   %0 = "onnx.InitializerSource"() {kind = "unknown", name = "W", path = "/not/read", scope = []} : () -> tensor<1xf32>

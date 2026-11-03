@@ -8,7 +8,7 @@
 # `make OMONNXOpsIncTranslation` in the build dir.
 # Alternatively, gen_onnx_mlir_multiple_custom_ops.sh can be used to generate
 # the ONNX Dialect with custom dialect extensions.
-# Before running these scripts, ensure that onnx==1.19.1 is installed
+# Before running these scripts, ensure that onnx==1.22.0 is installed
 # in the python environment.
 # If the changes are not seen, then you need to rebuild the entire onnx-mlir.
 
@@ -81,7 +81,7 @@ list_operation_version = args.list_operation_version
 
 # ==UPDATE_ONNX_VERSION_OPSET==
 # Look for tag above and update all references when upgrading the ONNX support within ONNX-MLIR.
-current_onnx_version = "1.19.1"
+current_onnx_version = "1.22.0"
 
 # Check the version of onnx package being used.
 # Allow version mismatch if only processing custom ops from YAML
@@ -413,6 +413,7 @@ class CustomOpSchema:
         self.since_version = yaml_dict.get("since_version", 1)
         self.support_level = 1  # COMMON
         self.doc = yaml_dict.get("description", "")
+        self.node_determinism = OpSchema.NodeDeterminism.Unknown
 
         # Parse inputs
         self.inputs = []
@@ -476,7 +477,10 @@ def load_custom_ops_from_yaml(yaml_paths: List[str]) -> List[CustomOpSchema]:
 
 
 # Extra tensor types patched into ops' ONNX type constraints after parsing.
-# Keyed by op name. Value is a dict of type_param -> extra allowed type strings:
+# A base ONNX schema name applies to every generated version. If an incompatible
+# opset needs different metadata, use its generated class stem, for example
+# "ResizeV18"; the version-specific entry replaces the base entry.
+# Values are dicts of type_param -> extra allowed type strings:
 #   "*" applies to all type params, named keys (e.g. "T4") target one param.
 special_type_constraints = {
     # FIXME(FXML-4138): Celu opset 12 is float-only; widen with bf16 here until
@@ -550,6 +554,10 @@ special_direct_input_types = {
 # each selected schema version so the generated interface remains independent
 # of operand-number changes.
 #
+# A base ONNX schema name applies to every generated version. If an incompatible
+# opset changes which inputs are structural, use its generated class stem, for
+# example "ResizeV18"; the version-specific entry replaces the base entry.
+#
 # When updating ONNX, audit getInputData/getShapeInput calls under
 # third_party/onnx/onnx/defs, then cross-check onnx-mlir shape helpers and
 # transforms. The importer uses default ShapeInferenceOptions, with data
@@ -563,6 +571,7 @@ structural_inputs = {
     "ConstantOfShape": {"input"},
     "CumSum": {"axis"},
     "DFT": {"dft_length", "axis"},
+    "DFTV17": {"dft_length"},
     "Expand": {"shape"},
     "HammingWindow": {"size"},
     "HannWindow": {"size"},
@@ -570,28 +579,46 @@ structural_inputs = {
     "MelWeightMatrix": {"num_mel_bins", "dft_length"},
     "OneHot": {"depth"},
     "Pad": {"pads", "axes"},
+    "PadV13": {"pads"},
+    "PadV11": {"pads"},
+    "PadV2": set(),
     "Range": {"start", "limit", "delta"},
     "ReduceL1": {"axes"},
+    "ReduceL1V13": set(),
     "ReduceL2": {"axes"},
+    "ReduceL2V13": set(),
     "ReduceLogSum": {"axes"},
+    "ReduceLogSumV13": set(),
     "ReduceLogSumExp": {"axes"},
+    "ReduceLogSumExpV13": set(),
     "ReduceMax": {"axes"},
+    "ReduceMaxV13": set(),
     "ReduceMean": {"axes"},
+    "ReduceMeanV13": set(),
     "ReduceMin": {"axes"},
+    "ReduceMinV13": set(),
     "ReduceProd": {"axes"},
+    "ReduceProdV13": set(),
     "ReduceSum": {"axes"},
+    "ReduceSumV11": set(),
     "ReduceSumSquare": {"axes"},
+    "ReduceSumSquareV13": set(),
     "Reshape": {"shape"},
     "Resize": {"roi", "scales", "sizes"},
+    "ResizeV10": {"scales"},
     "Slice": {"starts", "ends", "axes", "steps"},
     "Split": {"split"},
+    "SplitV11": set(),
     "SplitToSequence": {"split"},
     "STFT": {"frame_step", "frame_length"},
     "Squeeze": {"axes"},
+    "SqueezeV11": set(),
     "Tile": {"repeats"},
     "TopK": {"K"},
     "Unsqueeze": {"axes"},
+    "UnsqueezeV11": set(),
     "Upsample": {"scales"},
+    "UpsampleV7": set(),
 }
 
 # Extra tensor types patched into ops' outputs that are declared with a *direct*
@@ -1414,6 +1441,12 @@ def join_args(args):
     return ", ".join(args)
 
 
+def get_schema_metadata(metadata, schema, op_name, default):
+    # Metadata for a generated class overrides the base-schema default. This
+    # lets versioned classes describe incompatible opset behavior explicitly.
+    return metadata.get(op_name, metadata.get(schema.name, default))
+
+
 def get_operands_or_results(schema, type_str_dict, op_name, is_input):
     value_list = schema.inputs if is_input else schema.outputs
     if not value_list:
@@ -1429,9 +1462,13 @@ def get_operands_or_results(schema, type_str_dict, op_name, is_input):
     # Extra widened types for operands/results declared with a direct type
     # string (see special_direct_input_types / special_direct_output_types).
     if is_input:
-        direct_patch = special_direct_input_types.get(schema.name, {})
+        direct_patch = get_schema_metadata(
+            special_direct_input_types, schema, op_name, {}
+        )
     else:
-        direct_patch = special_direct_output_types.get(schema.name, {})
+        direct_patch = get_schema_metadata(
+            special_direct_output_types, schema, op_name, {}
+        )
 
     name_to_types = OrderedDict()
     for i, value in enumerate(value_list):
@@ -1607,9 +1644,13 @@ def get_numberof_list(my_list):
     return expected_num
 
 
-def get_output_type_mapping(schema):
-    direct_output_patch = special_direct_output_types.get(schema.name, {})
-    constraint_patch = special_type_constraints.get(schema.name, {})
+def get_output_type_mapping(schema, op_name):
+    direct_output_patch = get_schema_metadata(
+        special_direct_output_types, schema, op_name, {}
+    )
+    constraint_patch = get_schema_metadata(
+        special_type_constraints, schema, op_name, {}
+    )
     mapping = []
     for output in schema.outputs:
         # A direct-typed output widened in ODS still defaults to the ONNX-specified
@@ -1663,7 +1704,7 @@ def get_output_type_mapping(schema):
     return mapping
 
 
-def get_numberof_inout(s, indent, schema):
+def get_numberof_inout(s, indent, schema, op_name):
     expected_num_operands = get_numberof_list(schema.inputs)
     indent = inc_indent(indent)
     s += indent + "static int getNumberOfOperands() {\n"
@@ -1680,7 +1721,7 @@ def get_numberof_inout(s, indent, schema):
     s += indent + "}\n"
 
     s += indent + "static std::vector<int> getTypeMap() {\n"
-    mapping = get_output_type_mapping(schema)
+    mapping = get_output_type_mapping(schema, op_name)
     indent = inc_indent(indent)
     s += indent + "return {" + ",".join(mapping) + "};\n"
     indent = dec_indent(indent)
@@ -1776,14 +1817,14 @@ def parse_a_type_constraint(constraint):
     return mlirTypes
 
 
-def parse_type_constraints(schema):
+def parse_type_constraints(schema, op_name):
     type_str_dict = dict()
     for type_constraint in schema.type_constraints:
         type_str_dict[type_constraint.type_param_str] = parse_a_type_constraint(
             type_constraint
         )
-    if schema.name in special_type_constraints:
-        patches = special_type_constraints[schema.name]
+    patches = get_schema_metadata(special_type_constraints, schema, op_name, {})
+    if patches:
         for type_param, types in type_str_dict.items():
             extra = patches.get(type_param, []) + patches.get("*", [])
             for t in extra:
@@ -1880,7 +1921,9 @@ def gen_op_def(schema, with_version=False):
                 regions[attr.name] = "AnyRegion"
 
     # Generate decl for op traits.
-    traits = ["Pure", f"OpVersionTrait<{schema.since_version}>"]
+    traits = [f"OpVersionTrait<{schema.since_version}>"]
+    if schema.node_determinism != OpSchema.NodeDeterminism.NonDeterministic:
+        traits.insert(0, "Pure")
 
     # Generate SameOperandsAndResultShape traits.
     if mlir_op_name in OpsWithSameOperandsAndResultShape:
@@ -1904,7 +1947,9 @@ def gen_op_def(schema, with_version=False):
     traits.append("DeclareOpInterfaceMethods<ShapeHelperOpInterface>")
     input_names = [input.name for input in schema.inputs]
     structural_names = (
-        structural_inputs.get(schema.name, set()) if domain == "" else set()
+        get_schema_metadata(structural_inputs, schema, opName, set())
+        if domain == ""
+        else set()
     )
     structural_indices = [
         index for index, name in enumerate(input_names) if name in structural_names
@@ -1945,7 +1990,7 @@ def gen_op_def(schema, with_version=False):
 
     # Handle the type constraint for input and output.
     # Parse type constraint into onnx-mlir type string list.
-    type_str_dict = parse_type_constraints(schema)
+    type_str_dict = parse_type_constraints(schema, opName)
 
     ###########################################
     # Generate ins (consisting of operands and attributes).
@@ -2070,7 +2115,7 @@ def gen_op_def(schema, with_version=False):
     # indent = inc_indent(indent)
 
     # Generate input/output number and output type mapping
-    s = get_numberof_inout(s, indent, schema)
+    s = get_numberof_inout(s, indent, schema, opName)
 
     if mlir_op_name in OpsWithHelpers:
         s += OpsWithHelpers[mlir_op_name]
@@ -2266,21 +2311,35 @@ def build_operator_schemas(custom_ops=None):
 
 
 def validate_structural_inputs(operator_schemas):
-    available_inputs = defaultdict(set)
+    available_keys = set()
     for domain, support_map in operator_schemas:
         if domain != "":
             continue
         for _, name_map in support_map:
+            previous_name = ""
             for _, schema, _ in name_map:
-                available_inputs[schema.name].update(inp.name for inp in schema.inputs)
-
-    for op_name, input_names in structural_inputs.items():
-        unknown = input_names - available_inputs[op_name]
-        if unknown:
-            raise RuntimeError(
-                "structural_inputs for {} names unknown inputs: {}".format(
-                    op_name, ", ".join(sorted(unknown))
+                op_name = gen_op_name(schema, previous_name == schema.name)
+                available_keys.update((schema.name, op_name))
+                input_names = {inp.name for inp in schema.inputs}
+                structural_names = get_schema_metadata(
+                    structural_inputs, schema, op_name, set()
                 )
+                unknown = structural_names - input_names
+                if unknown:
+                    metadata_key = (
+                        op_name if op_name in structural_inputs else schema.name
+                    )
+                    raise RuntimeError(
+                        "structural_inputs for {} names unknown inputs: {}".format(
+                            metadata_key, ", ".join(sorted(unknown))
+                        )
+                    )
+                previous_name = schema.name
+
+    for op_name in structural_inputs:
+        if op_name not in available_keys:
+            raise RuntimeError(
+                "structural_inputs names unknown generated op class {}".format(op_name)
             )
 
 
