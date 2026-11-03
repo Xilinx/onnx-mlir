@@ -557,12 +557,6 @@ def FuseMulConvNullBiasPattern: Pat<
 def IdentityEliminationPattern : Pat<(ONNXIdentityOp $arg),
                                      (replaceWithValue $arg)>;
 
-// not(not(%X)) = %X
-def RemoveNotNotPattern : Pat<
-  (ONNXNotOp:$res (ONNXNotOp $val)),
-  (replaceWithValue $val),
-  [(HaveSameShapedType $res, $val)]>;
-
 //===----------------------------------------------------------------------===//
 // Canonicalization for ONNXDropoutOp
 //===----------------------------------------------------------------------===//
