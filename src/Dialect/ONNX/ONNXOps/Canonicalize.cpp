@@ -1475,7 +1475,7 @@ struct FusePadPadPattern : public OpRewritePattern<ONNXPadOp> {
   LogicalResult matchAndRewrite(
       ONNXPadOp outerPad, PatternRewriter &rewriter) const override {
     auto innerPad = outerPad.getData().getDefiningOp<ONNXPadOp>();
-    if (!innerPad)
+    if (!innerPad || !innerPad->hasOneUse())
       return failure();
 
     if (outerPad.getMode() != "constant" || innerPad.getMode() != "constant")
