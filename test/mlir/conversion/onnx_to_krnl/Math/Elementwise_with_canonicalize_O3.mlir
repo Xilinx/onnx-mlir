@@ -124,7 +124,7 @@ func.func private @test_elementwise_op_with_array_and_scalar_values(%arg0 : tens
 // CHECK:             [[VAR_1_:%.+]] = krnl.get_induction_var_value([[BLOCK_TILE__0_]]) : (!krnl.loop) -> index
 // CHECK-DAG:         [[LOAD_VAR_reshape_MEM_:%.+]] = vector.load [[VAR_reshape_]]{{.}}[[VAR_1_]]{{.}} : memref<512xf32>, vector<32xf32>
 // CHECK-DAG:         [[LOAD_PARAM_1_MEM_:%.+]] = krnl.load [[PARAM_1_]][] : memref<f32>
-// CHECK:             [[VAR_4_:%.+]] = vector.splat [[LOAD_PARAM_1_MEM_]] : vector<32xf32>
+// CHECK:             [[VAR_4_:%.+]] = vector.broadcast [[LOAD_PARAM_1_MEM_]] : f32 to vector<32xf32>
 // CHECK:             [[VAR_5_:%.+]] = arith.addf [[LOAD_VAR_reshape_MEM_]], [[VAR_4_]] : vector<32xf32>
 // CHECK:             vector.store [[VAR_5_]], [[VAR_reshape_2_]]{{.}}[[VAR_1_]]{{.}} : memref<512xf32>, vector<32xf32>
 // CHECK:           }
@@ -169,7 +169,7 @@ func.func private @test_elementwise_op_with_array_and_scalar_values_2(%arg0 : te
 // CHECK:             [[VAR_5_:%.+]] = krnl.get_induction_var_value([[BLOCK_TILE__0_]]) : (!krnl.loop) -> index
 // CHECK-DAG:         [[LOAD_VAR_reshape_MEM_:%.+]] = vector.load [[VAR_reshape_]]{{.}}[[VAR_5_]]{{.}} : memref<?xf32>, vector<32xf32>
 // CHECK-DAG:         [[LOAD_PARAM_1_MEM_:%.+]] = krnl.load [[PARAM_1_]][] : memref<f32>
-// CHECK:             [[VAR_8_:%.+]] = vector.splat [[LOAD_PARAM_1_MEM_]] : vector<32xf32>
+// CHECK:             [[VAR_8_:%.+]] = vector.broadcast [[LOAD_PARAM_1_MEM_]] : f32 to vector<32xf32>
 // CHECK:             [[VAR_9_:%.+]] = arith.addf [[LOAD_VAR_reshape_MEM_]], [[VAR_8_]] : vector<32xf32>
 // CHECK:             vector.store [[VAR_9_]], [[VAR_reshape_5_]]{{.}}[[VAR_5_]]{{.}} : memref<?xf32>, vector<32xf32>
 // CHECK:           }
@@ -376,7 +376,7 @@ func.func @roberta_partial_simd_1dim_tensor1(%arg0: tensor<?x?x768xf32>, %arg1: 
 // CHECK:             [[VAR_5_:%.+]] = krnl.get_induction_var_value([[BLOCK_TILE__0_]]) : (!krnl.loop) -> index
 // CHECK-DAG:         [[LOAD_VAR_reshape_MEM_:%.+]] = vector.load [[VAR_reshape_]]{{.}}[[VAR_5_]]{{.}} : memref<?xf32>, vector<32xf32>
 // CHECK-DAG:         [[LOAD_PARAM_1_MEM_:%.+]] = krnl.load [[PARAM_1_]]{{.}}[[CST_0_]]{{.}} : memref<1xf32>
-// CHECK:             [[VAR_8_:%.+]] = vector.splat [[LOAD_PARAM_1_MEM_]] : vector<32xf32>
+// CHECK:             [[VAR_8_:%.+]] = vector.broadcast [[LOAD_PARAM_1_MEM_]] : f32 to vector<32xf32>
 // CHECK:             [[VAR_9_:%.+]] = arith.addf [[LOAD_VAR_reshape_MEM_]], [[VAR_8_]] : vector<32xf32>
 // CHECK:             vector.store [[VAR_9_]], [[VAR_reshape_5_]]{{.}}[[VAR_5_]]{{.}} : memref<?xf32>, vector<32xf32>
 // CHECK:           }
@@ -421,7 +421,7 @@ func.func @roberta_partial_simd_1dim_tensor2(%arg0: tensor<?x?x768xf32>, %arg1: 
 // CHECK:             [[VAR_5_:%.+]] = krnl.get_induction_var_value([[BLOCK_TILE__0_]]) : (!krnl.loop) -> index
 // CHECK-DAG:         [[LOAD_VAR_reshape_MEM_:%.+]] = vector.load [[VAR_reshape_]]{{.}}[[VAR_5_]]{{.}} : memref<?xf32>, vector<32xf32>
 // CHECK-DAG:         [[LOAD_PARAM_1_MEM_:%.+]] = krnl.load [[PARAM_1_]]{{.}}[[CST_0_]], [[CST_0_]]{{.}} : memref<1x1xf32>
-// CHECK:             [[VAR_8_:%.+]] = vector.splat [[LOAD_PARAM_1_MEM_]] : vector<32xf32>
+// CHECK:             [[VAR_8_:%.+]] = vector.broadcast [[LOAD_PARAM_1_MEM_]] : f32 to vector<32xf32>
 // CHECK:             [[VAR_9_:%.+]] = arith.addf [[LOAD_VAR_reshape_MEM_]], [[VAR_8_]] : vector<32xf32>
 // CHECK:             vector.store [[VAR_9_]], [[VAR_reshape_5_]]{{.}}[[VAR_5_]]{{.}} : memref<?xf32>, vector<32xf32>
 // CHECK:           }
@@ -466,7 +466,7 @@ func.func @roberta_partial_simd_1dim_tensor3(%arg0: tensor<?x?x768xf32>, %arg1: 
 // CHECK:             [[VAR_5_:%.+]] = krnl.get_induction_var_value([[BLOCK_TILE__0_]]) : (!krnl.loop) -> index
 // CHECK-DAG:         [[LOAD_VAR_reshape_MEM_:%.+]] = vector.load [[VAR_reshape_]]{{.}}[[VAR_5_]]{{.}} : memref<?xf32>, vector<32xf32>
 // CHECK-DAG:         [[LOAD_PARAM_1_MEM_:%.+]] = krnl.load [[PARAM_1_]]{{.}}[[CST_0_]], [[CST_0_]], [[CST_0_]]{{.}} : memref<1x1x1xf32>
-// CHECK:             [[VAR_8_:%.+]] = vector.splat [[LOAD_PARAM_1_MEM_]] : vector<32xf32>
+// CHECK:             [[VAR_8_:%.+]] = vector.broadcast [[LOAD_PARAM_1_MEM_]] : f32 to vector<32xf32>
 // CHECK:             [[VAR_9_:%.+]] = arith.addf [[LOAD_VAR_reshape_MEM_]], [[VAR_8_]] : vector<32xf32>
 // CHECK:             vector.store [[VAR_9_]], [[VAR_reshape_5_]]{{.}}[[VAR_5_]]{{.}} : memref<?xf32>, vector<32xf32>
 // CHECK:           }
@@ -511,7 +511,7 @@ func.func @roberta_partial_simd_1dim_scalar(%arg0: tensor<?x?x768xf32>, %arg1: t
 // CHECK:             [[VAR_5_:%.+]] = krnl.get_induction_var_value([[BLOCK_TILE__0_]]) : (!krnl.loop) -> index
 // CHECK-DAG:         [[LOAD_VAR_reshape_MEM_:%.+]] = vector.load [[VAR_reshape_]]{{.}}[[VAR_5_]]{{.}} : memref<?xf32>, vector<32xf32>
 // CHECK-DAG:         [[LOAD_PARAM_1_MEM_:%.+]] = krnl.load [[PARAM_1_]][] : memref<f32>
-// CHECK:             [[VAR_8_:%.+]] = vector.splat [[LOAD_PARAM_1_MEM_]] : vector<32xf32>
+// CHECK:             [[VAR_8_:%.+]] = vector.broadcast [[LOAD_PARAM_1_MEM_]] : f32 to vector<32xf32>
 // CHECK:             [[VAR_9_:%.+]] = arith.addf [[LOAD_VAR_reshape_MEM_]], [[VAR_8_]] : vector<32xf32>
 // CHECK:             vector.store [[VAR_9_]], [[VAR_reshape_5_]]{{.}}[[VAR_5_]]{{.}} : memref<?xf32>, vector<32xf32>
 // CHECK:           }
@@ -1307,7 +1307,7 @@ func.func @add_partial_splat(%arg0: tensor<2x3x4x5xf32>, %arg1: tensor<3x1x1xf32
 // CHECK:               [[VAR_3_:%.+]] = krnl.get_induction_var_value([[BLOCK_TILE__0_]]) : (!krnl.loop) -> index
 // CHECK-DAG:           [[LOAD_VAR_reshape_MEM_:%.+]] = vector.load [[VAR_reshape_]]{{.}}[[VAR_1_]]#0, [[VAR_1_]]#1, [[VAR_3_]]{{.}} : memref<2x3x20xf32>, vector<20xf32>
 // CHECK-DAG:           [[LOAD_VAR_reshape_2_MEM_:%.+]] = krnl.load [[VAR_reshape_2_]]{{.}}[[VAR_1_]]#1, [[CST_0_]]{{.}} : memref<3x1xf32>
-// CHECK:               [[VAR_6_:%.+]] = vector.splat [[LOAD_VAR_reshape_2_MEM_]] : vector<20xf32>
+// CHECK:               [[VAR_6_:%.+]] = vector.broadcast [[LOAD_VAR_reshape_2_MEM_]] : f32 to vector<20xf32>
 // CHECK:               [[VAR_7_:%.+]] = arith.addf [[LOAD_VAR_reshape_MEM_]], [[VAR_6_]] : vector<20xf32>
 // CHECK:               vector.store [[VAR_7_]], [[VAR_reshape_4_]]{{.}}[[VAR_1_]]#0, [[VAR_1_]]#1, [[VAR_3_]]{{.}} : memref<2x3x20xf32>, vector<20xf32>
 // CHECK:             }
@@ -2435,10 +2435,10 @@ func.func private @test_clip(%arg0: tensor<128xf32>, %arg1: tensor<f32>, %arg2: 
 // CHECK-DAG:         [[LOAD_PARAM_0_MEM_:%.+]] = vector.load [[PARAM_0_]]{{.}}[[VAR_1_]]{{.}} : memref<128xf32>, vector<32xf32>
 // CHECK-DAG:         [[LOAD_PARAM_1_MEM_:%.+]] = krnl.load [[PARAM_1_]][] : memref<f32>
 // CHECK-NOT: separator of consecutive DAGs
-// CHECK-DAG:         [[VAR_4_:%.+]] = vector.splat [[LOAD_PARAM_1_MEM_]] : vector<32xf32>
+// CHECK-DAG:         [[VAR_4_:%.+]] = vector.broadcast [[LOAD_PARAM_1_MEM_]] : f32 to vector<32xf32>
 // CHECK-DAG:         [[LOAD_PARAM_2_MEM_:%.+]] = krnl.load [[PARAM_2_]][] : memref<f32>
 // CHECK-NOT: separator of consecutive DAGs
-// CHECK-DAG:         [[VAR_6_:%.+]] = vector.splat [[LOAD_PARAM_2_MEM_]] : vector<32xf32>
+// CHECK-DAG:         [[VAR_6_:%.+]] = vector.broadcast [[LOAD_PARAM_2_MEM_]] : f32 to vector<32xf32>
 // CHECK-DAG:         [[VAR_7_:%.+]] = arith.maxnumf [[VAR_4_]], [[LOAD_PARAM_0_MEM_]] : vector<32xf32>
 // CHECK:             [[VAR_8_:%.+]] = arith.minnumf [[VAR_6_]], [[VAR_7_]] : vector<32xf32>
 // CHECK:             vector.store [[VAR_8_]], [[RES_]]{{.}}[[VAR_1_]]{{.}} : memref<128xf32>, vector<32xf32>
@@ -2465,7 +2465,7 @@ func.func private @test_clip_default_min(%arg0: tensor<128xf32>, %arg1: tensor<f
 // CHECK:             [[VAR_1_:%.+]] = krnl.get_induction_var_value([[BLOCK_TILE__0_]]) : (!krnl.loop) -> index
 // CHECK-DAG:         [[LOAD_PARAM_0_MEM_:%.+]] = vector.load [[PARAM_0_]]{{.}}[[VAR_1_]]{{.}} : memref<128xf32>, vector<32xf32>
 // CHECK-DAG:         [[LOAD_PARAM_2_MEM_:%.+]] = krnl.load [[PARAM_2_]][] : memref<f32>
-// CHECK:             [[VAR_4_:%.+]] = vector.splat [[LOAD_PARAM_2_MEM_]] : vector<32xf32>
+// CHECK:             [[VAR_4_:%.+]] = vector.broadcast [[LOAD_PARAM_2_MEM_]] : f32 to vector<32xf32>
 // CHECK:             [[VAR_5_:%.+]] = arith.minnumf [[VAR_4_]], [[LOAD_PARAM_0_MEM_]] : vector<32xf32>
 // CHECK:             vector.store [[VAR_5_]], [[RES_]]{{.}}[[VAR_1_]]{{.}} : memref<128xf32>, vector<32xf32>
 // CHECK:           }
@@ -2491,7 +2491,7 @@ func.func private @test_clip_default_min_int(%arg0: tensor<128xi32>, %arg1: tens
 // CHECK:             [[VAR_1_:%.+]] = krnl.get_induction_var_value([[BLOCK_TILE__0_]]) : (!krnl.loop) -> index
 // CHECK-DAG:         [[LOAD_PARAM_0_MEM_:%.+]] = vector.load [[PARAM_0_]]{{.}}[[VAR_1_]]{{.}} : memref<128xi32>, vector<32xi32>
 // CHECK-DAG:         [[LOAD_PARAM_2_MEM_:%.+]] = krnl.load [[PARAM_2_]][] : memref<i32>
-// CHECK:             [[VAR_4_:%.+]] = vector.splat [[LOAD_PARAM_2_MEM_]] : vector<32xi32>
+// CHECK:             [[VAR_4_:%.+]] = vector.broadcast [[LOAD_PARAM_2_MEM_]] : i32 to vector<32xi32>
 // CHECK:             [[VAR_5_:%.+]] = arith.minsi [[VAR_4_]], [[LOAD_PARAM_0_MEM_]] : vector<32xi32>
 // CHECK:             vector.store [[VAR_5_]], [[RES_]]{{.}}[[VAR_1_]]{{.}} : memref<128xi32>, vector<32xi32>
 // CHECK:           }
