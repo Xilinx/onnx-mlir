@@ -1,6 +1,7 @@
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa -cse %s -split-input-file | FileCheck %s
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="convert-slice-only-when-step-one=true" -cse %s -split-input-file | FileCheck %s --check-prefix=ONLY-STEP1
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="excluded-ops=Slice" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDE-SLICE
+// RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="excluded-ops=Pad" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDE-PAD --implicit-check-not=tosa.pad
 
 
 func.func @test_slice_constant_default_steps(%arg0 : tensor<2x4xf32>) -> tensor<1x3xf32> {
@@ -118,14 +119,22 @@ func.func @slice_steps_and_edges_with_padding(%arg0: tensor<99x195xf32>) -> tens
   return %1 : tensor<19x19xf32> 
 }
 // CHECK-LABEL: func @slice_steps_and_edges_with_padding
-// CHECK: %0 = tosa.const_shape {value = dense<[0, 1, 0, 5]> : tensor<4xindex>} : () -> !tosa.shape<4>
-// CHECK: %1 = "tosa.const"() <{value = dense<0.000000e+00> : tensor<f32>}> : () -> tensor<f32>
-// CHECK: %2 = tosa.pad %arg0, %0, %1 : (tensor<99x195xf32>, !tosa.shape<4>, tensor<f32>) -> tensor<100x200xf32>
-// CHECK: %3 = tosa.slice %2 {size = array<i64: 95, 190>, start = array<i64: 5, 10>} : (tensor<100x200xf32>) -> tensor<95x190xf32>
-// CHECK: %4 = tosa.reshape %3 {new_shape = array<i64: 19, 5, 19, 10>} : (tensor<95x190xf32>) -> tensor<19x5x19x10xf32>
-// CHECK: %5 = tosa.slice %4 {size = array<i64: 19, 1, 19, 1>, start = array<i64: 0, 0, 0, 0>} : (tensor<19x5x19x10xf32>) -> tensor<19x1x19x1xf32>
-// CHECK: %6 = tosa.reshape %5 {new_shape = array<i64: 19, 19>} : (tensor<19x1x19x1xf32>) -> tensor<19x19xf32>
-// CHECK: return %6 : tensor<19x19xf32>
+// CHECK-DAG: [[FILL:%.+]] = "tosa.const"() <{value = dense<0.000000e+00> : tensor<f32>}> : () -> tensor<f32>
+// CHECK-DAG: [[PADS:%.+]] = tosa.const_shape {value = dense<[0, 1, 0, 5]> : tensor<4xindex>} : () -> !tosa.shape<4>
+// CHECK-DAG: [[ZERO:%.+]] = tosa.reshape [[FILL]] {new_shape = array<i64>} : (tensor<f32>) -> tensor<f32>
+// CHECK: [[PAD:%.+]] = tosa.pad %arg0, [[PADS]], [[ZERO]] : (tensor<99x195xf32>, !tosa.shape<4>, tensor<f32>) -> tensor<100x200xf32>
+// CHECK: [[SLICE0:%.+]] = tosa.slice [[PAD]] {size = array<i64: 95, 190>, start = array<i64: 5, 10>} : (tensor<100x200xf32>) -> tensor<95x190xf32>
+// CHECK: [[RESHAPE0:%.+]] = tosa.reshape [[SLICE0]] {new_shape = array<i64: 19, 5, 19, 10>} : (tensor<95x190xf32>) -> tensor<19x5x19x10xf32>
+// CHECK: [[SLICE1:%.+]] = tosa.slice [[RESHAPE0]] {size = array<i64: 19, 1, 19, 1>, start = array<i64: 0, 0, 0, 0>} : (tensor<19x5x19x10xf32>) -> tensor<19x1x19x1xf32>
+// CHECK: [[RESHAPE1:%.+]] = tosa.reshape [[SLICE1]] {new_shape = array<i64: 19, 19>} : (tensor<19x1x19x1xf32>) -> tensor<19x19xf32>
+// CHECK: return [[RESHAPE1]] : tensor<19x19xf32>
+
+// EXCLUDE-PAD-LABEL: func @slice_steps_and_edges_with_padding
+// EXCLUDE-PAD-DAG: [[PADS:%.+]] = "tosa.const"() <{value = dense<[0, 0, 1, 5]> : tensor<4xi64>}> : () -> tensor<4xi64>
+// EXCLUDE-PAD-DAG: [[FILL:%.+]] = "tosa.const"() <{value = dense<0.000000e+00> : tensor<f32>}> : () -> tensor<f32>
+// EXCLUDE-PAD-DAG: [[NONE:%.+]] = "onnx.NoValue"() {value} : () -> none
+// EXCLUDE-PAD: [[PAD:%.+]] = "onnx.Pad"(%arg0, [[PADS]], [[FILL]], [[NONE]]) {mode = "constant"} : (tensor<99x195xf32>, tensor<4xi64>, tensor<f32>, none) -> tensor<100x200xf32>
+// EXCLUDE-PAD: tosa.slice [[PAD]] {size = array<i64: 95, 190>, start = array<i64: 5, 10>} : (tensor<100x200xf32>) -> tensor<95x190xf32>
 
 // ONLY-STEP1-LABEL: func @slice_steps_and_edges_with_padding
 // ONLY-STEP1: tosa.slice
@@ -141,13 +150,21 @@ func.func @slice_just_steps_with_padding(%arg0: tensor<99x195xf32>) -> tensor<20
   return %1 : tensor<20x20xf32> 
 }
 // CHECK-LABEL: func @slice_just_steps_with_padding
-// CHECK: %0 = tosa.const_shape {value = dense<[0, 1, 0, 5]> : tensor<4xindex>} : () -> !tosa.shape<4>
-// CHECK: %1 = "tosa.const"() <{value = dense<0.000000e+00> : tensor<f32>}> : () -> tensor<f32>
-// CHECK: %2 = tosa.pad %arg0, %0, %1 : (tensor<99x195xf32>, !tosa.shape<4>, tensor<f32>) -> tensor<100x200xf32>
-// CHECK: %3 = tosa.reshape %2 {new_shape = array<i64: 20, 5, 20, 10>} : (tensor<100x200xf32>) -> tensor<20x5x20x10xf32>
-// CHECK: %4 = tosa.slice %3 {size = array<i64: 20, 1, 20, 1>, start = array<i64: 0, 0, 0, 0>} : (tensor<20x5x20x10xf32>) -> tensor<20x1x20x1xf32>
-// CHECK: %5 = tosa.reshape %4 {new_shape = array<i64: 20, 20>} : (tensor<20x1x20x1xf32>) -> tensor<20x20xf32>
-// CHECK: return %5 : tensor<20x20xf32>
+// CHECK-DAG: [[FILL:%.+]] = "tosa.const"() <{value = dense<0.000000e+00> : tensor<f32>}> : () -> tensor<f32>
+// CHECK-DAG: [[PADS:%.+]] = tosa.const_shape {value = dense<[0, 1, 0, 5]> : tensor<4xindex>} : () -> !tosa.shape<4>
+// CHECK-DAG: [[ZERO:%.+]] = tosa.reshape [[FILL]] {new_shape = array<i64>} : (tensor<f32>) -> tensor<f32>
+// CHECK: [[PAD:%.+]] = tosa.pad %arg0, [[PADS]], [[ZERO]] : (tensor<99x195xf32>, !tosa.shape<4>, tensor<f32>) -> tensor<100x200xf32>
+// CHECK: [[RESHAPE0:%.+]] = tosa.reshape [[PAD]] {new_shape = array<i64: 20, 5, 20, 10>} : (tensor<100x200xf32>) -> tensor<20x5x20x10xf32>
+// CHECK: [[SLICE:%.+]] = tosa.slice [[RESHAPE0]] {size = array<i64: 20, 1, 20, 1>, start = array<i64: 0, 0, 0, 0>} : (tensor<20x5x20x10xf32>) -> tensor<20x1x20x1xf32>
+// CHECK: [[RESHAPE1:%.+]] = tosa.reshape [[SLICE]] {new_shape = array<i64: 20, 20>} : (tensor<20x1x20x1xf32>) -> tensor<20x20xf32>
+// CHECK: return [[RESHAPE1]] : tensor<20x20xf32>
+
+// EXCLUDE-PAD-LABEL: func @slice_just_steps_with_padding
+// EXCLUDE-PAD-DAG: [[PADS:%.+]] = "tosa.const"() <{value = dense<[0, 0, 1, 5]> : tensor<4xi64>}> : () -> tensor<4xi64>
+// EXCLUDE-PAD-DAG: [[FILL:%.+]] = "tosa.const"() <{value = dense<0.000000e+00> : tensor<f32>}> : () -> tensor<f32>
+// EXCLUDE-PAD-DAG: [[NONE:%.+]] = "onnx.NoValue"() {value} : () -> none
+// EXCLUDE-PAD: [[PAD:%.+]] = "onnx.Pad"(%arg0, [[PADS]], [[FILL]], [[NONE]]) {mode = "constant"} : (tensor<99x195xf32>, tensor<4xi64>, tensor<f32>, none) -> tensor<100x200xf32>
+// EXCLUDE-PAD: tosa.reshape [[PAD]] {new_shape = array<i64: 20, 5, 20, 10>} : (tensor<100x200xf32>) -> tensor<20x5x20x10xf32>
 
 // ONLY-STEP1-LABEL: func @slice_just_steps_with_padding
 // ONLY-STEP1: tosa.slice
