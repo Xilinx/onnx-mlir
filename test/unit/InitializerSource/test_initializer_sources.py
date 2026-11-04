@@ -443,6 +443,14 @@ def main(driver):
             "--output",
             saved,
         )
+        run(
+            driver,
+            "--input",
+            saved,
+            "--read-ir",
+            "--concurrent-materializations=8",
+        )
+        checks += 1
         proto = onnx.load_model(model, load_external_data=False)
         for tensor in proto.graph.initializer:
             entries = [field for field in tensor.external_data if field.key != "length"]
