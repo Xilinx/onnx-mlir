@@ -67,6 +67,25 @@ func.func @fuse_constant_pads(%arg0: tensor<2x3xf32>) -> tensor<6x7xf32> {
 
 // -----
 
+// An inner Pad with another user must not be fused into the outer Pad.
+func.func @preserve_multiple_use_inner_pad(
+    %arg0: tensor<2x3xf32>) -> (tensor<3x6xf32>, tensor<6x7xf32>) {
+  %inner_pads = onnx.Constant dense<[0, 1, 1, 2]> : tensor<4xi64>
+  %outer_pads = onnx.Constant dense<[1, 0, 2, 1]> : tensor<4xi64>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %inner = "onnx.Pad"(%arg0, %inner_pads, %none, %none) {mode = "constant"} : (tensor<2x3xf32>, tensor<4xi64>, none, none) -> tensor<3x6xf32>
+  %outer = "onnx.Pad"(%inner, %outer_pads, %none, %none) {mode = "constant"} : (tensor<3x6xf32>, tensor<4xi64>, none, none) -> tensor<6x7xf32>
+  return %inner, %outer : tensor<3x6xf32>, tensor<6x7xf32>
+}
+
+// CHECK-LABEL: func.func @preserve_multiple_use_inner_pad
+// CHECK: %[[INNER:.*]] = "onnx.Pad"(%arg0,
+// CHECK: %[[OUTER:.*]] = "onnx.Pad"(%[[INNER]],
+// CHECK-NOT: onnx.Pad
+// CHECK: return %[[INNER]], %[[OUTER]] : tensor<3x6xf32>, tensor<6x7xf32>
+
+// -----
+
 // Equal explicit constant fill values are also fusible.
 func.func @fuse_constant_pads_same_explicit_fill(
     %arg0: tensor<2x3xf32>) -> tensor<6x7xf32> {

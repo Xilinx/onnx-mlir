@@ -17,6 +17,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <algorithm>
 #include <functional>
 #include <math.h>
 #include <numeric>
@@ -24,6 +25,7 @@
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/Dialect/Traits.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Attributes.h"
@@ -1475,7 +1477,7 @@ struct FusePadPadPattern : public OpRewritePattern<ONNXPadOp> {
   LogicalResult matchAndRewrite(
       ONNXPadOp outerPad, PatternRewriter &rewriter) const override {
     auto innerPad = outerPad.getData().getDefiningOp<ONNXPadOp>();
-    if (!innerPad)
+    if (!innerPad || !innerPad->hasOneUse())
       return failure();
 
     if (outerPad.getMode() != "constant" || innerPad.getMode() != "constant")
@@ -1510,6 +1512,98 @@ struct FusePadPadPattern : public OpRewritePattern<ONNXPadOp> {
         ValueRange{innerPad.getData(), fusedPadsValue,
             outerPad.getConstantValue(), fusedAxes},
         outerPad->getAttrs());
+    return success();
+  }
+};
+
+/// Backfill a Slice's discarded data into poison padding. Widen the slice to
+/// the overlap of the padded window with the original input, retaining poison
+/// only outside that input. Defined elements keep their output positions.
+struct SlicePadPoisonOptimization : public OpRewritePattern<ONNXPadOp> {
+  using OpRewritePattern<ONNXPadOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXPadOp padOp, PatternRewriter &rewriter) const override {
+    if (padOp.getMode() != "constant" ||
+        !padOp.getConstantValue().getDefiningOp<ub::PoisonOp>())
+      return rewriter.notifyMatchFailure(
+          padOp, "pad is not a constant pad filling poison");
+    auto sliceOp = padOp.getData().getDefiningOp<ONNXSliceOp>();
+    if (!sliceOp)
+      return rewriter.notifyMatchFailure(padOp, "pad input must be a slice");
+    if (!sliceOp->hasOneUse())
+      return rewriter.notifyMatchFailure(
+          padOp, "preceding slice must have a single use");
+    auto inputType = dyn_cast<RankedTensorType>(sliceOp.getData().getType());
+    auto outputType = dyn_cast<RankedTensorType>(padOp.getType());
+    if (!inputType || !inputType.hasStaticShape() || !outputType ||
+        !outputType.hasStaticShape() ||
+        outputType.getRank() != inputType.getRank())
+      return rewriter.notifyMatchFailure(padOp,
+          "slice input and pad output must be static tensors of equal rank");
+    const int64_t rank = inputType.getRank();
+
+    ONNXSliceOpShapeHelper sliceHelper(sliceOp.getOperation(), {});
+    if (failed(sliceHelper.computeShape()) || sliceHelper.starts.empty() ||
+        !IndexExpr::isLiteral(sliceHelper.starts) ||
+        !IndexExpr::isLiteral(sliceHelper.ends) ||
+        !IndexExpr::isLiteral(sliceHelper.steps))
+      return rewriter.notifyMatchFailure(
+          padOp, "slice starts, ends, axes and steps must be constant");
+    SmallVector<int64_t> sliceStart;
+    SmallVector<int64_t> sliceEnd;
+    SmallVector<int64_t> steps;
+    IndexExpr::getLiteral(sliceHelper.starts, sliceStart);
+    IndexExpr::getLiteral(sliceHelper.ends, sliceEnd);
+    IndexExpr::getLiteral(sliceHelper.steps, steps);
+    if (llvm::any_of(steps, [](int64_t step) { return step != 1; }))
+      return rewriter.notifyMatchFailure(padOp, "slice steps must all be 1");
+
+    auto pads = FusePadPadPattern::getNormalizedPadValues(padOp);
+    if (failed(pads) || static_cast<int64_t>(pads->size()) != 2 * rank ||
+        llvm::any_of(*pads, [](int64_t pad) { return pad < 0; }))
+      return rewriter.notifyMatchFailure(
+          padOp, "pads must be constant and non-negative");
+
+    SmallVector<int64_t> sliceSize(rank);
+    SmallVector<int64_t> newStart(rank);
+    SmallVector<int64_t> newSize(rank);
+    SmallVector<int64_t> newPads(2 * rank);
+
+    // Compute the new start, size and pads for each axis
+    for (int64_t axis = 0; axis < rank; ++axis) {
+      int64_t dim = inputType.getDimSize(axis);
+      int64_t paddedSize = outputType.getDimSize(axis);
+      int64_t low = (*pads)[axis];
+      int64_t high = (*pads)[rank + axis];
+      sliceSize[axis] = sliceEnd[axis] - sliceStart[axis];
+      if (sliceSize[axis] <= 0)
+        return rewriter.notifyMatchFailure(padOp, "slice must not be empty");
+      if (low + sliceSize[axis] + high != paddedSize)
+        return rewriter.notifyMatchFailure(
+            padOp, "pad output shape does not match the padded slice");
+      int64_t windowStart = sliceStart[axis] - low;
+      int64_t inStart = std::clamp(windowStart, int64_t(0), dim);
+      int64_t inEnd = std::clamp(windowStart + paddedSize, int64_t(0), dim);
+      newStart[axis] = inStart;
+      newSize[axis] = inEnd - inStart;
+      newPads[axis] = inStart - windowStart;
+      newPads[rank + axis] = paddedSize - newPads[axis] - newSize[axis];
+    }
+    if (newStart == sliceStart && newSize == sliceSize)
+      return rewriter.notifyMatchFailure(
+          padOp, "no discarded data to backfill");
+
+    Value newInput = sliceOp.getData();
+    if (llvm::any_of(newStart, [](int64_t start) { return start != 0; }) ||
+        ArrayRef<int64_t>(newSize) != inputType.getShape())
+      newInput = OnnxBuilder(rewriter, sliceOp.getLoc())
+                     .slice(newInput, newStart, newSize);
+    OnnxBuilder b(rewriter, padOp.getLoc());
+    Value newPadsValue = b.constantInt64(newPads);
+    rewriter.replaceOpWithNewOp<ONNXPadOp>(padOp, padOp.getType(),
+        ValueRange{newInput, newPadsValue, padOp.getConstantValue(), b.none()},
+        padOp->getAttrs());
     return success();
   }
 };
@@ -5601,6 +5695,7 @@ void ONNXPadOp::getCanonicalizationPatterns(
   results.insert<RemoveZeroPadCanonicalizationPattern>(context);
   results.insert<MaterializeAbsentPadConstantValuePattern>(context);
   results.insert<FusePadPadPattern>(context);
+  results.insert<SlicePadPoisonOptimization>(context);
 }
 
 /// on the ONNXReduceL1Op.

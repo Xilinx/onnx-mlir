@@ -2,7 +2,7 @@
 # Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
 # affiliates
 
-if (${CMAKE_SYSTEM_PROCESSOR} STREQUAL "s390x")
+if(${CMAKE_SYSTEM_PROCESSOR} STREQUAL "s390x")
   # currently needed for a bug on Z for the ONNXOps.cpp.inc file
   llvm_replace_compiler_option(CMAKE_CXX_FLAGS_RELEASE "-O2" "-O1")
   llvm_replace_compiler_option(CMAKE_CXX_FLAGS_RELEASE "-O3" "-O1")
@@ -15,7 +15,8 @@ add_subdirectory(Transforms)
 add_onnx_mlir_dialect(ONNX onnx)
 add_onnx_mlir_dialect_doc(onnx ONNX.td)
 
-add_onnx_mlir_library(OMONNXOps
+add_onnx_mlir_library(
+  OMONNXOps
   # Top files for ONNX dialect
   DialectBuilder.cpp
   OnnxElementsAttrBuilder.cpp
@@ -28,7 +29,6 @@ add_onnx_mlir_library(OMONNXOps
   ONNXOps/ShapeHelper.cpp
   ONNXTypes.cpp
   TensorName.cpp
-
   # Support for shape inference and verifiers
   ONNXOps/Additional/AMDQuark.cpp
   ONNXOps/Additional/XFE.cpp
@@ -122,7 +122,6 @@ add_onnx_mlir_library(OMONNXOps
   ONNXOps/Tensor/Unique.cpp
   ONNXOps/Tensor/Unsqueeze.cpp
   ONNXOps/Tensor/Upsample.cpp
-  
   DEPENDS
   OMHasOnnxSubgraphOpInterfaceIncGen
   OMONNXIncGen
@@ -131,11 +130,11 @@ add_onnx_mlir_library(OMONNXOps
   OMShapeInferenceOpInterfaceIncGen
   OMStructuralOperandOpInterfaceIncGen
   OMTensorNameInferenceIncGen
-
-  LINK_LIBS PRIVATE
+  LINK_LIBS
+  PRIVATE
   OMDiagnostic
-
-  LINK_LIBS PUBLIC
+  LINK_LIBS
+  PUBLIC
   OMMlirDialects
   OMMlirUtilities
   OMShapeHelperOpInterface
@@ -145,10 +144,10 @@ add_onnx_mlir_library(OMONNXOps
   onnx
   MLIRFuncDialect
   MLIRQuantDialect
+  MLIRUBDialect
   MLIRMemRefTransforms
-  )
+)
 
-configure_file(ONNXOps.td.inc.dc.in
-  ${CMAKE_CURRENT_BINARY_DIR}/ONNXOps.td.inc.dc
-  @ONLY
-  )
+configure_file(
+  ONNXOps.td.inc.dc.in ${CMAKE_CURRENT_BINARY_DIR}/ONNXOps.td.inc.dc @ONLY
+)
