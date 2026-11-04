@@ -20,6 +20,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/IR/DialectResourceBlobManager.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/APInt.h"
@@ -451,7 +452,7 @@ bool isConstantFoldable(Value value, llvm::DenseMap<Value, bool> &knownValues) {
     return it->second;
 
   Operation *op = value.getDefiningOp();
-  if (isConstLikeOperation(op) || isa_and_nonnull<ONNXInitializerSourceOp>(op))
+  if (isConstLikeOperation(op) || isDeferredConstant(value))
     return knownValues.try_emplace(value, true).first->second;
 
   if (!op || !isPure(op))
@@ -477,6 +478,73 @@ bool isConstantFoldable(Value value) {
   llvm::DenseMap<Value, bool> knownValues;
   return isConstantFoldable(value, knownValues);
 }
+
+FailureOr<Operation *> peelDeferredFoldableExpression(
+    ONNXDeferredFoldableOp deferred, RewriterBase &rewriter) {
+  Operation *terminal = deferred.getTerminalOperation();
+  if (!terminal || terminal->getNumResults() != 1)
+    return failure();
+
+  IRMapping mapping;
+  for (auto [argument, capture] : llvm::zip_equal(
+           deferred.getBody().getArguments(), deferred.getCaptures()))
+    mapping.map(argument, capture);
+
+  llvm::SetVector<Value> internalOperands;
+  Block &body = deferred.getBody().front();
+  for (Value operand : terminal->getOperands()) {
+    auto result = dyn_cast<OpResult>(operand);
+    if (result && result.getOwner()->getBlock() == &body)
+      internalOperands.insert(operand);
+  }
+  if (internalOperands.size() > 1)
+    return failure();
+
+  OpBuilder::InsertionGuard guard(rewriter);
+  if (internalOperands.empty()) {
+    rewriter.setInsertionPoint(deferred);
+    Operation *peeled = rewriter.clone(*terminal, mapping);
+    if (Attribute nodeName = deferred->getAttr("onnx_node_name"))
+      peeled->setAttr("onnx_node_name", nodeName);
+    if (Attribute resultNames = deferred->getAttr("ResultNames"))
+      peeled->setAttr("ResultNames", resultNames);
+    rewriter.replaceOp(deferred, peeled->getResults());
+    return peeled;
+  }
+
+  Value prefix = internalOperands.front();
+  Operation *prefixOp = prefix.getDefiningOp();
+  if (!prefixOp || prefixOp->getNextNode() != terminal)
+    return failure();
+
+  Attribute nodeName = deferred->getAttr("onnx_node_name");
+  Attribute resultNames = deferred->getAttr("ResultNames");
+  rewriter.modifyOpInPlace(deferred, [&]() {
+    cast<ONNXDeferredYieldOp>(body.getTerminator())
+        .getValueMutable()
+        .assign(prefix);
+    deferred.getResult().setType(prefix.getType());
+    for (StringRef name : {"onnx_node_name", "ResultNames"}) {
+      if (Attribute prefixAttr = prefixOp->getAttr(name))
+        deferred->setAttr(name, prefixAttr);
+      else
+        deferred->removeAttr(name);
+    }
+  });
+
+  mapping.map(prefix, deferred.getResult());
+  rewriter.setInsertionPointAfter(deferred);
+  Operation *peeled = rewriter.clone(*terminal, mapping);
+  if (nodeName)
+    peeled->setAttr("onnx_node_name", nodeName);
+  if (resultNames)
+    peeled->setAttr("ResultNames", resultNames);
+  rewriter.replaceAllUsesExcept(
+      deferred.getResult(), peeled->getResult(0), peeled);
+  rewriter.eraseOp(terminal);
+  return peeled;
+}
+
 // compare two ElementsAttr, except for their internal buffer size
 bool compareValueFromElementAttribute(
     ElementsAttr &attr1, ElementsAttr &attr2) {
