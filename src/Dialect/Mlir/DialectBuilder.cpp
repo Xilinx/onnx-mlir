@@ -1787,7 +1787,7 @@ void SCFBuilder::forLoop(
     Value lb, Value ub, int64_t step, SCFLoopBodyFn bodyFn) const {
   MathBuilder createMath(*this);
   Value stepVal = createMath.constantIndex(step);
-  b().create<scf::ForOp>(loc(), lb, ub, stepVal, std::nullopt,
+  b().create<scf::ForOp>(loc(), lb, ub, stepVal, ValueRange(),
       [&](OpBuilder &childBuilder, Location childLoc, Value inductionVar,
           ValueRange args) {
         SCFBuilder builder(childBuilder, childLoc);
