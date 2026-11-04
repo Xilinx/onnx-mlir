@@ -1,3 +1,4 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
 /*
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -65,6 +66,13 @@ LogicalResult ONNXRangeOpShapeHelper::computeShape() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ONNXRangeOp::verify() {
+  Type elementType = getElementType(getStart().getType());
+  if ((elementType.isF16() || elementType.isBF16()) &&
+      getStashType() != onnx::TensorProto::FLOAT &&
+      getStashType() != onnx::TensorProto::DOUBLE)
+    return emitOpError(
+        "stash_type must be FLOAT or DOUBLE for FLOAT16/BFLOAT16 inputs");
+
   // All inputs must be valid ranked tensors.
   if (!hasShapeAndRank(getStart()) || !hasShapeAndRank(getLimit()) ||
       !hasShapeAndRank(getDelta()))

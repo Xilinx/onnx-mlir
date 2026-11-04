@@ -1,3 +1,4 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
 // RUN: onnx-mlir-opt -legalize-quark-quantized-ops --split-input-file %s | FileCheck %s
 
 func.func @test_gather(%arg0 : tensor<3x3xbf16>, %arg1 : tensor<1x2xi64>) -> tensor<1x2x3xbf16> {
@@ -27,7 +28,7 @@ func.func @test_gather2(%arg0 : tensor<3x3xbf16>, %arg1 : tensor<1x2xi64>) -> te
 // CHECK-SAME:                            %[[VAL_0:.*]]: tensor<3x3xbf16>,
 // CHECK-SAME:                            %[[VAL_1:.*]]: tensor<1x2xi64>) -> tensor<1x2x3xf32> {
 // CHECK:           %[[VAL_2:.*]] = "onnx.Gather"(%[[VAL_0]], %[[VAL_1]]) {axis = 0 : si64} : (tensor<3x3xbf16>, tensor<1x2xi64>) -> tensor<1x2x3xbf16>
-// CHECK:           %[[VAL_3:.*]] = "onnx.Cast"(%[[VAL_2]]) {saturate = 1 : si64, to = f32} : (tensor<1x2x3xbf16>) -> tensor<1x2x3xf32>
+// CHECK:           %[[VAL_3:.*]] = "onnx.Cast"(%[[VAL_2]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<1x2x3xbf16>) -> tensor<1x2x3xf32>
 // CHECK:           onnx.Return %[[VAL_3]] : tensor<1x2x3xf32>
 // CHECK:         }
 
@@ -55,9 +56,9 @@ func.func @test_lstm_forward_mode(%arg0: tensor<7x2x3xbf16>, %arg1: tensor<1x16x
 // CHECK-LABEL:   func.func @test_lstm_forward_mode
 // CHECK:           %[[VAL_7:.*]] = "onnx.NoValue"() {value} : () -> none
 // CHECK:           %[[VAL_8:.*]], %[[VAL_9:.*]], %[[VAL_10:.*]] = "onnx.LSTM"(%arg0, %arg1, %arg2, %arg3, %[[VAL_7]], %arg4, %arg5, %arg6) {direction = "forward", hidden_size = 4 : si64, input_forget = 0 : si64, layout = 0 : si64} : (tensor<7x2x3xbf16>, tensor<1x16x3xbf16>, tensor<1x16x4xbf16>, tensor<1x32xbf16>, none, tensor<1x2x4xbf16>, tensor<1x2x4xbf16>, tensor<1x12xbf16>) -> (tensor<7x1x2x4xbf16>, tensor<1x2x4xbf16>, tensor<1x2x4xbf16>)
-// CHECK:           %[[VAL_11:.*]] = "onnx.Cast"(%[[VAL_8]]) {saturate = 1 : si64, to = f32} : (tensor<7x1x2x4xbf16>) -> tensor<7x1x2x4xf32>
-// CHECK:           %[[VAL_12:.*]] = "onnx.Cast"(%[[VAL_9]]) {saturate = 1 : si64, to = f32} : (tensor<1x2x4xbf16>) -> tensor<1x2x4xf32>
-// CHECK:           %[[VAL_13:.*]] = "onnx.Cast"(%[[VAL_10]]) {saturate = 1 : si64, to = f32} : (tensor<1x2x4xbf16>) -> tensor<1x2x4xf32>
+// CHECK:           %[[VAL_11:.*]] = "onnx.Cast"(%[[VAL_8]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<7x1x2x4xbf16>) -> tensor<7x1x2x4xf32>
+// CHECK:           %[[VAL_12:.*]] = "onnx.Cast"(%[[VAL_9]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<1x2x4xbf16>) -> tensor<1x2x4xf32>
+// CHECK:           %[[VAL_13:.*]] = "onnx.Cast"(%[[VAL_10]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<1x2x4xbf16>) -> tensor<1x2x4xf32>
 // CHECK:           return %[[VAL_11]], %[[VAL_12]], %[[VAL_13]] : tensor<7x1x2x4xf32>, tensor<1x2x4xf32>, tensor<1x2x4xf32>
 // CHECK:         }
 
@@ -179,10 +180,10 @@ func.func @onnx_add_unknown_no_changes(%arg0: tensor<*xbf16>, %arg1: tensor<*xbf
 // CHECK-LABEL:   func.func @onnx_add_unknown_no_changes(
 // CHECK-SAME:                                           %[[VAL_0:.*]]: tensor<*xbf16>,
 // CHECK-SAME:                                           %[[VAL_1:.*]]: tensor<*xbf16>) -> tensor<*xbf16> {
-// CHECK:           %[[VAL_2:.*]] = "onnx.Cast"(%[[VAL_0]]) {saturate = 1 : si64, to = f32} : (tensor<*xbf16>) -> tensor<*xf32>
-// CHECK:           %[[VAL_3:.*]] = "onnx.Cast"(%[[VAL_1]]) {saturate = 1 : si64, to = f32} : (tensor<*xbf16>) -> tensor<*xf32>
+// CHECK:           %[[VAL_2:.*]] = "onnx.Cast"(%[[VAL_0]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<*xbf16>) -> tensor<*xf32>
+// CHECK:           %[[VAL_3:.*]] = "onnx.Cast"(%[[VAL_1]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<*xbf16>) -> tensor<*xf32>
 // CHECK:           %[[VAL_4:.*]] = "onnx.Add"(%[[VAL_2]], %[[VAL_3]]) : (tensor<*xf32>, tensor<*xf32>) -> tensor<*xf32>
-// CHECK:           %[[VAL_5:.*]] = "onnx.Cast"(%[[VAL_4]]) {saturate = 1 : si64, to = bf16} : (tensor<*xf32>) -> tensor<*xbf16>
+// CHECK:           %[[VAL_5:.*]] = "onnx.Cast"(%[[VAL_4]]) {round_mode = "up", saturate = 1 : si64, to = bf16} : (tensor<*xf32>) -> tensor<*xbf16>
 // CHECK:           return %[[VAL_5]] : tensor<*xbf16>
 // CHECK:         }
 
@@ -195,7 +196,7 @@ func.func @LayerNorm_no_conversion_no_input_cast(%arg0: tensor<256xf32>, %arg1: 
 }
 // CHECK-LABEL:   func.func @LayerNorm_no_conversion_no_input_cast
 // CHECK:           %[[VAL_3:.*]], %[[VAL_4:.*]], %[[VAL_5:.*]] = "onnx.LayerNormalization"(%arg2, %arg1, %arg0) {axis = -1 : si64, epsilon = 9.99999996E-13 : f32, onnx_node_name = "LayerNorm_24", stash_type = 1 : si64} : (tensor<1x256x256xf32>, tensor<256xf32>, tensor<256xf32>) -> (tensor<1x256x256xf32>, none, none)
-// CHECK:           %[[VAL_6:.*]] = "onnx.Cast"(%[[VAL_3]]) {saturate = 1 : si64, to = bf16} : (tensor<1x256x256xf32>) -> tensor<1x256x256xbf16>
+// CHECK:           %[[VAL_6:.*]] = "onnx.Cast"(%[[VAL_3]]) {round_mode = "up", saturate = 1 : si64, to = bf16} : (tensor<1x256x256xf32>) -> tensor<1x256x256xbf16>
 // CHECK:           onnx.Return %[[VAL_6]] : tensor<1x256x256xbf16>
 // CHECK:         }
 
@@ -209,9 +210,9 @@ func.func @Pad_V2_no_bf16_type(%arg0: tensor<1x1x1x1xbf16>) -> tensor<1x1x9x9xbf
 }
 // CHECK-LABEL:   func.func @Pad_V2_no_bf16_type(
 // CHECK-SAME:                     %[[VAL_0:.*]]: tensor<1x1x1x1xbf16>) -> tensor<1x1x9x9xbf16> {
-// CHECK:           %[[VAL_1:.*]] = "onnx.Cast"(%[[VAL_0]]) {saturate = 1 : si64, to = f32} : (tensor<1x1x1x1xbf16>) -> tensor<1x1x1x1xf32>
+// CHECK:           %[[VAL_1:.*]] = "onnx.Cast"(%[[VAL_0]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<1x1x1x1xbf16>) -> tensor<1x1x1x1xf32>
 // CHECK:           %[[VAL_2:.*]] = "onnx.PadV2"(%[[VAL_1]]) {mode = "reflect", pads = [0, 0, 4, 4, 0, 0, 4, 4], value = 0.000000e+00 : f32} : (tensor<1x1x1x1xf32>) -> tensor<1x1x9x9xf32>
-// CHECK:           %[[VAL_3:.*]] = "onnx.Cast"(%[[VAL_2]]) {saturate = 1 : si64, to = bf16} : (tensor<1x1x9x9xf32>) -> tensor<1x1x9x9xbf16>
+// CHECK:           %[[VAL_3:.*]] = "onnx.Cast"(%[[VAL_2]]) {round_mode = "up", saturate = 1 : si64, to = bf16} : (tensor<1x1x9x9xf32>) -> tensor<1x1x9x9xbf16>
 // CHECK:           onnx.Return %[[VAL_3]] : tensor<1x1x9x9xbf16>
 // CHECK:         }
 
@@ -342,7 +343,7 @@ func.func @resize(%arg0: tensor<1x256x20x20xf32> {onnx.name = "input"}) -> (tens
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x256x20x20xf32> {onnx.name = "input"}) -> (tensor<1x256x40x40xbf16> {onnx.name = "output"}) {
 // CHECK-DAG:       [[VAR_0_:%.+]] = "onnx.NoValue"() {value} : () -> none
 // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<[1.000000e+00, 1.000000e+00, 2.000000e+00, 2.000000e+00]> : tensor<4xf32>
-// CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {saturate = 1 : si64, to = bf16} : (tensor<1x256x20x20xf32>) -> tensor<1x256x20x20xbf16>
+// CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {round_mode = "up", saturate = 1 : si64, to = bf16} : (tensor<1x256x20x20xf32>) -> tensor<1x256x20x20xbf16>
 // CHECK:           [[VAR_3_:%.+]] = "onnx.Resize"([[VAR_2_]], [[VAR_0_]], [[VAR_1_]], [[VAR_0_]]) {antialias = 0 : si64, coordinate_transformation_mode = "asymmetric", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "nearest", nearest_mode = "floor", onnx_node_name = "/fpn/up/Resize"} : (tensor<1x256x20x20xbf16>, none, tensor<4xf32>, none) -> tensor<1x256x40x40xbf16>
 // CHECK:           onnx.Return [[VAR_3_]] : tensor<1x256x40x40xbf16>
 // CHECK:         }
@@ -362,9 +363,9 @@ func.func @resize_not_converted_no_input_cast(%arg0: tensor<1x256x20x20xf32> {on
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x256x20x20xf32> {onnx.name = "input"}) -> (tensor<1x256x40x40xbf16> {onnx.name = "output"}) {
 // CHECK-DAG:       [[VAR_0_:%.+]] = "onnx.NoValue"() {value} : () -> none
 // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<[1.000000e+00, 1.000000e+00, 2.000000e+00, 2.000000e+00]> : tensor<4xf32>
-// CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {saturate = 1 : si64, to = f16} : (tensor<1x256x20x20xf32>) -> tensor<1x256x20x20xf16>
-// CHECK:           [[VAR_3_:%.+]] = "onnx.Cast"([[VAR_2_]]) {saturate = 1 : si64, to = f32} : (tensor<1x256x20x20xf16>) -> tensor<1x256x20x20xf32>
+// CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {round_mode = "up", saturate = 1 : si64, to = f16} : (tensor<1x256x20x20xf32>) -> tensor<1x256x20x20xf16>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.Cast"([[VAR_2_]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<1x256x20x20xf16>) -> tensor<1x256x20x20xf32>
 // CHECK:           [[VAR_4_:%.+]] = "onnx.Resize"([[VAR_3_]], [[VAR_0_]], [[VAR_1_]], [[VAR_0_]]) {antialias = 0 : si64, coordinate_transformation_mode = "asymmetric", cubic_coeff_a = -7.500000e-01 : f32, exclude_outside = 0 : si64, extrapolation_value = 0.000000e+00 : f32, keep_aspect_ratio_policy = "stretch", mode = "nearest", nearest_mode = "floor", onnx_node_name = "/fpn/up/Resize"} : (tensor<1x256x20x20xf32>, none, tensor<4xf32>, none) -> tensor<1x256x40x40xf32>
-// CHECK:           [[VAR_5_:%.+]] = "onnx.Cast"([[VAR_4_]]) {saturate = 1 : si64, to = bf16} : (tensor<1x256x40x40xf32>) -> tensor<1x256x40x40xbf16>
+// CHECK:           [[VAR_5_:%.+]] = "onnx.Cast"([[VAR_4_]]) {round_mode = "up", saturate = 1 : si64, to = bf16} : (tensor<1x256x40x40xf32>) -> tensor<1x256x40x40xbf16>
 // CHECK:           onnx.Return [[VAR_5_]] : tensor<1x256x40x40xbf16>
 // CHECK:         }

@@ -1,3 +1,4 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
 // RUN: onnx-mlir-opt --qdq-canonicalize="remove-binary=true" %s -split-input-file | FileCheck %s
 
 
@@ -290,10 +291,10 @@ func.func @cleanup_qdq_activation_pair_folded_into_q(%arg0: tensor<4xf32>) -> te
 // CHECK: %[[ZP:.*]]   = onnx.Constant dense<0>            : tensor<i8>
 // CHECK: %[[S_Q:.*]]  = onnx.Constant dense<3.125000e-02> : tensor<f32>
 // CHECK: %[[Q:.*]] = "onnx.QuantizeLinear"(%arg0, %[[S_Q]], %[[ZP]])
-// CHECK-SAME: {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64}
+// CHECK-SAME: {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, precision = 0 : si64, saturate = 1 : si64}
 // CHECK-SAME: : (tensor<4xf32>, tensor<f32>, tensor<i8>) -> tensor<4xi8>
 // CHECK: %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[Q]], %[[S_DQ]], %[[ZP]])
-// CHECK-SAME: {axis = 1 : si64, block_size = 0 : si64}
+// CHECK-SAME: {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64}
 // CHECK-SAME: : (tensor<4xi8>, tensor<f32>, tensor<i8>) -> tensor<4xf32>
 // CHECK-NOT: "onnx.Add"
 // CHECK-NOT: "onnx.Mul"

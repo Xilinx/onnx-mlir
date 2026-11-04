@@ -1,4 +1,4 @@
-// Copyright (C) 2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 
 // RUN: onnx-mlir-opt --split-input-file --batch-reduction-to-reshape-reduction %s | FileCheck %s
 // -----
@@ -24,7 +24,7 @@ func.func @test_batch_reduction(%arg0: tensor<16x16x300x4xf32>) -> tensor<16x16x
 
 // Step 1: Quantize input (float -> quantized)
 // CHECK: %[[QUANT:.*]] = "onnx.QuantizeLinear"(%[[ARG0]], %[[SCALE]], %[[ZP]])
-// CHECK-SAME:    {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64}
+// CHECK-SAME:    {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, precision = 0 : si64, saturate = 1 : si64}
 // CHECK-SAME:    : (tensor<16x16x300x4xf32>, tensor<f32>, tensor<i8>)
 // CHECK-SAME:    -> tensor<16x16x300x4x!quant.uniform<u8:f32, 0.10000000149011612>>
 
@@ -46,7 +46,7 @@ func.func @test_batch_reduction(%arg0: tensor<16x16x300x4xf32>) -> tensor<16x16x
 
 // Step 5: Dequantize final result (quantized -> float)
 // CHECK: %[[DEQUANT:.*]] = "onnx.DequantizeLinear"(%[[POST_RESHAPE]], %[[SCALE]], %[[ZP]])
-// CHECK-SAME:    {axis = 1 : si64, block_size = 0 : si64}
+// CHECK-SAME:    {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64}
 // CHECK-SAME:    : (tensor<16x16x300x!quant.uniform<u8:f32, 0.10000000149011612>>, tensor<f32>, tensor<i8>)
 // CHECK-SAME:    -> tensor<16x16x300xf32>
 

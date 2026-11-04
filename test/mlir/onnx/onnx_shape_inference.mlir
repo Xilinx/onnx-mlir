@@ -1,3 +1,4 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
 // RUN: onnx-mlir-opt --shape-inference %s -split-input-file | FileCheck %s
 
 // -----
@@ -2043,7 +2044,7 @@ func.func @test_cast_1(%arg0 : tensor<2x3x4xf32>) -> tensor<*xf32> {
   "onnx.Return"(%1) : (tensor<*xf32>) -> ()
 
   // CHECK-LABEL: test_cast_1
-  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {saturate = 1 : si64, to = f32} : (tensor<2x3x4xf32>) -> tensor<2x3x4xf32>
+  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<2x3x4xf32>) -> tensor<2x3x4xf32>
   // CHECK: onnx.Return [[RES]] : tensor<2x3x4xf32>
 }
 
@@ -2054,7 +2055,7 @@ func.func @test_cast_2(%arg0 : tensor<2x3x4xf32>) -> tensor<*xui8> {
   "onnx.Return"(%1) : (tensor<*xui8>) -> ()
 
   // CHECK-LABEL: test_cast_2
-  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {saturate = 1 : si64, to = ui8} : (tensor<2x3x4xf32>) -> tensor<2x3x4xui8>
+  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {round_mode = "up", saturate = 1 : si64, to = ui8} : (tensor<2x3x4xf32>) -> tensor<2x3x4xui8>
   // CHECK: onnx.Return [[RES]] : tensor<2x3x4xui8>
 }
 
@@ -2065,7 +2066,7 @@ func.func @test_cast_3(%arg0 : tensor<2x3x4xf32>) -> tensor<*xi8> {
   "onnx.Return"(%1) : (tensor<*xi8>) -> ()
 
   // CHECK-LABEL: test_cast_3
-  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {saturate = 1 : si64, to = i8} : (tensor<2x3x4xf32>) -> tensor<2x3x4xi8>
+  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {round_mode = "up", saturate = 1 : si64, to = i8} : (tensor<2x3x4xf32>) -> tensor<2x3x4xi8>
   // CHECK: onnx.Return [[RES]] : tensor<2x3x4xi8>
 }
 
@@ -2076,7 +2077,7 @@ func.func @test_cast_10(%arg0 : tensor<2x3x4xf32>) -> tensor<*xf16> {
   "onnx.Return"(%1) : (tensor<*xf16>) -> ()
 
   // CHECK-LABEL: test_cast_10
-  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {saturate = 1 : si64, to = f16} : (tensor<2x3x4xf32>) -> tensor<2x3x4xf16>
+  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {round_mode = "up", saturate = 1 : si64, to = f16} : (tensor<2x3x4xf32>) -> tensor<2x3x4xf16>
   // CHECK: onnx.Return [[RES]] : tensor<2x3x4xf16>
 }
 
@@ -2105,7 +2106,7 @@ func.func @test_quantize_linear_1(%arg0 : tensor<5x2x3x4xf32>, %arg1 : tensor<f3
   "onnx.Return"(%1) {} : (tensor<*xi8>) -> ()
 
   // CHECK-LABEL: test_quantize_linear_1
-  // CHECK: [[RES:%.+]] = "onnx.QuantizeLinear"(%arg0, %arg1, %arg2) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<5x2x3x4xf32>, tensor<f32>, tensor<i8>) -> tensor<5x2x3x4xi8>
+  // CHECK: [[RES:%.+]] = "onnx.QuantizeLinear"(%arg0, %arg1, %arg2) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, precision = 0 : si64, saturate = 1 : si64} : (tensor<5x2x3x4xf32>, tensor<f32>, tensor<i8>) -> tensor<5x2x3x4xi8>
   // CHECK: onnx.Return [[RES]] : tensor<5x2x3x4xi8>
 }
 
@@ -2116,7 +2117,7 @@ func.func @test_quantize_linear_2(%arg0 : tensor<5x2x3x4xf32>, %arg1: tensor<f32
  "onnx.Return"(%0) {} : (tensor<*xui8>) -> ()
 
  // CHECK-LABEL: test_quantize_linear_2
- // CHECK: [[RES:%.+]] = "onnx.QuantizeLinear"(%arg0, %arg1, %arg2) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<5x2x3x4xf32>, tensor<f32>, tensor<ui8>) -> tensor<5x2x3x4xui8>
+ // CHECK: [[RES:%.+]] = "onnx.QuantizeLinear"(%arg0, %arg1, %arg2) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, precision = 0 : si64, saturate = 1 : si64} : (tensor<5x2x3x4xf32>, tensor<f32>, tensor<ui8>) -> tensor<5x2x3x4xui8>
  // CHECK: onnx.Return [[RES]] : tensor<5x2x3x4xui8>
 }
 
@@ -2128,7 +2129,7 @@ func.func @test_quantize_linear_3(%arg0 : tensor<5x2x3x4xf32>, %arg1: tensor<f32
  "onnx.Return"(%0) {} : (tensor<*xui8>) -> ()
 
  // CHECK-LABEL: test_quantize_linear_3
- // CHECK: [[RES:%.+]] = "onnx.QuantizeLinear"(%arg0, %arg1, %0) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<5x2x3x4xf32>, tensor<f32>, none) -> tensor<5x2x3x4xui8>
+ // CHECK: [[RES:%.+]] = "onnx.QuantizeLinear"(%arg0, %arg1, %0) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64, precision = 0 : si64, saturate = 1 : si64} : (tensor<5x2x3x4xf32>, tensor<f32>, none) -> tensor<5x2x3x4xui8>
  // CHECK: onnx.Return [[RES]] : tensor<5x2x3x4xui8>
 }
 
@@ -2140,7 +2141,7 @@ func.func @test_quantize_linear_dtype(%arg0 : tensor<5x2x3x4xf32>, %arg1: tensor
  "onnx.Return"(%0) {} : (tensor<*xui8>) -> ()
 
  // CHECK-LABEL: test_quantize_linear_dtype
- // CHECK: [[RES:%.+]] = "onnx.QuantizeLinear"(%arg0, %arg1, %0) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 2 : si64, saturate = 1 : si64} : (tensor<5x2x3x4xf32>, tensor<f32>, none) -> tensor<5x2x3x4xui8>
+ // CHECK: [[RES:%.+]] = "onnx.QuantizeLinear"(%arg0, %arg1, %0) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 2 : si64, precision = 0 : si64, saturate = 1 : si64} : (tensor<5x2x3x4xf32>, tensor<f32>, none) -> tensor<5x2x3x4xui8>
  // CHECK: onnx.Return [[RES]] : tensor<5x2x3x4xui8>
 }
 
@@ -2151,7 +2152,7 @@ func.func @test_dequantize_linear_1(%arg0 : tensor<5x2x3x4xi8>, %arg1 : tensor<f
   "onnx.Return"(%1) {} : (tensor<*xf32>) -> ()
 
   // CHECK-LABEL: test_dequantize_linear_1
-  // CHECK: [[RES:%.+]] = "onnx.DequantizeLinear"(%arg0, %arg1, %arg2) {axis = 1 : si64, block_size = 0 : si64} : (tensor<5x2x3x4xi8>, tensor<f32>, tensor<i8>) -> tensor<5x2x3x4xf32>
+  // CHECK: [[RES:%.+]] = "onnx.DequantizeLinear"(%arg0, %arg1, %arg2) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64} : (tensor<5x2x3x4xi8>, tensor<f32>, tensor<i8>) -> tensor<5x2x3x4xf32>
   // CHECK: onnx.Return [[RES]] : tensor<5x2x3x4xf32>
 }
 
@@ -2162,7 +2163,7 @@ func.func @test_dequantize_linear_2(%arg0 : tensor<5x?x3x4xi8>, %arg1 : tensor<*
   "onnx.Return"(%1) {} : (tensor<*xf32>) -> ()
 
   // CHECK-LABEL: test_dequantize_linear_2
-  // CHECK: [[RES:%.+]] = "onnx.DequantizeLinear"(%arg0, %arg1, %arg2) {axis = 1 : si64, block_size = 0 : si64} : (tensor<5x?x3x4xi8>, tensor<*xf32>, tensor<2xi8>) -> tensor<5x2x3x4xf32>
+  // CHECK: [[RES:%.+]] = "onnx.DequantizeLinear"(%arg0, %arg1, %arg2) {axis = 1 : si64, block_size = 0 : si64, output_dtype = 0 : si64} : (tensor<5x?x3x4xi8>, tensor<*xf32>, tensor<2xi8>) -> tensor<5x2x3x4xf32>
   // CHECK: onnx.Return [[RES]] : tensor<5x2x3x4xf32>
 }
 
@@ -3140,7 +3141,7 @@ func.func @test_range(%arg0: tensor<f32>, %arg1: tensor<f32>, %arg2: tensor<f32>
   onnx.Return %0 : tensor<*xf32>
 
   // CHECK-LABEL: test_range
-  // CHECK: {{.*}} = "onnx.Range"(%arg0, %arg1, %arg2) : (tensor<f32>, tensor<f32>, tensor<f32>) -> tensor<?xf32>
+  // CHECK: {{.*}} = "onnx.Range"(%arg0, %arg1, %arg2) {stash_type = 1 : si64} : (tensor<f32>, tensor<f32>, tensor<f32>) -> tensor<?xf32>
 }
 
 // -----
@@ -3153,7 +3154,7 @@ func.func @test_range_float_constant() -> tensor<*xf32> {
   onnx.Return %0 : tensor<*xf32>
 
   // CHECK-LABEL: test_range_float_constant
-  // CHECK: {{.*}} = "onnx.Range"(%0, %1, %2) : (tensor<1xf32>, tensor<1xf32>, tensor<1xf32>) -> tensor<8xf32>
+  // CHECK: {{.*}} = "onnx.Range"(%0, %1, %2) {stash_type = 1 : si64} : (tensor<1xf32>, tensor<1xf32>, tensor<1xf32>) -> tensor<8xf32>
 }
 
 // -----
@@ -3166,7 +3167,7 @@ func.func @test_range_int_constant() -> tensor<*xi32> {
   onnx.Return %0 : tensor<*xi32>
 
   // CHECK-LABEL: test_range_int_constant
-  // CHECK: {{.*}} = "onnx.Range"(%0, %1, %2) : (tensor<1xi32>, tensor<1xi32>, tensor<1xi32>) -> tensor<8xi32>
+  // CHECK: {{.*}} = "onnx.Range"(%0, %1, %2) {stash_type = 1 : si64} : (tensor<1xi32>, tensor<1xi32>, tensor<1xi32>) -> tensor<8xi32>
 }
 
 // -----

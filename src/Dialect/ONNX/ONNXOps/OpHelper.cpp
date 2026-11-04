@@ -1633,6 +1633,16 @@ static bool isQDQWithinRoundTripTolerance(mlir::Type storageElemType,
 
 bool isDequantQuantSame(mlir::ONNXDequantizeLinearOp dqOp,
     mlir::ONNXQuantizeLinearOp qOp, int64_t maxRoundTripDiff) {
+  if (qOp.getPrecision() || dqOp.getOutputDtype())
+    return false;
+  auto xType = dyn_cast<ShapedType>(qOp.getX().getType());
+  auto qScaleType = dyn_cast<ShapedType>(qOp.getYScale().getType());
+  auto yType = dyn_cast<ShapedType>(dqOp.getY().getType());
+  auto dqScaleType = dyn_cast<ShapedType>(dqOp.getXScale().getType());
+  if (!xType || !qScaleType || !yType || !dqScaleType ||
+      xType.getElementType() != qScaleType.getElementType() ||
+      yType.getElementType() != dqScaleType.getElementType())
+    return false;
   // Helper lambda to check if a value is a scalar (rank 0 or shape [1]).
   auto isScalar = [](Value v) -> bool {
     if (!v)

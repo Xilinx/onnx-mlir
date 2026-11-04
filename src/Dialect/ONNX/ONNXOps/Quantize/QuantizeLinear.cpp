@@ -43,12 +43,46 @@ LogicalResult ONNXQuantizeLinearOpShapeHelper::computeShape() {
 // Verify
 //===----------------------------------------------------------------------===//
 LogicalResult ONNXQuantizeLinearOp::verify() {
+  switch (getOutputDtype()) {
+  case onnx::TensorProto::UNDEFINED:
+  case onnx::TensorProto::UINT8:
+  case onnx::TensorProto::INT8:
+  case onnx::TensorProto::UINT16:
+  case onnx::TensorProto::INT16:
+  case onnx::TensorProto::UINT4:
+  case onnx::TensorProto::INT4:
+  case onnx::TensorProto::FLOAT8E4M3FN:
+  case onnx::TensorProto::FLOAT8E4M3FNUZ:
+  case onnx::TensorProto::FLOAT8E5M2:
+  case onnx::TensorProto::FLOAT8E5M2FNUZ:
+    break;
+  default:
+    return emitOpError("output_dtype is not a supported quantized data type");
+  }
+  if (getPrecision() != 0 && getPrecision() != onnx::TensorProto::FLOAT &&
+      getPrecision() != onnx::TensorProto::FLOAT16 &&
+      getPrecision() != onnx::TensorProto::BFLOAT16)
+    return emitOpError("precision must be 0, FLOAT, FLOAT16 or BFLOAT16");
   return verifyLinearQuantizationParameterShapes(getOperation(), getX(),
       getYScale(), getYZeroPoint(), getAxis(), getBlockSize());
 }
 //===----------------------------------------------------------------------===//
 // Shape Inference
 //===----------------------------------------------------------------------===//
+
+std::vector<Type> ONNXQuantizeLinearOp::resultTypeInference() {
+  Type type;
+  if (getOutputDtype()) {
+    OpBuilder builder(getContext());
+    type = convertONNXTypeToMLIRType(
+        builder, static_cast<onnx::TensorProto_DataType>(getOutputDtype()));
+  } else if (!isNoneValue(getYZeroPoint())) {
+    type = cast<ShapedType>(getYZeroPoint().getType()).getElementType();
+  } else {
+    type = IntegerType::get(getContext(), 8, IntegerType::Unsigned);
+  }
+  return {UnrankedTensorType::get(type)};
+}
 
 LogicalResult ONNXQuantizeLinearOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {

@@ -19,7 +19,9 @@
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 using namespace mlir;
 
 namespace onnx_mlir {
@@ -171,6 +173,14 @@ Value handleDynamicToStaticShapes(OpBuilder & /*builder*/, TensorType type,
 
 void FrontendToTosaLoweringPass::runOnOperation() {
   ModuleOp module = getOperation();
+  // Existing Q/DQ lowerings expect explicit, common arithmetic types, including
+  // when conversion is invoked without the decomposition pass.
+  RewritePatternSet normalizationPatterns(&getContext());
+  populateOpset27NormalizationPatterns(normalizationPatterns);
+  if (failed(applyPatternsGreedily(module, std::move(normalizationPatterns)))) {
+    signalPassFailure();
+    return;
+  }
   // Define final conversion target
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);

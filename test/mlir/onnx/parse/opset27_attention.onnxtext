@@ -1,0 +1,21 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
+// RUN: onnx-mlir --EmitONNXBasic --printIR %s | FileCheck %s
+<
+  ir_version: 10,
+  opset_import: ["" : 27]
+>
+opset27_attention (float[1,2,2,4] q, float[1,2,3,4] k,
+    float[1,2,3,4] v, float[1,1,2,2] mask, int64[1] valid)
+    => (float[1,2,2,4] y)
+{
+  y = Attention <is_causal: int = 1> (q, k, v, mask, , , valid)
+}
+
+// Attention-24 must use the ONNX-defined mask/cache semantics rather than
+// silently applying a downstream Attention-23 lowering.
+// CHECK-NOT: "onnx.Attention"
+// CHECK-NOT: "onnx.Custom"
+// CHECK: "onnx.MatMul"
+// CHECK: "onnx.Softmax"
+// CHECK: "onnx.MatMul"
+// CHECK-NOT: "onnx.Attention"

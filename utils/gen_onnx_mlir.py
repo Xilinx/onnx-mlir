@@ -123,18 +123,21 @@ version_dict = {
         "Asinh": [22],
         "Atan": [22],
         "Atanh": [22],
+        # Keep the downstream/internal Attention-23 contract. Newer standard
+        # schemas expand through the ONNX function in the importer.
         "Attention": [23],
         "AveragePool": [22],
         "BatchNormalization": [15, 9],
         "Bernoulli": [22],
+        "BitCast": [26],
         "BitShift": [11],
         "BitwiseAnd": [18],
         "BitwiseNot": [18],
         "BitwiseOr": [18],
         "BitwiseXor": [18],
         "BlackmanWindow": [17],
-        "Cast": [21],
-        "CastLike": [21],
+        "Cast": [25],
+        "CastLike": [25],
         "Ceil": [13],
         "Celu": [12],
         "CenterCropPad": [18],
@@ -142,18 +145,19 @@ version_dict = {
         "Compress": [11],
         "Concat": [13],
         "ConcatFromSequence": [11],
-        "Constant": [21],
-        "ConstantOfShape": [21],
+        "Constant": [25],
+        "ConstantOfShape": [25],
         "Conv": [22],
         "ConvInteger": [10],
         "ConvTranspose": [22],
         "Cos": [22],
         "Cosh": [22],
         "Col2Im": [18],
+        "CumProd": [26],
         "CumSum": [14],
         "DeformConv": [22],
         "DepthToSpace": [13],
-        "DequantizeLinear": [21],
+        "DequantizeLinear": [25],
         "Det": [22],
         "DFT": [20, 17],
         "Div": [14],
@@ -166,7 +170,7 @@ version_dict = {
         "Exp": [13],
         "Expand": [13],
         "EyeLike": [22],
-        "Flatten": [21],
+        "Flatten": [25],
         "Floor": [13],
         "GRU": [22],
         "Gather": [13],
@@ -175,7 +179,7 @@ version_dict = {
         "Gelu": [20],
         "Gemm": [13],
         "GlobalAveragePool": [22],
-        "GlobalLpPool": [2],
+        "GlobalLpPool": [22],
         "GlobalMaxPool": [22],
         "Greater": [13],
         "GreaterOrEqual": [16],
@@ -186,8 +190,8 @@ version_dict = {
         "HardSigmoid": [22],
         "Hardmax": [13],
         "HardSwish": [22],
-        "Identity": [21],
-        "If": [21],
+        "Identity": [25],
+        "If": [25],
         "ImageDecoder": [20],
         "InstanceNormalization": [22],
         "IsInf": [20],
@@ -200,7 +204,7 @@ version_dict = {
         "LessOrEqual": [16],
         "Log": [13],
         "LogSoftmax": [13],
-        "Loop": [21],
+        "Loop": [25],
         "LpNormalization": [22],
         "LpPool": [22],
         "MatMul": [13],
@@ -228,17 +232,17 @@ version_dict = {
         "OptionalHasElement": [18],
         "Or": [7],
         "PRelu": [16],
-        "Pad": [21, 18, 13, 11, 2],
+        "Pad": [25, 18, 13, 11, 2],
         "Pow": [15],
         "QLinearConv": [10],
         "QLinearMatMul": [21],
-        "QuantizeLinear": [21],
+        "QuantizeLinear": [25],
         "RNN": [22],
         "RandomNormal": [22],
         "RandomNormalLike": [22],
         "RandomUniform": [22],
         "RandomUniformLike": [22],
-        "Range": [11],
+        "Range": [27],
         "Reciprocal": [13],
         "ReduceL1": [18, 13],
         "ReduceL2": [18, 13],
@@ -252,13 +256,13 @@ version_dict = {
         "ReduceSumSquare": [18, 13],
         "RegexFullMatch": [20],
         "Relu": [14],
-        "Reshape": [21],
+        "Reshape": [25],
         "Resize": [19, 18, 13, 11, 10],
         "ReverseSequence": [10],
         "RoiAlign": [22],
         "RotaryEmbedding": [23],
         "Round": [22],
-        "Scan": [21],
+        "Scan": [25],
         "Scatter": [11],
         "ScatterElements": [18],
         "ScatterND": [18],
@@ -270,13 +274,13 @@ version_dict = {
         "SequenceInsert": [11],
         "SequenceLength": [11],
         "SequenceMap": [17],
-        "Shape": [21],
+        "Shape": [25],
         "Shrink": [9],
         "Sigmoid": [13],
         "Sign": [13],
         "Sin": [22],
         "Sinh": [22],
-        "Size": [21],
+        "Size": [25],
         "Slice": [13],
         "Softmax": [13, 11],
         "SoftmaxCrossEntropyLoss": [13],
@@ -284,9 +288,9 @@ version_dict = {
         "Softsign": [22],
         "SpaceToDepth": [13],
         "Split": [18, 13, 11],
-        "SplitToSequence": [11],
+        "SplitToSequence": [24],
         "Sqrt": [13],
-        "Squeeze": [21, 11],
+        "Squeeze": [25, 11],
         "StringConcat": [20],
         "StringNormalizer": [10],
         "StringSplit": [20],
@@ -295,14 +299,15 @@ version_dict = {
         "Sum": [13],
         "Tan": [22],
         "Tanh": [13],
+        "TensorScatter": [24],
         "TfIdfVectorizer": [9],
         "ThresholdedRelu": [22],
         "Tile": [13],
         "TopK": [24],
-        "Transpose": [21],
+        "Transpose": [25],
         "Trilu": [14],
         "Unique": [11],
-        "Unsqueeze": [21, 11],
+        "Unsqueeze": [25, 11],
         "Upsample": [10, 7],
         "Where": [16],
         "Xor": [7],
@@ -570,6 +575,7 @@ structural_inputs = {
     "Col2Im": {"image_shape", "block_shape"},
     "ConstantOfShape": {"input"},
     "CumSum": {"axis"},
+    "CumProd": {"axis"},
     "DFT": {"dft_length", "axis"},
     "DFTV17": {"dft_length"},
     "Expand": {"shape"},
@@ -636,12 +642,14 @@ special_direct_output_types = {
 }
 
 # Manual specification of attribute type.
-special_attr_types = dict([("Cast.to", "type")])
+special_attr_types = dict([("Cast.to", "type"), ("BitCast.to", "type")])
 
 # Manual specification of attribute order:
 # The names in each tuple will be ordered in that sequence.
 special_attr_order = {
     ("then_branch", "else_branch"),
+    # Append precision to preserve the pre-opset-27 QuantizeLinear C++ API.
+    ("saturate", "precision"),
 }
 
 # Special operation importing handlers.
@@ -651,6 +659,7 @@ special_op_handler = dict(
         ("CategoryMapper", "ImportCategoryMapper"),
         ("Dropout", "ImportNodeDropout"),
         ("Cast", "ImportNodeCast"),
+        ("BitCast", "ImportNodeBitCast"),
         ("MaxPool", "ImportNodeMaxPool"),
         ("Pad", "ImportNodePad"),
         ("Slice", "ImportNodeSlice"),
@@ -673,6 +682,8 @@ OpsWithCustomAssemblyFormat = [
 # When adding a new op with an axis/axes attr or operand, also add it to
 # getONNXAxisValueSpec.
 OpsWithCanonicalizer = [
+    "QuantizeLinear",
+    "Range",
     "Abs",
     "Add",
     "And",
@@ -749,6 +760,9 @@ OpsWithCanonicalizer = [
 
 # Operations with custom verifiers (alphabetical order).
 OpsWithVerifier = [
+    "TensorScatter",
+    "CumProd",
+    "BitCast",
     "Add",
     "And",
     "ArgMax",
@@ -1025,8 +1039,11 @@ OpsWithHelpers = {
 OpsWithResultTypeInference = [
     "Bernoulli",
     "Constant",
+    "BitCast",
     "Cast",
     "CastLike",
+    "QuantizeLinear",
+    "DequantizeLinear",
     "ConcatFromSequence",
     "ConstantOfShape",
     "EyeLike",
@@ -1194,6 +1211,59 @@ custom_definition_misc = dict(
 #
 #     // Future extensions go here.
 #   }
+# Preserve builders for downstream clients using the pre-opset-27 attributes.
+custom_definition_misc["Cast"] = """  let builders = [
+  // The pre-opset-27 builder supplies the default rounding mode.
+  OpBuilder<(ins "Type":$resultType, "Value":$input,
+      "IntegerAttr":$saturate, "TypeAttr":$to), [{
+    build($_builder, $_state, resultType, input,
+      $_builder.getStringAttr("up"), saturate, to);
+  }]>,
+  OpBuilder<(ins "Type":$resultType, "Value":$input,
+      "int64_t":$saturate, "Type":$to), [{
+    build($_builder, $_state, resultType, input,
+      ::llvm::StringRef("up"), saturate, to);
+  }]>,
+  OpBuilder<(ins "TypeRange":$resultTypes, "Value":$input,
+      "IntegerAttr":$saturate, "TypeAttr":$to), [{
+    build($_builder, $_state, resultTypes, input,
+      $_builder.getStringAttr("up"), saturate, to);
+  }]>,
+  OpBuilder<(ins "TypeRange":$resultTypes, "Value":$input,
+      "int64_t":$saturate, "Type":$to), [{
+    build($_builder, $_state, resultTypes, input,
+      ::llvm::StringRef("up"), saturate, to);
+  }]>,
+  // DRR can infer the result element type from the 'to' attribute.
+  OpBuilder<(ins "Value":$input, "StringAttr":$round_mode,
+      "IntegerAttr":$saturate, "TypeAttr":$to), [{
+    auto resultType = UnrankedTensorType::get(to.getValue());
+    build($_builder, $_state, resultType, input, round_mode, saturate, to);
+  }]>
+  ];"""
+
+custom_definition_misc["CastLike"] = """  let builders = [
+  OpBuilder<(ins "Type":$resultType, "Value":$input, "Value":$target_type,
+      "IntegerAttr":$saturate), [{
+    build($_builder, $_state, resultType, input, target_type,
+      $_builder.getStringAttr("up"), saturate);
+  }]>,
+  OpBuilder<(ins "Type":$resultType, "Value":$input, "Value":$target_type,
+      "int64_t":$saturate), [{
+    build($_builder, $_state, resultType, input, target_type,
+      ::llvm::StringRef("up"), saturate);
+  }]>,
+  OpBuilder<(ins "TypeRange":$resultTypes, "Value":$input, "Value":$target_type,
+      "IntegerAttr":$saturate), [{
+    build($_builder, $_state, resultTypes, input, target_type,
+      $_builder.getStringAttr("up"), saturate);
+  }]>,
+  OpBuilder<(ins "TypeRange":$resultTypes, "Value":$input, "Value":$target_type,
+      "int64_t":$saturate), [{
+    build($_builder, $_state, resultTypes, input, target_type,
+      ::llvm::StringRef("up"), saturate);
+  }]>];"""
+
 onnx_types = (
     "undefined",
     "float",
@@ -1359,16 +1429,19 @@ def tblgen_operand_type_to_cpp_type(op_type):
     return mytype
 
 
+# Dtype implementations are deliberately separate from the opset contract bump.
+# Do not emit malformed ODS or accidentally map an unknown float format to F32.
+DEFERRED_ONNX_TYPES = {"float4e2m1", "float8e8m0", "uint2", "int2"}
+
+
+def is_deferred_type(type_str):
+    return any(t in type_str for t in DEFERRED_ONNX_TYPES)
+
+
 def np_type_to_tblgen_attr_type(tstr):
-    index = -1
-    for i in range(len(onnx_types)):
-        if onnx_types[i] in tstr:
-            index = i
-            break
-    if index == -1:
+    if tstr not in onnx_types:
         return None
-    else:
-        return tblgen_types[i]
+    return tblgen_types[onnx_types.index(tstr)]
 
 
 def get_tblgen_type_index(type_str):
@@ -1411,6 +1484,8 @@ def get_allowed_elem_types(schema, input):
             allowedTypes = type_constraint.allowed_type_strs
             allowed_structure = None
             for allowedType in allowedTypes:
+                if is_deferred_type(allowedType):
+                    continue
                 structure, element = get_data_structure_element(allowedType)
                 if structure == None or element == None:
                     return None, None
@@ -1571,7 +1646,8 @@ def get_attrs(schema):
         return True, default_value
 
     name_to_type = OrderedDict()
-    for _, attr in sorted(schema.attributes.items()):
+    for name in order_attr_names(schema.attributes.keys()):
+        attr = schema.attributes[name]
         if attr.type == OpSchema.AttrType.GRAPH:
             continue
 
@@ -1806,6 +1882,8 @@ def parse_a_type_constraint(constraint):
     allowedTypes = constraint.allowed_type_strs
     mlirTypes = []
     for allowedType in allowedTypes:
+        if is_deferred_type(allowedType):
+            continue
         mlirType = parse_type_str(allowedType)
         mlirTypes.append(mlirType)
 

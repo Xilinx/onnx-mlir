@@ -1,3 +1,4 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
 // RUN: onnx-mlir-opt -legalize-quark-quantized-ops --split-input-file %s | FileCheck %s
 
 func.func @test_cast_cast_canonicalization(%arg0: tensor<1x1x256x256xbf16>, %arg1: tensor<bf16>, %arg2: tensor<1x1x256x256xbf16>) -> tensor<1x1x256x256xbf16> {
@@ -16,7 +17,7 @@ func.func @test_cast_cast_canonicalization(%arg0: tensor<1x1x256x256xbf16>, %arg
 // CHECK-SAME:                                               %[[VAL_0:.*]]: tensor<1x1x256x256xbf16>,
 // CHECK-SAME:                                               %[[VAL_1:.*]]: tensor<bf16>,
 // CHECK-SAME:                                               %[[VAL_2:.*]]: tensor<1x1x256x256xbf16>) -> tensor<1x1x256x256xbf16> {
-// CHECK:           %[[VAL_3:.*]] = "onnx.Cast"(%[[VAL_0]]) {saturate = 1 : si64, to = i1} : (tensor<1x1x256x256xbf16>) -> tensor<1x1x256x256xi1>
+// CHECK:           %[[VAL_3:.*]] = "onnx.Cast"(%[[VAL_0]]) {round_mode = "up", saturate = 1 : si64, to = i1} : (tensor<1x1x256x256xbf16>) -> tensor<1x1x256x256xi1>
 // CHECK:           %[[VAL_4:.*]] = "onnx.Where"(%[[VAL_3]], %[[VAL_1]], %[[VAL_2]]) {onnx_node_name = "/bert/Where_1"} : (tensor<1x1x256x256xi1>, tensor<bf16>, tensor<1x1x256x256xbf16>) -> tensor<1x1x256x256xbf16>
 // CHECK:           onnx.Return %[[VAL_4]] : tensor<1x1x256x256xbf16>
 // CHECK:         }
@@ -39,8 +40,8 @@ func.func @test_cast_cast_canonicalization_multi_uses(%arg0: tensor<1x1x256x256x
 // CHECK-SAME:                                                          %[[VAL_0:.*]]: tensor<1x1x256x256xbf16>,
 // CHECK-SAME:                                                          %[[VAL_1:.*]]: tensor<bf16>,
 // CHECK-SAME:                                                          %[[VAL_2:.*]]: tensor<1x1x256x256xbf16>) -> (tensor<1x1x256x256xf32>, tensor<1x1x256x256xbf16>) {
-// CHECK:           %[[VAL_3:.*]] = "onnx.Cast"(%[[VAL_0]]) {onnx_node_name = "/bert/Sub_onnx.Cast_39", saturate = 1 : si64, to = f32} : (tensor<1x1x256x256xbf16>) -> tensor<1x1x256x256xf32>
-// CHECK:           %[[VAL_4:.*]] = "onnx.Cast"(%[[VAL_3]]) {onnx_node_name = "/bert/Cast_1", saturate = 1 : si64, to = i1} : (tensor<1x1x256x256xf32>) -> tensor<1x1x256x256xi1>
+// CHECK:           %[[VAL_3:.*]] = "onnx.Cast"(%[[VAL_0]]) {onnx_node_name = "/bert/Sub_onnx.Cast_39", round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<1x1x256x256xbf16>) -> tensor<1x1x256x256xf32>
+// CHECK:           %[[VAL_4:.*]] = "onnx.Cast"(%[[VAL_3]]) {onnx_node_name = "/bert/Cast_1", round_mode = "up", saturate = 1 : si64, to = i1} : (tensor<1x1x256x256xf32>) -> tensor<1x1x256x256xi1>
 // CHECK:           %[[VAL_5:.*]] = "onnx.Where"(%[[VAL_4]], %[[VAL_1]], %[[VAL_2]]) {onnx_node_name = "/bert/Where_1"} : (tensor<1x1x256x256xi1>, tensor<bf16>, tensor<1x1x256x256xbf16>) -> tensor<1x1x256x256xbf16>
 // CHECK:           onnx.Return %[[VAL_3]], %[[VAL_5]] : tensor<1x1x256x256xf32>, tensor<1x1x256x256xbf16>
 // CHECK:         }
@@ -61,8 +62,8 @@ func.func @test_no_cast_cast_canonicalization(%arg0: tensor<1x1x256x256xbf16>) -
 }
 // CHECK-LABEL:  func.func @test_no_cast_cast_canonicalization
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x1x256x256xbf16>) -> tensor<1x1x256x256xbf16> {
-// CHECK:           [[VAR_0_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {onnx_node_name = "/bert/Sub_onnx.Cast_39", saturate = 1 : si64, to = f32} : (tensor<1x1x256x256xbf16>) -> tensor<1x1x256x256xf32>
-// CHECK:           [[VAR_1_:%.+]] = "onnx.Cast"([[VAR_0_]]) {onnx_node_name = "/bert/Cast_1", saturate = 1 : si64, to = bf16} : (tensor<1x1x256x256xf32>) -> tensor<1x1x256x256xbf16>
+// CHECK:           [[VAR_0_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {onnx_node_name = "/bert/Sub_onnx.Cast_39", round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<1x1x256x256xbf16>) -> tensor<1x1x256x256xf32>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Cast"([[VAR_0_]]) {onnx_node_name = "/bert/Cast_1", round_mode = "up", saturate = 1 : si64, to = bf16} : (tensor<1x1x256x256xf32>) -> tensor<1x1x256x256xbf16>
 // CHECK:           [[VAR_2_:%.+]] = "onnx.Add"([[VAR_1_]], [[PARAM_0_]]) {onnx_node_name = "/bert/Where_1"} : (tensor<1x1x256x256xbf16>, tensor<1x1x256x256xbf16>) -> tensor<1x1x256x256xbf16>
 // CHECK:           onnx.Return [[VAR_2_]] : tensor<1x1x256x256xbf16>
 // CHECK:         }

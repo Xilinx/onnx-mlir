@@ -2244,6 +2244,21 @@ public:
   }
 };
 
+// ElementsAttr arithmetic normally keeps wide intermediate values. Q/DQ have
+// explicit precision boundaries, so round at those boundaries rather than only
+// when a final constant happens to be materialized.
+static ElementsAttr roundQuantizationValues(ElementsAttr values,
+    FloatType computeType, OnnxElementsAttrBuilder &builder) {
+  auto f64 = Float64Type::get(computeType.getContext());
+  return builder.transform(values, f64, [computeType](WideNum n) {
+    APFloat value(n.narrow<BType::DOUBLE>());
+    bool losesInfo;
+    value.convert(computeType.getFloatSemantics(), APFloat::rmNearestTiesToEven,
+        &losesInfo);
+    return WideNum::widen<BType::DOUBLE>(value.convertToDouble());
+  });
+}
+
 // Fold Const(fp) -> QuantizeLinear into Const(int)
 class ConstFoldQuantizeLinearOnConst
     : public OpRewritePattern<ONNXQuantizeLinearOp> {
@@ -2252,6 +2267,10 @@ public:
 
   LogicalResult matchAndRewrite(
       ONNXQuantizeLinearOp qOp, PatternRewriter &rewriter) const override {
+    if (qOp.getPrecision() || getElementType(qOp.getX().getType()) !=
+                                  getElementType(qOp.getYScale().getType()))
+      return rewriter.notifyMatchFailure(
+          qOp, "normalize arithmetic precision first");
     // Blocked quantization is out of scope.
     if (qOp.getBlockSize() != 0)
       return rewriter.notifyMatchFailure(qOp, "blocked quantization");
@@ -2336,29 +2355,33 @@ public:
     ElementsAttr xF64 = elementsBuilder.castToFPElementType(xElems, f64Type);
     ElementsAttr scaleF64 =
         broadcastToX(elementsBuilder.castToFPElementType(scaleElems, f64Type));
+    auto computeType =
+        cast<FloatType>(getElementType(qOp.getYScale().getType()));
+    xF64 = roundQuantizationValues(xF64, computeType, elementsBuilder);
+    scaleF64 = roundQuantizationValues(scaleF64, computeType, elementsBuilder);
     ElementsAttr scaled = elementsBuilder.combine(xF64, scaleF64, combinedType,
         elementwiseBinaryOpCombiner<ONNXDivOp>(f64Type));
+    scaled = roundQuantizationValues(scaled, computeType, elementsBuilder);
 
-    // shifted = (x / scale) + zero_point
-    ElementsAttr shifted = scaled;
-    if (hasZeroPoint) {
-      ElementsAttr zpF64 =
-          broadcastToX(elementsBuilder.castToFPElementType(zpElems, f64Type));
-      shifted = elementsBuilder.combine(
-          scaled, zpF64, combinedType, addCombiner(f64Type));
-    }
-
+    // ONNX rounds the quotient to nearest even BEFORE adding the zero point.
     ElementsAttr rounded =
-        elementsBuilder.transform(shifted, f64Type, [](WideNum n) {
+        elementsBuilder.transform(scaled, f64Type, [](WideNum n) {
           int savedMode = fegetround();
           fesetround(FE_TONEAREST);
           double r = std::nearbyint(n.narrow<BType::DOUBLE>());
           fesetround(savedMode);
           return WideNum::widen<BType::DOUBLE>(r);
         });
+    ElementsAttr shifted = rounded;
+    if (hasZeroPoint) {
+      ElementsAttr zpF64 =
+          broadcastToX(elementsBuilder.castToFPElementType(zpElems, f64Type));
+      shifted = elementsBuilder.combine(
+          rounded, zpF64, combinedType, addCombiner(f64Type));
+    }
 
     ElementsAttr quantized =
-        elementsBuilder.castToIntElementType(rounded, intType, /*round=*/false);
+        elementsBuilder.castToIntElementType(shifted, intType, /*round=*/false);
 
     rewriter.replaceOp(
         qOp, createReplacingConstantOp(rewriter, qOp.getY(), quantized));
@@ -2440,6 +2463,9 @@ public:
 
   LogicalResult matchAndRewrite(
       ONNXDequantizeLinearOp dqOp, PatternRewriter &rewriter) const override {
+    if (dqOp.getOutputDtype())
+      return rewriter.notifyMatchFailure(
+          dqOp, "normalize arithmetic precision first");
     // Blocked quantization is out of scope.
     if (dqOp.getBlockSize() != 0)
       return rewriter.notifyMatchFailure(dqOp, "blocked quantization");
@@ -2535,8 +2561,12 @@ public:
     // dequantized = (x - zero_point) * scale (still in f64).
     ElementsAttr scaleF64 =
         broadcastToX(elementsBuilder.castToFPElementType(scaleElems, f64Type));
+    shifted = roundQuantizationValues(shifted, floatType, elementsBuilder);
+    scaleF64 = roundQuantizationValues(scaleF64, floatType, elementsBuilder);
     ElementsAttr dequantizedF64 = elementsBuilder.combine(shifted, scaleF64,
         combinedType, elementwiseBinaryOpCombiner<ONNXMulOp>(f64Type));
+    dequantizedF64 =
+        roundQuantizationValues(dequantizedF64, floatType, elementsBuilder);
 
     // Cast down to the DequantizeLinear result's floating-point type.
     ElementsAttr dequantized =
@@ -2731,6 +2761,7 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
     patterns.add<DropIdempotentQDQOnConst, DropWideningRequantizeOnConst>(
         patterns.getContext());
   }
+  populateOpset27NormalizationPatterns(patterns);
   if (enableQuantConstFold)
     patterns.add<ConstFoldQuantizeLinearOnConst>(patterns.getContext());
   if (enableDequantConstFold || enableDequantConstFoldWeights)

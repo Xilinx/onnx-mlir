@@ -1,3 +1,4 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
 // RUN: onnx-mlir-opt --decompose-onnx=enable-matmulnbits-decompose --mlir-print-elementsattrs-with-hex-if-larger=128 --mlir-elide-elementsattrs-if-larger=128 %s -split-input-file | FileCheck %s
 
 func.func @matmul_n_bits_no_zp(%a: tensor<1x2x32xf32>) -> tensor<1x2x4xf32> {
@@ -21,7 +22,7 @@ func.func @matmul_n_bits_no_zp(%a: tensor<1x2x32xf32>) -> tensor<1x2x4xf32> {
 // CHECK-DAG:      %[[SCALES:.*]] = onnx.Constant {{.*}} : tensor<4x2xf32>
 // CHECK-DAG:      %[[ZPS:.*]] = "onnx.NoValue"() {value} : () -> none
 // CHECK:          %[[SCALES_R:.*]] = "onnx.Reshape"(%[[SCALES]]
-// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64} 
+// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64, output_dtype = 0 : si64}
 // CHECK-SAME:         (tensor<1x4x32xui8>, tensor<1x4x2xf32>, none) -> tensor<1x4x32xf32>
 // CHECK:          %[[TRANSPOSE:.*]] = "onnx.Transpose"(%[[DQ]]) {perm = [0, 2, 1]} : (tensor<1x4x32xf32>) -> tensor<1x32x4xf32>
 // CHECK:          %[[MM:.*]] = "onnx.MatMul"(%[[ARG0]], %[[TRANSPOSE]]) : (tensor<1x2x32xf32>, tensor<1x32x4xf32>) -> tensor<1x2x4xf32>
@@ -51,7 +52,7 @@ func.func @matmul_n_bits(%a: tensor<1x2x32xf32>) -> tensor<1x2x4xf32> {
 // CHECK-DAG:      %[[SCALES:.*]] = onnx.Constant {{.*}} : tensor<4x2xf32>
 // CHECK-DAG:      %[[ZPS:.*]] = onnx.Constant {{.*}} : tensor<1x4x2xui8>
 // CHECK:          %[[SCALES_R:.*]] = "onnx.Reshape"(%[[SCALES]], {{.*}} : (tensor<4x2xf32>, tensor<3xi64>) -> tensor<1x4x2xf32>
-// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64} 
+// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64, output_dtype = 0 : si64}
 // CHECK-SAME:         (tensor<1x4x32xui8>, tensor<1x4x2xf32>, tensor<1x4x2xui8>) -> tensor<1x4x32xf32>
 // CHECK:          %[[TRANSPOSE:.*]] = "onnx.Transpose"(%[[DQ]]) {perm = [0, 2, 1]} : (tensor<1x4x32xf32>) -> tensor<1x32x4xf32>
 // CHECK:          %[[MM:.*]] = "onnx.MatMul"(%[[ARG0]], %[[TRANSPOSE]]) : (tensor<1x2x32xf32>, tensor<1x32x4xf32>) -> tensor<1x2x4xf32>
@@ -83,7 +84,7 @@ func.func @matmul_n_bits_bias(%a: tensor<1x2x32xf32>) -> tensor<1x2x4xf32> {
 // CHECK-DAG:      %[[SCALES:.*]] = onnx.Constant {{.*}} : tensor<4x2xf32>
 // CHECK-DAG:      %[[ZPS:.*]] = onnx.Constant {{.*}} : tensor<1x4x2xui8>
 // CHECK:          %[[SCALES_R:.*]] = "onnx.Reshape"(%[[SCALES]]
-// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64} 
+// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64, output_dtype = 0 : si64}
 // CHECK-SAME:         (tensor<1x4x32xui8>, tensor<1x4x2xf32>, tensor<1x4x2xui8>) -> tensor<1x4x32xf32>
 // CHECK:          %[[TRANSPOSE:.*]] = "onnx.Transpose"(%[[DQ]]) {perm = [0, 2, 1]} : (tensor<1x4x32xf32>) -> tensor<1x32x4xf32>
 // CHECK:          %[[MM:.*]] = "onnx.MatMul"(%[[ARG0]], %[[TRANSPOSE]]) : (tensor<1x2x32xf32>, tensor<1x32x4xf32>) -> tensor<1x2x4xf32>
@@ -114,7 +115,7 @@ func.func @matmul_n_bits_bits_2(%a: tensor<1x2x64xf32>) -> tensor<1x2x4xf32> {
 // CHECK-DAG:      %[[SCALES:.*]] = onnx.Constant {{.*}} : tensor<4x4xf32>
 // CHECK-DAG:      %[[ZPS:.*]] = onnx.Constant {{.*}} : tensor<1x4x4xui8>
 // CHECK:          %[[SCALES_R:.*]] = "onnx.Reshape"(%[[SCALES]]
-// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64} 
+// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64, output_dtype = 0 : si64}
 // CHECK-SAME:         (tensor<1x4x64xui8>, tensor<1x4x4xf32>, tensor<1x4x4xui8>) -> tensor<1x4x64xf32>
 // CHECK:          %[[TRANSPOSE:.*]] = "onnx.Transpose"(%[[DQ]]) {perm = [0, 2, 1]} : (tensor<1x4x64xf32>) -> tensor<1x64x4xf32>
 // CHECK:          %[[MM:.*]] = "onnx.MatMul"(%[[ARG0]], %[[TRANSPOSE]]) : (tensor<1x2x64xf32>, tensor<1x64x4xf32>) -> tensor<1x2x4xf32>
@@ -145,7 +146,7 @@ func.func @matmul_n_bits_bits_8(%a: tensor<1x2x64xf32>) -> tensor<1x2x4xf32> {
 // CHECK-DAG:      %[[SCALES:.*]] = onnx.Constant {{.*}} : tensor<4x4xf32>
 // CHECK-DAG:      %[[ZPS:.*]] = onnx.Constant {{.*}} : tensor<1x4x4xui8>
 // CHECK:          %[[SCALES_R:.*]] = "onnx.Reshape"(%[[SCALES]]
-// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64} 
+// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64, output_dtype = 0 : si64}
 // CHECK-SAME:         (tensor<1x4x64xui8>, tensor<1x4x4xf32>, tensor<1x4x4xui8>) -> tensor<1x4x64xf32>
 // CHECK:          %[[TRANSPOSE:.*]] = "onnx.Transpose"(%[[DQ]]) {perm = [0, 2, 1]} : (tensor<1x4x64xf32>) -> tensor<1x64x4xf32>
 // CHECK:          %[[MM:.*]] = "onnx.MatMul"(%[[ARG0]], %[[TRANSPOSE]]) : (tensor<1x2x64xf32>, tensor<1x64x4xf32>) -> tensor<1x2x4xf32>
@@ -175,7 +176,7 @@ func.func @matmul_n_bits_block_32(%a: tensor<1x2x64xf32>) -> tensor<1x2x4xf32> {
 // CHECK-DAG:      %[[SCALES:.*]] = onnx.Constant {{.*}} : tensor<4x2xf32>
 // CHECK-DAG:      %[[ZPS:.*]] = onnx.Constant {{.*}} : tensor<1x4x2xui8>
 // CHECK:          %[[SCALES_R:.*]] = "onnx.Reshape"(%[[SCALES]]
-// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 32 : si64} 
+// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 32 : si64, output_dtype = 0 : si64}
 // CHECK-SAME:         (tensor<1x4x64xui8>, tensor<1x4x2xf32>, tensor<1x4x2xui8>) -> tensor<1x4x64xf32>
 // CHECK:          %[[TRANSPOSE:.*]] = "onnx.Transpose"(%[[DQ]]) {perm = [0, 2, 1]} : (tensor<1x4x64xf32>) -> tensor<1x64x4xf32>
 // CHECK:          %[[MM:.*]] = "onnx.MatMul"(%[[ARG0]], %[[TRANSPOSE]]) : (tensor<1x2x64xf32>, tensor<1x64x4xf32>) -> tensor<1x2x4xf32>
@@ -205,7 +206,7 @@ func.func @matmul_n_bits_1d_scales_zp(%a: tensor<1x2x32xf32>) -> tensor<1x2x4xf3
 // CHECK-DAG:      %[[SCALES:.*]] = onnx.Constant {{.*}} : tensor<8xf32>
 // CHECK-DAG:      %[[ZPS:.*]] = onnx.Constant {{.*}} : tensor<1x4x2xui8>
 // CHECK:          %[[SCALES_R:.*]] = "onnx.Reshape"(%[[SCALES]]
-// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64} 
+// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64, output_dtype = 0 : si64}
 // CHECK-SAME:         (tensor<1x4x32xui8>, tensor<1x4x2xf32>, tensor<1x4x2xui8>) -> tensor<1x4x32xf32>
 // CHECK:          %[[TRANSPOSE:.*]] = "onnx.Transpose"(%[[DQ]]) {perm = [0, 2, 1]} : (tensor<1x4x32xf32>) -> tensor<1x32x4xf32>
 // CHECK:          %[[MM:.*]] = "onnx.MatMul"(%[[ARG0]], %[[TRANSPOSE]]) : (tensor<1x2x32xf32>, tensor<1x32x4xf32>) -> tensor<1x2x4xf32>
@@ -247,7 +248,7 @@ func.func @matmul_n_bits_slice_scales(%a: tensor<1x3x56xf32>) -> tensor<1x3x2xf3
 // CHECK-DAG:      %[[ZPS:.*]] = onnx.Constant {{.*}} : tensor<1x2x4xui8>
 
 // CHECK:          %[[SCALES_R:.*]] = "onnx.Reshape"(%[[SCALES]]
-// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B_SLICE]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64} 
+// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B_SLICE]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64, output_dtype = 0 : si64}
 // CHECK-SAME:         (tensor<1x2x56xui8>, tensor<1x2x4xf32>, tensor<1x2x4xui8>) -> tensor<1x2x56xf32>
 // CHECK:          %[[TRANSPOSE:.*]] = "onnx.Transpose"(%[[DQ]]) {perm = [0, 2, 1]} : (tensor<1x2x56xf32>) -> tensor<1x56x2xf32>
 // CHECK:          %[[MM:.*]] = "onnx.MatMul"(%[[ARG0]], %[[TRANSPOSE]]) : (tensor<1x3x56xf32>, tensor<1x56x2xf32>) -> tensor<1x3x2xf32>
@@ -285,7 +286,7 @@ func.func @matmul_n_bits_slice_zps(%arg0: tensor<1x256x896xf32> ) -> (tensor<1x2
 // CHECK-DAG:      %[[ZPS_SLICE:.*]] = "onnx.Slice"(%[[ZPS]], %[[START]], %[[END]], %[[AXIS]], %[[STEP]])
 
 // CHECK:          %[[SCALES_R:.*]] = "onnx.Reshape"(%[[SCALES]]
-// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS_SLICE]]) {axis = -1 : si64, block_size = 128 : si64} 
+// CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS_SLICE]]) {axis = -1 : si64, block_size = 128 : si64, output_dtype = 0 : si64}
 // CHECK-SAME:         (tensor<1x1152x896xui8>, tensor<1x1152x7xf32>, tensor<1x1152x7xui8>) -> tensor<1x1152x896xf32>
 // CHECK:          %[[TRANSPOSE:.*]] = "onnx.Transpose"(%[[DQ]]) {perm = [0, 2, 1]} : (tensor<1x1152x896xf32>) -> tensor<1x896x1152xf32>
 // CHECK:          %[[MM:.*]] = "onnx.MatMul"(%[[ARG0]], %[[TRANSPOSE]]) : (tensor<1x256x896xf32>, tensor<1x896x1152xf32>) -> tensor<1x256x1152xf32>
@@ -319,7 +320,7 @@ func.func @matmul_n_bits_check_vals(%a: tensor<1x2x32xf32>) -> tensor<1x2x4xf32>
 // CHECK-SAME:     ]]> : tensor<1x4x32xui8>
 
 // CHECK:          %[[ZPS:.*]] = onnx.Constant dense<{{\[\[}}[1, 4], [13, 2], [15, 6], [6, 11]]]> : tensor<1x4x2xui8>
-// CHECK:          "onnx.DequantizeLinear"(%[[B]], %{{.*}}, %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64} 
+// CHECK:          "onnx.DequantizeLinear"(%[[B]], %{{.*}}, %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64, output_dtype = 0 : si64}
 
 // -----
 
@@ -354,4 +355,4 @@ func.func @matmul_n_bits_not_divisible_check_vals(%a: tensor<1x3x56xf32>) -> ten
 // CHECK-DAG:      %[[STEP:.*]] = onnx.Constant dense<1> : tensor<1xi64>
 // CHECK-DAG:      %[[B_SLICE:.*]] = "onnx.Slice"(%[[B]], %[[START]], %[[END]], %[[AXIS]], %[[STEP]])
 
-// CHECK:          "onnx.DequantizeLinear"(%[[B_SLICE]], %{{.*}}, %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64} 
+// CHECK:          "onnx.DequantizeLinear"(%[[B_SLICE]], %{{.*}}, %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64, output_dtype = 0 : si64}

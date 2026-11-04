@@ -1,0 +1,12 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
+// RUN: onnx-mlir --EmitONNXBasic --printIR -o %t %s | FileCheck %s
+<ir_version: 10, opset_import: ["" : 23]>
+opset23_attention (float[1,2,2,4] q, float[1,2,3,4] k, float[1,2,3,4] v)
+    => (float[1,2,2,4] y)
+{
+  y = Attention (q, k, v)
+}
+
+// Older standard Attention and internal Microsoft GQA lowering retain the
+// native six-operand dialect contract.
+// CHECK: "onnx.Attention"{{.*}} : (tensor<1x2x2x4xf32>, tensor<1x2x3x4xf32>, tensor<1x2x3x4xf32>, none, none, none)

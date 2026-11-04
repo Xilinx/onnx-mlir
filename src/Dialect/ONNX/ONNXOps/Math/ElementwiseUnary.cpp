@@ -1,3 +1,4 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
 /*
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -143,6 +144,9 @@ LogicalResult ONNXBitwiseNotOp::inferShapes(
 //===----------------------------------------------------------------------===//
 
 LogicalResult ONNXCastOp::verify() {
+  if (getRoundMode() != "up" && getRoundMode() != "down" &&
+      getRoundMode() != "nearest")
+    return emitOpError("round_mode must be 'up', 'down' or 'nearest'");
   auto elemType = cast<ShapedType>(getResult().getType()).getElementType();
   if (auto qType = dyn_cast_if_present<quant::QuantizedType>(elemType))
     elemType = qType.getExpressedType();
@@ -170,6 +174,9 @@ LogicalResult ONNXCastOp::inferShapes(
 //===----------------------------------------------------------------------===//
 
 LogicalResult ONNXCastLikeOp::verify() {
+  if (getRoundMode() != "up" && getRoundMode() != "down" &&
+      getRoundMode() != "nearest")
+    return emitOpError("round_mode must be 'up', 'down' or 'nearest'");
   return cast<ShapedType>(this->getResult().getType()).getElementType() ==
                  cast<ShapedType>(this->getTargetType().getType())
                      .getElementType()

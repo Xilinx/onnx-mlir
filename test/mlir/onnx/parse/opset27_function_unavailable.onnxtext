@@ -1,0 +1,12 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
+// RUN: not onnx-mlir --EmitONNXBasic -o %t %s 2>&1 | FileCheck %s
+<ir_version: 10, opset_import: ["" : 27]>
+dynamic_channels (float[B,C,T] x, float[C,1,K] w)
+    => (float[B,C,T] y, float[B,C,S] state)
+{
+  y, state = CausalConvWithState (x, w)
+}
+
+// ONNX's function builder needs a concrete channel count to set Conv.group.
+// Failure must be a diagnostic rather than an unreachable assertion.
+// CHECK: Failed to expand ONNX function for CausalConvWithState

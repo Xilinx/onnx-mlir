@@ -1,0 +1,13 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
+// RUN: onnx-mlir --EmitONNXBasic --printIR -o %t %s | FileCheck %s
+<ir_version: 10, opset_import: ["" : 27]>
+opset27_range (float16 start, float16 limit, float16 delta) => (float16[N] y)
+{
+  y = Range <stash_type: int = 1> (start, limit, delta)
+}
+
+// CHECK-NOT: "onnx.Range"
+// CHECK: "onnx.Cast"{{.*}}to = f32
+// CHECK: "onnx.Loop"
+// CHECK: "onnx.Cast"{{.*}}to = f16
+// CHECK-NOT: "onnx.Range"

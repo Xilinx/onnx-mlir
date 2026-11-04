@@ -104,6 +104,10 @@ LogicalResult ONNXDequantizeLinearOpShapeHelper::computeShape() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ONNXDequantizeLinearOp::verify() {
+  if (getOutputDtype() != 0 && getOutputDtype() != onnx::TensorProto::FLOAT &&
+      getOutputDtype() != onnx::TensorProto::FLOAT16 &&
+      getOutputDtype() != onnx::TensorProto::BFLOAT16)
+    return emitOpError("output_dtype must be 0, FLOAT, FLOAT16 or BFLOAT16");
   if (failed(verifyLinearQuantizationParameterShapes(getOperation(), getX(),
           getXScale(), getXZeroPoint(), getAxis(), getBlockSize())))
     return failure();
@@ -134,11 +138,22 @@ LogicalResult ONNXDequantizeLinearOp::verify() {
 // Shape Inference
 //===----------------------------------------------------------------------===//
 
+std::vector<Type> ONNXDequantizeLinearOp::resultTypeInference() {
+  Type type = cast<ShapedType>(getXScale().getType()).getElementType();
+  if (getOutputDtype()) {
+    OpBuilder builder(getContext());
+    type = convertONNXTypeToMLIRType(
+        builder, static_cast<onnx::TensorProto_DataType>(getOutputDtype()));
+  }
+  return {UnrankedTensorType::get(type)};
+}
+
 LogicalResult ONNXDequantizeLinearOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
   if (!mlir::dyn_cast<RankedTensorType>(getX().getType()))
     return success();
-  Type elementType = mlir::cast<ShapedType>(getY().getType()).getElementType();
+  Type elementType =
+      cast<ShapedType>(resultTypeInference()[0]).getElementType();
   ONNXDequantizeLinearOpShapeHelper shapeHelper(getOperation(), {});
   return shapeHelper.computeShapeAndUpdateType(elementType);
 }

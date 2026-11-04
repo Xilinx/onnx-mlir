@@ -1,0 +1,39 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
+// RUN: onnx-mlir --EmitONNXBasic --printIR %s | FileCheck %s
+<
+  ir_version: 10,
+  opset_import: ["" : 27]
+>
+opset27_new_ops (float[2,4] x, float[4] scale,
+    float[1,4,8] conv_input, float[4,1,3] weight,
+    float[1,2,4] q, float[1,2,4] k, float[1,2,4] v,
+    float[1,2,2,2] state, float[1,2,2] decay, float[1,2,2] beta,
+    int64 axis, float[1,2,4] cache, float[1,1,4] update, int64[1] indices)
+    => (int32[2,4] bits, float[2,4] product, float[1,2,4] updated,
+        float[2,4] swish, float[2,4] swish_scaled, float[2,4] rms, float[1,4,8] conv,
+        float[1,4,2] conv_state, float[1,2,4] attention,
+        float[1,2,2,2] attention_state)
+{
+  bits = BitCast <to: int = 6> (x)
+  product = CumProd <exclusive: int = 1, reverse: int = 1> (x, axis)
+  updated = TensorScatter <axis: int = 1, mode: string = "circular"> (cache, update, indices)
+  swish = Swish (x)
+  swish_scaled = Swish <alpha: float = 2.0> (x)
+  rms = RMSNormalization (x, scale)
+  conv, conv_state = CausalConvWithState (conv_input, weight)
+  attention, attention_state = LinearAttention <q_num_heads: int = 2, kv_num_heads: int = 2>
+      (q, k, v, state, decay, beta)
+}
+
+// CHECK-NOT: "onnx.Custom"
+// CHECK: "onnx.BitCast"
+// CHECK: "onnx.CumProd"
+// CHECK: "onnx.TensorScatter"
+// CHECK: onnx.Constant {value_float = 1.000000e+00 : f32}
+// CHECK: "onnx.Sigmoid"
+// CHECK: onnx.Constant {value_float = 2.000000e+00 : f32}
+// CHECK: "onnx.Sigmoid"
+// CHECK: "onnx.ReduceMean"
+// CHECK: "onnx.Conv"
+// CHECK: "onnx.Scan"
+// CHECK-NOT: "onnx.Custom"

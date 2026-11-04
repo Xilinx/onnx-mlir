@@ -37,7 +37,7 @@ namespace mlir {
 // OpSet level supported by onnx-mlir
 // To update all occurrence of the current ONNX opset, please grep
 // "CURRENT_ONNX_OPSET" and update all locations accordingly.
-static constexpr int CURRENT_ONNX_OPSET = 22;
+static constexpr int CURRENT_ONNX_OPSET = 27;
 } // end namespace mlir
 
 #define GET_OP_CLASSES

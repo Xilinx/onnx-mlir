@@ -1,3 +1,4 @@
+# Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
 .idea/
 cmake-*/
 CMakePresets.json
@@ -188,3 +189,6 @@ dmypy.json
 .vscode
 .devcontainer
 .vs
+
+# Isolated local dependency worktrees
+/.deps/

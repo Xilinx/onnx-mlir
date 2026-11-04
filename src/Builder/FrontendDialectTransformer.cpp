@@ -1520,11 +1520,12 @@ private:
   /*!
    * Special handle for Cast operations.
    */
-  [[nodiscard]] std::error_code ImportNodeCast(
+  template <typename CastOp>
+  [[nodiscard]] std::error_code ImportTypedCastNode(
       const onnx::NodeProto &node, std::string &errorMessage) {
     std::vector<Value> inputs;
-    int expectedNumOperands = ONNXCastOp::getNumberOfOperands();
-    int expectedNumResults = ONNXCastOp::getNumberOfResults();
+    int expectedNumOperands = CastOp::getNumberOfOperands();
+    int expectedNumResults = CastOp::getNumberOfResults();
     for (const auto &item : node.input())
       if (item.empty()) {
         // Optional inputs using empty string will be imported as NoneType.
@@ -1539,9 +1540,18 @@ private:
     if (auto ec = importedCastAttributes.getError()) {
       return ec;
     }
-    return buildOutputAndOperation<ONNXCastOp>(node, inputs,
-        expectedNumOperands, expectedNumResults, *importedCastAttributes,
-        errorMessage);
+    return buildOutputAndOperation<CastOp>(node, inputs, expectedNumOperands,
+        expectedNumResults, *importedCastAttributes, errorMessage);
+  }
+
+  [[nodiscard]] std::error_code ImportNodeCast(
+      const onnx::NodeProto &node, std::string &errorMessage) {
+    return ImportTypedCastNode<ONNXCastOp>(node, errorMessage);
+  }
+
+  [[nodiscard]] std::error_code ImportNodeBitCast(
+      const onnx::NodeProto &node, std::string &errorMessage) {
+    return ImportTypedCastNode<ONNXBitCastOp>(node, errorMessage);
   }
 
   /*!
@@ -1750,7 +1760,7 @@ private:
   }
 
   const onnx::OpSchema *GetOpSchema(const onnx::NodeProto &node) {
-    const std::string &domain = node.domain();
+    const std::string domain = canonicalizeDomain(node.domain());
     auto version_it = opset_map_.find(domain);
     if (version_it == opset_map_.end())
       return nullptr;
@@ -1893,8 +1903,12 @@ private:
         // Generate a context-dependent function body:
         onnx::FunctionBodyBuildContextImpl onnxFunContext(node, inputOnnxTypes);
         if (!schema->BuildContextDependentFunction(
-                onnxFunContext, functionProto))
-          llvm_unreachable("failed to generate context dependent function");
+                onnxFunContext, functionProto)) {
+          errorMessage += "Failed to expand ONNX function for " +
+                          node.op_type() +
+                          ": unsupported input types, shapes or attributes.\n";
+          return InvalidOnnxFormat;
+        }
       }
     } else {
       functionProto = *modelLocalFunction; // Model local function.
@@ -1951,6 +1965,13 @@ private:
       else
         attr_map[attrName] = &attr;
     }
+    // Schema functions can reference defaults declared by the operator schema
+    // without duplicating them in FunctionProto.attribute_proto (e.g. Swish's
+    // alpha). Caller values and function-local defaults take precedence.
+    if (schema)
+      for (const auto &[name, definition] : schema->attributes())
+        if (!attr_map.count(name) && definition.default_value.has_name())
+          attr_map[name] = &definition.default_value;
     replaceAttrRefs(graph, attr_map);
 
     OpsetImportsMap function_opset_map =
@@ -2106,6 +2127,24 @@ private:
 
     const std::string opName =
         node.op_type() + GetImportVersionOfNode(node, domain);
+    // ONNX supplies the complete Attention-24 masking/cache semantics. Expand
+    // that schema before downstream code sees a native op with new semantics.
+    // Older models continue using the native Attention representation.
+    const onnx::OpSchema *modelSchema = GetOpSchema(node);
+    bool expandSchema = isDefaultDomain(domain) && modelSchema &&
+                        node.op_type() == "Attention" &&
+                        modelSchema->SinceVersion() >= 24;
+    if (isDefaultDomain(domain) && modelSchema && node.op_type() == "Range" &&
+        modelSchema->SinceVersion() >= 27 && node.input_size() > 0) {
+      Value start = LookupOnnxName(node.input(0));
+      if (auto type = dyn_cast<ShapedType>(start.getType()))
+        expandSchema =
+            type.getElementType().isF16() || type.getElementType().isBF16();
+    }
+    if (expandSchema)
+      return ImportFunctionCallNode(
+          node, modelSchema, /*modelLocalFunction=*/nullptr, errorMessage);
+
     auto domainIt = import_handler_map_.find(domain);
     if (domainIt != import_handler_map_.end()) {
       auto handler = domainIt->second.find(opName);
@@ -2293,6 +2332,75 @@ static std::error_code internalImportFrontendModelWithPreProcessing(
     onnx::ModelProto &model, MLIRContext &context,
     OwningOpRef<ModuleOp> &module, const ImportOptions &options,
     std::string &errorMessage, bool referenceCallerOwnedTensors) {
+  // The opset contract upgrade does not implement these storage/compute types.
+  // Diagnose them before type conversion or initializer decoding can assert.
+  auto deferredDtype = [](int64_t dtype) {
+    return dtype >= onnx::TensorProto::FLOAT4E2M1 &&
+           dtype <= onnx::TensorProto::INT2;
+  };
+  std::function<bool(const onnx::TypeProto &)> deferredType;
+  deferredType = [&](const onnx::TypeProto &type) {
+    if (type.has_tensor_type())
+      return deferredDtype(type.tensor_type().elem_type());
+    if (type.has_sparse_tensor_type())
+      return deferredDtype(type.sparse_tensor_type().elem_type());
+    if (type.has_sequence_type())
+      return deferredType(type.sequence_type().elem_type());
+    if (type.has_optional_type())
+      return deferredType(type.optional_type().elem_type());
+    if (type.has_map_type())
+      return deferredType(type.map_type().value_type());
+    return false;
+  };
+  std::function<bool(const onnx::GraphProto &)> deferredGraph;
+  std::function<bool(const onnx::NodeProto &)> deferredNode;
+  deferredNode = [&](const onnx::NodeProto &node) {
+    for (const auto &attr : node.attribute()) {
+      if (isDefaultDomain(node.domain()) && attr.has_i() &&
+          (attr.name() == "to" || attr.name() == "dtype" ||
+              attr.name() == "output_dtype" || attr.name() == "precision" ||
+              attr.name() == "stash_type") &&
+          deferredDtype(attr.i()))
+        return true;
+      if (attr.has_t() && deferredDtype(attr.t().data_type()))
+        return true;
+      for (const auto &tensor : attr.tensors())
+        if (deferredDtype(tensor.data_type()))
+          return true;
+      if (attr.has_g() && deferredGraph(attr.g()))
+        return true;
+      for (const auto &graph : attr.graphs())
+        if (deferredGraph(graph))
+          return true;
+    }
+    return false;
+  };
+  deferredGraph = [&](const onnx::GraphProto &graph) {
+    for (const auto &tensor : graph.initializer())
+      if (deferredDtype(tensor.data_type()))
+        return true;
+    for (const auto &tensor : graph.sparse_initializer())
+      if (deferredDtype(tensor.values().data_type()))
+        return true;
+    for (const auto *values :
+        {&graph.input(), &graph.output(), &graph.value_info()})
+      for (const auto &value : *values)
+        if (deferredType(value.type()))
+          return true;
+    for (const auto &node : graph.node())
+      if (deferredNode(node))
+        return true;
+    return false;
+  };
+  bool unsupportedDtype = deferredGraph(model.graph());
+  for (const auto &function : model.functions())
+    for (const auto &node : function.node())
+      unsupportedDtype |= deferredNode(node);
+  if (unsupportedDtype) {
+    errorMessage += "FP4 E2M1, FP8 E8M0 and INT2/UINT2 support is deferred; "
+                    "opset 27 import requires supported tensor data types.\n";
+    return InvalidOnnxFormat;
+  }
   if (options.useInitializerSources && options.invokeOnnxVersionConverter) {
     errorMessage +=
         "Initializer-source import requires ONNX version conversion disabled "

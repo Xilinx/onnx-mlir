@@ -1,4 +1,4 @@
-// Copyright (C) 2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 // ConvertSCastPairToRequantizePass
@@ -415,7 +415,8 @@ struct ConvertScastAndDQToRequantizePattern
     auto dqResultType = cast<RankedTensorType>(dqOp.getResult().getType());
     auto newDQOp = rewriter.create<ONNXDequantizeLinearOp>(dqOp.getLoc(),
         dqResultType, storageScast.getResult(), dqOp.getXScale(),
-        dqOp.getXZeroPoint(), dqOp.getAxisAttr(), dqOp.getBlockSizeAttr());
+        dqOp.getXZeroPoint(), dqOp.getAxisAttr(), dqOp.getBlockSizeAttr(),
+        dqOp.getOutputDtypeAttr());
 
     rewriter.replaceOp(dqOp, newDQOp.getResult());
     if (scast->use_empty())

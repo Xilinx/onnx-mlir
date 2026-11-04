@@ -1786,14 +1786,15 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
     RankedTensorType quantOutputType =
         RankedTensorType::get(convOutputType.getShape(), quantElementType);
 
-    auto quantNode =
-        rewriter.create<ONNXQuantizeLinearOp>(convtQuantLoc, quantOutputType,
-            conv, convtQuantScale, convtQuantZeroPoint, convtQuantAxis,
-            convtQuantBlockSize, convtQuantOutputDtype, convtQuantSaturate);
+    auto quantNode = rewriter.create<ONNXQuantizeLinearOp>(convtQuantLoc,
+        quantOutputType, conv, convtQuantScale, convtQuantZeroPoint,
+        convtQuantAxis, convtQuantBlockSize, convtQuantOutputDtype,
+        convtQuantSaturate, convtQuantOp.getPrecision());
 
     auto dequantNode = rewriter.create<ONNXDequantizeLinearOp>(convtDequantLoc,
         dequantOutputType, quantNode, convtDequantScale, convtDequantZeroPoint,
-        convtDequantAxis, convtDequantBlockSize);
+        convtDequantAxis, convtDequantBlockSize,
+        convtDequantOp.getOutputDtype());
     return dequantNode;
   };
 
@@ -1824,7 +1825,8 @@ Value decomposeIntoPhasedConvs(PatternRewriter &rewriter, Location loc,
         RankedTensorType::get(constantType.getShape(), elementType);
 
     return rewriter.create<ONNXDequantizeLinearOp>(loc, dqOuputType,
-        constantValue, wtsDqScale, wtsDqZeroPoint, wtsDqAxis, wtsDqBlockSize);
+        constantValue, wtsDqScale, wtsDqZeroPoint, wtsDqAxis, wtsDqBlockSize,
+        wtsDequantOp.getOutputDtype());
   };
   if (numPhases == 1) {
     const std::array<int64_t, 4> convPadsShape = {
@@ -6350,6 +6352,7 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     bool enableLstmDecompose,
     LSTMDecompositionPredicate lstmDecompositionPredicate) {
   MLIRContext *context = patterns.getContext();
+  populateOpset27NormalizationPatterns(patterns);
   if (!disableGenericDecompositions)
     populateWithGenerated(patterns);
   if (enableConvTransposeDecompose)

@@ -154,7 +154,7 @@ func.func @forward_seq4_masked(
 // LOOP-DAG:         [[VAR_59_:%.+]] = "onnx.Sigmoid"([[VAR_58_]]) : (tensor<3x3xf32>) -> tensor<3x3xf32>
 // LOOP-DAG:         [[VAR_60_:%.+]] = "onnx.Tanh"([[VAR_56_]]) : (tensor<3x3xf32>) -> tensor<3x3xf32>
 // LOOP-DAG:         [[VAR_61_:%.+]] = "onnx.Mul"([[VAR_59_]], [[VAR_60_]]) : (tensor<3x3xf32>, tensor<3x3xf32>) -> tensor<3x3xf32>
-// LOOP-DAG:         [[VAR_62_:%.+]] = "onnx.Cast"([[LOOP_ITER]]) {saturate = 1 : si64, to = i32} : (tensor<i64>) -> tensor<i32>
+// LOOP-DAG:         [[VAR_62_:%.+]] = "onnx.Cast"([[LOOP_ITER]]) {round_mode = "up", saturate = 1 : si64, to = i32} : (tensor<i64>) -> tensor<i32>
 // LOOP:             [[VAR_63_:%.+]] = "onnx.Less"([[VAR_62_]], [[PARAM_3_]]) : (tensor<i32>, tensor<3xi32>) -> tensor<3xi1>
 // LOOP:             [[VAR_64_:%.+]] = "onnx.Unsqueeze"([[VAR_63_]], [[VAR_13_]]) : (tensor<3xi1>, tensor<1xi64>) -> tensor<3x1xi1>
 // LOOP-DAG:         [[VAR_65_:%.+]] = "onnx.Where"([[VAR_64_]], [[VAR_61_]], [[LOOP_H]]) : (tensor<3x1xi1>, tensor<3x3xf32>, tensor<3x3xf32>) -> tensor<3x3xf32>

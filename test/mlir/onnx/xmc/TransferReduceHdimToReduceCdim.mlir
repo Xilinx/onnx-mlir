@@ -1,6 +1,6 @@
 // RUN: onnx-mlir-opt --split-input-file --transfer-reduce-hdim-to-reduce-cdim %s | FileCheck %s
 
-// Copyright (C) 2025 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright (C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 //
 // Verifier for TransferReduceHdimToReduceCdimPass which contains four
 // templated patterns that together shape ReduceSum/ReduceMean ops so the
@@ -228,7 +228,7 @@ func.func @move_reduction_to_last_axis_rank3_keepdims_false_no_cast(%arg0: tenso
 // CHECK:       %[[R1:.+]] = "onnx.Reshape"(%arg0, %[[NEW_SHAPE]])
 // CHECK-SAME:  (tensor<1x150x1xi32>
 // CHECK-SAME:  -> tensor<1x1x150xi32>
-// CHECK:       %[[C:.+]] = "onnx.Cast"(%[[R1]]) {saturate = 1 : si64, to = i64}
+// CHECK:       %[[C:.+]] = "onnx.Cast"(%[[R1]]) {round_mode = "up", saturate = 1 : si64, to = i64}
 // CHECK-SAME:  -> tensor<1x1x150xi64>
 // CHECK:       %[[R:.+]] = "onnx.ReduceSum"(%[[C]], %[[NEW_AXES]]) {keepdims = 0 : si64
 // CHECK-SAME:  -> tensor<1x1xi64>

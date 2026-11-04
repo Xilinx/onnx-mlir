@@ -309,7 +309,7 @@ class RankXMinusRankYIs<int diff>: Constraint<
     "X' rank is greater than Y's rank diff units">;
 
 def CastVariadicInput: NativeCodeCall<
-  "onnx_mlir::castVariadicInput($_builder, $_loc, $0, $1, $2)">;
+  "onnx_mlir::castVariadicInput($_builder, $_loc, $0, $1, $2, $3)">;
 
 // Check whether two variables are equal.
 def Equal: Constraint<CPred<"$0 == $1">, "are equal">;
@@ -466,13 +466,13 @@ def FuseAddConvQDQBiasPattern: Pattern<
       (ONNXQuantizeLinearOp:$q
          (ONNXConvOp
             $x, $w, $b, $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
-         $q_scale, $q_zp, $q_axis, $q_bs, $odt, $sat),
-      $_, $_, $_, $_),
+         $q_scale, $q_zp, $q_axis, $q_bs, $odt, $sat, $precision),
+      $_, $_, $_, $_, $dq_output_dtype),
     (ONNXDequantizeLinearOp:$addend_dq
        (ONNXConstantOp:$addend_q $_, $addend_q_attr, $_, $_, $_, $_, $_, $_),
        (ONNXConstantOp:$addend_scale $_, $addend_scale_attr, $_, $_, $_, $_, $_, $_),
        (ONNXConstantOp:$addend_zp $_, $addend_zp_attr, $_, $_, $_, $_, $_, $_),
-       $_, $_)),
+       $_, $_, $addend_output_dtype)),
   [(ONNXDequantizeLinearOp
     (ONNXQuantizeLinearOp:$new_q
        (ONNXConvOp
@@ -480,9 +480,9 @@ def FuseAddConvQDQBiasPattern: Pattern<
           // new_b: Expand(Reshape(addend_dq, [1]), [Cout]).
           (buildBroadcastBiasViaReshapeExpand $addend_dq, $w),
           $auto_pad, $dilation, $group, $kernel_shape, $pads, $strides),
-       $q_scale, $q_zp, $q_axis, $q_bs, $odt, $sat,
+       $q_scale, $q_zp, $q_axis, $q_bs, $odt, $sat, $precision,
        (returnType $q)),
-    $q_scale, $q_zp, $q_axis, $q_bs)],
+    $q_scale, $q_zp, $q_axis, $q_bs, $dq_output_dtype)],
   [(HasShapeAndRank:$res),
    (IsNoneOrEffectivelyZeroBias $b),
    (WeightHasStaticCout $w),
@@ -577,7 +577,7 @@ def DropoutEliminationPattern : Pattern<(ONNXDropoutOp $data, $ratio, $training_
 //===----------------------------------------------------------------------===//
 
 def CastEliminationPattern : Pat<
-	(ONNXCastOp:$result $arg, $saturate, $type),
+	(ONNXCastOp:$result $arg, $round_mode, $saturate, $type),
 	(replaceWithValue $arg),
   [(HaveSameShapedType $arg, $result)]>;
 
@@ -585,15 +585,15 @@ def CastEliminationPattern : Pat<
 // cast operations together, which brings concat close to reshape
 // because concat is used for shape in reshape.
 def SwapCastConcatPattern: Pat<
-  (ONNXCastOp (ONNXConcatOp $inputs, $axis), $saturate, $to),
-  (ONNXConcatOp (CastVariadicInput $inputs, $saturate, $to), $axis)
+  (ONNXCastOp (ONNXConcatOp $inputs, $axis), $round_mode, $saturate, $to),
+  (ONNXConcatOp (CastVariadicInput $inputs, $round_mode, $saturate, $to), $axis)
 >;
 
 // Do cast on slice's inputs instead of output in order to propagate
 // cast operations together, which brings slice close to reshape.
 def SwapCastSlicePattern: Pat<
-  (ONNXCastOp (ONNXSliceOp $data, $starts, $ends, $axes, $steps), $saturate, $to),
-  (ONNXSliceOp (ONNXCastOp $data, $saturate, $to), $starts, $ends, $axes, $steps)
+  (ONNXCastOp (ONNXSliceOp $data, $starts, $ends, $axes, $steps), $round_mode, $saturate, $to),
+  (ONNXSliceOp (ONNXCastOp $data, $round_mode, $saturate, $to), $starts, $ends, $axes, $steps)
 >;
 
 //===----------------------------------------------------------------------===//
@@ -674,8 +674,12 @@ class FuseTransposeAndElementwiseUnaryWithTwoArgOpPattern<Op elmOp>:  Pat<
 
 def FuseTransposeAndAtanPattern :
     FuseTransposeAndElementwiseUnaryOpPattern<ONNXAtanOp>;
-def FuseTransposeAndCastPattern :
-    FuseTransposeAndElementwiseUnaryWithTwoArgOpPattern<ONNXCastOp>;
+def FuseTransposeAndCastPattern : Pat<
+  (ONNXTransposeOp
+    (ONNXCastOp (ONNXTransposeOp $v, $p1), $round_mode, $saturate, $to), $p2),
+  (ONNXTransposeOp
+    (ONNXCastOp $v, $round_mode, $saturate, $to),
+    (CreateCombinedTransposedPattern $p1, $p2))>;
 def FuseTransposeAndCeilPattern :
     FuseTransposeAndElementwiseUnaryOpPattern<ONNXCeilOp>;
 def FuseTransposeAndCosPattern :
@@ -882,9 +886,9 @@ def RemoveSqueezeV11UnsqueezeV11Pattern:  Pat<
 /// Squeeze {axes = [a, b, c]} (Cast (Unsqueeze {axes = [a, b, c]} (%X))) = Cast %X
 def RemoveSqueezeCastUnsqueezePattern:  Pat<
   // Squeeze and the unsqueeze with the same axes.
-  (ONNXSqueezeOp (ONNXCastOp (ONNXUnsqueezeOp $val, $u_axes), $saturate, $castTo), $s_axes),
+  (ONNXSqueezeOp (ONNXCastOp (ONNXUnsqueezeOp $val, $u_axes), $round_mode, $saturate, $castTo), $s_axes),
   // Remove both squeeze and unsqueeze.
-  (ONNXCastOp $val, $saturate, $castTo),
+  (ONNXCastOp $val, $round_mode, $saturate, $castTo),
   // Check that both ops use the same `axes`.
   [(AreTheSameAxesConstant $val, $u_axes, $s_axes)]>;
 
@@ -892,9 +896,9 @@ def RemoveSqueezeCastUnsqueezePattern:  Pat<
 /// Squeeze {axes = [a, b, c]} (Cast (Unsqueeze {axes = [a, b, c]} (%X))) = Cast %X
 def RemoveSqueezeV11CastUnsqueezeV11Pattern:  Pat<
   // Squeeze and the unsqueeze with the same axes.
-  (ONNXSqueezeV11Op (ONNXCastOp (ONNXUnsqueezeV11Op $val, $u_axes), $saturate, $castTo), $s_axes),
+  (ONNXSqueezeV11Op (ONNXCastOp (ONNXUnsqueezeV11Op $val, $u_axes), $round_mode, $saturate, $castTo), $s_axes),
   // Remove both squeeze and unsqueeze.
-  (ONNXCastOp $val, $saturate, $castTo),
+  (ONNXCastOp $val, $round_mode, $saturate, $castTo),
   // Check that both ops use the same `axes`.
   [(AreTheSameAxesArrayAttr $val, $u_axes, $s_axes)]>;
 
@@ -926,9 +930,9 @@ def RemoveUnsqueezeV11SqueezeV11Pattern:  Pat<
 /// Unsqueeze {axes = [a, b, c]} (Cast (Squeeze {axes = [a, b, c]} (%X))) = Cast %X
 def RemoveUnsqueezeCastSqueezePattern:  Pat<
   // Squeeze and the unsqueeze with the same axes.
-  (ONNXUnsqueezeOp (ONNXCastOp (ONNXSqueezeOp:$res $val, $s_axes), $saturate, $castTo), $u_axes),
+  (ONNXUnsqueezeOp (ONNXCastOp (ONNXSqueezeOp:$res $val, $s_axes), $round_mode, $saturate, $castTo), $u_axes),
   // Remove both squeeze and unsqueeze.
-  (ONNXCastOp $val, $saturate, $castTo),
+  (ONNXCastOp $val, $round_mode, $saturate, $castTo),
   // Check that both ops use the same `axes`.
   [(AreTheSameAxesConstant $res, $u_axes, $s_axes)]>;
 
@@ -936,9 +940,9 @@ def RemoveUnsqueezeCastSqueezePattern:  Pat<
 /// Unsqueeze {axes = [a, b, c]} (Cast (Squeeze {axes = [a, b, c]} (%X))) = Cast %X
 def RemoveUnsqueezeV11CastSqueezeV11Pattern:  Pat<
   // Squeeze and the unsqueeze with the same axes.
-  (ONNXUnsqueezeV11Op (ONNXCastOp (ONNXSqueezeV11Op:$res $val, $s_axes), $saturate, $castTo), $u_axes),
+  (ONNXUnsqueezeV11Op (ONNXCastOp (ONNXSqueezeV11Op:$res $val, $s_axes), $round_mode, $saturate, $castTo), $u_axes),
   // Remove both squeeze and unsqueeze.
-  (ONNXCastOp $val, $saturate, $castTo),
+  (ONNXCastOp $val, $round_mode, $saturate, $castTo),
   // Check that both ops use the same `axes`.
   [(AreTheSameAxesArrayAttr $res, $u_axes, $s_axes)]>;
 
@@ -1153,7 +1157,7 @@ def RemoveSpaceToDepthDepthToSpacePattern : Pat<
 // The 'saturate' attribute shouldn't matter but we require it to be the same
 // for $a and $b to avoid applying the pattern in surprising ways.
 def LessOpSameCastPattern: Pat<
-   (ONNXLessOp (ONNXCastOp:$cast_a $a, $saturate1, $to1), (ONNXCastOp $b, $saturate2, $to2)),
+   (ONNXLessOp (ONNXCastOp:$cast_a $a, $round_mode1, $saturate1, $to1), (ONNXCastOp $b, $round_mode2, $saturate2, $to2)),
    (ONNXLessOp $a, $b),
    [(HaveSameElementType $a, $b), (Equal $saturate1, $saturate2), (Equal $to1, $to2),
     (HaveSameElementTypeBitWidth $a, $cast_a),

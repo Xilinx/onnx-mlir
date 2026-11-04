@@ -1,3 +1,4 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa -cse %s -split-input-file | FileCheck %s
 
 // -----
@@ -53,7 +54,7 @@ func.func @test_cast_int4_and_uint4_to_float_and_back(%arg0: tensor<1xi4>, %arg1
 // CHECK-DAG:       [[VAR_5_:%.+]] = tosa.select [[VAR_2_]], [[VAR_3_]], [[VAR_4_]] : (tensor<1xi1>, tensor<1xf32>, tensor<1xf32>) -> tensor<1xf32>
 // CHECK-DAG:       [[VAR_6_:%.+]] = tosa.cast [[VAR_5_]] : (tensor<1xf32>) -> tensor<1xi4>
 // CHECK-DAG:       [[VAR_7_:%.+]] = tosa.cast [[PARAM_1_]] : (tensor<1xui4>) -> tensor<1xf32>
-// CHECK-DAG:       [[VAR_8_:%.+]] = "onnx.Cast"([[VAR_7_]]) {saturate = 1 : si64, to = ui4} : (tensor<1xf32>) -> tensor<1xui4>
+// CHECK-DAG:       [[VAR_8_:%.+]] = "onnx.Cast"([[VAR_7_]]) {round_mode = "up", saturate = 1 : si64, to = ui4} : (tensor<1xf32>) -> tensor<1xui4>
 // CHECK:           onnx.Return [[VAR_6_]], [[VAR_8_]] : tensor<1xi4>, tensor<1xui4>
 // CHECK:         }
 }

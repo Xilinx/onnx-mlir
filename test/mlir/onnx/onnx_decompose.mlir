@@ -1,3 +1,4 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
 // RUN: onnx-mlir-opt --decompose-onnx %s -split-input-file | FileCheck %s
 
 // -----
@@ -178,7 +179,7 @@ func.func @test_scaler_null(%arg0: tensor<3xi32>) -> tensor<3xf32> {
   %0 = "onnx.Scaler"(%arg0) : (tensor<3xi32>) -> tensor<3xf32>
   onnx.Return %0 : tensor<3xf32>
 
-  // CHECK-NEXT: %0 = "onnx.Cast"(%arg0) {saturate = 1 : si64, to = f32} : (tensor<3xi32>) -> tensor<3xf32>
+  // CHECK-NEXT: %0 = "onnx.Cast"(%arg0) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<3xi32>) -> tensor<3xf32>
   // CHECK-NEXT: onnx.Return %0 : tensor<3xf32>
 }
 
@@ -204,7 +205,7 @@ func.func @test_scaler_no_offset2(%arg0: tensor<3xi32>) -> tensor<3xf32> {
   onnx.Return %0 : tensor<3xf32>
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3xi32>) -> tensor<3xf32> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<[3.125000e-02, 0.0909090936, 0.0333333351]> : tensor<3xf32>
-// CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {saturate = 1 : si64, to = f32} : (tensor<3xi32>) -> tensor<*xf32>
+// CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<3xi32>) -> tensor<*xf32>
 // CHECK:           [[VAR_2_:%.+]] = "onnx.Mul"([[VAR_1_]], [[VAR_0_]]) : (tensor<*xf32>, tensor<3xf32>) -> tensor<3xf32>
 // CHECK:           onnx.Return [[VAR_2_]] : tensor<3xf32>
 }
@@ -232,7 +233,7 @@ func.func @test_scaler_no_scale2(%arg0: tensor<3xi32>) -> tensor<3xf32> {
 
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3xi32>) -> tensor<3xf32> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<[1986.99939, 0.99999988, 0.999999701]> : tensor<3xf32>
-// CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {saturate = 1 : si64, to = f32} : (tensor<3xi32>) -> tensor<*xf32>
+// CHECK-DAG:       [[VAR_1_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<3xi32>) -> tensor<*xf32>
 // CHECK:           [[VAR_2_:%.+]] = "onnx.Sub"([[VAR_1_]], [[VAR_0_]]) : (tensor<*xf32>, tensor<3xf32>) -> tensor<3xf32>
 // CHECK:           onnx.Return [[VAR_2_]] : tensor<3xf32>
 }
@@ -264,7 +265,7 @@ func.func @test_scaler_normal2(%arg0: tensor<3xi32>) -> tensor<3xf32> {
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3xi32>) -> tensor<3xf32> {
 // CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<[3.125000e-02, 0.0909090936, 0.0333333351]> : tensor<3xf32>
 // CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<[1986.99939, 0.99999988, 0.999999701]> : tensor<3xf32>
-// CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {saturate = 1 : si64, to = f32} : (tensor<3xi32>) -> tensor<*xf32>
+// CHECK-DAG:       [[VAR_2_:%.+]] = "onnx.Cast"([[PARAM_0_]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<3xi32>) -> tensor<*xf32>
 // CHECK:           [[VAR_3_:%.+]] = "onnx.Sub"([[VAR_2_]], [[VAR_1_]]) : (tensor<*xf32>, tensor<3xf32>) -> tensor<*xf32>
 // CHECK:           [[VAR_4_:%.+]] = "onnx.Mul"([[VAR_3_]], [[VAR_0_]]) : (tensor<*xf32>, tensor<3xf32>) -> tensor<3xf32>
 // CHECK:           onnx.Return [[VAR_4_]] : tensor<3xf32>
@@ -599,7 +600,7 @@ func.func @test_castlike(%arg0 : tensor<*xf32>, %arg1 : tensor<*xf16>) -> tensor
   "onnx.Return"(%0) : (tensor<*xf16>) -> ()
 
   // CHECK-LABEL: test_castlike
-  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {saturate = 1 : si64, to = f16} : (tensor<*xf32>) -> tensor<*xf16> 
+  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {round_mode = "up", saturate = 1 : si64, to = f16} : (tensor<*xf32>) -> tensor<*xf16>
   // CHECK: onnx.Return [[RES]] : tensor<*xf16>
 }
 
@@ -610,7 +611,7 @@ func.func @test_castlike_i4(%arg0 : tensor<*xf32>, %arg1 : tensor<*xi4>) -> tens
   "onnx.Return"(%0) : (tensor<*xi4>) -> ()
 
   // CHECK-LABEL: test_castlike_i4
-  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {saturate = 1 : si64, to = i4} : (tensor<*xf32>) -> tensor<*xi4> 
+  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {round_mode = "up", saturate = 1 : si64, to = i4} : (tensor<*xf32>) -> tensor<*xi4>
   // CHECK: onnx.Return [[RES]] : tensor<*xi4>
 }
 
@@ -621,7 +622,7 @@ func.func @test_castlike_ui4(%arg0 : tensor<*xf32>, %arg1 : tensor<*xui4>) -> te
   "onnx.Return"(%0) : (tensor<*xui4>) -> ()
 
   // CHECK-LABEL: test_castlike_ui4
-  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {saturate = 1 : si64, to = ui4} : (tensor<*xf32>) -> tensor<*xui4> 
+  // CHECK: [[RES:%.+]] = "onnx.Cast"(%arg0) {round_mode = "up", saturate = 1 : si64, to = ui4} : (tensor<*xf32>) -> tensor<*xui4>
   // CHECK: onnx.Return [[RES]] : tensor<*xui4>
 }
 
@@ -649,7 +650,7 @@ func.func @test_sum_to_unranked(%arg0: tensor<128x10xf32>, %arg1: tensor<64x128x
   // CHECK-NEXT:      %[[SUM0:.*]] = "onnx.Add"(%[[ARG0]], %[[ARG1]])
   // CHECK-NEXT:      %[[SUM1:.*]] = "onnx.Add"(%[[SUM0]], %[[ARG2]])
   // CHECK-NEXT:      %[[SUM2:.*]] = "onnx.Add"(%[[SUM1]], %[[ARG3]])
-  // CHECK-NEXT:      %[[CAST:.*]] = "onnx.Cast"(%[[SUM2]]) {saturate = 1 : si64, to = f32} : (tensor<64x128x10xf32>) -> tensor<*xf32>
+  // CHECK-NEXT:      %[[CAST:.*]] = "onnx.Cast"(%[[SUM2]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<64x128x10xf32>) -> tensor<*xf32>
   // CHECK-NEXT:      onnx.Return %[[CAST]]
 }
 
@@ -670,7 +671,7 @@ func.func @test_sum_single_input_to_unranked(%arg0: tensor<64x128x10xf32>) -> te
   onnx.Return %0 : tensor<*xf32> 
   // CHECK-LABEL:       func @test_sum_single_input_to_unranked
   // CHECK-SAME:     (%[[ARG0:.*]]: {{.*}})
-  // CHECK-NEXT:      %[[CAST:.*]] = "onnx.Cast"(%[[ARG0]]) {saturate = 1 : si64, to = f32} : (tensor<64x128x10xf32>) -> tensor<*xf32>
+  // CHECK-NEXT:      %[[CAST:.*]] = "onnx.Cast"(%[[ARG0]]) {round_mode = "up", saturate = 1 : si64, to = f32} : (tensor<64x128x10xf32>) -> tensor<*xf32>
   // CHECK-NEXT:      onnx.Return %[[CAST]]
 }
 // -----
@@ -1211,7 +1212,7 @@ func.func @sce_mean(%arg0: tensor<64x10xf32>, %arg1: tensor<64xi64>) -> tensor<f
   // CHECK-DAG:      %[[ONE_HOT_VALS:.*]] = onnx.Constant dense<[0, 1]> : tensor<2xi64>
   // CHECK-DAG:      %[[REDUCE_AXIS:.*]] = onnx.Constant dense<1> : tensor<1xi64>
   // CHECK:          %[[ONE_HOT_LABELS:.*]] = "onnx.OneHot"(%[[ARG1]], %[[NUM_CLASSES]], %[[ONE_HOT_VALS]]) {axis = 1 : si64} : ({{.*}}) -> tensor<64x10xi64>
-  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {saturate = 1 : si64, to = f32}
+  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {round_mode = "up", saturate = 1 : si64, to = f32}
   // CHECK-NEXT:     %[[SOFTMAX:.*]] = "onnx.Softmax"(%[[ARG0]]) {axis = 1 : si64}
   // CHECK-NEXT:     %[[LOG_SOFTMAX:.*]] = "onnx.Log"(%[[SOFTMAX]])
   // CHECK-NEXT:     %[[PROD:.*]] = "onnx.Mul"(%[[LOG_SOFTMAX]], %[[ONE_HOT_LABELS_F]])
@@ -1234,7 +1235,7 @@ func.func @sce_mean_return_log_prob(%arg0: tensor<64x10xf32>, %arg1: tensor<64xi
   // CHECK-DAG:      %[[ONE_HOT_VALS:.*]] = onnx.Constant dense<[0, 1]> : tensor<2xi64>
   // CHECK-DAG:      %[[REDUCE_AXIS:.*]] = onnx.Constant dense<1> : tensor<1xi64>
   // CHECK:          %[[ONE_HOT_LABELS:.*]] = "onnx.OneHot"(%[[ARG1]], %[[NUM_CLASSES]], %[[ONE_HOT_VALS]]) {axis = 1 : si64} : ({{.*}}) -> tensor<64x10xi64>
-  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {saturate = 1 : si64, to = f32}
+  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {round_mode = "up", saturate = 1 : si64, to = f32}
   // CHECK-NEXT:     %[[SOFTMAX:.*]] = "onnx.Softmax"(%[[ARG0]]) {axis = 1 : si64}
   // CHECK-NEXT:     %[[LOG_SOFTMAX:.*]] = "onnx.Log"(%[[SOFTMAX]])
   // CHECK-NEXT:     %[[PROD:.*]] = "onnx.Mul"(%[[LOG_SOFTMAX]], %[[ONE_HOT_LABELS_F]])
@@ -1260,7 +1261,7 @@ func.func @sce_mean_with_weight_NCD1D2(%arg0: tensor<64x10x2x3xf32>, %arg1: tens
   // CHECK-DAG:      %[[EXPANDED_WEIGHT_SHAPE:.*]] = onnx.Constant dense<[10, 1]> : tensor<2xi64>
   // CHECK-DAG:      %[[W_SHAPE:.*]] = onnx.Constant dense<[64, 2, 3]> : tensor<3xi64>
   // CHECK:          %[[ONE_HOT_LABELS:.*]] = "onnx.OneHot"(%[[ARG1]], %[[NUM_CLASSES]], %[[ONE_HOT_VALS]]) {axis = 1 : si64} : ({{.*}}) -> tensor<64x10x2x3xi64>
-  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {saturate = 1 : si64, to = f32}
+  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {round_mode = "up", saturate = 1 : si64, to = f32}
   // CHECK-NEXT:     %[[SOFTMAX:.*]] = "onnx.Softmax"(%[[ARG0]]) {axis = 1 : si64}
   // CHECK-NEXT:     %[[LOG_SOFTMAX:.*]] = "onnx.Log"(%[[SOFTMAX]])
   // CHECK-NEXT:     %[[PROD:.*]] = "onnx.Mul"(%[[LOG_SOFTMAX]], %[[ONE_HOT_LABELS_F]])
@@ -1295,7 +1296,7 @@ func.func @sce_mean_with_weight_NCD1D2_dynamic_num_classes(%arg0: tensor<64x?x2x
   // CHECK-DAG:      %[[UNSQUEEZE_AXES:.*]] = onnx.Constant dense<[0, 2, 3]> : tensor<3xi64>
   // CHECK-DAG:     %[[REDUCE_AXIS:.*]] = onnx.Constant dense<1> : tensor<1xi64>
   // CHECK:          %[[ONE_HOT_LABELS:.*]] = "onnx.OneHot"(%[[ARG1]], %[[NUM_CLASSES]], %[[ONE_HOT_VALS]]) {axis = 1 : si64} : ({{.*}}) -> tensor<64x?x2x3xi64>
-  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {saturate = 1 : si64, to = f32}
+  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {round_mode = "up", saturate = 1 : si64, to = f32}
   // CHECK-NEXT:     %[[SOFTMAX:.*]] = "onnx.Softmax"(%[[ARG0]]) {axis = 1 : si64}
   // CHECK-NEXT:     %[[LOG_SOFTMAX:.*]] = "onnx.Log"(%[[SOFTMAX]])
   // CHECK-NEXT:     %[[PROD:.*]] = "onnx.Mul"(%[[LOG_SOFTMAX]], %[[ONE_HOT_LABELS_F]])
@@ -1323,7 +1324,7 @@ func.func @sce_sum(%arg0: tensor<64x10xf32>, %arg1: tensor<64xi64>) -> tensor<f3
   // CHECK-DAG:      %[[ONE_HOT_VALS:.*]] = onnx.Constant dense<[0, 1]> : tensor<2xi64>
   // CHECK-DAG:     %[[REDUCE_AXIS:.*]] = onnx.Constant dense<1> : tensor<1xi64>
   // CHECK:          %[[ONE_HOT_LABELS:.*]] = "onnx.OneHot"(%[[ARG1]], %[[NUM_CLASSES]], %[[ONE_HOT_VALS]]) {axis = 1 : si64} : ({{.*}}) -> tensor<64x10xi64>
-  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {saturate = 1 : si64, to = f32}
+  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {round_mode = "up", saturate = 1 : si64, to = f32}
   // CHECK-NEXT:     %[[SOFTMAX:.*]] = "onnx.Softmax"(%[[ARG0]]) {axis = 1 : si64}
   // CHECK-NEXT:     %[[LOG_SOFTMAX:.*]] = "onnx.Log"(%[[SOFTMAX]])
   // CHECK-NEXT:     %[[PROD:.*]] = "onnx.Mul"(%[[LOG_SOFTMAX]], %[[ONE_HOT_LABELS_F]])
@@ -1346,7 +1347,7 @@ func.func @sce_sum_with_weight(%arg0: tensor<64x10xf32>, %arg1: tensor<64xi64>, 
   // CHECK-DAG:      %[[UNSQUEEZE_AXES:.*]] = onnx.Constant dense<0> : tensor<1xi64>
   // CHECK-DAG:      %[[REDUCE_AXIS:.*]] = onnx.Constant dense<1> : tensor<1xi64>
   // CHECK:          %[[ONE_HOT_LABELS:.*]] = "onnx.OneHot"(%[[ARG1]], %[[NUM_CLASSES]], %[[ONE_HOT_VALS]]) {axis = 1 : si64} : ({{.*}}) -> tensor<64x10xi64>
-  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {saturate = 1 : si64, to = f32}
+  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {round_mode = "up", saturate = 1 : si64, to = f32}
   // CHECK-NEXT:     %[[SOFTMAX:.*]] = "onnx.Softmax"(%[[ARG0]]) {axis = 1 : si64}
   // CHECK-NEXT:     %[[LOG_SOFTMAX:.*]] = "onnx.Log"(%[[SOFTMAX]])
   // CHECK-NEXT:     %[[PROD:.*]] = "onnx.Mul"(%[[LOG_SOFTMAX]], %[[ONE_HOT_LABELS_F]])
@@ -1370,7 +1371,7 @@ func.func @sce_none(%arg0: tensor<64x10x2x3xf32>, %arg1: tensor<64x2x3xi64>) -> 
   // CHECK-DAG:      %[[ONE_HOT_VALS:.*]] = onnx.Constant dense<[0, 1]> : tensor<2xi64>
   // CHECK-DAG:     %[[REDUCE_AXIS:.*]] = onnx.Constant dense<1> : tensor<1xi64>
   // CHECK:          %[[ONE_HOT_LABELS:.*]] = "onnx.OneHot"(%[[ARG1]], %[[NUM_CLASSES]], %[[ONE_HOT_VALS]]) {axis = 1 : si64} : ({{.*}}) -> tensor<64x10x2x3xi64>
-  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {saturate = 1 : si64, to = f32}
+  // CHECK-NEXT:     %[[ONE_HOT_LABELS_F:.*]] = "onnx.Cast"(%[[ONE_HOT_LABELS]]) {round_mode = "up", saturate = 1 : si64, to = f32}
   // CHECK-NEXT:     %[[SOFTMAX:.*]] = "onnx.Softmax"(%[[ARG0]]) {axis = 1 : si64}
   // CHECK-NEXT:     %[[LOG_SOFTMAX:.*]] = "onnx.Log"(%[[SOFTMAX]])
   // CHECK-NEXT:     %[[PROD:.*]] = "onnx.Mul"(%[[LOG_SOFTMAX]], %[[ONE_HOT_LABELS_F]])

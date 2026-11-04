@@ -1,0 +1,9 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
+// RUN: not onnx-mlir --EmitONNXBasic -o %t %s 2>&1 | FileCheck %s
+<ir_version: 10, opset_import: ["" : 27]>
+opset27_deferred_dtype (float[2] x) => (float4e2m1[2] y)
+{
+  y = Cast <to: int = 23> (x)
+}
+
+// CHECK: FP4 E2M1, FP8 E8M0 and INT2/UINT2 support is deferred

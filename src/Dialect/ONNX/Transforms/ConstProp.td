@@ -505,7 +505,7 @@ def SubZerosOnRhs : NamedPat<"SubZerosOnRhs",
 // Cast of constant is simply a constant with the new type.
 def CastofConst : NamedPat<"CastofConst",
     // From (c)
-    (ONNXCastOp:$castOp $input, $saturate, $to),
+    (ONNXCastOp:$castOp $input, $round_mode, $saturate, $to),
     // To (c)
     (CreateCastOfConst $castOp, $input, $saturate, $to),
     [(IsFromDenseConstLike:$input), (IsIntOrFloatType:$input)]>;
@@ -1405,7 +1405,7 @@ def RangeConstProp : NamedPat<"RangeConstProp",
     // From range(c0, c1, c2).
     (ONNXRangeOp:$rangeOp $start,
                       $limit,
-                      $delta),
+                      $delta, $stash_type),
     // To [c0, c0 + c2, c0 + c2 * 2, ...] assuming shape inference calculated
     // dim size max(ceil((c1 - c0) / c2), 0).
     (CreateRangeOfThreeConst $rangeOp, $start, $limit, $delta),

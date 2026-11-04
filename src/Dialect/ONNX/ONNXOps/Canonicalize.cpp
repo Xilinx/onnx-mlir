@@ -349,12 +349,13 @@ bool isNotConvProducer(mlir::Value val) {
 
 // Cast a variadic input using the given `saturate` and `to`.
 SmallVector<Value, 4> castVariadicInput(PatternRewriter &rewriter, Location loc,
-    ValueRange inputs, IntegerAttr saturate, TypeAttr to) {
+    ValueRange inputs, StringAttr roundMode, IntegerAttr saturate,
+    TypeAttr to) {
   SmallVector<Value, 4> castInputs;
   for (Value inp : inputs) {
     ShapedType inpType = mlir::cast<ShapedType>(inp.getType());
     ONNXCastOp castOp = rewriter.create<ONNXCastOp>(
-        loc, inpType.clone(to.getValue()), inp, saturate, to);
+        loc, inpType.clone(to.getValue()), inp, roundMode, saturate, to);
     castInputs.emplace_back(castOp.getResult());
   }
   return castInputs;
@@ -4711,7 +4712,8 @@ public:
 
     auto newDQOp = rewriter.create<ONNXDequantizeLinearOp>(newLoc, op.getType(),
         newOp.getResult(), commonDQOp.getXScale(), commonDQOp.getXZeroPoint(),
-        commonDQOp.getAxisAttr(), commonDQOp.getBlockSizeAttr());
+        commonDQOp.getAxisAttr(), commonDQOp.getBlockSizeAttr(),
+        commonDQOp.getOutputDtypeAttr());
 
     rewriter.replaceOp(op, newDQOp.getResult());
     return success();
@@ -4763,7 +4765,7 @@ public:
           dataInputShapedType.clone(quantizedElementType), dataInput,
           quantOp.getYScale(), quantOp.getYZeroPoint(), quantOp.getAxisAttr(),
           quantOp.getBlockSizeAttr(), quantOp.getOutputDtypeAttr(),
-          quantOp.getSaturateAttr());
+          quantOp.getSaturateAttr(), quantOp.getPrecisionAttr());
       mapping.map(dataInput, newQOp.getResult());
     }
 
@@ -5914,7 +5916,19 @@ void ONNXWhereOp::getCanonicalizationPatterns(
 
 // on the ONNXDequantizeLinearOp.
 void ONNXDequantizeLinearOp::getCanonicalizationPatterns(
-    RewritePatternSet &result, MLIRContext *context) {}
+    RewritePatternSet &result, MLIRContext *context) {
+  populateOpset27NormalizationPatterns(result);
+}
+
+void ONNXQuantizeLinearOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  populateOpset27NormalizationPatterns(result);
+}
+
+void ONNXRangeOp::getCanonicalizationPatterns(
+    RewritePatternSet &result, MLIRContext *context) {
+  populateOpset27NormalizationPatterns(result);
+}
 
 void onnx_mlir::populateQDQDataMovementCanonicalizationPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {

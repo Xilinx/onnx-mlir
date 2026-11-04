@@ -57,6 +57,8 @@
 
 namespace onnx_mlir {
 
+void populateOpset27NormalizationPatterns(mlir::RewritePatternSet &patterns);
+
 /// This function returns a location with the corresponding ONNX operator name
 /// inside. This is useful when tracing what expanded MLIR instructions
 /// correspond to what ONNX operator.

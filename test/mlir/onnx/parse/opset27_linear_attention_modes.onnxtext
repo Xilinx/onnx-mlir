@@ -1,0 +1,23 @@
+// Copyright 2026 Advanced Micro Devices, Inc. or its affiliates.
+// RUN: onnx-mlir --EmitONNXBasic --printIR -o %t %s | FileCheck %s --implicit-check-not='"onnx.Custom"'
+<ir_version: 10, opset_import: ["" : 27]>
+linear_attention_modes (float[1,2,4] q, float[1,2,2] k, float[1,2,2] v,
+    float[1,1,2,2] state, float[1,2,1] decay, float[1,2,1] beta)
+    => (float[1,2,4] linear, float[1,1,2,2] linear_state,
+        float[1,2,4] gated, float[1,1,2,2] gated_state,
+        float[1,2,4] delta, float[1,1,2,2] delta_state)
+{
+  linear, linear_state = LinearAttention
+      <q_num_heads: int = 2, kv_num_heads: int = 1, update_rule: string = "linear">
+      (q, k, v, state)
+  gated, gated_state = LinearAttention
+      <q_num_heads: int = 2, kv_num_heads: int = 1, update_rule: string = "gated">
+      (q, k, v, state, decay)
+  delta, delta_state = LinearAttention
+      <q_num_heads: int = 2, kv_num_heads: int = 1, update_rule: string = "delta">
+      (q, k, v, state, , beta)
+}
+
+// The default gated_delta mode is covered in opset27_new_ops.onnxtext. These
+// cases exercise the other modes, omitted optional inputs, and GQA head sharing.
+// CHECK-COUNT-3: "onnx.Scan"
