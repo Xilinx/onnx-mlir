@@ -5726,8 +5726,13 @@ struct DecomposeGroupNormV18Pattern
 //     = (AveragePool(|X|^p, count_include_pad=1) * kernel_volume)^(1/p)
 // p = 2 is Mul(x, x) and Sqrt. Other p uses Abs and, when p is not 1, Pow.
 // AveragePool and LpPool share conv/pool shape inference, so kernel, pads,
-// strides, dilations, ceil_mode, and auto_pad are copied unchanged. Padded
-// taps contribute 0 and are part of the Lp sum, which is count_include_pad=1.
+// strides, dilations, and auto_pad are copied unchanged. Declared padding
+// contributes 0 and is part of the Lp sum, which is count_include_pad=1.
+// ceil_mode is not rewritten. A ceiling window can extend past the input and
+// the declared pads, and AveragePool excludes those positions from its divisor,
+// so a constant kernel volume is not the Lp sum. Intermediate types are the
+// LpPool operand and result types: builders that omit a result type turn a
+// ranked dynamic tensor into an unranked one.
 // =============================================================================
 struct DecomposeLpPoolPattern : public OpRewritePattern<ONNXLpPoolOp> {
   using OpRewritePattern<ONNXLpPoolOp>::OpRewritePattern;
@@ -5766,6 +5771,16 @@ struct DecomposeLpPoolPattern : public OpRewritePattern<ONNXLpPoolOp> {
     int64_t p = op.getP();
     if (p <= 0)
       return rewriter.notifyMatchFailure(op, "p must be positive");
+    if (op.getCeilMode() != 0)
+      return rewriter.notifyMatchFailure(
+          op, "ceil_mode windows are not a full kernel");
+
+    Type resultType = op.getType();
+    auto resultShaped = dyn_cast<ShapedType>(resultType);
+    if (!resultShaped ||
+        resultShaped.getElementType() != inputType.getElementType())
+      return rewriter.notifyMatchFailure(
+          op, "result type must match the input element type");
 
     Location loc = op.getLoc();
     Type elementType = inputType.getElementType();
@@ -5783,27 +5798,24 @@ struct DecomposeLpPoolPattern : public OpRewritePattern<ONNXLpPoolOp> {
       powered = create.abs(input);
       if (p != 1)
         powered = rewriter.create<ONNXPowOp>(
-            loc, powered, scalar(static_cast<double>(p)));
+            loc, powered.getType(), powered, scalar(static_cast<double>(p)));
     }
 
     auto si64 =
         IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed);
-    auto avgPool = rewriter.create<ONNXAveragePoolOp>(loc,
-        UnrankedTensorType::get(elementType), powered, op.getAutoPadAttr(),
-        op.getCeilModeAttr(), IntegerAttr::get(si64, 1), op.getDilationsAttr(),
-        kernelAttr, op.getPadsAttr(), op.getStridesAttr());
-    if (failed(avgPool.inferShapes([](Region &) {})))
-      return rewriter.notifyMatchFailure(
-          op, "AveragePool shape inference failed");
+    auto avgPool = rewriter.create<ONNXAveragePoolOp>(loc, resultType, powered,
+        op.getAutoPadAttr(), op.getCeilModeAttr(), IntegerAttr::get(si64, 1),
+        op.getDilationsAttr(), kernelAttr, op.getPadsAttr(),
+        op.getStridesAttr());
 
-    Value scaled =
-        create.mul(avgPool.getResult(), scalar(static_cast<double>(volume)));
+    Value scaled = create.mul(
+        resultType, avgPool.getResult(), scalar(static_cast<double>(volume)));
     Value result = scaled;
     if (p == 2)
-      result = create.sqrt(scaled);
+      result = rewriter.create<ONNXSqrtOp>(loc, resultType, scaled);
     else if (p != 1)
       result = rewriter.create<ONNXPowOp>(
-          loc, scaled, scalar(1.0 / static_cast<double>(p)));
+          loc, resultType, scaled, scalar(1.0 / static_cast<double>(p)));
 
     rewriter.replaceOp(op, result);
     return success();

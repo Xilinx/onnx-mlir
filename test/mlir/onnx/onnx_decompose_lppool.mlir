@@ -56,3 +56,41 @@ func.func @lppool_p3(%arg0: tensor<1x1x4x4xf32>) -> tensor<1x1x2x2xf32> {
   // CHECK: onnx.Pow
   // CHECK: return
 }
+
+// -----
+
+// ceil_mode can end a window past the input and the declared pads. AveragePool
+// drops those positions from its divisor, so the full kernel volume is wrong
+// (this input would become [3, 3] instead of LpPool's [3, 2]). Leave LpPool.
+func.func @lppool_ceil_partial_window(%arg0: tensor<1x1x4xf32>) -> tensor<1x1x2xf32> {
+  %0 = "onnx.LpPool"(%arg0) {auto_pad = "NOTSET", ceil_mode = 1 : si64, kernel_shape = [3], p = 1 : si64, strides = [2]} : (tensor<1x1x4xf32>) -> tensor<1x1x2xf32>
+  return %0 : tensor<1x1x2xf32>
+
+  // CHECK-LABEL: func.func @lppool_ceil_partial_window
+  // CHECK: [[POOL:%.+]] = "onnx.LpPool"(%arg0)
+  // CHECK-SAME: ceil_mode = 1 : si64
+  // CHECK-SAME: -> tensor<1x1x2xf32>
+  // CHECK-NOT: onnx.AveragePool
+  // CHECK-NOT: onnx.Mul
+  // CHECK: return [[POOL]] : tensor<1x1x2xf32>
+}
+
+// -----
+
+// p > 2 with a ranked dynamic shape. Pow must keep that rank; the untyped Pow
+// builder would produce tensor<*xf32> and the return would no longer match.
+func.func @lppool_p3_dynamic(%arg0: tensor<?x1x4x4xf32>) -> tensor<?x1x2x2xf32> {
+  %0 = "onnx.LpPool"(%arg0) {auto_pad = "NOTSET", ceil_mode = 0 : si64, kernel_shape = [2, 2], p = 3 : si64, strides = [2, 2]} : (tensor<?x1x4x4xf32>) -> tensor<?x1x2x2xf32>
+  return %0 : tensor<?x1x2x2xf32>
+
+  // CHECK-LABEL: func.func @lppool_p3_dynamic
+  // CHECK-NOT: onnx.LpPool
+  // CHECK: [[ABS:%.+]] = "onnx.Abs"(%arg0) : (tensor<?x1x4x4xf32>) -> tensor<?x1x4x4xf32>
+  // CHECK: [[POW:%.+]] = "onnx.Pow"([[ABS]], {{%.+}}) : (tensor<?x1x4x4xf32>, tensor<f32>) -> tensor<?x1x4x4xf32>
+  // CHECK: [[POOL:%.+]] = "onnx.AveragePool"([[POW]])
+  // CHECK-SAME: count_include_pad = 1 : si64
+  // CHECK-SAME: -> tensor<?x1x2x2xf32>
+  // CHECK: [[SCALED:%.+]] = "onnx.Mul"([[POOL]], {{%.+}}) : (tensor<?x1x2x2xf32>, tensor<f32>) -> tensor<?x1x2x2xf32>
+  // CHECK: [[ROOT:%.+]] = "onnx.Pow"([[SCALED]], {{%.+}}) : (tensor<?x1x2x2xf32>, tensor<f32>) -> tensor<?x1x2x2xf32>
+  // CHECK: return [[ROOT]] : tensor<?x1x2x2xf32>
+}
