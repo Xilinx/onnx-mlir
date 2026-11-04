@@ -19,15 +19,18 @@
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Support/Int4.hpp"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <thread>
 #include <vector>
 
 using namespace mlir;
@@ -336,6 +339,94 @@ public:
         sizeof(kInt4OddRawBytes), {5}, verifyInt4Odd);
   }
 
+  bool testConcurrentExternalDataFileAccess() {
+    llvm::SmallString<128> tmpPath;
+    int fd = -1;
+    if (llvm::sys::fs::createTemporaryFile(
+            "onnx_ext_data_concurrent", "bin", fd, tmpPath))
+      return false;
+    {
+      llvm::raw_fd_ostream os(fd, /*shouldClose=*/true);
+      os.write(reinterpret_cast<const char *>(kFloatTestData),
+          sizeof(kFloatTestData));
+    }
+
+    constexpr size_t threadCount = 8;
+    std::atomic<size_t> ready{0};
+    std::atomic<size_t> loaded{0};
+    std::vector<uint8_t> succeeded(threadCount, false);
+    std::vector<const llvm::MemoryBuffer *> buffers(threadCount, nullptr);
+    std::vector<std::thread> threads;
+    threads.reserve(threadCount);
+    for (size_t i = 0; i < threadCount; ++i) {
+      threads.emplace_back([&, i]() {
+        MLIRContext context;
+        context.getOrLoadDialect<ONNXDialect>();
+        auto type = RankedTensorType::get({2, 3}, Float32Type::get(&context));
+        ++ready;
+        while (ready.load() != threadCount)
+          std::this_thread::yield();
+
+        auto bufferOrError = getExternalDataFile(tmpPath);
+        ElementsAttr attr;
+        if (bufferOrError) {
+          std::shared_ptr<const llvm::MemoryBuffer> buffer = *bufferOrError;
+          buffers[i] = buffer.get();
+          attr = externalTensorBytesToElmAttr(
+              type, std::move(buffer), 0, sizeof(kFloatTestData));
+          succeeded[i] =
+              verifyFloat("testConcurrentExternalDataFileAccess", attr);
+        }
+        ++loaded;
+        while (loaded.load() != threadCount)
+          std::this_thread::yield();
+      });
+    }
+    for (std::thread &thread : threads)
+      thread.join();
+    llvm::sys::fs::remove(tmpPath);
+
+    if (!llvm::all_of(succeeded, [](uint8_t value) { return value; }))
+      return false;
+    return llvm::all_of(buffers,
+        [&](const llvm::MemoryBuffer *buffer) { return buffer == buffers[0]; });
+  }
+
+  bool testExternalDataFileReleasedWithContext() {
+    llvm::SmallString<128> tmpPath;
+    int fd = -1;
+    if (llvm::sys::fs::createTemporaryFile(
+            "onnx_ext_data_lifetime", "bin", fd, tmpPath))
+      return false;
+    {
+      llvm::raw_fd_ostream os(fd, /*shouldClose=*/true);
+      os.write(reinterpret_cast<const char *>(kFloatTestData),
+          sizeof(kFloatTestData));
+    }
+
+    std::weak_ptr<const llvm::MemoryBuffer> mapping;
+    bool retainedByAttribute = false;
+    {
+      MLIRContext context;
+      context.getOrLoadDialect<ONNXDialect>();
+      auto type = RankedTensorType::get({2, 3}, Float32Type::get(&context));
+      auto bufferOrError = getExternalDataFile(tmpPath);
+      if (!bufferOrError) {
+        llvm::sys::fs::remove(tmpPath);
+        return false;
+      }
+      std::shared_ptr<const llvm::MemoryBuffer> buffer = *bufferOrError;
+      mapping = buffer;
+      ElementsAttr attr = externalTensorBytesToElmAttr(
+          type, std::move(buffer), 0, sizeof(kFloatTestData));
+      retainedByAttribute =
+          !mapping.expired() &&
+          verifyFloat("testExternalDataFileReleasedWithContext", attr);
+    }
+    llvm::sys::fs::remove(tmpPath);
+    return retainedByAttribute && mapping.expired();
+  }
+
   bool runAllTests() {
     bool allPassed = true;
 
@@ -351,6 +442,8 @@ public:
     allPassed = testFileExternalDataWithZeroLengthBool() && allPassed;
     allPassed = testFileExternalDataWithZeroLengthInt4() && allPassed;
     allPassed = testFileExternalDataWithZeroLengthInt4Odd() && allPassed;
+    allPassed = testConcurrentExternalDataFileAccess() && allPassed;
+    allPassed = testExternalDataFileReleasedWithContext() && allPassed;
 
     return allPassed;
   }
