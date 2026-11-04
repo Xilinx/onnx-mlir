@@ -282,6 +282,10 @@ def constants(output):
     return [line for line in output.splitlines() if line.startswith("constant ")]
 
 
+def constant_values(output):
+    return [line.split(" ", 2)[2] for line in constants(output)]
+
+
 def main(driver):
     checks = 0
     with tempfile.TemporaryDirectory(prefix="initializer-source-") as temporary:
@@ -804,6 +808,32 @@ def main(driver):
         )
         assert len(constants(out)) == 3
         checks += 1
+
+        # Structural consumption snapshots an initializer into compiler-owned
+        # constants. Replacing its backing bytes after serialization must not
+        # change those constants, while the unrelated data source stays lazy.
+        structural_saved = folder / "structural-consumed.mlir"
+        run(
+            driver,
+            "--input",
+            structural_model,
+            "--skip-all",
+            "--output",
+            structural_saved,
+        )
+        consumed = constant_values(out)
+        (folder / "structural.bin").write_bytes(struct.pack("<5q", 1, 4, 1, 0, 1))
+        reloaded = run(
+            driver,
+            "--input",
+            structural_saved,
+            "--read-ir",
+            "--skip-all",
+        )
+        assert constant_values(reloaded) == consumed
+        assert "source data live=0" in reloaded
+        checks += 1
+
         out = run(
             driver,
             "--input",
