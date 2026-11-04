@@ -108,6 +108,34 @@ def ONNXInitializerSourceOp : ONNX_Op<"InitializerSource", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// XFE CastOp
+def XFECastOp : ONNX_Op<"XFECast", [Pure, SameOperandsAndResultShape]> {
+  let summary = "Convert a deferred f32 constant to bf16 with an explicit policy";
+  let description = [{
+    Converts an f32 tensor to bf16 using the policy named by `policy`. Unlike
+    ONNX Cast, this operation makes the compiler-selected constant-conversion
+    behavior part of the IR so it remains stable while the input is deferred.
+
+    Supported policies are:
+
+    - `legacy_bf16_truncate`: copy the upper 16 bits of each f32 IEEE
+      representation without rounding or saturation.
+    - `runtime_bf16_rne`: match the FlexML runtime scalar round-to-nearest-even
+      bit arithmetic, including its negative-infinity saturation and NaN
+      behavior.
+
+    The operation is intended for constant expressions and must fold before
+    lowering to a runtime implementation.
+  }];
+  let arguments = (ins TensorOf<[F32]>:$input, StrAttr:$policy);
+  let results = (outs TensorOf<[BF16]>:$output);
+  let assemblyFormat = [{ $input `policy` `=` $policy attr-dict `:`
+                          type($input) `to` type($output) }];
+  let hasFolder = 1;
+  let hasVerifier = 1;
+}
+
+//===----------------------------------------------------------------------===//
 // ONNX ReturnOp
 def ONNXReturnOp : ONNX_Op<"Return",
     [Pure, HasParent<"func::FuncOp">, ReturnLike, Terminator]> {
