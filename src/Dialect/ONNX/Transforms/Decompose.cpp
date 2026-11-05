@@ -5733,12 +5733,22 @@ struct DecomposeGroupNormV18Pattern
 // so a constant kernel volume is not the Lp sum. Intermediate types are the
 // LpPool operand and result types: builders that omit a result type turn a
 // ranked dynamic tensor into an unranked one.
+//
+// This is only enabled with --unsafe-math-optimizations. Averaging and then
+// scaling by the kernel volume reassociates the sum, so the result is not the
+// Lp sum in reduced precision. With p=1 and a 257-element bf16 window holding
+// 256 ones and a zero, the sum is exactly 256 but 256/257 rounds to
+// 0.99609375 and the scale of 256 gives 255. In fp16 the volume itself, or the
+// powered values, can overflow.
 // =============================================================================
 struct DecomposeLpPoolPattern : public OpRewritePattern<ONNXLpPoolOp> {
   using OpRewritePattern<ONNXLpPoolOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
       ONNXLpPoolOp op, PatternRewriter &rewriter) const final {
+    if (!onnx_mlir::isUnsafeMathEnabled())
+      return rewriter.notifyMatchFailure(
+          op, "LpPool decomposition needs --unsafe-math-optimizations");
     Value input = op.getX();
     auto inputType = dyn_cast<ShapedType>(input.getType());
     if (!inputType || !isa<FloatType>(inputType.getElementType()))

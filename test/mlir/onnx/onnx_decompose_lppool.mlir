@@ -1,4 +1,4 @@
-// RUN: onnx-mlir-opt --decompose-onnx %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --unsafe-math-optimizations=true --decompose-onnx %s -split-input-file | FileCheck %s
 
 // p = 2: Mul(x, x) -> AveragePool(count_include_pad=1) -> Mul(kernel volume) -> Sqrt.
 func.func @lppool_p2(%arg0: tensor<1x4x8x8xf32>) -> tensor<1x4x4x4xf32> {
