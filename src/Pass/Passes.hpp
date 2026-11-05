@@ -69,6 +69,10 @@ void configureBatchNormCanonicalization(bool disableBatchNormDecompose);
 // Configure patterns that are not numerically safe.
 void configureUnsafeMathCanonicalization(bool enableUnsafeMathOptimizations);
 
+// True when --unsafe-math-optimizations is on. Rewrites that change the order
+// or precision of floating-point arithmetic ask this before they fire.
+bool isUnsafeMathEnabled();
+
 // Configure whether Flatten/Squeeze/Unsqueeze-to-Reshape canonicalization is
 // enabled.
 void configureReshapeCanonicalization(bool enableReshapeCanonicalization);

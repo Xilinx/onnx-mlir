@@ -5953,6 +5953,8 @@ void onnx_mlir::configureUnsafeMathCanonicalization(
   enableUnsafeMath = enableUnsafeMathOptimizations;
 }
 
+bool onnx_mlir::isUnsafeMathEnabled() { return enableUnsafeMath; }
+
 void onnx_mlir::configureReshapeCanonicalization(bool enable) {
   enableReshapeCanonicalization = enable;
 }
