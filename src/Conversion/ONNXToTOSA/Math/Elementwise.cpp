@@ -4,7 +4,7 @@
 
 //===---------------- Elementwise.cpp - Elementwise Op --------------------===//
 //
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -420,6 +420,13 @@ public:
     Value rhs = adaptor.getB();
     auto resultType = mlir::cast<TensorType>(op.getResult().getType());
     Type resultElementType = resultType.getElementType();
+
+    // Keep foldable floating-point division intact. Replacing it by
+    // multiplication with a rounded reciprocal can change the value that is
+    // produced after an initializer source is materialized and folded.
+    if (isa<FloatType>(resultElementType) && isConstantFoldable(op.getResult()))
+      return rewriter.notifyMatchFailure(
+          op, "preserve constant-foldable floating-point division");
 
     TosaBuilder tosaBuilder(rewriter, op->getLoc());
 
