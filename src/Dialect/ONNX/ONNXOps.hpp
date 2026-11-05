@@ -24,6 +24,7 @@
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
 #include "src/Dialect/ONNX/ONNXTraits.hpp"
 #include "src/Dialect/ONNX/ONNXTypes.hpp"
+#include "src/Interface/DeferredConstantOpInterface.hpp"
 #include "src/Interface/HasOnnxSubgraphOpInterface.hpp"
 #include "src/Interface/ResultTypeInferenceOpInterface.hpp"
 #include "src/Interface/ShapeInferenceOpInterface.hpp"

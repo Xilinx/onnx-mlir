@@ -68,8 +68,54 @@ def ONNX_CallerOwnedDataAttr : Attr<
 }
 
 //===----------------------------------------------------------------------===//
+// ONNX DeferredFoldableOp
+def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
+    [DeferredConstantOpInterface, IsolatedFromAbove,
+     RecursivelySpeculatable, RecursiveMemoryEffects, SingleBlock]> {
+  let summary = "Retain a constant expression for explicit later folding";
+  let description = [{
+    Represents a deterministic expression with constant semantics whose source
+    contents are deliberately unavailable to ordinary folding. The body keeps
+    the expression recipe so an explicit materialization API can load deferred
+    sources and evaluate it later.
+
+    `captures` correspond positionally to the arguments of `body`. The body is
+    a flattened DAG of pure, regionless operations followed by
+    `onnx.DeferredYield`; forming a larger expression inlines the bodies of its
+    deferred operands. The yielded value's producer is the terminal operation,
+    allowing the compiler to inspect or peel it in constant time before
+    choosing whether to evaluate it during materialization.
+
+    This operation is not `ConstantLike` and has no fold hook: merely running
+    generic folding must not read initializer payloads.
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$captures);
+  let results = (outs AnyType:$result);
+  let regions = (region SizedRegion<1>:$body);
+  let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    /// Return the terminal operation retained by this wrapper.
+    Operation *getTerminalOperation();
+
+    template <typename OpTy>
+    OpTy getTerminalOperation() {
+      return dyn_cast_or_null<OpTy>(getTerminalOperation());
+    }
+  }];
+}
+
+def ONNXDeferredYieldOp : ONNX_Op<"DeferredYield",
+    [HasParent<"ONNXDeferredFoldableOp">, Pure, ReturnLike, Terminator]> {
+  let summary = "Return the retained deferred expression value";
+  let arguments = (ins AnyType:$value);
+  let assemblyFormat = "$value attr-dict `:` type($value)";
+}
+
+//===----------------------------------------------------------------------===//
 // ONNX InitializerSourceOp
-def ONNXInitializerSourceOp : ONNX_Op<"InitializerSource", [Pure]> {
+def ONNXInitializerSourceOp : ONNX_Op<"InitializerSource",
+    [Pure, DeferredConstantOpInterface]> {
   let summary = "Reference an ONNX initializer without reading it";
   let description = [{
     Represents immutable ONNX initializer contents by either an external-data
