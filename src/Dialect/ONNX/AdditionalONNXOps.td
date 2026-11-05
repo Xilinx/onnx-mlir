@@ -82,9 +82,11 @@ def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
     `captures` correspond positionally to the arguments of `body`. The body is
     a flattened DAG of pure, regionless operations followed by
     `onnx.DeferredYield`; forming a larger expression inlines the bodies of its
-    deferred operands. The yielded value's producer is the terminal operation,
-    allowing the compiler to inspect or peel it in constant time before
-    choosing whether to evaluate it during materialization.
+    deferred operands. The yielded value's producer is normally the terminal
+    operation, allowing the compiler to inspect or peel it in constant time
+    before choosing whether to evaluate it during materialization. A recipe
+    may yield a capture directly after semantics-preserving canonicalization
+    removes its last operation; such a recipe has no peelable terminal.
 
     Recipe operations belong to the ONNX dialect, including XFE extension
     operations such as `onnx.XFECast`. Ordinary passes treat the body as

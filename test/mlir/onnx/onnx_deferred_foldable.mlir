@@ -3,6 +3,7 @@
 // affiliates
 
 // RUN: onnx-mlir-opt --onnx-form-deferred-foldable-expressions %s | FileCheck %s
+// RUN: onnx-mlir-opt --canonicalize %s | FileCheck %s --check-prefix=CANON
 
 func.func @retain_expression(%runtime: tensor<2x2xf32>) -> (tensor<2x2xf32>, tensor<2x2xf32>) {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
@@ -39,3 +40,24 @@ func.func @do_not_retain_nondeterministic_expression() -> tensor<2x2xf32> {
 // CHECK:         %[[SOURCE:.+]] = "onnx.InitializerSource"()
 // CHECK-NEXT:    %[[RANDOM:.+]] = "onnx.RandomNormalLike"(%[[SOURCE]])
 // CHECK-NEXT:    onnx.Return %[[RANDOM]]
+
+// Generic cleanup is not the recipe evaluation mechanism, but a
+// semantics-preserving canonicalization may eliminate an identity terminal.
+// The recipe remains valid and directly yields its capture in that case.
+func.func @canonicalized_identity_recipe() -> tensor<2x2xf32> {
+  %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+  %result = "onnx.DeferredFoldable"(%weight) ({
+  ^bb0(%captured: tensor<2x2xf32>):
+    %identity = "onnx.Identity"(%captured) : (tensor<2x2xf32>) -> tensor<2x2xf32>
+    onnx.DeferredYield %identity : tensor<2x2xf32>
+  }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
+  onnx.Return %result : tensor<2x2xf32>
+}
+
+// CANON-LABEL: func.func @canonicalized_identity_recipe
+// CANON:         %[[SOURCE:.+]] = "onnx.InitializerSource"()
+// CANON:         %[[DEFERRED:.+]] = "onnx.DeferredFoldable"(%[[SOURCE]]) ({
+// CANON-NOT:       "onnx.Identity"
+// CANON:         ^bb0(%[[CAPTURE:.+]]: tensor<2x2xf32>):
+// CANON-NEXT:      onnx.DeferredYield %[[CAPTURE]]
+// CANON:         onnx.Return %[[DEFERRED]]

@@ -194,6 +194,8 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
 
   for (auto [capture, argument] :
       llvm::zip_equal(getCaptures(), body.getArguments())) {
+    if (!capture)
+      return emitOpError("has an invalid capture");
     if (capture.getDefiningOp<ONNXDeferredFoldableOp>())
       return emitOpError("must inline a captured onnx.DeferredFoldable body");
     if (!onnx_mlir::isConstLikeOperation(capture.getDefiningOp()) &&
@@ -225,9 +227,16 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
   if (!yield)
     return emitOpError("body must terminate with onnx.DeferredYield");
   Operation *terminal = getTerminalOperation();
-  if (!terminal)
-    return emitOpError("must yield a value produced in its body");
-  if (terminal->getNextNode() != yield.getOperation())
+  if (!terminal) {
+    auto argument = dyn_cast<BlockArgument>(yield.getValue());
+    if (!argument || argument.getOwner() != &body)
+      return emitOpError(
+          "must yield a value produced in its body or a body argument");
+    if (body.getOperations().size() != 1)
+      return emitOpError(
+          "a recipe that yields a capture directly must contain no other "
+          "operations");
+  } else if (terminal->getNextNode() != yield.getOperation())
     return emitOpError("terminal operation must immediately precede its yield");
 
   for (Operation &operation : body.without_terminator()) {
@@ -249,7 +258,7 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
              << operation.getName();
   }
 
-  if (yield.getValue() != terminal->getResult(0))
+  if (terminal && yield.getValue() != terminal->getResult(0))
     return emitOpError("must yield the terminal operation's result");
   if (yield.getValue().getType() != getResult().getType())
     return emitOpError() << "yield type " << yield.getValue().getType()
