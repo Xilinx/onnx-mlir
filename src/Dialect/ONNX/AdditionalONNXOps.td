@@ -86,10 +86,10 @@ def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
     allowing the compiler to inspect or peel it in constant time before
     choosing whether to evaluate it during materialization.
 
-    Recipe operations may belong to any registered dialect. A materializer
-    must evaluate them through their registered folding/canonicalization
-    interfaces and diagnose an unsupported operation; the ONNX dialect does
-    not define a separate evaluator for operations owned by other dialects.
+    Recipe operations belong to the ONNX dialect, including XFE extension
+    operations such as `onnx.XFECast`. Ordinary passes treat the body as
+    opaque. A materializer evaluates it explicitly and diagnoses any operation
+    for which no fold is available.
 
     This operation is not `ConstantLike` and has no fold hook: merely running
     generic folding must not read initializer payloads.

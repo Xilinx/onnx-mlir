@@ -61,23 +61,24 @@ private:
 void SetONNXNodeNamePass::runOnOperation() {
   ModuleOp moduleOp = getOperation();
   MLIRContext *context = &getContext();
-  llvm::DenseMap<Value, bool> knownConstantFoldability;
-
   // Collect
   // - all onnx_node_name strings and
   // - operations that have an empty onnx_node_name or a duplicated name.
-  moduleOp.walk([&](Operation *op) -> WalkResult {
+  moduleOp.walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
     // Only deal with ONNX ops.
     if (op->getDialect()->getNamespace() != ONNXDialect::getDialectNamespace())
       return WalkResult::advance();
+    // A deferred recipe is an implementation detail, not a collection of
+    // model nodes. Its wrapper carries any externally visible identity.
+    if (isa<ONNXDeferredFoldableOp>(op))
+      return WalkResult::skip();
     // Constant expressions do not represent model nodes and may disappear
     // when their payloads become available.
     if (isa<ONNXEntryPointOp, ONNXReturnOp, ONNXConstantOp>(op))
       return WalkResult::advance();
     if (op->getNumResults() != 0 &&
-        llvm::all_of(op->getResults(), [&](Value result) {
-          return isConstantFoldable(result, knownConstantFoldability);
-        }))
+        llvm::all_of(op->getResults(),
+            [&](Value result) { return isConstantFoldable(result); }))
       return WalkResult::advance();
     StringAttr nodeName = op->getAttrOfType<mlir::StringAttr>(nodeNameAttr);
     if (nodeName && !nodeName.getValue().empty()) {

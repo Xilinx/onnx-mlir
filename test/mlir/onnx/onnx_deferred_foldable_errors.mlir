@@ -59,3 +59,16 @@ func.func @dead_recipe_operation() -> tensor<2x2xf32> {
   }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
   return %result : tensor<2x2xf32>
 }
+
+// -----
+
+func.func @non_onnx_recipe_operation() -> tensor<2x2xf32> {
+  %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+  // expected-error@+1 {{'onnx.DeferredFoldable' op body operation must belong to the ONNX dialect: tosa.reshape}}
+  %result = "onnx.DeferredFoldable"(%weight) ({
+  ^bb0(%arg0: tensor<2x2xf32>):
+    %reshaped = "tosa.reshape"(%arg0) {new_shape = array<i64: 2, 2>} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+    onnx.DeferredYield %reshaped : tensor<2x2xf32>
+  }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
+  return %result : tensor<2x2xf32>
+}

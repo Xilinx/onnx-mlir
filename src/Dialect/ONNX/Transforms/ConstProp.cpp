@@ -2704,7 +2704,8 @@ public:
   }
 
   static FailureOr<Value> form(Operation *op, RewriterBase &rewriter) {
-    if (isa<ONNXDeferredFoldableOp, ONNXDeferredYieldOp>(op))
+    if (!isa<ONNXDialect>(op->getDialect()) ||
+        isa<ONNXDeferredFoldableOp, ONNXDeferredYieldOp>(op))
       return failure();
     if (!isPure(op) || op->getNumOperands() == 0 || op->getNumResults() != 1 ||
         op->getNumRegions() != 0)
@@ -3033,6 +3034,11 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
   if (enableDequantConstFold || enableDequantConstFoldWeights)
     patterns.add<ConstFoldDequantizeLinearOnConst>(
         patterns.getContext(), enableDequantConstFoldWeights);
+
+  // Retain any initializer-dependent expression not consumed by a more
+  // specific constant-propagation pattern. Pattern benefit zero makes this a
+  // dialect-wide fallback rather than a competing optimization.
+  populateFormDeferredFoldableExpressionPatterns(patterns, PatternBenefit(0));
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,

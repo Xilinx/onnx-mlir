@@ -447,7 +447,8 @@ bool isConstLikeOperation(mlir::Operation *op) {
   return op && op->hasTrait<OpTrait::ConstantLike>();
 }
 
-bool isConstantFoldable(Value value, llvm::DenseMap<Value, bool> &knownValues) {
+bool isSemanticallyConstantFoldable(
+    Value value, llvm::DenseMap<Value, bool> &knownValues) {
   if (auto it = knownValues.find(value); it != knownValues.end())
     return it->second;
 
@@ -468,15 +469,16 @@ bool isConstantFoldable(Value value, llvm::DenseMap<Value, bool> &knownValues) {
   if (op->getNumRegions() != 0)
     return knownValues.try_emplace(value, false).first->second;
 
-  bool isFoldable = llvm::all_of(op->getOperands(),
-      [&](Value operand) { return isConstantFoldable(operand, knownValues); });
+  bool isFoldable = llvm::all_of(op->getOperands(), [&](Value operand) {
+    return isSemanticallyConstantFoldable(operand, knownValues);
+  });
   knownValues.try_emplace(value, isFoldable);
   return isFoldable;
 }
 
 bool isConstantFoldable(Value value) {
-  llvm::DenseMap<Value, bool> knownValues;
-  return isConstantFoldable(value, knownValues);
+  Operation *op = value.getDefiningOp();
+  return isConstLikeOperation(op) || isDeferredConstant(value);
 }
 
 FailureOr<Operation *> peelDeferredFoldableExpression(

@@ -56,10 +56,15 @@ int testDirectFormation(MLIRContext &context) {
 
   ONNXTransposeOp transpose;
   module->walk([&](ONNXTransposeOp op) { transpose = op; });
+  llvm::DenseMap<Value, bool> knownValues;
+  if (isConstantFoldable(transpose.getResult()) ||
+      !isSemanticallyConstantFoldable(transpose.getResult(), knownValues))
+    return 1;
   IRRewriter rewriter(&context);
   rewriter.setInsertionPoint(transpose);
   FailureOr<Value> formed = formDeferredFoldableExpression(transpose, rewriter);
   if (failed(formed) || !formed->getDefiningOp<ONNXDeferredFoldableOp>() ||
+      !isConstantFoldable(*formed) ||
       rewriter.getInsertionBlock() != formed->getParentBlock() ||
       failed(verify(*module)))
     return 1;
@@ -107,7 +112,7 @@ int testNormalizeDuplicateCaptureUses(MLIRContext &context) {
   return 0;
 }
 
-int testCrossDialectFormation(MLIRContext &context) {
+int testRejectCrossDialectFormation(MLIRContext &context) {
   auto module = parseModule(context, R"mlir(
     module {
       func.func @test() -> tensor<?x2xf32> {
@@ -125,10 +130,8 @@ int testCrossDialectFormation(MLIRContext &context) {
   IRRewriter rewriter(&context);
   rewriter.setInsertionPoint(cast);
   FailureOr<Value> formed = formDeferredFoldableExpression(cast, rewriter);
-  ONNXDeferredFoldableOp deferred;
-  if (succeeded(formed))
-    deferred = formed->getDefiningOp<ONNXDeferredFoldableOp>();
-  if (!deferred || !isa<tensor::CastOp>(deferred.getTerminalOperation()) ||
+  if (succeeded(formed) ||
+      rewriter.getInsertionPoint() != cast->getIterator() ||
       failed(verify(*module)))
     return 1;
   return 0;
@@ -196,7 +199,7 @@ int main() {
   context.loadDialect<func::FuncDialect, ONNXDialect, tensor::TensorDialect>();
   int failures = testDirectFormation(context) +
                  testNormalizeDuplicateCaptureUses(context) +
-                 testCrossDialectFormation(context) +
+                 testRejectCrossDialectFormation(context) +
                  testPeelOneInternalOperand(context) +
                  testRejectMultipleInternalOperands(context);
   if (failures)

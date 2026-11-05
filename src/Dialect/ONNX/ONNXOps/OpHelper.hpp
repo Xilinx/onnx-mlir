@@ -208,15 +208,16 @@ mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 
 [[nodiscard]] bool isConstLikeOperation(mlir::Operation *op);
 
-// Return true when `value` is ConstantLike, implements deferred-constant
-// semantics, or is the result of a pure, regionless operation whose operands
-// are all recursively constant-foldable. This predicate does not read or fold
-// tensor payloads.
+// Return true when `value`'s direct producer is ConstantLike or implements
+// deferred-constant semantics. Deferred expressions must be represented
+// explicitly rather than rediscovered by walking the operand graph.
 [[nodiscard]] bool isConstantFoldable(mlir::Value value);
 
-// As above, reusing classifications accumulated by earlier queries. The cache
-// is valid only while the defining operation graph remains unchanged.
-[[nodiscard]] bool isConstantFoldable(
+// Temporary semantic audit helper. Recursively classify a value without
+// reading payloads. Do not use this for ordinary transformation matching;
+// form an explicit DeferredFoldable recipe instead. The cache is valid only
+// while the defining operation graph remains unchanged.
+[[nodiscard]] bool isSemanticallyConstantFoldable(
     mlir::Value value, llvm::DenseMap<mlir::Value, bool> &knownValues);
 
 // Move the terminal operation retained by `deferred` back into its parent

@@ -1,6 +1,6 @@
 // Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
 
-// RUN: onnx-mlir-opt --set-onnx-node-name --split-input-file %s | FileCheck %s
+// RUN: onnx-mlir-opt --onnx-form-deferred-foldable-expressions --set-onnx-node-name --split-input-file %s | FileCheck %s
 
 module { 
   func.func @set_for_multiple_ops(%arg0: tensor<3x2xf32>, %arg1: tensor<3x2xf32>) -> tensor<3x2xf32> {
@@ -60,9 +60,14 @@ func.func @skip_constant_foldable_expression(%arg0: tensor<2x2xf32>) -> tensor<2
 // CHECK-LABEL:  func.func @skip_constant_foldable_expression
 // CHECK:           [[WEIGHT:%.+]] = "onnx.InitializerSource"() {{.*}} : () -> tensor<2x2xf32>
 // CHECK-NOT:       onnx_node_name
-// CHECK:           [[TRANSPOSED:%.+]] = "onnx.Transpose"([[WEIGHT]]) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+// CHECK:           [[DEFERRED:%.+]] = "onnx.DeferredFoldable"([[WEIGHT]]) ({
 // CHECK-NOT:       onnx_node_name
-// CHECK:           [[RESULT:%.+]] = "onnx.Add"(%arg0, [[TRANSPOSED]]) {onnx_node_name = "onnx.Add_0"}
+// CHECK:             [[TRANSPOSED:%.+]] = "onnx.Transpose"
+// CHECK-NOT:         onnx_node_name
+// CHECK:             onnx.DeferredYield [[TRANSPOSED]]
+// CHECK-NOT:         onnx_node_name
+// CHECK:           }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
+// CHECK:           [[RESULT:%.+]] = "onnx.Add"(%arg0, [[DEFERRED]]) {onnx_node_name = "onnx.Add_0"}
 // CHECK:           onnx.Return [[RESULT]]
 }
 
