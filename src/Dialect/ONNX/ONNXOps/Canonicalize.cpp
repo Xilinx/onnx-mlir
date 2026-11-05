@@ -524,7 +524,7 @@ bool areAllDimSizes(ValueRange vals) {
 // shape_transform is a sequence of operations like Reshape, Transpose,
 // Squeeze, Unsqueeze, etc. that do not change the numerical values by data
 // shape.
-// A and B are constants.
+// A and B are constant-foldable expressions.
 bool matchShapeAddMatMul(Value v, Value &matA, Value &biasB,
     Operation *&matmulOrGemmOp, Operation *&addOp, bool &isGemm) {
   if (mlir::isa<BlockArgument>(v))
@@ -548,10 +548,10 @@ bool matchShapeAddMatMul(Value v, Value &matA, Value &biasB,
   // Match Gemm
   auto onnxGemmOp = origV.getDefiningOp<ONNXGemmOp>();
   if (onnxGemmOp) {
-    if (!isDenseONNXConstant(onnxGemmOp.getB()))
+    if (!isConstantFoldable(onnxGemmOp.getB()))
       return false;
     if (!isNoneValue(onnxGemmOp.getC()) &&
-        !isDenseONNXConstant(onnxGemmOp.getC()))
+        !isConstantFoldable(onnxGemmOp.getC()))
       return false;
     matmulOrGemmOp = onnxGemmOp.getOperation();
     matA = onnxGemmOp.getB();
@@ -574,11 +574,11 @@ bool matchShapeAddMatMul(Value v, Value &matA, Value &biasB,
   if (!onnxMatMulOp)
     return false;
   Value rhsMatMul = onnxMatMulOp.getB();
-  if (!isDenseONNXConstant(rhsMatMul))
+  if (!isConstantFoldable(rhsMatMul))
     return false;
 
-  // RHS of Add is a constant.
-  if (!isDenseONNXConstant(rhsAdd))
+  // RHS of Add is constant-foldable.
+  if (!isConstantFoldable(rhsAdd))
     return false;
 
   // Passed all tests.
@@ -974,19 +974,20 @@ public:
 // ```
 // shape_transform(X1 * A1 + B1) * shape_transform(X2 * A2/k + B2/k)
 // ```
-// if A2, B2 and k are constants,
+// if A2 and B2 are constant-foldable and k is a scalar constant,
 //
 // or into
 // ```
 // shape_transform(X1 * A1/k + B1/k) * shape_transform(X2 * A2 + B2)
 // ```
-// if A1, B1 and k are constants,
+// if A1 and B1 are constant-foldable and k is a scalar constant,
 //
 // where
 // - * is matrix multiplication; + and / are element-wise addition and division
-// - A1, A2, B1, B2, and k are constants so that A1/k, B1/k, A2/k and B2/k can
-// be folded. k is a scalar constant so that it's broadcastable to all A1, A2,
-// B1, B2.
+// - A1, A2, B1, and B2 are constant-foldable so that A1/k, B1/k, A2/k, and
+// B2/k can be folded. Folding remains deferred when an expression depends on
+// an initializer source. k is a scalar constant so that it is broadcastable to
+// all A1, A2, B1, and B2.
 // - shape_transform includes a sequence of operations that change the data
 // shape of the input but not numerical values, for example: Reshape,
 // Transpose, etc.
