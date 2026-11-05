@@ -7,5 +7,8 @@ add_onnx_mlir_unittest(TestDeferredFoldable
 
   LINK_LIBS PRIVATE
   OMONNXOps
+  OMONNXRewrite
+  MLIRBytecodeWriter
   MLIRParser
+  MLIRTensorDialect
   )

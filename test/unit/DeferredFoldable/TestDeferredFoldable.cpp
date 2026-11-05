@@ -6,11 +6,15 @@
 
 #include "src/Dialect/ONNX/ONNXDialect.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
+#include "src/Dialect/ONNX/Transforms/ConstProp.hpp"
 
+#include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Parser/Parser.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
@@ -22,6 +26,12 @@ OwningOpRef<ModuleOp> parseModule(MLIRContext &context, StringRef body) {
   return parseSourceString<ModuleOp>(body, &context);
 }
 
+OwningOpRef<ModuleOp> parseModuleUnverified(
+    MLIRContext &context, StringRef body) {
+  ParserConfig config(&context, /*verifyAfterParse=*/false);
+  return parseSourceString<ModuleOp>(body, config);
+}
+
 ONNXDeferredFoldableOp findDeferred(ModuleOp module) {
   ONNXDeferredFoldableOp result;
   module.walk([&](ONNXDeferredFoldableOp op) {
@@ -29,6 +39,99 @@ ONNXDeferredFoldableOp findDeferred(ModuleOp module) {
       result = op;
   });
   return result;
+}
+
+int testDirectFormation(MLIRContext &context) {
+  auto module = parseModule(context, R"mlir(
+    module {
+      func.func @test() -> tensor<2x2xf32> {
+        %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+        %transposed = "onnx.Transpose"(%weight) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+        return %transposed : tensor<2x2xf32>
+      }
+    }
+  )mlir");
+  if (!module)
+    return 1;
+
+  ONNXTransposeOp transpose;
+  module->walk([&](ONNXTransposeOp op) { transpose = op; });
+  IRRewriter rewriter(&context);
+  rewriter.setInsertionPoint(transpose);
+  FailureOr<Value> formed = formDeferredFoldableExpression(transpose, rewriter);
+  if (failed(formed) || !formed->getDefiningOp<ONNXDeferredFoldableOp>() ||
+      rewriter.getInsertionBlock() != formed->getParentBlock() ||
+      failed(verify(*module)))
+    return 1;
+
+  SmallString<1024> bytecode;
+  llvm::raw_svector_ostream output(bytecode);
+  if (failed(writeBytecodeToFile(*module, output)))
+    return 1;
+  OwningOpRef<ModuleOp> roundTripped =
+      parseSourceString<ModuleOp>(bytecode, &context);
+  if (!roundTripped || !findDeferred(*roundTripped))
+    return 1;
+  return 0;
+}
+
+int testNormalizeDuplicateCaptureUses(MLIRContext &context) {
+  auto module = parseModuleUnverified(context, R"mlir(
+    module {
+      func.func @test() -> tensor<2x2xf32> {
+        %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+        %cast = "onnx.Cast"(%weight) {saturate = 1 : si64, to = f32} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+        %result = "onnx.DeferredFoldable"(%cast, %cast) ({
+        ^bb0(%lhs: tensor<2x2xf32>, %rhs: tensor<2x2xf32>):
+          %sum = "onnx.Add"(%lhs, %rhs) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+          onnx.DeferredYield %sum : tensor<2x2xf32>
+        }) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+        return %result : tensor<2x2xf32>
+      }
+    }
+  )mlir");
+  if (!module)
+    return 1;
+
+  RewritePatternSet patterns(&context);
+  populateFormDeferredFoldableExpressionPatterns(patterns, PatternBenefit(1));
+  if (failed(applyPatternsGreedily(*module, std::move(patterns))))
+    return 1;
+
+  ONNXDeferredFoldableOp deferred = findDeferred(*module);
+  if (!deferred || deferred.getCaptures().size() != 1 ||
+      !isa<ONNXInitializerSourceOp>(
+          deferred.getCaptures().front().getDefiningOp()) ||
+      failed(verify(*module)))
+    return 1;
+  return 0;
+}
+
+int testCrossDialectFormation(MLIRContext &context) {
+  auto module = parseModule(context, R"mlir(
+    module {
+      func.func @test() -> tensor<?x2xf32> {
+        %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+        %cast = tensor.cast %weight : tensor<2x2xf32> to tensor<?x2xf32>
+        return %cast : tensor<?x2xf32>
+      }
+    }
+  )mlir");
+  if (!module)
+    return 1;
+
+  tensor::CastOp cast;
+  module->walk([&](tensor::CastOp op) { cast = op; });
+  IRRewriter rewriter(&context);
+  rewriter.setInsertionPoint(cast);
+  FailureOr<Value> formed = formDeferredFoldableExpression(cast, rewriter);
+  ONNXDeferredFoldableOp deferred;
+  if (succeeded(formed))
+    deferred = formed->getDefiningOp<ONNXDeferredFoldableOp>();
+  if (!deferred || !isa<tensor::CastOp>(deferred.getTerminalOperation()) ||
+      failed(verify(*module)))
+    return 1;
+  return 0;
 }
 
 int testPeelOneInternalOperand(MLIRContext &context) {
@@ -90,8 +193,11 @@ int testRejectMultipleInternalOperands(MLIRContext &context) {
 
 int main() {
   MLIRContext context;
-  context.loadDialect<func::FuncDialect, ONNXDialect>();
-  int failures = testPeelOneInternalOperand(context) +
+  context.loadDialect<func::FuncDialect, ONNXDialect, tensor::TensorDialect>();
+  int failures = testDirectFormation(context) +
+                 testNormalizeDuplicateCaptureUses(context) +
+                 testCrossDialectFormation(context) +
+                 testPeelOneInternalOperand(context) +
                  testRejectMultipleInternalOperands(context);
   if (failures)
     llvm::errs() << failures << " DeferredFoldable test(s) failed\n";

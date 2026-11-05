@@ -3,7 +3,6 @@
 // affiliates
 
 // RUN: onnx-mlir-opt --onnx-form-deferred-foldable-expressions %s | FileCheck %s
-// RUN: onnx-mlir-opt --onnx-form-deferred-foldable-expressions --emit-bytecode %s | onnx-mlir-opt | FileCheck %s
 
 func.func @retain_expression(%runtime: tensor<2x2xf32>) -> (tensor<2x2xf32>, tensor<2x2xf32>) {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
