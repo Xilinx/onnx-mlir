@@ -2,7 +2,7 @@
 // Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
 // affiliates
 
-// RUN: onnx-mlir-opt --constprop-onnx %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --constprop-onnx %s --split-input-file | FileCheck %s
 
 func.func @reassociate_adds(%arg0: tensor<4xf32>) -> tensor<4xf32> {
   %c0 = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "c0", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<4xf32>

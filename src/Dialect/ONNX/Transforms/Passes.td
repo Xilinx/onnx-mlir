@@ -24,6 +24,16 @@ def MaterializeInitializerSourcesPass
   ];
 }
 
+def FormDeferredFoldableExpressionsPass
+    : Pass<"onnx-form-deferred-foldable-expressions", "::mlir::func::FuncOp"> {
+  let summary = "Retain deferred constant expressions behind an explicit IR boundary";
+  let description = [{
+    Forms flattened `onnx.DeferredFoldable` recipes after ordinary ONNX
+    rewriting and constant propagation have reached their intended fixed
+    point. The pass does not read initializer payloads.
+  }];
+}
+
 // Options common to both decompose-onnx and recompose-onnx: same C++ member,
 // same meaning. Declared once and pulled into both passes (and the hybrid pass)
 // so the generated options struct never gets a duplicate member.

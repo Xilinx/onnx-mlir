@@ -54,6 +54,7 @@ using namespace onnx_mlir;
 
 namespace onnx_mlir {
 #define GEN_PASS_DEF_CONSTPROPONNXTOONNXPASS
+#define GEN_PASS_DEF_FORMDEFERREDFOLDABLEEXPRESSIONSPASS
 #include "src/Dialect/ONNX/Transforms/Passes.h.inc"
 } // namespace onnx_mlir
 
@@ -2689,6 +2690,160 @@ public:
   }
 };
 
+// Retain an initializer-dependent constant expression without reading its
+// payload. This runs only after ordinary constant propagation reaches a fixed
+// point, so payload-backed constants continue to use the existing folds.
+class FormDeferredFoldableExpression : public RewritePattern {
+public:
+  explicit FormDeferredFoldableExpression(MLIRContext *context)
+      : RewritePattern(MatchAnyOpTypeTag(), /*benefit=*/1, context) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, PatternRewriter &rewriter) const override {
+    if (!isa<ONNXDialect>(op->getDialect()) ||
+        isa<ONNXDeferredFoldableOp, ONNXDeferredYieldOp>(op))
+      return failure();
+    if (!isPure(op) || op->getNumOperands() == 0 || op->getNumResults() != 1 ||
+        op->getNumRegions() != 0)
+      return failure();
+
+    bool hasDeferredOperand = false;
+    for (Value operand : op->getOperands()) {
+      if (isDeferredConstant(operand)) {
+        hasDeferredOperand = true;
+        continue;
+      }
+      if (!isConstLikeValue(operand))
+        return failure();
+    }
+    if (!hasDeferredOperand)
+      return failure();
+
+    ONNXDeferredFoldableOp extensible;
+    bool hasMultipleDeferredWrappers = false;
+    for (Value operand : op->getOperands()) {
+      auto nested = operand.getDefiningOp<ONNXDeferredFoldableOp>();
+      if (!nested)
+        continue;
+      if (!extensible)
+        extensible = nested;
+      else if (extensible != nested)
+        hasMultipleDeferredWrappers = true;
+    }
+    if (extensible && !hasMultipleDeferredWrappers &&
+        llvm::all_of(extensible.getResult().getUses(),
+            [&](OpOperand &use) { return use.getOwner() == op; })) {
+      Block &body = extensible.getBody().front();
+      auto oldYield = cast<ONNXDeferredYieldOp>(body.getTerminator());
+      Value prefix = oldYield.getValue();
+      IRMapping mapping;
+      mapping.map(extensible.getResult(), prefix);
+
+      DenseMap<Value, BlockArgument> captureArguments;
+      for (auto [capture, argument] :
+          llvm::zip_equal(extensible.getCaptures(), body.getArguments()))
+        captureArguments.try_emplace(capture, argument);
+      for (Value operand : op->getOperands()) {
+        if (operand == extensible.getResult())
+          continue;
+        if (mapping.contains(operand))
+          continue;
+        BlockArgument argument = captureArguments.lookup(operand);
+        if (!argument) {
+          rewriter.modifyOpInPlace(extensible, [&]() {
+            extensible.getCapturesMutable().append(operand);
+            argument = body.addArgument(operand.getType(), op->getLoc());
+          });
+          captureArguments.try_emplace(operand, argument);
+        }
+        mapping.map(operand, argument);
+      }
+
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(oldYield);
+      Operation *terminal = rewriter.clone(*op, mapping);
+      rewriter.create<ONNXDeferredYieldOp>(
+          op->getLoc(), terminal->getResult(0));
+      rewriter.eraseOp(oldYield);
+      rewriter.modifyOpInPlace(extensible, [&]() {
+        extensible.getResult().setType(op->getResult(0).getType());
+        extensible->setLoc(op->getLoc());
+        for (StringRef name : {"onnx_node_name", "ResultNames"}) {
+          if (Attribute attr = op->getAttr(name))
+            extensible->setAttr(name, attr);
+          else
+            extensible->removeAttr(name);
+        }
+      });
+      rewriter.replaceOp(op, extensible.getResult());
+      return success();
+    }
+
+    SmallVector<Value> captures;
+    DenseMap<Value, unsigned> captureIndices;
+    auto addCapture = [&](Value capture) {
+      auto [it, inserted] =
+          captureIndices.try_emplace(capture, captures.size());
+      if (inserted)
+        captures.push_back(capture);
+      return it->second;
+    };
+    for (Value operand : op->getOperands()) {
+      if (auto nested = operand.getDefiningOp<ONNXDeferredFoldableOp>()) {
+        for (Value capture : nested.getCaptures())
+          addCapture(capture);
+      } else {
+        addCapture(operand);
+      }
+    }
+
+    auto deferred = rewriter.create<ONNXDeferredFoldableOp>(
+        op->getLoc(), op->getResult(0).getType(), captures);
+    if (Attribute nodeName = op->getAttr("onnx_node_name"))
+      deferred->setAttr("onnx_node_name", nodeName);
+    if (Attribute resultNames = op->getAttr("ResultNames"))
+      deferred->setAttr("ResultNames", resultNames);
+
+    Region &body = deferred.getBody();
+    Block *block = rewriter.createBlock(&body);
+    SmallVector<BlockArgument> arguments;
+    arguments.reserve(captures.size());
+    for (Value capture : captures)
+      arguments.push_back(block->addArgument(capture.getType(), op->getLoc()));
+
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(block);
+    IRMapping expressionMapping;
+    for (Value operand : op->getOperands()) {
+      if (expressionMapping.contains(operand))
+        continue;
+      if (auto nested = operand.getDefiningOp<ONNXDeferredFoldableOp>()) {
+        IRMapping nestedMapping;
+        for (auto [capture, argument] : llvm::zip_equal(
+                 nested.getCaptures(), nested.getBody().getArguments())) {
+          nestedMapping.map(
+              argument, arguments[captureIndices.lookup(capture)]);
+        }
+        for (Operation &nestedOp :
+            nested.getBody().front().without_terminator())
+          rewriter.clone(nestedOp, nestedMapping);
+        auto nestedYield =
+            cast<ONNXDeferredYieldOp>(nested.getBody().front().getTerminator());
+        expressionMapping.map(
+            operand, nestedMapping.lookup(nestedYield.getValue()));
+        continue;
+      }
+
+      expressionMapping.map(operand, arguments[captureIndices.lookup(operand)]);
+    }
+
+    Operation *terminal = rewriter.clone(*op, expressionMapping);
+    rewriter.create<ONNXDeferredYieldOp>(op->getLoc(), terminal->getResult(0));
+    rewriter.replaceOp(op, deferred.getResult());
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Code to manage the pass.
 //===----------------------------------------------------------------------===//
@@ -2699,6 +2854,26 @@ struct ConstPropONNXToONNXPass
   using Base::Base;
 
   void runOnOperation() final;
+};
+
+LogicalResult formDeferredFoldableExpressions(func::FuncOp function) {
+  MLIRContext *context = function.getContext();
+  RewritePatternSet patterns(context);
+  patterns.insert<FormDeferredFoldableExpression>(context);
+  onnx_mlir::ResultNamesUpdater rnUpdater;
+  return applyPatternsGreedily(function, std::move(patterns),
+      GreedyRewriteConfig().setListener(&rnUpdater));
+}
+
+struct FormDeferredFoldableExpressionsPass
+    : public onnx_mlir::impl::FormDeferredFoldableExpressionsPassBase<
+          FormDeferredFoldableExpressionsPass> {
+  using Base::Base;
+
+  void runOnOperation() final {
+    if (failed(formDeferredFoldableExpressions(getOperation())))
+      signalPassFailure();
+  }
 };
 
 void ConstPropONNXToONNXPass::runOnOperation() {
