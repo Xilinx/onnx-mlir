@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa -cse %s -split-input-file | FileCheck %s
 
 // -----
@@ -353,6 +357,23 @@ func.func @test_div_decomposed(%arg0: tensor<13x21x1xf32>, %arg1: tensor<13x21x1
 // CHECK-NEXT:      [[VAR_0_:%.+]] = tosa.reciprocal [[PARAM_1_]] : (tensor<13x21x1xf32>) -> tensor<13x21x1xf32>
 // CHECK-NEXT:      [[SHIFT_4_:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
 // CHECK-NEXT:      [[VAR_1_:%.+]] = tosa.mul [[PARAM_0_]], [[VAR_0_]], [[SHIFT_4_]] : (tensor<13x21x1xf32>, tensor<13x21x1xf32>, tensor<1xi8>) -> tensor<13x21x1xf32>
+}
+
+// -----
+
+// Preserve division until an initializer-dependent expression is folded.
+// Replacing x / sqrt(48) by x * rounded(1 / sqrt(48)) changes F32 values.
+func.func @test_div_deferred_initializer() -> tensor<4xf32> {
+  %weight = "onnx.InitializerSource"() {kind = "onnx_model", name = "weight", path = "/model.onnx", scope = []} : () -> tensor<4xf32>
+  %scale = "onnx.Constant"() {value = dense<6.928203105926514> : tensor<f32>} : () -> tensor<f32>
+  %0 = "onnx.Div"(%weight, %scale) : (tensor<4xf32>, tensor<f32>) -> tensor<4xf32>
+  "func.return"(%0) : (tensor<4xf32>) -> ()
+// CHECK-LABEL:  func @test_div_deferred_initializer
+// CHECK-DAG:       [[WEIGHT:%.+]] = "onnx.InitializerSource"()
+// CHECK-DAG:       [[SCALE:%.+]] = "tosa.const"() <{value = dense<6.92820311>
+// CHECK:           [[DIV:%.+]] = "onnx.Div"([[WEIGHT]], [[SCALE]])
+// CHECK-NOT:       tosa.reciprocal
+// CHECK-NOT:       tosa.mul
 }
 
 // -----

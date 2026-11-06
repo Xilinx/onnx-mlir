@@ -626,6 +626,16 @@ Value ConstPropElementwiseUnary(
       rewriter, replacingValue, transposedElements);
 }
 
+Value createNegOfConstantExpression(
+    PatternRewriter &rewriter, Value replacingValue, Value input) {
+  if (getDenseOrDisposableConstLikeElements(input))
+    return ConstPropElementwiseUnary<ONNXNegOp>(
+        rewriter, replacingValue, input);
+
+  return rewriter.create<ONNXNegOp>(
+      input.getLoc(), replacingValue.getType(), input);
+}
+
 //===----------------------------------------------------------------------===//
 // Code to perform constant propagation for ONNXWhereOp in presence of
 // broadcast.
