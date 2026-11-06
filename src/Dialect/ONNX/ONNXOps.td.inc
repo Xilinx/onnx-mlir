@@ -873,6 +873,7 @@ def ONNXBitwiseAndOp:ONNX_Op<"BitwiseAnd",
 
 def ONNXBitwiseNotOp:ONNX_Op<"BitwiseNot",
   [Pure, OpVersionTrait<18>, ONNXElementwiseTrait, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX BitwiseNot operation";
   let description = [{
   Returns the bitwise not of the input tensor element-wise.
@@ -1143,6 +1144,7 @@ def ONNXCastLikeOp:ONNX_Op<"CastLike",
 
 def ONNXCeilOp:ONNX_Op<"Ceil",
   [Pure, OpVersionTrait<13>, SameOperandsAndResultShape, ONNXElementwiseTrait, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Ceil operation";
   let description = [{
   Ceil takes one input data (Tensor<T>) and produces one output data
@@ -2482,6 +2484,7 @@ def ONNXErfOp:ONNX_Op<"Erf",
 
 def ONNXExpOp:ONNX_Op<"Exp",
   [Pure, OpVersionTrait<13>, SameOperandsAndResultShape, ONNXElementwiseTrait, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Exp operation";
   let description = [{
   Calculates the exponential of the given input tensor, element-wise.
@@ -2637,6 +2640,7 @@ def ONNXFlattenOp:ONNX_Op<"Flatten",
 
 def ONNXFloorOp:ONNX_Op<"Floor",
   [Pure, OpVersionTrait<13>, SameOperandsAndResultShape, ONNXElementwiseTrait, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Floor operation";
   let description = [{
   Floor takes one input data (Tensor<T>) and produces one output data
@@ -4352,6 +4356,7 @@ def ONNXLessOrEqualOp:ONNX_Op<"LessOrEqual",
 
 def ONNXLogOp:ONNX_Op<"Log",
   [Pure, OpVersionTrait<13>, SameOperandsAndResultShape, ONNXElementwiseTrait, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Log operation";
   let description = [{
   Calculates the natural log of the given input tensor, element-wise.
@@ -5247,6 +5252,7 @@ def ONNXMultinomialOp:ONNX_Op<"Multinomial",
 
 def ONNXNegOp:ONNX_Op<"Neg",
   [Pure, OpVersionTrait<13>, SameOperandsAndResultShape, ONNXElementwiseTrait, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Neg operation";
   let description = [{
   Neg takes one input data (Tensor<T>) and produces one output data
@@ -7828,6 +7834,7 @@ def ONNXRegexFullMatchOp:ONNX_Op<"RegexFullMatch",
 
 def ONNXReluOp:ONNX_Op<"Relu",
   [Pure, OpVersionTrait<14>, SameOperandsAndResultShape, ONNXElementwiseTrait, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Relu operation";
   let description = [{
   Relu takes one input data (Tensor<T>) and produces one output data
@@ -8375,6 +8382,7 @@ def ONNXRotaryEmbeddingOp:ONNX_Op<"RotaryEmbedding",
 
 def ONNXRoundOp:ONNX_Op<"Round",
   [Pure, OpVersionTrait<22>, SameOperandsAndResultShape, ONNXElementwiseTrait, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Round operation";
   let description = [{
   Round takes one input Tensor and rounds the values, element-wise, meaning
