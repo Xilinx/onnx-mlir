@@ -107,6 +107,9 @@ struct FoldEqualQDQPattern : public OpRewritePattern<ONNXQuantizeLinearOp> {
       return failure();
     if (!onnx_mlir::isDequantQuantSame(dqOp, qOp))
       return failure();
+    if (onnx_mlir::collapsesDistinctOnnxQuantTensors(dqOp.getX(), qOp))
+      return rewriter.notifyMatchFailure(qOp,
+          "QuantizeLinear(DequantizeLinear(quant)) collapses two ONNX tensors");
     rewriter.replaceOp(qOp, dqOp.getX());
     return success();
   }

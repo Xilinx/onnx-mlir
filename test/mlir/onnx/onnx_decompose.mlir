@@ -1034,6 +1034,41 @@ func.func @test_scatter_nd_full_overwrite(%data : tensor<1x6x10x12xf32>, %update
 // CHECK:         }
 
 // -----
+// A whole-tensor overwrite drops the data operand and everything that only it
+// keeps alive. Here the DequantizeLinear dies but the QuantizeLinear feeding it
+// stays, so an ONNX tensor would silently lose one of its consumers. Keep the
+// scatter instead.
+func.func @test_scatter_nd_full_overwrite_shared_producer(%arg0 : tensor<1x2x3xf32>, %updates : tensor<1x2x3xf32>) -> (tensor<1x2x3xf32>, tensor<1x2x3xf32>) {
+  %scale = onnx.Constant dense<1.000000e+00> : tensor<f32>
+  %zp = onnx.Constant dense<0> : tensor<ui16>
+  %q = "onnx.QuantizeLinear"(%arg0, %scale, %zp) {ResultNames = ["/q_Output"], axis = 1 : si64, block_size = 0 : si64, onnx_node_name = "/q", output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x2x3xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x2x3xui16>
+  %dq0 = "onnx.DequantizeLinear"(%q, %scale, %zp) {ResultNames = ["/dq0_Output"], axis = 1 : si64, block_size = 0 : si64, onnx_node_name = "/dq0"} : (tensor<1x2x3xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x2x3xf32>
+  %dq1 = "onnx.DequantizeLinear"(%q, %scale, %zp) {ResultNames = ["/dq1_Output"], axis = 1 : si64, block_size = 0 : si64, onnx_node_name = "/dq1"} : (tensor<1x2x3xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x2x3xf32>
+  %indices = onnx.Constant dense<[[[[0, 0, 0], [0, 0, 1], [0, 0, 2]], [[0, 1, 0], [0, 1, 1], [0, 1, 2]]]]> : tensor<1x2x3x3xi64>
+  %0 = "onnx.ScatterND"(%dq1, %indices, %updates) {reduction = "none"} : (tensor<1x2x3xf32>, tensor<1x2x3x3xi64>, tensor<1x2x3xf32>) -> tensor<1x2x3xf32>
+  onnx.Return %dq0, %0 : tensor<1x2x3xf32>, tensor<1x2x3xf32>
+}
+// CHECK-LABEL:  func.func @test_scatter_nd_full_overwrite_shared_producer
+// CHECK:        ResultNames = ["/q_Output"]
+// CHECK:        onnx.ScatterND
+
+// -----
+// Same whole-tensor overwrite, but the data chain is used only by the scatter,
+// so nothing outside it observes those tensors and the decomposition applies.
+func.func @test_scatter_nd_full_overwrite_private_producer(%arg0 : tensor<1x2x3xf32>, %updates : tensor<1x2x3xf32>) -> tensor<1x2x3xf32> {
+  %scale = onnx.Constant dense<1.000000e+00> : tensor<f32>
+  %zp = onnx.Constant dense<0> : tensor<ui16>
+  %q = "onnx.QuantizeLinear"(%arg0, %scale, %zp) {ResultNames = ["/q_Output"], axis = 1 : si64, block_size = 0 : si64, onnx_node_name = "/q", output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x2x3xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x2x3xui16>
+  %dq = "onnx.DequantizeLinear"(%q, %scale, %zp) {ResultNames = ["/dq_Output"], axis = 1 : si64, block_size = 0 : si64, onnx_node_name = "/dq"} : (tensor<1x2x3xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x2x3xf32>
+  %indices = onnx.Constant dense<[[[[0, 0, 0], [0, 0, 1], [0, 0, 2]], [[0, 1, 0], [0, 1, 1], [0, 1, 2]]]]> : tensor<1x2x3x3xi64>
+  %0 = "onnx.ScatterND"(%dq, %indices, %updates) {reduction = "none"} : (tensor<1x2x3xf32>, tensor<1x2x3x3xi64>, tensor<1x2x3xf32>) -> tensor<1x2x3xf32>
+  onnx.Return %0 : tensor<1x2x3xf32>
+}
+// CHECK-LABEL:  func.func @test_scatter_nd_full_overwrite_private_producer
+// CHECK-NOT:    onnx.ScatterND
+// CHECK:        onnx.Concat
+
+// -----
 func.func @test_scatter_nd_multi_dim(%data : tensor<1x4x6xf32>, %updates : tensor<1x4x2xf32> ) -> tensor<1x4x6xf32> {
   %indices = onnx.Constant dense<[[[[0, 0, 0], [0, 0, 1]], [[0, 1, 0], [0, 1, 1]], [[0, 2, 0], [0, 2, 1]], [[0, 3, 0], [0, 3, 1]]]]> : tensor<1x4x2x3xi64>
   %0 = "onnx.ScatterND"(%data, %indices, %updates) {reduction = "none"} : (tensor<1x4x6xf32>, tensor<1x4x2x3xi64>, tensor<1x4x2xf32>) -> tensor<1x4x6xf32>

@@ -247,3 +247,25 @@ return %4 : tensor<1x128x768xui16>
 // TOL:   return %[[ARG0]] : tensor<1x128x768xui16>
 // TOL-NOT: onnx.DequantizeLinear
 // TOL-NOT: onnx.QuantizeLinear
+
+// Two QuantizeLinear ops that name different ONNX tensors must stay distinct
+// even when the DQ->Q round-trip is an identity. Folding the outer quant onto
+// the inner one drops the outer tensor and rewrites the inner ResultNames,
+// which leaves an original consumer of the inner tensor with no producer.
+func.func @do_not_fold_distinct_quant_tensors(%arg0: tensor<1x4xf32>) -> tensor<1x4xui16> {
+%0 = onnx.Constant dense<1.000000e+00> : tensor<f32>
+%1 = onnx.Constant dense<0> : tensor<ui16>
+%2 = "onnx.QuantizeLinear"(%arg0, %0, %1) {ResultNames = ["/q0_Output"], axis = 1 : si64, block_size = 0 : si64, onnx_node_name = "/q0", output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x4xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x4xui16>
+%3 = "onnx.DequantizeLinear"(%2, %0, %1) {ResultNames = ["/dq_Output"], axis = 1 : si64, block_size = 0 : si64, onnx_node_name = "/dq"} : (tensor<1x4xui16>, tensor<f32>, tensor<ui16>) -> tensor<1x4xf32>
+%4 = "onnx.QuantizeLinear"(%3, %0, %1) {ResultNames = ["/q1_Output"], axis = 1 : si64, block_size = 0 : si64, onnx_node_name = "/q1", output_dtype = 0 : si64, saturate = 1 : si64} : (tensor<1x4xf32>, tensor<f32>, tensor<ui16>) -> tensor<1x4xui16>
+return %4 : tensor<1x4xui16>
+}
+
+// CHECK-LABEL: func.func @do_not_fold_distinct_quant_tensors
+// CHECK: ResultNames = ["/q0_Output"]
+// CHECK: onnx.DequantizeLinear
+// CHECK: ResultNames = ["/q1_Output"]
+// TOL-LABEL: func.func @do_not_fold_distinct_quant_tensors
+// TOL: ResultNames = ["/q0_Output"]
+// TOL: onnx.DequantizeLinear
+// TOL: ResultNames = ["/q1_Output"]

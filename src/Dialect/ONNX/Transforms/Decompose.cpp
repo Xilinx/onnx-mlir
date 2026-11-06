@@ -3046,7 +3046,15 @@ struct DecomposeScatterNDPattern : public OpRewritePattern<ONNXScatterNDOp> {
         getScatterNDSplitAxes(dataShape, updateShape);
     if (splitAxes.empty()) {
       // Edge case: data and updates have the same shape (the whole tensor is
-      // overwritten); split on the last dim.
+      // overwritten); split on the last dim. Both surrounding slabs are then
+      // zero-sized, so the Split/Concat fold away and the data operand is
+      // dropped along with its producer chain. Keep the scatter when that
+      // chain carries an ONNX tensor that other ONNX nodes still read.
+      if (onnx_mlir::droppingOperandOrphansOnnxConsumer(
+              scatterNDOp, scatterNDOp.getData())) {
+        return rewriter.notifyMatchFailure(scatterNDOp,
+            "whole-tensor overwrite would drop an ONNX consumer of data");
+      }
       splitAxes.push_back(dataType.getRank() - 1);
     }
 

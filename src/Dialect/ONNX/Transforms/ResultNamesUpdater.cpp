@@ -3,6 +3,7 @@
 #include <deque>
 #include <iterator>
 #include <memory>
+#include <string>
 #include <unordered_set>
 
 #include <llvm/ADT/STLExtras.h>
@@ -74,6 +75,26 @@ bool hasNameAndManyUses(Value value) {
   return liveUses > 1;
 }
 
+// A QuantizeLinear / DequantizeLinear that still carries its own ONNX output
+// tensor (`onnx_node_name + "_Output"`) must keep that name. Stamping the
+// erased op's ResultNames onto it is what makes VAIP delete the wrong
+// producer.
+bool ownsOnnxOutputName(Operation *op) {
+  StringRef opName = op->getName().getStringRef();
+  if (opName != "onnx.QuantizeLinear" && opName != "onnx.DequantizeLinear")
+    return false;
+  auto node = op->getAttrOfType<StringAttr>("onnx_node_name");
+  auto names = op->getAttrOfType<ArrayAttr>("ResultNames");
+  if (!node || !names || names.size() != 1)
+    return false;
+  auto resultName = dyn_cast<StringAttr>(names[0]);
+  if (!resultName)
+    return false;
+  std::string expected(node.getValue().str());
+  expected.append("_Output");
+  return resultName.getValue() == expected;
+}
+
 // True if `value` currently carries a MultiUseConflict transform in its name.
 bool hasConflictMarker(Value value) {
   TensorName tn(value);
@@ -100,6 +121,9 @@ void ResultNamesUpdater::notifyOperationReplaced(
 
   // First, copy the ResultNames attribute for the last value
   auto resultNamesArray = op->getAttrOfType<ArrayAttr>("ResultNames");
+  if (ownsOnnxOutputName(replacement) &&
+      replacement->getAttrOfType<ArrayAttr>("ResultNames") != resultNamesArray)
+    return;
   replacement->setAttr("ResultNames", resultNamesArray);
 
   // Infer the TensorNames for defining values
@@ -135,7 +159,11 @@ void ResultNamesUpdater::notifyOperationReplaced(
       if (auto existing = replOp->getAttrOfType<ArrayAttr>("ResultNames"))
         replResultNames = SmallVector<Attribute>(existing.getValue());
 
-      // Replace the ResultName of current result
+      // Replace the ResultName of current result. Leave a quant/dequant that
+      // still owns its ONNX output tensor name alone.
+      if (ownsOnnxOutputName(replOp) &&
+          replResultNames[replResult.getResultNumber()] != name)
+        continue;
       replResultNames[replResult.getResultNumber()] = name;
       replOp->setAttr("ResultNames", ArrayAttr::get(ctx, replResultNames));
     }

@@ -22,6 +22,9 @@
 #include "mlir/IR/DialectResourceBlobManager.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Path.h"
 
@@ -1706,6 +1709,43 @@ bool isDequantQuantSame(mlir::ONNXDequantizeLinearOp dqOp,
     return false;
   }
   return true;
+}
+
+bool collapsesDistinctOnnxQuantTensors(
+    mlir::Value producer, mlir::ONNXQuantizeLinearOp foldedQuant) {
+  auto producerQuant = producer.getDefiningOp<mlir::ONNXQuantizeLinearOp>();
+  if (!producerQuant)
+    return false;
+  auto producerNames =
+      producerQuant->getAttrOfType<mlir::ArrayAttr>("ResultNames");
+  auto foldedNames = foldedQuant->getAttrOfType<mlir::ArrayAttr>("ResultNames");
+  if (!producerNames || !foldedNames)
+    return false;
+  return producerNames != foldedNames;
+}
+
+bool droppingOperandOrphansOnnxConsumer(
+    mlir::Operation *rewrittenOp, mlir::Value operand) {
+  llvm::SmallPtrSet<mlir::Operation *, 8> dying;
+  dying.insert(rewrittenOp);
+  llvm::SmallVector<mlir::Value, 8> worklist;
+  worklist.push_back(operand);
+  while (!worklist.empty()) {
+    mlir::Value value = worklist.pop_back_val();
+    mlir::Operation *def = value.getDefiningOp();
+    // Block arguments are graph inputs and constants are initializers. ORT
+    // keeps both whatever this compiler claims.
+    if (!def || mlir::isa<mlir::ONNXConstantOp, mlir::ONNXNoneOp>(def))
+      continue;
+    bool survives = llvm::any_of(value.getUsers(),
+        [&](mlir::Operation *user) { return !dying.contains(user); });
+    if (survives)
+      return def->hasAttr("ResultNames");
+    if (!dying.insert(def).second)
+      continue;
+    worklist.append(def->operand_begin(), def->operand_end());
+  }
+  return false;
 }
 
 bool hasQuantizedElementType(mlir::Type type) {
