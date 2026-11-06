@@ -192,6 +192,35 @@ int testRejectMultipleInternalOperands(MLIRContext &context) {
   return failed(verify(*module));
 }
 
+int testInlineCompleteRecipe(MLIRContext &context) {
+  auto module = parseModule(context, R"mlir(
+    module {
+      func.func @test() -> tensor<4x4xf32> {
+        %arg0 = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+        %repeats = onnx.Constant dense<[2, 2]> : tensor<2xi64>
+        %0 = "onnx.DeferredFoldable"(%arg0, %repeats) ({
+        ^bb0(%arg1: tensor<2x2xf32>, %arg2: tensor<2xi64>):
+          %1 = "onnx.Transpose"(%arg1) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+          %2 = "onnx.Tile"(%1, %arg2) : (tensor<2x2xf32>, tensor<2xi64>) -> tensor<4x4xf32>
+          onnx.DeferredYield %2 : tensor<4x4xf32>
+        }) : (tensor<2x2xf32>, tensor<2xi64>) -> tensor<4x4xf32>
+        return %0 : tensor<4x4xf32>
+      }
+    }
+  )mlir");
+  if (!module)
+    return 1;
+
+  ONNXDeferredFoldableOp deferred = findDeferred(*module);
+  IRRewriter rewriter(&context);
+  auto inlined = inlineDeferredFoldableExpression(deferred, rewriter);
+  if (failed(inlined) || inlined->size() != 2 ||
+      !isa<ONNXTransposeOp>((*inlined)[0]) || !isa<ONNXTileOp>((*inlined)[1]) ||
+      findDeferred(*module) || failed(verify(*module)))
+    return 1;
+  return 0;
+}
+
 } // namespace
 
 int main() {
@@ -201,7 +230,8 @@ int main() {
                  testNormalizeDuplicateCaptureUses(context) +
                  testRejectCrossDialectFormation(context) +
                  testPeelOneInternalOperand(context) +
-                 testRejectMultipleInternalOperands(context);
+                 testRejectMultipleInternalOperands(context) +
+                 testInlineCompleteRecipe(context);
   if (failures)
     llvm::errs() << failures << " DeferredFoldable test(s) failed\n";
   return failures;

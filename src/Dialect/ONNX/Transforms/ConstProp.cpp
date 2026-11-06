@@ -2695,16 +2695,23 @@ public:
 // rewrites so they can consume the original operations first.
 class FormDeferredFoldableExpression : public RewritePattern {
 public:
-  FormDeferredFoldableExpression(MLIRContext *context, PatternBenefit benefit)
-      : RewritePattern(MatchAnyOpTypeTag(), benefit, context) {}
+  FormDeferredFoldableExpression(
+      MLIRContext *context, PatternBenefit benefit, bool includeTOSAOps)
+      : RewritePattern(MatchAnyOpTypeTag(), benefit, context),
+        includeTOSAOps(includeTOSAOps) {}
 
   LogicalResult matchAndRewrite(
       Operation *op, PatternRewriter &rewriter) const override {
-    return success(succeeded(form(op, rewriter)));
+    return success(succeeded(form(op, rewriter, includeTOSAOps)));
   }
 
-  static FailureOr<Value> form(Operation *op, RewriterBase &rewriter) {
-    if (!isa<ONNXDialect>(op->getDialect()) ||
+  static FailureOr<Value> form(
+      Operation *op, RewriterBase &rewriter, bool includeTOSAOps = false) {
+    const bool eligibleDialect =
+        isa<ONNXDialect>(op->getDialect()) ||
+        (includeTOSAOps && op->getDialect() &&
+            op->getDialect()->getNamespace() == "tosa");
+    if (!eligibleDialect || op->hasAttr("onnx.deferred_foldable_exposed") ||
         isa<ONNXDeferredFoldableOp, ONNXDeferredYieldOp>(op))
       return failure();
     if (!isPure(op) || op->getNumOperands() == 0 || op->getNumResults() != 1 ||
@@ -2846,6 +2853,9 @@ public:
     rewriter.replaceOp(op, deferred.getResult());
     return deferred.getResult();
   }
+
+private:
+  bool includeTOSAOps;
 };
 
 // Keep the boundary of an existing deferred expression flat when another
@@ -2998,9 +3008,9 @@ FailureOr<Value> onnx_mlir::formDeferredFoldableExpression(
 }
 
 void onnx_mlir::populateFormDeferredFoldableExpressionPatterns(
-    RewritePatternSet &patterns, PatternBenefit benefit) {
+    RewritePatternSet &patterns, PatternBenefit benefit, bool includeTOSAOps) {
   patterns.insert<FormDeferredFoldableExpression>(
-      patterns.getContext(), benefit);
+      patterns.getContext(), benefit, includeTOSAOps);
   patterns.insert<NormalizeDeferredFoldableCapture>(
       patterns.getContext(), PatternBenefit(benefit.getBenefit() + 1));
 }

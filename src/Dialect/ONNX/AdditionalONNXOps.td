@@ -88,10 +88,12 @@ def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
     may yield a capture directly after semantics-preserving canonicalization
     removes its last operation; such a recipe has no peelable terminal.
 
-    Recipe operations belong to the ONNX dialect, including XFE extension
-    operations such as `onnx.XFECast`. Ordinary passes treat the body as
-    opaque. A materializer evaluates it explicitly and diagnoses any operation
-    for which no fold is available.
+    Formation captures ONNX operations, including XFE extension operations such
+    as `onnx.XFECast`. Later dialect conversion may lower operations retained in
+    the recipe. The verifier therefore requires recipe operations to be pure,
+    regionless, and single-result rather than requiring a particular dialect.
+    Ordinary passes treat the body as opaque. A materializer evaluates it
+    explicitly and diagnoses any operation for which no fold is available.
 
     This operation is not `ConstantLike` and has no fold hook: merely running
     generic folding must not read initializer payloads.

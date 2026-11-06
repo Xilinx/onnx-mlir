@@ -547,6 +547,44 @@ FailureOr<Operation *> peelDeferredFoldableExpression(
   return peeled;
 }
 
+FailureOr<llvm::SmallVector<Operation *>> inlineDeferredFoldableExpression(
+    ONNXDeferredFoldableOp deferred, RewriterBase &rewriter) {
+  if (deferred.getBody().empty())
+    return failure();
+  Block &body = deferred.getBody().front();
+  auto yield = dyn_cast_or_null<ONNXDeferredYieldOp>(body.getTerminator());
+  if (!yield)
+    return failure();
+
+  IRMapping mapping;
+  for (auto [argument, capture] :
+      llvm::zip_equal(body.getArguments(), deferred.getCaptures()))
+    mapping.map(argument, capture);
+
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPoint(deferred);
+  llvm::SmallVector<Operation *> inlined;
+  for (Operation &operation : body.without_terminator()) {
+    Operation *clone = rewriter.clone(operation, mapping);
+    inlined.push_back(clone);
+    for (auto [oldResult, newResult] :
+        llvm::zip_equal(operation.getResults(), clone->getResults()))
+      mapping.map(oldResult, newResult);
+  }
+
+  Value result = mapping.lookupOrDefault(yield.getValue());
+  if (!result)
+    return failure();
+  if (Operation *producer = result.getDefiningOp()) {
+    if (Attribute nodeName = deferred->getAttr("onnx_node_name"))
+      producer->setAttr("onnx_node_name", nodeName);
+    if (Attribute resultNames = deferred->getAttr("ResultNames"))
+      producer->setAttr("ResultNames", resultNames);
+  }
+  rewriter.replaceOp(deferred, result);
+  return inlined;
+}
+
 // compare two ElementsAttr, except for their internal buffer size
 bool compareValueFromElementAttribute(
     ElementsAttr &attr1, ElementsAttr &attr2) {

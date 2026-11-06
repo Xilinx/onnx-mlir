@@ -23,7 +23,8 @@ void getConstPropONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
 // into explicit recipes. A low benefit lets ordinary optimization patterns
 // consume the original operations before the fallback retains what remains.
 void populateFormDeferredFoldableExpressionPatterns(
-    mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit);
+    mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit,
+    bool includeTOSAOps = false);
 
 // Form or extend a deferred recipe for one newly created operation. On
 // success, the insertion point is immediately after the replacement producer.

@@ -61,3 +61,15 @@ func.func @canonicalized_identity_recipe() -> tensor<2x2xf32> {
 // CANON:         ^bb0(%[[CAPTURE:.+]]: tensor<2x2xf32>):
 // CANON-NEXT:      onnx.DeferredYield %[[CAPTURE]]
 // CANON:         onnx.Return %[[DEFERRED]]
+
+// A retained recipe remains valid when later dialect conversion lowers an
+// operation in its body.
+func.func @lowered_recipe_operation() -> tensor<2x2xf32> {
+  %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+  %result = "onnx.DeferredFoldable"(%weight) ({
+  ^bb0(%arg0: tensor<2x2xf32>):
+    %reshaped = "tosa.reshape"(%arg0) {new_shape = array<i64: 2, 2>} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+    onnx.DeferredYield %reshaped : tensor<2x2xf32>
+  }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
+  return %result : tensor<2x2xf32>
+}

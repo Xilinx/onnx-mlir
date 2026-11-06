@@ -240,9 +240,6 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
     return emitOpError("terminal operation must immediately precede its yield");
 
   for (Operation &operation : body.without_terminator()) {
-    if (!isa<ONNXDialect>(operation.getDialect()))
-      return emitOpError("body operation must belong to the ONNX dialect: ")
-             << operation.getName();
     if (!isPure(&operation))
       return emitOpError("body operation must be pure: ")
              << operation.getName();

@@ -38,6 +38,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -226,6 +227,14 @@ mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 // multiple wrapper results. The caller can inspect getTerminalOperation()
 // before peeling to select which operations should execute at runtime.
 mlir::FailureOr<mlir::Operation *> peelDeferredFoldableExpression(
+    mlir::ONNXDeferredFoldableOp deferred, mlir::RewriterBase &rewriter);
+
+// Move a complete deferred recipe back into its parent block, mapping its
+// captures to the values at the wrapper boundary. Returns the inlined
+// operations in program order. A recipe that yields a capture directly is
+// valid and returns an empty list.
+mlir::FailureOr<llvm::SmallVector<mlir::Operation *>>
+inlineDeferredFoldableExpression(
     mlir::ONNXDeferredFoldableOp deferred, mlir::RewriterBase &rewriter);
 
 bool compareValueFromElementAttribute(
