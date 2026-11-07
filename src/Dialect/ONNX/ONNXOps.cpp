@@ -164,6 +164,107 @@ LogicalResult ONNXInitializerSourceOp::verify() {
   return success();
 }
 
+Operation *ONNXDeferredFoldableOp::getTerminalOperation() {
+  if (getBody().empty())
+    return nullptr;
+  Block &body = getBody().front();
+  if (!body.mightHaveTerminator())
+    return nullptr;
+  auto yield = dyn_cast_or_null<ONNXDeferredYieldOp>(body.getTerminator());
+  if (!yield)
+    return nullptr;
+  auto result = dyn_cast<OpResult>(yield.getValue());
+  if (!result || result.getOwner()->getBlock() != &body)
+    return nullptr;
+  return result.getOwner();
+}
+
+LogicalResult ONNXDeferredFoldableOp::verify() {
+  if (getBody().empty())
+    return emitOpError("requires a body block");
+  Block &body = getBody().front();
+  if (body.empty())
+    return emitOpError("requires a non-empty body block");
+  if (!body.mightHaveTerminator())
+    return emitOpError("requires a body terminator, but the body ends with ")
+           << body.back().getName();
+  if (getCaptures().size() != body.getNumArguments())
+    return emitOpError() << "has " << getCaptures().size() << " captures but "
+                         << body.getNumArguments() << " body arguments";
+
+  for (auto [capture, argument] :
+      llvm::zip_equal(getCaptures(), body.getArguments())) {
+    if (!capture)
+      return emitOpError("has an invalid capture");
+    if (dyn_cast_or_null<ONNXDeferredFoldableOp>(capture.getDefiningOp()))
+      return emitOpError("must inline a captured onnx.DeferredFoldable body");
+    if (!onnx_mlir::isConstLikeOperation(capture.getDefiningOp()) &&
+        !isDeferredConstant(capture)) {
+      InFlightDiagnostic diagnostic =
+          emitOpError("capture must be constant or deferred constant");
+      if (Operation *producer = capture.getDefiningOp()) {
+        diagnostic << "; capture is defined by " << producer->getName();
+        if (auto castOp = dyn_cast<ONNXCastOp>(producer)) {
+          Operation *inputProducer = castOp.getInput().getDefiningOp();
+          diagnostic << " from "
+                     << (inputProducer ? inputProducer->getName().getStringRef()
+                                       : "a block argument")
+                     << " (" << castOp.getInput().getType() << " -> "
+                     << castOp.getResult().getType() << ")";
+        }
+      } else {
+        diagnostic << "; capture is a block argument";
+      }
+      return diagnostic;
+    }
+    if (capture.getType() != argument.getType())
+      return emitOpError() << "capture type " << capture.getType()
+                           << " does not match body argument type "
+                           << argument.getType();
+  }
+
+  auto yield = dyn_cast<ONNXDeferredYieldOp>(body.getTerminator());
+  if (!yield)
+    return emitOpError("body must terminate with onnx.DeferredYield");
+  Operation *terminal = getTerminalOperation();
+  if (!terminal) {
+    auto argument = dyn_cast<BlockArgument>(yield.getValue());
+    if (!argument || argument.getOwner() != &body)
+      return emitOpError(
+          "must yield a value produced in its body or a body argument");
+    if (body.getOperations().size() != 1)
+      return emitOpError(
+          "a recipe that yields a capture directly must contain no other "
+          "operations");
+  } else if (terminal->getNextNode() != yield.getOperation())
+    return emitOpError("terminal operation must immediately precede its yield");
+
+  for (Operation &operation : body.without_terminator()) {
+    if (!isPure(&operation))
+      return emitOpError("body operation must be pure: ")
+             << operation.getName();
+    if (operation.getNumRegions() != 0)
+      return emitOpError("body operation must be regionless: ")
+             << operation.getName();
+    if (operation.getNumResults() == 0)
+      return emitOpError("body operation must have a result: ")
+             << operation.getName();
+    if (llvm::all_of(operation.getResults(),
+            [](Value result) { return result.use_empty(); }))
+      return emitOpError(
+                 "body operation must contribute to the yielded recipe: ")
+             << operation.getName();
+  }
+
+  if (terminal && yield.getValue().getDefiningOp() != terminal)
+    return emitOpError("must yield a result of the terminal operation");
+  if (yield.getValue().getType() != getResult().getType())
+    return emitOpError() << "yield type " << yield.getValue().getType()
+                         << " does not match result type "
+                         << getResult().getType();
+  return success();
+}
+
 namespace {
 
 //===----------------------------------------------------------------------===//
