@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+# affiliates
+
 # ==============================================================================
 # MatMulBias: Matrix multiplication with optional bias addition (A * B + C)
 # ==============================================================================
@@ -38,6 +42,53 @@
     - tensor(bfloat16)
   min_input: 3
   max_input: 3
+  min_output: 1
+  max_output: 1
+
+# ==============================================================================
+# Cast: ONNX Cast with explicit rounding and saturation policy
+# ==============================================================================
+- name: Cast
+  domain: com.amd.xfe
+  since_version: 1
+  support_level: COMMON
+  description: 'Extends ONNX Cast opset 24 by applying round_mode and saturate to f32-to-bf16 conversion. The down mode converts toward zero. The nearest_even mode rounds to nearest with ties to even. When saturate is enabled, the bf16 result is capped at 0xff7f to match the FlexML runtime conversion.'
+  meta_attributes:
+  - onnx_opset: 24
+  - verify: True
+  - fold: True
+  inputs:
+  - name: input
+    description: Input f32 tensor to cast
+    type_str: T1
+  outputs:
+  - name: output
+    description: Output bf16 tensor with the same shape as input
+    type_str: T2
+  attributes:
+  - name: round_mode
+    description: Rounding mode. Supported values are down and nearest_even.
+    type: string
+    required: true
+  - name: saturate
+    description: Whether to cap the converted bf16 bit-pattern at 0xff7f
+    type: int
+    default_value: 1
+  - name: to
+    description: Destination element type, which must be bfloat16
+    type: int
+    required: true
+  type_constraints:
+  - type_param: T1
+    description: Constrain the input to f32 tensors.
+    allowed_types:
+    - tensor(float)
+  - type_param: T2
+    description: Constrain the output to bf16 tensors.
+    allowed_types:
+    - tensor(bfloat16)
+  min_input: 1
+  max_input: 1
   min_output: 1
   max_output: 1
 

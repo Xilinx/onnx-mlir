@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+# affiliates
+
 # Generate ONNX MLIR op files for multiple custom ops
 # Loop through yaml files in current directory to create an argument list to gen_onnx_mlir.py
 yaml_args=()
@@ -33,14 +37,14 @@ for td_file in *Ops.td; do
 done
 echo "Prefixes: ${prefixes[@]}"
 
-echo "Copying generated <prefix>*.cpp/.hpp files (excluding shape inference and verify cpp files) to ../src/Dialect/ONNX/ONNXOps/Additional/"
+echo "Copying generated <prefix>*.cpp/.hpp files (excluding manually implemented shape inference, verify, and fold cpp files) to ../src/Dialect/ONNX/ONNXOps/Additional/"
 for prefix in "${prefixes[@]}"; do
-    ls ${prefix}*.cpp ${prefix}*.hpp | grep -v "ShapeInference.cpp" | grep -v "Verify.cpp" | while read -r f; do
+    ls ${prefix}*.cpp ${prefix}*.hpp | grep -v "ShapeInference.cpp" | grep -v "Verify.cpp" | grep -v "Fold.cpp" | while read -r f; do
         cp "$f" ../src/Dialect/ONNX/ONNXOps/Additional/
     done
 done
 echo "========================================================="
 echo "REMINDER: Add your function implementation (for a new op only) to files:"
-ls *ShapeInference.cpp *Verify.cpp
+ls *ShapeInference.cpp *Verify.cpp *Fold.cpp
 echo "in ../src/Dialect/ONNX/ONNXOps/Additional/"
 echo "========================================================="

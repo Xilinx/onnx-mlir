@@ -186,6 +186,25 @@ LogicalResult XFEMatMulBiasOpVerify(Operation *op) {
   return XFEChannelWiseQuantizationVerify(op);
 }
 
+LogicalResult XFECastOpVerify(Operation *op) {
+  auto castOp = dyn_cast<XFECastOp>(op);
+  if (!castOp)
+    return failure();
+
+  if (!castOp.getTo().isBF16())
+    return castOp.emitOpError("requires 'to' to be bfloat16");
+  if (!getElementType(castOp.getInput().getType()).isF32())
+    return castOp.emitOpError("requires an f32 input tensor");
+  if (castOp.getSaturate() != 0 && castOp.getSaturate() != 1)
+    return castOp.emitOpError("requires 'saturate' to be 0 or 1");
+
+  StringRef roundMode = castOp.getRoundMode();
+  if (roundMode != "down" && roundMode != "nearest_even")
+    return castOp.emitOpError("has unsupported round_mode '")
+           << roundMode << "'";
+  return success();
+}
+
 LogicalResult XFEConvOpVerify(Operation *op) {
   auto convOp = dyn_cast<XFEConvOp>(op);
   if (!convOp)
