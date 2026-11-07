@@ -4,7 +4,7 @@
 
 //===---------------- Elementwise.cpp - Elementwise Op --------------------===//
 //
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
