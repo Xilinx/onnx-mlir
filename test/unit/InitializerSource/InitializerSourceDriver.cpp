@@ -9,11 +9,14 @@
 #include "mlir/Pass/PassManager.h"
 #include "src/Builder/InitializerSource.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/DisposableElementsAttr.hpp"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
+#include <atomic>
+#include <thread>
 #ifndef _WIN32
 #include <sys/mman.h>
 #endif
@@ -82,6 +85,10 @@ static cl::opt<bool> opsetConversion("opset-conversion",
 static cl::opt<bool> cloneBeforeLoad("clone-before-load",
     cl::desc("Clone the MLIR module before delayed materialization"),
     cl::init(false), cl::cat(initializerSourceCategory));
+static cl::opt<unsigned> concurrentMaterializations(
+    "concurrent-materializations",
+    cl::desc("Materialize MLIR concurrently in this many independent contexts"),
+    cl::init(0), cl::cat(initializerSourceCategory));
 
 #ifndef _WIN32
 class GuardedBuffer final : public llvm::MemoryBuffer {
@@ -205,6 +212,41 @@ static bool configureLive(onnx::GraphProto &graph,
   return true;
 }
 
+static bool materializeIRConcurrently(unsigned threadCount) {
+  std::vector<std::string> skipped(skipNames.begin(), skipNames.end());
+  std::vector<std::string> forced(forceNames.begin(), forceNames.end());
+  std::atomic<unsigned> ready{0};
+  std::atomic<unsigned> finished{0};
+  std::vector<uint8_t> success(threadCount, false);
+  std::vector<std::thread> threads;
+  threads.reserve(threadCount);
+  for (unsigned i = 0; i < threadCount; ++i) {
+    threads.emplace_back([&, i]() {
+      MLIRContext context;
+      context.loadDialect<ONNXDialect, func::FuncDialect>();
+      ++ready;
+      while (ready.load() != threadCount)
+        std::this_thread::yield();
+
+      OwningOpRef<ModuleOp> module = parseSourceFile<ModuleOp>(input, &context);
+      if (module) {
+        PassManager pm(&context);
+        pm.addPass(
+            createMaterializeInitializerSourcesPass(skipAll, skipped, forced));
+        success[i] = succeeded(pm.run(*module)) && succeeded(verify(*module));
+      }
+      ++finished;
+      // Keep every module and context alive until all peers have materialized.
+      // This ensures their external tensor slices overlap in the shared cache.
+      while (finished.load() != threadCount)
+        std::this_thread::yield();
+    });
+  }
+  for (std::thread &thread : threads)
+    thread.join();
+  return llvm::all_of(success, [](uint8_t value) { return value; });
+}
+
 int main(int argc, char **argv) {
   cl::HideUnrelatedOptions(initializerSourceCategory);
   cl::ParseCommandLineOptions(argc, argv,
@@ -214,6 +256,14 @@ int main(int argc, char **argv) {
       "fixtures and invokes this command in separate processes.\n");
   if (sourceMode != "file" && sourceMode != "live" && sourceMode != "guard")
     return 2;
+  if (concurrentMaterializations) {
+    if (!readIR || !output.empty()) {
+      llvm::errs() << "--concurrent-materializations requires --read-ir and "
+                      "does not support --output\n";
+      return 2;
+    }
+    return materializeIRConcurrently(concurrentMaterializations) ? 0 : 1;
+  }
   // Declare caller-owned protobuf storage before the context so it is destroyed
   // after every attribute that may reference it.
   std::unique_ptr<onnx::ModelProto> modelOwner;
