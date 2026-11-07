@@ -21,7 +21,9 @@
 
 #include "mlir/IR/DialectResourceBlobManager.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Path.h"
 
@@ -442,6 +444,40 @@ bool isConstLikeValue(Value value) {
 
 bool isConstLikeOperation(mlir::Operation *op) {
   return op && op->hasTrait<OpTrait::ConstantLike>();
+}
+
+bool isSemanticallyConstantFoldable(
+    Value value, llvm::DenseMap<Value, bool> &knownValues) {
+  if (auto it = knownValues.find(value); it != knownValues.end())
+    return it->second;
+
+  Operation *op = value.getDefiningOp();
+  if (isConstLikeOperation(op) || isDeferredConstant(value))
+    return knownValues.try_emplace(value, true).first->second;
+
+  if (!op || !isPure(op))
+    return knownValues.try_emplace(value, false).first->second;
+
+  // Constant-like source operations were handled above. Do not classify every
+  // other zero-operand operation as constant through an empty operand walk.
+  if (op->getNumOperands() == 0)
+    return knownValues.try_emplace(value, false).first->second;
+
+  // Operand recursion does not account for values captured or produced by a
+  // region, so it cannot establish that the complete operation is constant.
+  if (op->getNumRegions() != 0)
+    return knownValues.try_emplace(value, false).first->second;
+
+  bool isFoldable = llvm::all_of(op->getOperands(), [&](Value operand) {
+    return isSemanticallyConstantFoldable(operand, knownValues);
+  });
+  knownValues.try_emplace(value, isFoldable);
+  return isFoldable;
+}
+
+bool isConstantFoldable(Value value) {
+  Operation *op = value.getDefiningOp();
+  return isConstLikeOperation(op) || isDeferredConstant(value);
 }
 
 // compare two ElementsAttr, except for their internal buffer size

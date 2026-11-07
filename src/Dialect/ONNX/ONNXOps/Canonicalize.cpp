@@ -5394,6 +5394,24 @@ struct MoveNegToMulConstantPattern : public OpRewritePattern<ONNXMulOp> {
   }
 };
 
+struct ElideEmptyDeferredFoldable
+    : public OpRewritePattern<ONNXDeferredFoldableOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXDeferredFoldableOp op, PatternRewriter &rewriter) const override {
+    if (op.getTerminalOperation())
+      return failure();
+    auto yield =
+        cast<ONNXDeferredYieldOp>(op.getBody().front().getTerminator());
+    auto argument = dyn_cast<BlockArgument>(yield.getValue());
+    if (!argument || argument.getOwner() != &op.getBody().front())
+      return failure();
+    rewriter.replaceOp(op, op.getCaptures()[argument.getArgNumber()]);
+    return success();
+  }
+};
+
 } // namespace
 
 // =============================================================================
@@ -5546,6 +5564,12 @@ void ONNXClipOp::getCanonicalizationPatterns(
 /// on the ONNXConstantOp.
 void ONNXConstantOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {}
+
+/// on the ONNXDeferredFoldableOp.
+void ONNXDeferredFoldableOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<ElideEmptyDeferredFoldable>(context);
+}
 
 /// on the ONNXDepthToSpaceOp.
 void ONNXDepthToSpaceOp::getCanonicalizationPatterns(

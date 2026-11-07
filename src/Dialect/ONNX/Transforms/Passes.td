@@ -24,6 +24,16 @@ def MaterializeInitializerSourcesPass
   ];
 }
 
+def FormDeferredFoldableExpressionsPass
+    : Pass<"onnx-form-deferred-foldable-expressions", "::mlir::func::FuncOp"> {
+  let summary = "Retain deferred constant expressions behind an explicit IR boundary";
+  let description = [{
+    Forms flattened `onnx.DeferredFoldable` recipes after ordinary ONNX
+    rewriting and constant propagation have reached their intended fixed
+    point. The pass does not read initializer payloads.
+  }];
+}
+
 // Options common to both decompose-onnx and recompose-onnx: same C++ member,
 // same meaning. Declared once and pulled into both passes (and the hybrid pass)
 // so the generated options struct never gets a duplicate member.
@@ -290,7 +300,13 @@ def ConstPropONNXToONNXPass : Pass<"constprop-onnx", "::mlir::func::FuncOp"> {
            "Allow folding of quantized weights and biases, not just constant "
            "islands. Implies enable-dequant-const-fold.">,
     Option<"maxLoopUnrollCount", "max-loop-unroll-count", "int64_t", "64",
-           "Maximum constant onnx.Loop trip count to unroll.">
+           "Maximum constant onnx.Loop trip count to unroll.">,
+    Option<"formDeferredFoldableExpressions",
+           "form-deferred-foldable-expressions", "bool", "false",
+           "Retain otherwise-unfolded initializer-dependent expressions as "
+           "onnx.DeferredFoldable recipes. Transformation pipelines should "
+           "leave this disabled and form recipes explicitly at the boundary "
+           "where constant expressions become opaque.">
   ];
 }
 

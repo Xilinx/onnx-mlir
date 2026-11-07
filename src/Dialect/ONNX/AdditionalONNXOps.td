@@ -88,12 +88,13 @@ def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
     may yield a capture directly after semantics-preserving canonicalization
     removes its last operation; such a recipe has no peelable terminal.
 
-    Formation captures ONNX operations, including XFE extension operations such
-    as `onnx.XFECast`. Later dialect conversion may lower operations retained in
-    the recipe. The verifier therefore requires recipe operations to be pure,
-    regionless, and single-result rather than requiring a particular dialect.
-    Ordinary passes treat the body as opaque. A materializer evaluates it
-    explicitly and diagnoses any operation for which no fold is available.
+    Formation captures pure, regionless operations with one or more results
+    whose inputs are constants or deferred constants. Each result retained
+    from a multi-result operation has its own recipe, yielding that result from
+    a clone of the operation. Operations may come from any dialect, including
+    ONNX/XFE and operations introduced by later lowering. Ordinary passes treat
+    the body as opaque. A materializer evaluates it explicitly and diagnoses
+    any operation for which no fold is available.
 
     This operation is not `ConstantLike` and has no fold hook: merely running
     generic folding must not read initializer payloads.
@@ -102,6 +103,7 @@ def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
   let arguments = (ins Variadic<AnyType>:$captures);
   let results = (outs AnyType:$result);
   let regions = (region SizedRegion<1>:$body);
+  let hasCanonicalizer = 1;
   let hasVerifier = 1;
   let extraClassDeclaration = [{
     /// Return the terminal operation retained by this wrapper.

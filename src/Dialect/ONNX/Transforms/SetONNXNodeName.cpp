@@ -13,10 +13,14 @@
 // This pass is to set onnx_node_name attribute for ONNX operations if the
 // attribute is absent.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/Passes.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/Debug.h"
@@ -57,16 +61,24 @@ private:
 void SetONNXNodeNamePass::runOnOperation() {
   ModuleOp moduleOp = getOperation();
   MLIRContext *context = &getContext();
-
   // Collect
   // - all onnx_node_name strings and
   // - operations that have an empty onnx_node_name or a duplicated name.
-  moduleOp.walk([&](Operation *op) -> WalkResult {
+  moduleOp.walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
     // Only deal with ONNX ops.
     if (op->getDialect()->getNamespace() != ONNXDialect::getDialectNamespace())
       return WalkResult::advance();
-    // No need onnx_node_name for these ops.
+    // A deferred recipe is an implementation detail, not a collection of
+    // model nodes. Its wrapper carries any externally visible identity.
+    if (isa<ONNXDeferredFoldableOp>(op))
+      return WalkResult::skip();
+    // Constant expressions do not represent model nodes and may disappear
+    // when their payloads become available.
     if (isa<ONNXEntryPointOp, ONNXReturnOp, ONNXConstantOp>(op))
+      return WalkResult::advance();
+    if (op->getNumResults() != 0 &&
+        llvm::all_of(op->getResults(),
+            [&](Value result) { return isConstantFoldable(result); }))
       return WalkResult::advance();
     StringAttr nodeName = op->getAttrOfType<mlir::StringAttr>(nodeNameAttr);
     if (nodeName && !nodeName.getValue().empty()) {

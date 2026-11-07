@@ -35,6 +35,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -206,6 +207,18 @@ mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 [[nodiscard]] bool isConstLikeValue(mlir::Value value);
 
 [[nodiscard]] bool isConstLikeOperation(mlir::Operation *op);
+
+// Return true when `value`'s direct producer is ConstantLike or implements
+// deferred-constant semantics. Deferred expressions must be represented
+// explicitly rather than rediscovered by walking the operand graph.
+[[nodiscard]] bool isConstantFoldable(mlir::Value value);
+
+// Temporary semantic audit helper. Recursively classify a value without
+// reading payloads. Do not use this for ordinary transformation matching;
+// form an explicit DeferredFoldable recipe instead. The cache is valid only
+// while the defining operation graph remains unchanged.
+[[nodiscard]] bool isSemanticallyConstantFoldable(
+    mlir::Value value, llvm::DenseMap<mlir::Value, bool> &knownValues);
 
 bool compareValueFromElementAttribute(
     mlir::ElementsAttr &attr1, mlir::ElementsAttr &attr2);
