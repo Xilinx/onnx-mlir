@@ -179,6 +179,28 @@ Operation *ONNXDeferredFoldableOp::getTerminalOperation() {
   return result.getOwner();
 }
 
+OperandRange ONNXDeferredFoldableOp::getEntrySuccessorOperands(
+    RegionBranchPoint point) {
+  assert(point == getBody() && "expected the deferred recipe body");
+  return getCaptures();
+}
+
+void ONNXDeferredFoldableOp::getSuccessorRegions(
+    RegionBranchPoint point, SmallVectorImpl<RegionSuccessor> &regions) {
+  if (point.isParent()) {
+    regions.emplace_back(&getBody(), getBody().getArguments());
+    return;
+  }
+  assert(point == getBody() && "expected the deferred recipe body");
+  regions.emplace_back(getOperation()->getResults());
+}
+
+void ONNXDeferredFoldableOp::getRegionInvocationBounds(
+    ArrayRef<Attribute> /*operands*/,
+    SmallVectorImpl<InvocationBounds> &bounds) {
+  bounds.emplace_back(/*lb=*/1, /*ub=*/1);
+}
+
 LogicalResult ONNXDeferredFoldableOp::verify() {
   if (getBody().empty())
     return emitOpError("requires a body block");
@@ -188,12 +210,7 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
   if (!body.mightHaveTerminator())
     return emitOpError("requires a body terminator, but the body ends with ")
            << body.back().getName();
-  if (getCaptures().size() != body.getNumArguments())
-    return emitOpError() << "has " << getCaptures().size() << " captures but "
-                         << body.getNumArguments() << " body arguments";
-
-  for (auto [capture, argument] :
-      llvm::zip_equal(getCaptures(), body.getArguments())) {
+  for (Value capture : getCaptures()) {
     if (!capture)
       return emitOpError("has an invalid capture");
     if (dyn_cast_or_null<ONNXDeferredFoldableOp>(capture.getDefiningOp()))
@@ -217,10 +234,6 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
       }
       return diagnostic;
     }
-    if (capture.getType() != argument.getType())
-      return emitOpError() << "capture type " << capture.getType()
-                           << " does not match body argument type "
-                           << argument.getType();
   }
 
   auto yield = dyn_cast<ONNXDeferredYieldOp>(body.getTerminator());
@@ -258,10 +271,6 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
 
   if (terminal && yield.getValue().getDefiningOp() != terminal)
     return emitOpError("must yield a result of the terminal operation");
-  if (yield.getValue().getType() != getResult().getType())
-    return emitOpError() << "yield type " << yield.getValue().getType()
-                         << " does not match result type "
-                         << getResult().getType();
   return success();
 }
 

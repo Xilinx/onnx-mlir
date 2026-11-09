@@ -57,3 +57,42 @@ func.func @dead_recipe_operation() -> tensor<2x2xf32> {
   }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
   return %result : tensor<2x2xf32>
 }
+
+// -----
+
+func.func @capture_count_mismatch() -> tensor<2x2xf32> {
+  %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+  // expected-error@+1 {{'onnx.DeferredFoldable' op region control flow edge from parent operands to Region #0: source has 1 operands, but target successor needs 2}}
+  %result = "onnx.DeferredFoldable"(%weight) ({
+  ^bb0(%arg0: tensor<2x2xf32>, %unused: tensor<2x2xf32>):
+    %0 = "onnx.Identity"(%arg0) : (tensor<2x2xf32>) -> tensor<2x2xf32>
+    onnx.DeferredYield %0 : tensor<2x2xf32>
+  }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
+  return %result : tensor<2x2xf32>
+}
+
+// -----
+
+func.func @capture_type_mismatch() -> tensor<2x2xi32> {
+  %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+  // expected-error@+1 {{'onnx.DeferredFoldable' op along control flow edge from parent operands to Region #0: source type #0 'tensor<2x2xf32>' should match input type #0 'tensor<2x2xi32>'}}
+  %result = "onnx.DeferredFoldable"(%weight) ({
+  ^bb0(%arg0: tensor<2x2xi32>):
+    %0 = "onnx.Identity"(%arg0) : (tensor<2x2xi32>) -> tensor<2x2xi32>
+    onnx.DeferredYield %0 : tensor<2x2xi32>
+  }) : (tensor<2x2xf32>) -> tensor<2x2xi32>
+  return %result : tensor<2x2xi32>
+}
+
+// -----
+
+func.func @yield_type_mismatch() -> tensor<2x2xi32> {
+  %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+  // expected-error@+1 {{'onnx.DeferredFoldable' op along control flow edge from Region #0 to parent results: source type #0 'tensor<2x2xf32>' should match input type #0 'tensor<2x2xi32>'}}
+  %result = "onnx.DeferredFoldable"(%weight) ({
+  ^bb0(%arg0: tensor<2x2xf32>):
+    %0 = "onnx.Identity"(%arg0) : (tensor<2x2xf32>) -> tensor<2x2xf32>
+    onnx.DeferredYield %0 : tensor<2x2xf32>
+  }) : (tensor<2x2xf32>) -> tensor<2x2xi32>
+  return %result : tensor<2x2xi32>
+}

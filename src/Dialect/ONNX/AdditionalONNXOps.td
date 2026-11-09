@@ -70,7 +70,9 @@ def ONNX_CallerOwnedDataAttr : Attr<
 //===----------------------------------------------------------------------===//
 // ONNX DeferredFoldableOp
 def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
-    [DeferredConstantOpInterface, IsolatedFromAbove,
+    [DeclareOpInterfaceMethods<RegionBranchOpInterface,
+         ["getEntrySuccessorOperands", "getRegionInvocationBounds"]>,
+     DeferredConstantOpInterface, IsolatedFromAbove,
      RecursivelySpeculatable, RecursiveMemoryEffects, SingleBlock]> {
   let summary = "Retain a constant expression for explicit later folding";
   let description = [{
@@ -117,7 +119,8 @@ def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
 }
 
 def ONNXDeferredYieldOp : ONNX_Op<"DeferredYield",
-    [HasParent<"ONNXDeferredFoldableOp">, Pure, ReturnLike, Terminator]> {
+    [DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>,
+     HasParent<"ONNXDeferredFoldableOp">, Pure, ReturnLike, Terminator]> {
   let summary = "Return the retained deferred expression value";
   let arguments = (ins AnyType:$value);
   let assemblyFormat = "$value attr-dict `:` type($value)";
