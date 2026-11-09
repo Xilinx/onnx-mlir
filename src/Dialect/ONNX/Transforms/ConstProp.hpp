@@ -30,6 +30,13 @@ void populateFormDeferredFoldableExpressionPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit,
     bool requireDeferredSource = true);
 
+// Inline recipes whose captures are all ordinary constants. Such recipes may
+// be formed temporarily inside a greedy rewrite so newly created dense
+// constant expressions have the same explicit producer classification as
+// initializer-dependent expressions. Recipes with deferred captures remain.
+mlir::LogicalResult inlineDenseDeferredFoldableExpressions(
+    mlir::Operation *root);
+
 // Form or extend a deferred recipe for one newly created operation. On
 // success, the insertion point is immediately after the replacement producer.
 // Failure means that the operation is not eligible for a deferred recipe.

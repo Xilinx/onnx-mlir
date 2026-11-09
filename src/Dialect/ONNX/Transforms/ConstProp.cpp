@@ -2681,7 +2681,7 @@ public:
 // verifier contracts, such as TOSA's resolvable shape operands, remain valid
 // inside the isolated body.
 bool shouldInlineConstant(Value value) {
-  return isConstLikeValue(value) && !isa<TensorType>(value.getType());
+  return isConstLikeValue(value) && !isa<TensorType, NoneType>(value.getType());
 }
 
 // Retain a constant expression without evaluating it. Callers should give this
@@ -2965,7 +2965,8 @@ public:
 
   LogicalResult matchAndRewrite(
       Operation *producer, PatternRewriter &rewriter) const override {
-    if (producer->getNumResults() != 1)
+    if (producer->hasAttr("onnx.deferred_foldable_exposed") ||
+        producer->getNumResults() != 1)
       return failure();
     Value produced = producer->getResult(0);
     if (isConstLikeValue(produced) ||
@@ -3156,9 +3157,9 @@ FailureOr<Value> onnx_mlir::formDeferredFoldableExpressionDAG(
     }
 
     Operation *producer = value.getDefiningOp();
-    if (!producer || producer->getNumResults() != 1 ||
-        producer->getNumRegions() != 0 || !isPure(producer) ||
-        dyn_cast<DeferredConstantOpInterface>(producer))
+    if (!producer || producer->hasAttr("onnx.deferred_foldable_exposed") ||
+        producer->getNumResults() != 1 || producer->getNumRegions() != 0 ||
+        !isPure(producer) || dyn_cast<DeferredConstantOpInterface>(producer))
       return failure();
 
     unsigned &operandIndex = nextOperand[value];
@@ -3236,6 +3237,21 @@ void onnx_mlir::populateFormDeferredFoldableExpressionPatterns(
       patterns.getContext(), PatternBenefit(benefit.getBenefit() + 1));
   ONNXDeferredFoldableOp::getCanonicalizationPatterns(
       patterns, patterns.getContext());
+}
+
+LogicalResult onnx_mlir::inlineDenseDeferredFoldableExpressions(
+    Operation *root) {
+  SmallVector<ONNXDeferredFoldableOp> denseRecipes;
+  root->walk([&](ONNXDeferredFoldableOp deferred) {
+    if (llvm::all_of(deferred.getCaptures(), isConstLikeValue))
+      denseRecipes.push_back(deferred);
+  });
+
+  IRRewriter rewriter(root->getContext());
+  for (ONNXDeferredFoldableOp deferred : denseRecipes)
+    if (failed(inlineDeferredFoldableExpression(deferred, rewriter)))
+      return failure();
+  return success();
 }
 
 void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
