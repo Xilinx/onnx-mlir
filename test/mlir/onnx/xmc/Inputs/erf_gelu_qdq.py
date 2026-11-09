@@ -33,6 +33,34 @@ def check(name, model, preserve, fuse):
 
 
 check("encoder", source, True, True)
+quantized_divisor = source.replace(
+    "%sqrt2 = onnx.Constant dense<1.41421356> : tensor<f32>",
+    """%sqrt2_code = onnx.Constant dense<91> : tensor<i8>
+  %sqrt2_scale = onnx.Constant dense<0.015625> : tensor<f32>
+  %sqrt2_zp = onnx.Constant dense<0> : tensor<i8>
+  %sqrt2 = "onnx.DequantizeLinear"(%sqrt2_code, %sqrt2_scale, %sqrt2_zp) : (tensor<i8>, tensor<f32>, tensor<i8>) -> tensor<f32>""",
+)
+check("quantized_divisor", quantized_divisor, True, True)
+check(
+    "quantized_divisor_nonzero_zp",
+    quantized_divisor.replace("dense<91>", "dense<96>").replace(
+        "dense<0> : tensor<i8>", "dense<5> : tensor<i8>"
+    ),
+    True,
+    True,
+)
+check(
+    "wrong_quantized_divisor",
+    quantized_divisor.replace("dense<91>", "dense<90>"),
+    False,
+    False,
+)
+check(
+    "wrong_quantized_divisor_scale",
+    quantized_divisor.replace("dense<0.015625>", "dense<0.03125>"),
+    False,
+    False,
+)
 check(
     "commuted_operands",
     source.replace("(%erf_dq, %one)", "(%one, %erf_dq)")

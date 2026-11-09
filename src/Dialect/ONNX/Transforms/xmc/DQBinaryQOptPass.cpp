@@ -893,6 +893,26 @@ static Value getInputBeforeMatchingQDQ(Value value, PatternRewriter &rewriter) {
   return value;
 }
 
+static bool isGeluDivisor(Value value) {
+  if (auto divisor = getScalarTensorValueFromVal<double>(value))
+    return std::abs(*divisor - std::sqrt(2.0)) < 1.0e-6;
+
+  auto dqOp = value.getDefiningOp<ONNXDequantizeLinearOp>();
+  if (!dqOp)
+    return false;
+  auto quantized = getScalarTensorValueFromVal<int64_t>(dqOp.getX());
+  auto scale = getScalarTensorValueFromVal<double>(dqOp.getXScale());
+  auto zeroPoint = getScalarTensorValueFromVal<int64_t>(dqOp.getXZeroPoint());
+  if (!quantized || !scale || !zeroPoint || !std::isfinite(*scale) ||
+      *scale <= 0.0)
+    return false;
+  double divisor =
+      (static_cast<double>(*quantized) - static_cast<double>(*zeroPoint)) *
+      *scale;
+  return std::isfinite(divisor) &&
+         std::abs(divisor - std::sqrt(2.0)) <= *scale * 0.5;
+}
+
 static bool isErfGeluProduct(Value value, PatternRewriter &rewriter) {
   auto productOp = value.getDefiningOp<ONNXMulOp>();
   if (!productOp || !value.hasOneUse())
@@ -917,8 +937,7 @@ static bool isErfGeluProduct(Value value, PatternRewriter &rewriter) {
                        .getDefiningOp<ONNXDivOp>();
       if (!divOp || divOp.getA() != input)
         continue;
-      auto divisor = getScalarTensorValueFromVal<double>(divOp.getB());
-      if (divisor && std::abs(*divisor - std::sqrt(2.0)) < 1.0e-6)
+      if (isGeluDivisor(divOp.getB()))
         return true;
     }
   }
