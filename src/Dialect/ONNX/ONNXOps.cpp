@@ -180,8 +180,9 @@ Operation *ONNXDeferredFoldableOp::getTerminalOperation() {
 }
 
 OperandRange ONNXDeferredFoldableOp::getEntrySuccessorOperands(
-    RegionBranchPoint point) {
-  assert(point == getBody() && "expected the deferred recipe body");
+    RegionSuccessor successor) {
+  assert(successor.getSuccessor() == &getBody() &&
+         "expected the deferred recipe body");
   return getCaptures();
 }
 
@@ -191,8 +192,10 @@ void ONNXDeferredFoldableOp::getSuccessorRegions(
     regions.emplace_back(&getBody(), getBody().getArguments());
     return;
   }
-  assert(point == getBody() && "expected the deferred recipe body");
-  regions.emplace_back(getOperation()->getResults());
+  assert(
+      point.getTerminatorPredecessorOrNull()->getParentRegion() == &getBody() &&
+      "expected the deferred recipe body");
+  regions.emplace_back(getOperation(), getOperation()->getResults());
 }
 
 void ONNXDeferredFoldableOp::getRegionInvocationBounds(
