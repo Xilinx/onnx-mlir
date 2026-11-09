@@ -3157,9 +3157,9 @@ FailureOr<Value> onnx_mlir::formDeferredFoldableExpressionDAG(
     }
 
     Operation *producer = value.getDefiningOp();
-    if (!producer || producer->hasAttr("onnx.deferred_foldable_exposed") ||
-        producer->getNumResults() != 1 || producer->getNumRegions() != 0 ||
-        !isPure(producer) || dyn_cast<DeferredConstantOpInterface>(producer))
+    if (!producer || producer->getNumResults() != 1 ||
+        producer->getNumRegions() != 0 || !isPure(producer) ||
+        dyn_cast<DeferredConstantOpInterface>(producer))
       return failure();
 
     unsigned &operandIndex = nextOperand[value];

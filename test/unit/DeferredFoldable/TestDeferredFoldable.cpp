@@ -216,6 +216,37 @@ int testFlattenSharedDeferredOperandDAG(MLIRContext &context) {
   return 0;
 }
 
+int testReformExplicitlyExposedDAG(MLIRContext &context) {
+  auto module = parseModule(context, R"mlir(
+    module {
+      func.func @test() -> tensor<2x2xf32> {
+        %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+        %transposed = "onnx.Transpose"(%weight) {onnx.deferred_foldable_exposed, perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+        %sum = "onnx.Add"(%transposed, %transposed) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+        return %sum : tensor<2x2xf32>
+      }
+    }
+  )mlir");
+  if (!module)
+    return 1;
+
+  ONNXAddOp add;
+  module->walk([&](ONNXAddOp op) { add = op; });
+  IRRewriter rewriter(&context);
+  rewriter.setInsertionPoint(add);
+  FailureOr<Value> formed = formDeferredFoldableExpressionDAG(add, rewriter);
+  if (failed(formed) || failed(verify(*module)))
+    return 1;
+
+  auto deferred = formed->getDefiningOp<ONNXDeferredFoldableOp>();
+  if (!deferred || deferred.getCaptures().size() != 1)
+    return 1;
+  for (Operation &op : deferred.getBody().front())
+    if (op.hasAttr("onnx.deferred_foldable_exposed"))
+      return 1;
+  return 0;
+}
+
 int testRejectNondeterministicFormation(MLIRContext &context) {
   auto module = parseModule(context, R"mlir(
     module {
@@ -335,6 +366,7 @@ int main() {
                  testNormalizeDuplicateCaptureUses(context) +
                  testCrossDialectFormation(context) +
                  testFlattenSharedDeferredOperandDAG(context) +
+                 testReformExplicitlyExposedDAG(context) +
                  testRejectNondeterministicFormation(context) +
                  testPeelOneInternalOperand(context) +
                  testRejectMultipleInternalOperands(context) +
