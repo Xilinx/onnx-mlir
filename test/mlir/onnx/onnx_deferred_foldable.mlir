@@ -105,6 +105,29 @@ func.func @canonicalized_identity_recipe() -> tensor<2x2xf32> {
 // CANON-NOT:     "onnx.Identity"
 // CANON:         onnx.Return %[[SOURCE]]
 
+// Constprop treats a retained recipe as opaque. Dense work inside the recipe
+// is evaluated only when the recipe is explicitly materialized.
+func.func @constprop_does_not_enter_recipe() -> tensor<2x2xf32> {
+  %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+  %result = "onnx.DeferredFoldable"(%weight) ({
+  ^bb0(%captured: tensor<2x2xf32>):
+    %one = onnx.Constant dense<1.0> : tensor<2x2xf32>
+    %two = onnx.Constant dense<2.0> : tensor<2x2xf32>
+    %three = "onnx.Add"(%one, %two) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+    %sum = "onnx.Add"(%captured, %three) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+    onnx.DeferredYield %sum : tensor<2x2xf32>
+  }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
+  onnx.Return %result : tensor<2x2xf32>
+}
+
+// NOFORM-LABEL: func.func @constprop_does_not_enter_recipe
+// NOFORM:         "onnx.DeferredFoldable"
+// NOFORM:           %[[ONE:.+]] = onnx.Constant dense<1.000000e+00>
+// NOFORM:           %[[TWO:.+]] = onnx.Constant dense<2.000000e+00>
+// NOFORM:           %[[THREE:.+]] = "onnx.Add"(%[[ONE]], %[[TWO]])
+// NOFORM:           %[[SUM:.+]] = "onnx.Add"(%{{.+}}, %[[THREE]])
+// NOFORM:           onnx.DeferredYield %[[SUM]]
+
 // A retained recipe remains valid when later dialect conversion lowers an
 // operation in its body.
 func.func @lowered_recipe_operation() -> tensor<2x2xf32> {

@@ -5397,6 +5397,9 @@ struct MoveNegToMulConstantPattern : public OpRewritePattern<ONNXMulOp> {
   }
 };
 
+// Canonicalization may reduce a deferred recipe to yielding one of its
+// captures. Remove that no-op wrapper so an unchanged value is not left behind
+// an artificial deferred-foldable boundary.
 struct ElideEmptyDeferredFoldable
     : public OpRewritePattern<ONNXDeferredFoldableOp> {
   using OpRewritePattern::OpRewritePattern;

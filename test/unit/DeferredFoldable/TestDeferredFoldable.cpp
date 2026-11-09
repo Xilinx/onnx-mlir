@@ -57,9 +57,7 @@ int testDirectFormation(MLIRContext &context) {
 
   ONNXTransposeOp transpose;
   module->walk([&](ONNXTransposeOp op) { transpose = op; });
-  llvm::DenseMap<Value, bool> knownValues;
-  if (isConstantFoldable(transpose.getResult()) ||
-      !isSemanticallyConstantFoldable(transpose.getResult(), knownValues))
+  if (isConstantFoldable(transpose.getResult()))
     return 1;
   IRRewriter rewriter(&context);
   rewriter.setInsertionPoint(transpose);
@@ -172,16 +170,12 @@ int testCrossDialectFormation(MLIRContext &context) {
   return 0;
 }
 
-int testFlattenSharedDeferredOperandDAG(MLIRContext &context) {
+int testBottomUpFormationWithSharedOperand(MLIRContext &context) {
   auto module = parseModule(context, R"mlir(
     module {
       func.func @test() -> tensor<2x2xf32> {
         %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
-        %transposed = "onnx.DeferredFoldable"(%weight) ({
-        ^bb0(%arg0: tensor<2x2xf32>):
-          %0 = "onnx.Transpose"(%arg0) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
-          onnx.DeferredYield %0 : tensor<2x2xf32>
-        }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
+        %transposed = "onnx.Transpose"(%weight) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
         %sum = "onnx.Add"(%transposed, %transposed) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
         return %sum : tensor<2x2xf32>
       }
@@ -190,15 +184,15 @@ int testFlattenSharedDeferredOperandDAG(MLIRContext &context) {
   if (!module)
     return 1;
 
-  ONNXAddOp add;
-  module->walk([&](ONNXAddOp op) { add = op; });
-  IRRewriter rewriter(&context);
-  rewriter.setInsertionPoint(add);
-  FailureOr<Value> formed = formDeferredFoldableExpressionDAG(add, rewriter);
-  if (failed(formed) || failed(verify(*module)))
+  RewritePatternSet patterns(&context);
+  populateFormDeferredFoldableExpressionPatterns(patterns, PatternBenefit(1));
+  GreedyRewriteConfig config;
+  config.setUseTopDownTraversal(true);
+  if (failed(applyPatternsGreedily(*module, std::move(patterns), config)) ||
+      failed(verify(*module)))
     return 1;
 
-  auto deferred = formed->getDefiningOp<ONNXDeferredFoldableOp>();
+  ONNXDeferredFoldableOp deferred = findDeferred(*module);
   int64_t numDeferred = 0;
   module->walk([&](ONNXDeferredFoldableOp) { ++numDeferred; });
   if (!deferred || deferred.getCaptures().size() != 1 || numDeferred != 1)
@@ -210,19 +204,19 @@ int testFlattenSharedDeferredOperandDAG(MLIRContext &context) {
   if (std::distance(adds.begin(), adds.end()) != 1)
     return 1;
   ONNXAddOp clonedAdd = *adds.begin();
-  if (clonedAdd.getA() != clonedAdd.getB() ||
-      rewriter.getInsertionBlock() != formed->getParentBlock())
+  if (clonedAdd.getA() != clonedAdd.getB())
     return 1;
   return 0;
 }
 
-int testReformExplicitlyExposedDAG(MLIRContext &context) {
+int testBottomUpFormationWithDenseSibling(MLIRContext &context) {
   auto module = parseModule(context, R"mlir(
     module {
       func.func @test() -> tensor<2x2xf32> {
         %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
-        %transposed = "onnx.Transpose"(%weight) {onnx.deferred_foldable_exposed, perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
-        %sum = "onnx.Add"(%transposed, %transposed) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+        %bias = onnx.Constant dense<1.0> : tensor<2x2xf32>
+        %transposed_bias = "onnx.Transpose"(%bias) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+        %sum = "onnx.Add"(%weight, %transposed_bias) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
         return %sum : tensor<2x2xf32>
       }
     }
@@ -230,20 +224,24 @@ int testReformExplicitlyExposedDAG(MLIRContext &context) {
   if (!module)
     return 1;
 
-  ONNXAddOp add;
-  module->walk([&](ONNXAddOp op) { add = op; });
-  IRRewriter rewriter(&context);
-  rewriter.setInsertionPoint(add);
-  FailureOr<Value> formed = formDeferredFoldableExpressionDAG(add, rewriter);
-  if (failed(formed) || failed(verify(*module)))
+  RewritePatternSet patterns(&context);
+  populateFormDeferredFoldableExpressionPatterns(
+      patterns, PatternBenefit(1), /*requireDeferredSource=*/false);
+  if (failed(applyPatternsGreedily(*module, std::move(patterns))) ||
+      failed(inlineDenseDeferredFoldableExpressions(*module)) ||
+      failed(verify(*module)))
     return 1;
 
-  auto deferred = formed->getDefiningOp<ONNXDeferredFoldableOp>();
-  if (!deferred || deferred.getCaptures().size() != 1)
+  ONNXDeferredFoldableOp deferred = findDeferred(*module);
+  int64_t numDeferred = 0;
+  module->walk([&](ONNXDeferredFoldableOp) { ++numDeferred; });
+  if (!deferred || numDeferred != 1 || deferred.getCaptures().size() != 2)
     return 1;
-  for (Operation &op : deferred.getBody().front())
-    if (op.hasAttr("onnx.deferred_foldable_exposed"))
-      return 1;
+  auto transposes = deferred.getBody().front().getOps<ONNXTransposeOp>();
+  auto adds = deferred.getBody().front().getOps<ONNXAddOp>();
+  if (std::distance(transposes.begin(), transposes.end()) != 1 ||
+      std::distance(adds.begin(), adds.end()) != 1)
+    return 1;
   return 0;
 }
 
@@ -365,8 +363,8 @@ int main() {
                  testConstantExpressionFormation(context) +
                  testNormalizeDuplicateCaptureUses(context) +
                  testCrossDialectFormation(context) +
-                 testFlattenSharedDeferredOperandDAG(context) +
-                 testReformExplicitlyExposedDAG(context) +
+                 testBottomUpFormationWithSharedOperand(context) +
+                 testBottomUpFormationWithDenseSibling(context) +
                  testRejectNondeterministicFormation(context) +
                  testPeelOneInternalOperand(context) +
                  testRejectMultipleInternalOperands(context) +
