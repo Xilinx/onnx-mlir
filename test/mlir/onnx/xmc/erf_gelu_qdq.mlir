@@ -1,12 +1,13 @@
 // RUN: onnx-mlir-opt --dq-binary-q-opt %s | FileCheck %s --check-prefix=FOLD
-// RUN: onnx-mlir-opt --dq-binary-q-opt --convert-qdq-to-requantize --quant-types --replace-erf-to-gelu %s | FileCheck %s --check-prefix=GELU
+// RUN: onnx-mlir-opt --replace-erf-to-gelu --dq-binary-q-opt --convert-qdq-to-requantize --quant-types --replace-erf-to-gelu %s | FileCheck %s --check-prefix=GELU
 // RUN: %python %S/Inputs/erf_gelu_qdq.py onnx-mlir-opt %s
 // RUN: onnx-mlir-opt --xmc-passes %s | FileCheck %s --check-prefix=XMC
 
 // FOLD-LABEL: func.func @encoder_gelu
-// FOLD: %[[HALF:.*]] = onnx.Constant dense<5.000000e-01>
-// FOLD: %[[TAIL:.*]] = "onnx.Mul"({{.*}}, %[[HALF]])
-// FOLD: "onnx.QuantizeLinear"(%[[TAIL]],
+// FOLD: %[[SCALE:.*]] = onnx.Constant dense<4.000000e-02>
+// FOLD: %[[PRODUCT:.*]] = "onnx.Mul"
+// FOLD-NOT: "onnx.Mul"
+// FOLD: "onnx.QuantizeLinear"(%[[PRODUCT]], %[[SCALE]],
 // GELU-LABEL: func.func @encoder_gelu
 // GELU-NOT: "onnx.Erf"
 // GELU: "onnx.Gelu"

@@ -886,64 +886,6 @@ static LogicalResult checkNewParamsFit(PatternRewriter &rewriter,
 //   Add:  q = round((x+k)/s) + z  =>  s' = s,   z' = z + k/s
 //   Sub:  q = round((x-k)/s) + z  =>  s' = s,   z' = z - k/s
 // ---------------------------------------------------------------------------
-static Value getInputBeforeMatchingQDQ(Value value, PatternRewriter &rewriter) {
-  auto dqOp = value.getDefiningOp<ONNXDequantizeLinearOp>();
-  if (dqOp && succeeded(tryRemoveQThenDQChain(rewriter, dqOp, false)))
-    return dqOp.getX().getDefiningOp<ONNXQuantizeLinearOp>().getX();
-  return value;
-}
-
-static bool isGeluDivisor(Value value) {
-  if (auto divisor = getScalarTensorValueFromVal<double>(value))
-    return std::abs(*divisor - std::sqrt(2.0)) < 1.0e-6;
-
-  auto dqOp = value.getDefiningOp<ONNXDequantizeLinearOp>();
-  if (!dqOp)
-    return false;
-  auto quantized = getScalarTensorValueFromVal<int64_t>(dqOp.getX());
-  auto scale = getScalarTensorValueFromVal<double>(dqOp.getXScale());
-  auto zeroPoint = getScalarTensorValueFromVal<int64_t>(dqOp.getXZeroPoint());
-  if (!quantized || !scale || !zeroPoint || !std::isfinite(*scale) ||
-      *scale <= 0.0)
-    return false;
-  double divisor =
-      (static_cast<double>(*quantized) - static_cast<double>(*zeroPoint)) *
-      *scale;
-  return std::isfinite(divisor) &&
-         std::abs(divisor - std::sqrt(2.0)) <= *scale * 0.5;
-}
-
-static bool isErfGeluProduct(Value value, PatternRewriter &rewriter) {
-  auto productOp = value.getDefiningOp<ONNXMulOp>();
-  if (!productOp || !value.hasOneUse())
-    return false;
-
-  for (Value addValue : productOp->getOperands()) {
-    auto addOp = addValue.getDefiningOp<ONNXAddOp>();
-    if (!addOp || !addValue.hasOneUse())
-      continue;
-    Value input =
-        productOp.getA() == addValue ? productOp.getB() : productOp.getA();
-    for (Value erfValue : addOp->getOperands()) {
-      Value offset = addOp.getA() == erfValue ? addOp.getB() : addOp.getA();
-      auto offsetValue = getScalarTensorValueFromVal<double>(offset);
-      if (!offsetValue || *offsetValue != 1.0)
-        continue;
-      auto erfOp = getInputBeforeMatchingQDQ(erfValue, rewriter)
-                       .getDefiningOp<ONNXErfOp>();
-      if (!erfOp)
-        continue;
-      auto divOp = getInputBeforeMatchingQDQ(erfOp.getInput(), rewriter)
-                       .getDefiningOp<ONNXDivOp>();
-      if (!divOp || divOp.getA() != input)
-        continue;
-      if (isGeluDivisor(divOp.getB()))
-        return true;
-    }
-  }
-  return false;
-}
-
 template <typename BinOp>
 struct FoldBinaryIntoQ : public OpRewritePattern<BinOp> {
   using OpRewritePattern<BinOp>::OpRewritePattern;
@@ -992,12 +934,6 @@ struct FoldBinaryIntoQ : public OpRewritePattern<BinOp> {
       return rewriter.notifyMatchFailure(
           op, "constant must be a scalar or all-same tensor");
     double k = *kOpt;
-
-    if constexpr (std::is_same_v<BinOp, ONNXMulOp>) {
-      if (k == 0.5 && isErfGeluProduct(activation, rewriter))
-        return rewriter.notifyMatchFailure(
-            op, "preserve Erf-based GELU tail for replace-erf-to-gelu");
-    }
 
     // Read Q's current y_scale / y_zero_point.
     Value scaleVal = qOp.getYScale();
