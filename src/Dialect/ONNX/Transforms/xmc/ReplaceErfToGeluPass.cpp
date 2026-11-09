@@ -27,16 +27,60 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "src/Dialect/ONNX/ONNXOps.hpp"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/Transforms/ResultNamesUpdater.hpp"
 #include "src/Pass/Passes.hpp"
 
 #include "llvm/Support/Debug.h"
+
+#include <cmath>
 
 #define DEBUG_TYPE "replace-erf-to-gelu"
 
 using namespace mlir;
 
 namespace {
+
+template <typename QDQOp>
+static bool hasScalarIntegerQuantization(QDQOp op) {
+  auto scale = onnx_mlir::readScalarConstant(op->getOperand(1));
+  auto zeroPoint = onnx_mlir::readScalarConstant(op->getOperand(2));
+  return succeeded(scale) && succeeded(zeroPoint) && std::isfinite(*scale) &&
+         *scale > 0.0 &&
+         isa<IntegerType>(getElementTypeOrSelf(op->getOperand(2).getType()));
+}
+
+static Value getSingleUseInputBeforeQDQ(Value value) {
+  if (!value.hasOneUse())
+    return {};
+  auto dqOp = value.getDefiningOp<ONNXDequantizeLinearOp>();
+  if (!dqOp)
+    return value;
+  auto qOp = dqOp.getX().getDefiningOp<ONNXQuantizeLinearOp>();
+  if (!qOp || !qOp.getY().hasOneUse() || !qOp.getX().hasOneUse() ||
+      !hasScalarIntegerQuantization(qOp) ||
+      !hasScalarIntegerQuantization(dqOp) ||
+      qOp.getX().getType() != dqOp.getY().getType() ||
+      !onnx_mlir::isDequantQuantSame(dqOp, qOp))
+    return {};
+  return qOp.getX();
+}
+
+static bool isGeluDivisor(Value value) {
+  if (auto divisor = onnx_mlir::readScalarConstant(value); succeeded(divisor))
+    return std::abs(*divisor - std::sqrt(2.0)) < 1.0e-6;
+  auto dqOp = value.getDefiningOp<ONNXDequantizeLinearOp>();
+  if (!dqOp || !hasScalarIntegerQuantization(dqOp))
+    return false;
+  auto quantized = onnx_mlir::readScalarConstant(dqOp.getX());
+  if (failed(quantized))
+    return false;
+  double scale = *onnx_mlir::readScalarConstant(dqOp.getXScale());
+  double zeroPoint = *onnx_mlir::readScalarConstant(dqOp.getXZeroPoint());
+  double divisor = (*quantized - zeroPoint) * scale;
+  return std::isfinite(divisor) &&
+         std::abs(divisor - std::sqrt(2.0)) <= scale * 0.5;
+}
 
 static bool isQuantizedType(Type type) {
   if (auto tensorType = dyn_cast<RankedTensorType>(type))
@@ -57,11 +101,12 @@ struct ReplaceErfGeluPattern : public OpRewritePattern<ONNXErfOp> {
 
   LogicalResult matchAndRewrite(
       ONNXErfOp erfOp, PatternRewriter &rewriter) const override {
-    if (!isQuantizedType(erfOp.getResult().getType()))
-      return rewriter.notifyMatchFailure(erfOp, "erf result not quantized");
+    bool quantized = isQuantizedType(erfOp.getResult().getType());
 
     // --- Upstream: Erf <- Div(x, sqrt2) ---
-    auto divOp = erfOp.getInput().getDefiningOp<ONNXDivOp>();
+    Value divInput = quantized ? erfOp.getInput()
+                               : getSingleUseInputBeforeQDQ(erfOp.getInput());
+    auto divOp = divInput ? divInput.getDefiningOp<ONNXDivOp>() : nullptr;
     if (!divOp)
       return rewriter.notifyMatchFailure(erfOp, "erf input is not Div");
 
@@ -69,6 +114,15 @@ struct ReplaceErfGeluPattern : public OpRewritePattern<ONNXErfOp> {
 
     // --- Downstream: Erf -> Add(erf, const_1) ---
     Value erfResult = erfOp.getResult();
+    if (!quantized && erfResult.hasOneUse()) {
+      auto qOp = dyn_cast<ONNXQuantizeLinearOp>(*erfResult.getUsers().begin());
+      if (qOp && qOp.getY().hasOneUse()) {
+        auto dqOp =
+            dyn_cast<ONNXDequantizeLinearOp>(*qOp.getY().getUsers().begin());
+        if (dqOp && getSingleUseInputBeforeQDQ(dqOp.getY()) == erfResult)
+          erfResult = dqOp.getY();
+      }
+    }
     if (!erfResult.hasOneUse())
       return rewriter.notifyMatchFailure(erfOp, "erf has multiple uses");
 
@@ -106,6 +160,21 @@ struct ReplaceErfGeluPattern : public OpRewritePattern<ONNXErfOp> {
     auto mul1Op = dyn_cast<ONNXMulOp>(*mulResult.getUsers().begin());
     if (!mul1Op)
       return rewriter.notifyMatchFailure(erfOp, "mul user is not Mul(0.5)");
+
+    if (!quantized) {
+      auto inputDQ = geluInput.getDefiningOp<ONNXDequantizeLinearOp>();
+      auto outputQ = mul1Op->hasOneUse()
+                         ? dyn_cast<ONNXQuantizeLinearOp>(*mul1Op->user_begin())
+                         : nullptr;
+      Value offset = addOp.getA() == erfResult ? addOp.getB() : addOp.getA();
+      Value half = mul1Op.getA() == mulResult ? mul1Op.getB() : mul1Op.getA();
+      if (!inputDQ || !outputQ || !hasScalarIntegerQuantization(inputDQ) ||
+          !hasScalarIntegerQuantization(outputQ) ||
+          geluInput.getType() != mul1Op.getResult().getType() ||
+          !isGeluDivisor(divOp.getB()) || !onnx_mlir::isConstOf(offset, 1.0) ||
+          !onnx_mlir::isConstOf(half, 0.5))
+        return rewriter.notifyMatchFailure(erfOp, "not a supported QDQ GELU");
+    }
 
     LLVM_DEBUG(llvm::dbgs() << "replace-erf-to-gelu: Matched GELU pattern at "
                             << erfOp.getLoc() << "\n");
