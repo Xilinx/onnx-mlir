@@ -18,3 +18,17 @@ Command-line options should be placed in `src/Compiler/CompilerOptions.cpp` and 
 
 ## Define an option local to a transformation
 Use MLIR's Pass Options to configure passes.
+
+## XMC early DQ deduplication
+
+Set `ONNX_MLIR_ENABLE_EARLY_DEDUP_DQS=1` for a compilation process to run the
+existing `DedupDQs` pass before early Erf-to-GELU recomposition in the XMC
+pipeline. This allows equivalent input DQs cloned by ORT to share a value before
+GELU matching and scalar folding. The setting applies to both the command-line
+tools and embedded callers of the shared XMC pipeline.
+
+This extra invocation is disabled by default; only the exact value `1` enables
+it. Unset or other values preserve the previous pipeline. The existing later
+`DedupDQs` invocation remains unchanged. Set the variable only for the affected
+model's compilation process, rather than globally, to leave other models on the
+default behavior.

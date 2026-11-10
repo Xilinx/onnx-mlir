@@ -1,3 +1,4 @@
+import os
 import pathlib
 import subprocess
 import sys
@@ -14,9 +15,14 @@ pipeline = [
 ]
 
 
-def optimize(model, passes):
+def optimize(model, passes, env=None):
     return subprocess.run(
-        [optimizer, *passes], input=model, text=True, capture_output=True, check=True
+        [optimizer, *passes],
+        input=model,
+        text=True,
+        capture_output=True,
+        check=True,
+        env=env,
     ).stdout
 
 
@@ -49,16 +55,23 @@ for name, scale, fuse in [
     model = source.replace(input_dq, input_dq + "\n" + duplicate_dq).replace(
         "(%x, %add)", "(%x_copy, %add)"
     )
-    result = optimize(model, ["--xmc-passes"])
-    assert ('type = "GELU"' in result) == fuse, (name, result)
-    assert ('"onnx.Erf"' not in result) == fuse, (name, result)
-    if fuse:
-        assert '"onnx.Mul"' not in result, (name, result)
-        assert "0.019999999552965164:128" in result, (name, result)
-    else:
-        assert result.count('"onnx.Mul"') == 1, (name, result)
-        assert "0.039999999105930328:128" in result, (name, result)
-    print(name + ": PASS")
+    for setting in [None, "0", "1", "true"]:
+        env = os.environ.copy()
+        env.pop("ONNX_MLIR_ENABLE_EARLY_DEDUP_DQS", None)
+        if setting is not None:
+            env["ONNX_MLIR_ENABLE_EARLY_DEDUP_DQS"] = setting
+        expected_fuse = fuse and setting == "1"
+        result = optimize(model, ["--xmc-passes"], env)
+        context = (name, setting, result)
+        assert ('type = "GELU"' in result) == expected_fuse, context
+        assert ('"onnx.Erf"' not in result) == expected_fuse, context
+        if expected_fuse:
+            assert '"onnx.Mul"' not in result, context
+            assert "0.019999999552965164:128" in result, context
+        else:
+            assert result.count('"onnx.Mul"') == 1, context
+            assert "0.039999999105930328:128" in result, context
+        print(f"{name} ({setting=}): PASS")
 
 for name, code, scale, zero_point, dtype, fuse in [
     ("quantized_divisor", 91, 0.015625, 0, "i8", True),

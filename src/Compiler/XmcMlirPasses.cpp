@@ -12,6 +12,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "src/Pass/Passes.hpp"
+#include "llvm/Support/Process.h"
 
 using namespace mlir;
 
@@ -20,7 +21,10 @@ namespace onnx_mlir {
 void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   pm.addNestedPass<func::FuncOp>(createFixNegScalePass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createRecomposeHardSigmoidPass());
-  pm.addNestedPass<func::FuncOp>(createDedupDQsPass());
+  auto earlyDedup =
+      llvm::sys::Process::GetEnv("ONNX_MLIR_ENABLE_EARLY_DEDUP_DQS");
+  if (earlyDedup && *earlyDedup == "1")
+    pm.addNestedPass<func::FuncOp>(createDedupDQsPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createReplaceErfToGeluPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createDQBinaryQOptPass());
   // Replaced by createXmcRequantizePass below (runs post-quant-types).
