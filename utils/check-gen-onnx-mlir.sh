@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+# affiliates
+
 set -euo pipefail
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
@@ -33,7 +37,7 @@ cpp_hpp_files=()
 for prefix in "${prefixes[@]}"; do
   for f in ${prefix}*.cpp ${prefix}*.hpp; do
     case "$f" in
-      *ShapeInference.cpp|*Verify.cpp) continue ;;
+      *ShapeInference.cpp|*Verify.cpp|*Fold.cpp) continue ;;
     esac
     generated_files+=("src/Dialect/ONNX/ONNXOps/Additional/$f")
     cpp_hpp_files+=("src/Dialect/ONNX/ONNXOps/Additional/$f")
