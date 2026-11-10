@@ -455,5 +455,6 @@ Operation *ONNXDialect::materializeConstant(
   MultiDialectBuilder<OnnxBuilder> create(builder, loc);
   Value result =
       isa<UnitAttr>(value) ? create.onnx.none() : create.onnx.constant(value);
+  result.setType(type);
   return result.getDefiningOp();
 }
