@@ -47,6 +47,14 @@ static int64_t computeChannelLastSpatialDim(int64_t inputDim, int64_t kernelDim,
 // XFE Shape Inference Implementations
 //===----------------------------------------------------------------------===//
 
+LogicalResult XFECastOpShapeInference(
+    Operation *op, std::function<void(Region &)> doShapeInference) {
+  auto castOp = dyn_cast<XFECastOp>(op);
+  if (!castOp)
+    return failure();
+  return inferShapeForUnaryOps(op, castOp.getTo());
+}
+
 LogicalResult XFEMatMulBiasOpShapeInference(
     Operation *op, std::function<void(Region &)> doShapeInference) {
   // Cast to specific op type to access operation-specific methods

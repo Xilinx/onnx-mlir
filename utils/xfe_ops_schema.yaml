@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+# affiliates
+
 # ==============================================================================
 # MatMulBias: Matrix multiplication with optional bias addition (A * B + C)
 # ==============================================================================
@@ -40,6 +44,37 @@
   max_input: 3
   min_output: 1
   max_output: 1
+
+# ==============================================================================
+# Cast: ONNX Cast with explicit rounding and saturation policy
+# ==============================================================================
+- name: Cast
+  domain: com.amd.xfe
+  since_version: 1
+  description: 'Extends ONNX Cast with an explicit rounding mode and with saturation for every floating-point destination type, rather than only float8 types. Rounding modes name their numerical behavior directly: nearest_even, nearest_away, toward_zero, toward_positive, and toward_negative. When saturate is enabled, out-of-range values are clamped to the finite range of the destination floating-point type. When it is disabled, the conversion is not saturated. Every supported ONNX Cast has an equivalent XFECast with explicit attributes.'
+  meta_attributes:
+  - specializes: onnx.Cast@24
+  - traits:
+    - SameOperandsAndResultShape
+  - verify: True
+  - fold: True
+  attributes:
+  - name: round_mode
+    description: Required numerical rounding mode with no default. Unlike ONNX Cast@24 round_mode, which accepts up (the default), down, or nearest and applies only to float8e8m0, this attribute accepts nearest_even, nearest_away, toward_zero, toward_positive, or toward_negative and applies whenever the conversion requires rounding.
+    required: true
+  - name: saturate
+    description: Extends ONNX Cast@24 saturation from float8 destinations to every floating-point destination. A value of 1 clamps out-of-range results to the destination type's finite range; 0 disables clamping. The inherited default is 1.
+  # These ONNX 1.22 types are not defined by the MLIR revision supported by
+  # current XFE consumers.
+  type_constraints:
+  - type_param: T1
+    excluded_types:
+    - tensor(float4e2m1)
+    - tensor(float8e8m0)
+  - type_param: T2
+    excluded_types:
+    - tensor(float4e2m1)
+    - tensor(float8e8m0)
 
 # ==============================================================================
 # Conv: N-D Convolution with channel-last data layout

@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+
+#include "XFEFold.hpp"
+#include "XFECastUtils.hpp"
+#include "src/Dialect/ONNX/ONNXOps.hpp"
+#include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
+
+#include "mlir/IR/BuiltinAttributes.h"
+
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringSwitch.h"
+
+#include <cstdint>
+#include <iterator>
+#include <optional>
+
+using namespace mlir;
+
+namespace {
+
+std::optional<APFloat::roundingMode> getAPFloatRoundingMode(StringRef mode) {
+  return StringSwitch<std::optional<APFloat::roundingMode>>(mode)
+      .Case("nearest_even", APFloat::rmNearestTiesToEven)
+      .Case("nearest_away", APFloat::rmNearestTiesToAway)
+      .Case("toward_zero", APFloat::rmTowardZero)
+      .Case("toward_positive", APFloat::rmTowardPositive)
+      .Case("toward_negative", APFloat::rmTowardNegative)
+      .Default(std::nullopt);
+}
+
+APFloat convertF32ToBf16(APFloat value, StringRef roundMode, bool saturate) {
+  uint32_t bits = value.bitcastToAPInt().getZExtValue();
+  return APFloat(APFloat::BFloat(),
+      APInt(16, onnx_mlir::xfe_cast::f32BitsToBf16(bits, roundMode, saturate)));
+}
+
+APFloat convertFloat(APFloat value, FloatType outputType,
+    APFloat::roundingMode roundMode, bool saturate) {
+  bool negative = value.isNegative();
+  bool isNaN = value.isNaN();
+  bool losesInfo;
+  APFloat::opStatus status =
+      value.convert(outputType.getFloatSemantics(), roundMode, &losesInfo);
+  if (saturate && !isNaN &&
+      ((status & APFloat::opOverflow) != 0 || value.isInfinity()))
+    return APFloat::getLargest(outputType.getFloatSemantics(), negative);
+  return value;
+}
+
+} // namespace
+
+OpFoldResult mlir::XFECastOpFold(Operation *op, ArrayRef<Attribute> operands) {
+  auto castOp = cast<XFECastOp>(op);
+  auto input = dyn_cast_or_null<ElementsAttr>(operands.front());
+  if (!input)
+    return {};
+
+  auto outputType = cast<ShapedType>(castOp.getOutput().getType());
+  auto inputType = cast<ShapedType>(castOp.getInput().getType());
+  StringRef roundMode = castOp.getRoundMode();
+  bool saturate = castOp.getSaturate() != 0;
+  Type inputElementType = inputType.getElementType();
+  Type outputElementType = outputType.getElementType();
+
+  if (auto outputFloatType = dyn_cast<FloatType>(outputElementType)) {
+    auto inputFloatType = dyn_cast<FloatType>(inputElementType);
+    if (!inputFloatType)
+      return onnx_mlir::OnnxElementsAttrBuilder(op->getContext())
+          .castToFPElementType(input, outputFloatType, saturate);
+
+    bool useOptimizedF32ToBF16 =
+        inputFloatType.isF32() && outputFloatType.isBF16() &&
+        (roundMode == "toward_zero" || roundMode == "nearest_even");
+    if (roundMode == "nearest_even" && !useOptimizedF32ToBF16)
+      return onnx_mlir::OnnxElementsAttrBuilder(op->getContext())
+          .castToFPElementType(input, outputFloatType, saturate);
+
+    std::optional<APFloat::roundingMode> apRoundMode =
+        getAPFloatRoundingMode(roundMode);
+    if (!apRoundMode)
+      return {};
+    auto convert = [=](APFloat value) {
+      if (useOptimizedF32ToBF16)
+        return convertF32ToBf16(value, roundMode, saturate);
+      return convertFloat(value, outputFloatType, *apRoundMode, saturate);
+    };
+    if (input.isSplat())
+      return DenseElementsAttr::get(
+          outputType, convert(input.getSplatValue<APFloat>()));
+
+    SmallVector<APFloat> output;
+    output.reserve(input.getNumElements());
+    llvm::transform(
+        input.getValues<APFloat>(), std::back_inserter(output), convert);
+    return DenseElementsAttr::get(outputType, output);
+  }
+
+  if (auto outputIntegerType = dyn_cast<IntegerType>(outputElementType)) {
+    if (roundMode != "toward_zero" && roundMode != "nearest_even")
+      return {};
+    return onnx_mlir::OnnxElementsAttrBuilder(op->getContext())
+        .castToIntElementType(
+            input, outputIntegerType, roundMode == "nearest_even");
+  }
+
+  return {};
+}
