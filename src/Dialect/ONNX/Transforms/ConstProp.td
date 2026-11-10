@@ -177,8 +177,8 @@ def CreateAddOfTwoConst :
 def CreateSubOfTwoConst :
    NativeCodeCall<"ConstPropElementwiseBinary<mlir::ONNXSubOp>($_builder, $0, $1, $2)">;
 
-def CreateCastOfConst :
-   NativeCodeCall<"ConstPropCast($_builder, $0, $1, $2, $3)">;
+def CreateXFECastOfConst :
+   NativeCodeCall<"createXFECastForConstProp($_builder, $0, $1)">;
 
 def CreateBitwiseNotOfConst :
    NativeCodeCall<"ConstPropElementwiseUnary<mlir::ONNXBitwiseNotOp>($_builder, $0, $1)">;
@@ -507,7 +507,7 @@ def CastofConst : NamedPat<"CastofConst",
     // From (c)
     (ONNXCastOp:$castOp $input, $saturate, $to),
     // To (c)
-    (CreateCastOfConst $castOp, $input, $saturate, $to),
+    (CreateXFECastOfConst $castOp, $input),
     [(IsFromDenseConstLike:$input), (IsIntOrFloatType:$input)]>;
 
 // Constant Propagation for BitwiseNot

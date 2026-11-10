@@ -364,27 +364,41 @@ class CustomOpSchema:
     """Wrapper class to make YAML-defined ops look like ONNX OpSchema objects."""
 
     class FormalParameter:
-        def __init__(self, param_dict):
-            self.name = param_dict["name"]
-            self.description = param_dict.get("description", "")
-            self.type_str = param_dict.get("type_str", "")
-            self.option = OpSchema.FormalParameterOption.Single
-            self.is_homogeneous = True
+        def __init__(self, param_dict, base=None):
+            self.name = param_dict.get("name", base.name if base else None)
+            if self.name is None:
+                raise ValueError("formal parameter requires a name")
+            self.description = param_dict.get(
+                "description", base.description if base else ""
+            )
+            self.type_str = param_dict.get("type_str", base.type_str if base else "")
+            self.option = base.option if base else OpSchema.FormalParameterOption.Single
+            self.is_homogeneous = base.is_homogeneous if base else True
 
-            if param_dict.get("optional", False):
-                self.option = OpSchema.FormalParameterOption.Optional
-            elif param_dict.get("variadic", False):
-                self.option = OpSchema.FormalParameterOption.Variadic
-                self.is_homogeneous = param_dict.get("is_homogeneous", True)
+            if "optional" in param_dict or "variadic" in param_dict:
+                self.option = OpSchema.FormalParameterOption.Single
+                if param_dict.get("optional", False):
+                    self.option = OpSchema.FormalParameterOption.Optional
+                elif param_dict.get("variadic", False):
+                    self.option = OpSchema.FormalParameterOption.Variadic
+            if "is_homogeneous" in param_dict:
+                self.is_homogeneous = param_dict["is_homogeneous"]
 
     class Attribute:
-        def __init__(self, attr_dict):
-            self.name = attr_dict["name"]
-            self.description = attr_dict.get("description", "")
-            self.required = attr_dict.get("required", False)
-            self.default_value = type(
-                "obj", (object,), {"name": attr_dict.get("default_value")}
-            )()
+        def __init__(self, attr_dict, base=None):
+            self.name = attr_dict.get("name", base.name if base else None)
+            if self.name is None:
+                raise ValueError("attribute requires a name")
+            self.description = attr_dict.get(
+                "description", base.description if base else ""
+            )
+            self.required = attr_dict.get("required", base.required if base else False)
+            if "default_value" in attr_dict or base is None or self.required:
+                self.default_value = type(
+                    "obj", (object,), {"name": attr_dict.get("default_value")}
+                )()
+            else:
+                self.default_value = base.default_value
 
             # Map type string to OpSchema.AttrType
             type_map = {
@@ -398,55 +412,134 @@ class CustomOpSchema:
                 "list(string)": OpSchema.AttrType.STRINGS,
                 "bool": OpSchema.AttrType.INT,
             }
-            self.type_str = attr_dict.get("type", "int")
-            self.type = type_map.get(self.type_str, OpSchema.AttrType.INT)
+            self.type_str = attr_dict.get("type")
+            if self.type_str is not None:
+                self.type = type_map.get(self.type_str, OpSchema.AttrType.INT)
+            elif base is not None:
+                self.type = base.type
+            else:
+                self.type_str = "int"
+                self.type = OpSchema.AttrType.INT
 
     class TypeConstraint:
-        def __init__(self, tc_dict):
-            self.type_param_str = tc_dict["type_param"]
-            self.description = tc_dict.get("description", "")
-            self.allowed_type_strs = tc_dict.get("allowed_types", [])
+        def __init__(self, tc_dict, base=None):
+            self.type_param_str = tc_dict.get(
+                "type_param", base.type_param_str if base else None
+            )
+            if self.type_param_str is None:
+                raise ValueError("type constraint requires a type_param")
+            self.description = tc_dict.get(
+                "description", base.description if base else ""
+            )
+            self.allowed_type_strs = list(
+                tc_dict.get("allowed_types", base.allowed_type_strs if base else [])
+            )
+            excluded_types = tc_dict.get("excluded_types", [])
+            unknown_exclusions = set(excluded_types) - set(self.allowed_type_strs)
+            if unknown_exclusions:
+                raise ValueError(
+                    f"type constraint {self.type_param_str} excludes unknown types: "
+                    + ", ".join(sorted(unknown_exclusions))
+                )
+            self.allowed_type_strs = [
+                t for t in self.allowed_type_strs if t not in excluded_types
+            ]
+
+    @staticmethod
+    def _parse_specialization(reference):
+        qualified_name, separator, version = reference.rpartition("@")
+        if not separator or not version.isdigit():
+            raise ValueError(
+                f"invalid specialization '{reference}'; expected <domain>.<op>@<opset>"
+            )
+        domain, separator, name = qualified_name.rpartition(".")
+        if not separator:
+            domain, name = "", qualified_name
+        elif domain in {"onnx", "ai.onnx"}:
+            domain = ""
+        return defs.get_schema(name, int(version), domain)
+
+    @staticmethod
+    def _merge_named(
+        base_values, overrides, yaml_name_field, schema_name_field, constructor
+    ):
+        if not overrides:
+            return list(base_values)
+        overrides_by_name = {entry[yaml_name_field]: entry for entry in overrides}
+        merged = []
+        for base in base_values:
+            name = getattr(base, schema_name_field)
+            override = overrides_by_name.pop(name, None)
+            merged.append(constructor(override, base) if override else base)
+        merged.extend(constructor(override) for override in overrides_by_name.values())
+        return merged
 
     def __init__(self, yaml_dict):
-        self.name = yaml_dict["name"]
-        self.domain = yaml_dict.get("domain", "")
-        self.since_version = yaml_dict.get("since_version", 1)
-        self.support_level = 1  # COMMON
-        self.doc = yaml_dict.get("description", "")
-        self.node_determinism = OpSchema.NodeDeterminism.Unknown
-
-        # Parse inputs
-        self.inputs = []
-        for inp in yaml_dict.get("inputs", []):
-            self.inputs.append(self.FormalParameter(inp))
-
-        # Parse outputs
-        self.outputs = []
-        for out in yaml_dict.get("outputs", []):
-            self.outputs.append(self.FormalParameter(out))
-
-        # Parse attributes
-        self.attributes = {}
-        for attr in yaml_dict.get("attributes", []):
-            attr_obj = self.Attribute(attr)
-            self.attributes[attr_obj.name] = attr_obj
-
-        # Parse type constraints
-        self.type_constraints = []
-        for tc in yaml_dict.get("type_constraints", []):
-            self.type_constraints.append(self.TypeConstraint(tc))
-
-        # Min/max counts
-        self.min_input = yaml_dict.get("min_input", len(self.inputs))
-        self.max_input = yaml_dict.get("max_input", len(self.inputs))
-        self.min_output = yaml_dict.get("min_output", len(self.outputs))
-        self.max_output = yaml_dict.get("max_output", len(self.outputs))
-
-        # Parse meta_attributes for verify, fold, etc.
+        # Generator-only metadata may describe this op as a specialization of
+        # an ONNX schema. The YAML then needs to state only the differences.
         self.meta_attributes = {}
         for meta_attr in yaml_dict.get("meta_attributes", []):
             if isinstance(meta_attr, dict):
                 self.meta_attributes.update(meta_attr)
+        base = None
+        if specialization := self.meta_attributes.get("specializes"):
+            base = self._parse_specialization(specialization)
+
+        self.name = yaml_dict["name"]
+        self.domain = yaml_dict.get("domain", "")
+        self.since_version = yaml_dict.get("since_version", 1)
+        self.support_level = base.support_level if base else 1
+        self.doc = yaml_dict.get("description", base.doc if base else "")
+        self.node_determinism = (
+            base.node_determinism if base else OpSchema.NodeDeterminism.Unknown
+        )
+
+        # Parse inputs
+        self.inputs = self._merge_named(
+            base.inputs if base else [],
+            yaml_dict.get("inputs", []),
+            "name",
+            "name",
+            self.FormalParameter,
+        )
+
+        # Parse outputs
+        self.outputs = self._merge_named(
+            base.outputs if base else [],
+            yaml_dict.get("outputs", []),
+            "name",
+            "name",
+            self.FormalParameter,
+        )
+
+        # Parse attributes
+        self.attributes = dict(base.attributes) if base else {}
+        for attr in yaml_dict.get("attributes", []):
+            attr_obj = self.Attribute(attr, self.attributes.get(attr["name"]))
+            self.attributes[attr_obj.name] = attr_obj
+
+        # Parse type constraints
+        self.type_constraints = self._merge_named(
+            base.type_constraints if base else [],
+            yaml_dict.get("type_constraints", []),
+            "type_param",
+            "type_param_str",
+            self.TypeConstraint,
+        )
+
+        # Min/max counts
+        self.min_input = yaml_dict.get(
+            "min_input", base.min_input if base else len(self.inputs)
+        )
+        self.max_input = yaml_dict.get(
+            "max_input", base.max_input if base else len(self.inputs)
+        )
+        self.min_output = yaml_dict.get(
+            "min_output", base.min_output if base else len(self.outputs)
+        )
+        self.max_output = yaml_dict.get(
+            "max_output", base.max_output if base else len(self.outputs)
+        )
 
 
 def load_custom_ops_from_yaml(yaml_paths: List[str]) -> List[CustomOpSchema]:
@@ -1860,9 +1953,16 @@ def get_onnx_mlir_types(schema, type_str_dict, input):
 def gen_shape_helper_code(s, indent, opName, domain=""):
     # Print getShapeHelper.
     indent = inc_indent(indent)
+    is_custom_domain = domain and domain not in [
+        "ai.onnx.ml",
+        "ai.onnx.preview.training",
+    ]
+    operand_separator = "" if is_custom_domain else " "
     s += (
         indent
-        + "onnx_mlir::ONNXOpShapeHelper * $cppClass::getShapeHelper(mlir::Operation *op, llvm::ArrayRef<mlir::Value> oper, \n"
+        + "onnx_mlir::ONNXOpShapeHelper * $cppClass::getShapeHelper(mlir::Operation *op, llvm::ArrayRef<mlir::Value> oper,"
+        + operand_separator
+        + "\n"
     )
     indent = inc_indent(indent)
     indent = inc_indent(indent)
@@ -1930,12 +2030,19 @@ def gen_op_def(schema, with_version=False):
 
     # Generate decl for op traits.
     traits = [f"OpVersionTrait<{schema.since_version}>"]
+    custom_meta = getattr(schema, "meta_attributes", {})
     if schema.node_determinism != OpSchema.NodeDeterminism.NonDeterministic:
         traits.insert(0, "Pure")
 
     # Generate SameOperandsAndResultShape traits.
     if mlir_op_name in OpsWithSameOperandsAndResultShape:
         traits.append("SameOperandsAndResultShape")
+
+    # Custom schemas declare MLIR-specific traits that ONNX OpSchema cannot
+    # represent.
+    for trait in custom_meta.get("traits", []):
+        if trait not in traits:
+            traits.append(trait)
 
     # Generate ONNXElementwise trait
     if mlir_op_name in OpsWithONNXElementwise:
@@ -2161,7 +2268,6 @@ def gen_op_def(schema, with_version=False):
 
     ###########################################
     # Generate decl for verifier/folder.
-    custom_meta = getattr(schema, "meta_attributes", {})
     custom_has_verifier = bool(custom_meta.get("verify", False))
     custom_has_folder = bool(custom_meta.get("fold", False))
 
@@ -2208,7 +2314,13 @@ def gen_op_importer(domain, name, file, since_version=None):
         opName = name
 
     mappedName = map_op_name_to_onnx_mlir_name(opName, domain)
-    s = indent + 'import_handler_map_["{}"]["{}"] = \n '.format(domain, opName)
+    if domain and domain not in ["ai.onnx.ml", "ai.onnx.preview.training"]:
+        # Custom-domain schemas are maintained in this repository. Keep their
+        # newly generated importer entries clang-format clean without
+        # rewriting the large body of imported upstream ONNX definitions.
+        s = indent + 'import_handler_map_["{}"]["{}"] =\n '.format(domain, opName)
+    else:
+        s = indent + 'import_handler_map_["{}"]["{}"] = \n '.format(domain, opName)
     if domain and domain not in ["", "ai.onnx.ml", "ai.onnx.preview.training"]:
         mlir_op_name = domain_abrv_dict[domain] + opName
     else:
@@ -2400,21 +2512,23 @@ def main(args):  # type: (Type[Args]) -> None
         "//********************************************************\n\n"
     )
     autogen_warning = autogen_warning.format(curr_utc_time)
+    amd_header = (
+        "// SPDX-License-Identifier: Apache-2.0\n"
+        "// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its\n"
+        "// affiliates\n\n"
+    )
+    custom_autogen_warning = amd_header + autogen_warning
 
     op_def = args.op_def
-    op_def.write("// SPDX-License-Identifier: Apache-2.0\n")
-    op_def.write(
-        "// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its\n"
-    )
-    op_def.write("// affiliates\n\n")
-    op_def.write(autogen_warning)
+    op_def.write(custom_autogen_warning)
     # The .td.inc suffix makes git-clang-format parse this generated TableGen
     # as C++, which can corrupt embedded C++ blocks. The generator is the sole
     # formatter for this file.
     op_def.write("// clang-format off\n\n")
 
     op_importer = args.op_importer
-    op_importer.write(autogen_warning)
+    op_importer.write(custom_autogen_warning)
+    op_importer.write("// clang-format off\n\n")
     for domain, version_map in version_dict.items():
         gen_op_versions(op_importer, version_map, domain)
     for domain, version_map in additional_op_version_dict.items():
@@ -2450,7 +2564,7 @@ def main(args):  # type: (Type[Args]) -> None
                     print(f"Generating custom ops for domain '{domain}' in {filename}")
 
                 # Write header for custom domain file
-                custom_domain_files[domain].write(autogen_warning)
+                custom_domain_files[domain].write(custom_autogen_warning)
                 custom_domain_files[domain].write(
                     f"//===-- {domain_abbrev}Ops.td -- {domain_abbrev} Ops -*- tablegen -===//\n"
                 )
@@ -2506,7 +2620,7 @@ def main(args):  # type: (Type[Args]) -> None
             # 1. Generate header file (.hpp) with function declarations
             hpp_filepath = os.path.join(curr_dir, hpp_filename)
             with io.open(hpp_filepath, "w", newline="") as hpp_file:
-                hpp_file.write(autogen_warning)
+                hpp_file.write(custom_autogen_warning)
                 hpp_file.write(
                     f"// Shape inference function declarations for {domain_abbrev} operations\n"
                 )
@@ -2536,7 +2650,7 @@ def main(args):  # type: (Type[Args]) -> None
             # This now includes shape inference, verify, and fold stubs all in one file
             cpp_stub_filepath = os.path.join(curr_dir, cpp_stub_filename)
             with io.open(cpp_stub_filepath, "w", newline="") as cpp_stub:
-                cpp_stub.write(autogen_warning)
+                cpp_stub.write(custom_autogen_warning)
                 cpp_stub.write(f"// DO NOT EDIT - Auto-generated forwarding stubs\n")
                 cpp_stub.write(
                     f"// This file forwards to manual implementations in shape inference, verify, and fold files\n"
@@ -2639,7 +2753,7 @@ def main(args):  # type: (Type[Args]) -> None
             # 3. Generate implementation templates - EDIT THIS FILE
             cpp_impl_filepath = os.path.join(curr_dir, cpp_impl_filename)
             with io.open(cpp_impl_filepath, "w", newline="") as cpp_impl:
-                cpp_impl.write(autogen_warning)
+                cpp_impl.write(custom_autogen_warning)
                 cpp_impl.write(f"// IMPLEMENT YOUR SHAPE INFERENCE HERE\n")
                 cpp_impl.write(
                     f"// This file contains templates - safe to edit and customize\n"
@@ -2720,7 +2834,7 @@ def main(args):  # type: (Type[Args]) -> None
                 verify_hpp_filename = f"{domain_abbrev}Verify.hpp"
                 verify_hpp_filepath = os.path.join(curr_dir, verify_hpp_filename)
                 with io.open(verify_hpp_filepath, "w", newline="") as verify_hpp:
-                    verify_hpp.write(autogen_warning)
+                    verify_hpp.write(custom_autogen_warning)
                     verify_hpp.write(
                         f"// Verify function declarations for {domain_abbrev} operations\n"
                     )
@@ -2748,7 +2862,7 @@ def main(args):  # type: (Type[Args]) -> None
                 verify_impl_filename = f"{domain_abbrev}Verify.cpp"
                 verify_impl_filepath = os.path.join(curr_dir, verify_impl_filename)
                 with io.open(verify_impl_filepath, "w", newline="") as verify_impl:
-                    verify_impl.write(autogen_warning)
+                    verify_impl.write(custom_autogen_warning)
                     verify_impl.write(f"// IMPLEMENT YOUR VERIFY LOGIC HERE\n")
                     verify_impl.write(
                         f"// Move to: src/Dialect/ONNX/ONNXOps/Additional/{verify_impl_filename}\n\n"
@@ -2804,7 +2918,7 @@ def main(args):  # type: (Type[Args]) -> None
                 fold_hpp_filename = f"{domain_abbrev}Fold.hpp"
                 fold_hpp_filepath = os.path.join(curr_dir, fold_hpp_filename)
                 with io.open(fold_hpp_filepath, "w", newline="") as fold_hpp:
-                    fold_hpp.write(autogen_warning)
+                    fold_hpp.write(custom_autogen_warning)
                     fold_hpp.write(
                         f"// Fold function declarations for {domain_abbrev} operations\n"
                     )
@@ -2832,7 +2946,7 @@ def main(args):  # type: (Type[Args]) -> None
                 fold_impl_filename = f"{domain_abbrev}Fold.cpp"
                 fold_impl_filepath = os.path.join(curr_dir, fold_impl_filename)
                 with io.open(fold_impl_filepath, "w", newline="") as fold_impl:
-                    fold_impl.write(autogen_warning)
+                    fold_impl.write(custom_autogen_warning)
                     fold_impl.write(f"// IMPLEMENT YOUR FOLD LOGIC HERE\n")
                     fold_impl.write(
                         f"// Move to: src/Dialect/ONNX/ONNXOps/Additional/{fold_impl_filename}\n\n"
@@ -2911,6 +3025,8 @@ def main(args):  # type: (Type[Args]) -> None
         gen_opsets(op_importer, versions_map, domain)
     for domain, versions_map in custom_version_dict.items():
         gen_opsets(op_importer, versions_map, domain)
+
+    op_importer.write("\n// clang-format on\n")
 
     if check_operation_version:
         for domain, version_map in version_dict.items():

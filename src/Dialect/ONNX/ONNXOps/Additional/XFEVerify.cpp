@@ -186,6 +186,29 @@ LogicalResult XFEMatMulBiasOpVerify(Operation *op) {
   return XFEChannelWiseQuantizationVerify(op);
 }
 
+LogicalResult XFECastOpVerify(Operation *op) {
+  auto castOp = dyn_cast<XFECastOp>(op);
+  if (!castOp)
+    return failure();
+
+  Type outputElementType = getElementType(castOp.getOutput().getType());
+  if (auto quantizedType = dyn_cast<quant::QuantizedType>(outputElementType))
+    outputElementType = quantizedType.getExpressedType();
+  if (outputElementType != castOp.getTo())
+    return castOp.emitOpError(
+        "output element type does not match the 'to' attribute");
+  if (castOp.getSaturate() != 0 && castOp.getSaturate() != 1)
+    return castOp.emitOpError("requires 'saturate' to be 0 or 1");
+
+  StringRef roundMode = castOp.getRoundMode();
+  if (!llvm::is_contained({"nearest_even", "nearest_away", "toward_zero",
+                              "toward_positive", "toward_negative"},
+          roundMode))
+    return castOp.emitOpError("has unsupported round_mode '")
+           << roundMode << "'";
+  return success();
+}
+
 LogicalResult XFEConvOpVerify(Operation *op) {
   auto convOp = dyn_cast<XFEConvOp>(op);
   if (!convOp)

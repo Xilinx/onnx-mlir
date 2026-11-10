@@ -34,6 +34,7 @@
 #include "src/Dialect/ONNX/ElementsAttr/ElementsAttrHelper.hpp"
 #include "src/Dialect/ONNX/ElementsAttr/WideNum.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
+#include "src/Dialect/ONNX/ONNXOps/Additional/XFECast.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps/ShapeHelper.hpp"
 #include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
@@ -1044,34 +1045,18 @@ Value ConstPropScatterND(PatternRewriter &rewriter, Value replacingValue,
 }
 
 //===----------------------------------------------------------------------===//
-// Code to perform constant propagation for CastOp.
+// Translate CastOp to its explicitly parameterized XFE equivalent. The XFE
+// fold hook then performs constant propagation, sharing the same semantics
+// with future ONNX-to-XFE legalization.
 //===----------------------------------------------------------------------===//
 
-Value ConstPropCast(PatternRewriter &rewriter, Value replacingValue,
-    Value constValue, IntegerAttr saturate, TypeAttr to) {
-  Type toType = to.getValue();
-  assert(toType == getElementType(replacingValue.getType()) &&
-         "result element type mismatch");
-
-  ElementsAttr constElements = getConstValueElements(constValue);
-  OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
-  ElementsAttr castElements;
-  if (auto ftype = dyn_cast<FloatType>(toType)) {
-    bool doSaturate = saturate.getSInt() != 0 && ftype.getWidth() == 8;
-    castElements =
-        elementsBuilder.castToFPElementType(constElements, ftype, doSaturate);
-  } else if (auto itype = dyn_cast<IntegerType>(toType)) {
-    // The onnx.Cast spec doesn’t say whether cast from floating point to
-    // integer type should truncate towards zero or round but past discussions
-    // (onnx issues #2285, #3776, #5004) point to truncation like numpy.
-    // But round to nearest, ties to even, is preferable for numerics.
-    bool round = ConstPropONNXToONNXPassConfiguration::roundFPToInt;
-    castElements =
-        elementsBuilder.castToIntElementType(constElements, itype, round);
-  } else {
-    llvm_unreachable("cast to unsupported type");
-  }
-  return createReplacingConstantOp(rewriter, replacingValue, castElements);
+Value createXFECastForConstProp(
+    PatternRewriter &rewriter, Value replacingValue, Value input) {
+  auto castOp = replacingValue.getDefiningOp<ONNXCastOp>();
+  assert(castOp && "expected ONNX Cast result");
+  ONNXCastToXFEOptions options{
+      ConstPropONNXToONNXPassConfiguration::roundFPToInt};
+  return createXFECastFromONNXCast(rewriter, castOp, input, options);
 }
 
 //===----------------------------------------------------------------------===//
