@@ -40,6 +40,26 @@ def check(name, model, fuse):
 
 
 check("encoder", source, True)
+input_dq = next(line for line in source.splitlines() if line.startswith("  %x = "))
+for name, scale, fuse in [
+    ("duplicated_input_dq", "%input_scale", True),
+    ("different_input_dq_scale", "%div_scale", False),
+]:
+    duplicate_dq = input_dq.replace("%x =", "%x_copy =").replace("%input_scale", scale)
+    model = source.replace(input_dq, input_dq + "\n" + duplicate_dq).replace(
+        "(%x, %add)", "(%x_copy, %add)"
+    )
+    result = optimize(model, ["--xmc-passes"])
+    assert ('type = "GELU"' in result) == fuse, (name, result)
+    assert ('"onnx.Erf"' not in result) == fuse, (name, result)
+    if fuse:
+        assert '"onnx.Mul"' not in result, (name, result)
+        assert "0.019999999552965164:128" in result, (name, result)
+    else:
+        assert result.count('"onnx.Mul"') == 1, (name, result)
+        assert "0.039999999105930328:128" in result, (name, result)
+    print(name + ": PASS")
+
 for name, code, scale, zero_point, dtype, fuse in [
     ("quantized_divisor", 91, 0.015625, 0, "i8", True),
     ("nonzero_zp", 96, 0.015625, 5, "i8", True),
