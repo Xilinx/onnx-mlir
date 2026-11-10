@@ -63,6 +63,8 @@ OpFoldResult mlir::XFECastOpFold(Operation *op, ArrayRef<Attribute> operands) {
   bool saturate = castOp.getSaturate() != 0;
   Type inputElementType = inputType.getElementType();
   Type outputElementType = outputType.getElementType();
+  ShapedType outputAttrType =
+      cast<ShapedType>(input.getType()).clone(outputElementType);
 
   if (auto outputFloatType = dyn_cast<FloatType>(outputElementType)) {
     auto inputFloatType = dyn_cast<FloatType>(inputElementType);
@@ -88,13 +90,13 @@ OpFoldResult mlir::XFECastOpFold(Operation *op, ArrayRef<Attribute> operands) {
     };
     if (input.isSplat())
       return DenseElementsAttr::get(
-          outputType, convert(input.getSplatValue<APFloat>()));
+          outputAttrType, convert(input.getSplatValue<APFloat>()));
 
     SmallVector<APFloat> output;
     output.reserve(input.getNumElements());
     llvm::transform(
         input.getValues<APFloat>(), std::back_inserter(output), convert);
-    return DenseElementsAttr::get(outputType, output);
+    return DenseElementsAttr::get(outputAttrType, output);
   }
 
   if (auto outputIntegerType = dyn_cast<IntegerType>(outputElementType)) {
