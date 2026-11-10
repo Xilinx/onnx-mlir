@@ -3052,22 +3052,35 @@ struct ConstPropONNXToONNXPass
 // Apply ordinary constant-propagation and recipe-formation patterns without
 // visiting recipe bodies. New recipe bodies are built through an unobserved
 // OpBuilder, so ExistingAndNewOps cannot enqueue their internal operations.
+// Repeat the outer walk to preserve the fixpoint behavior of
+// applyPatternsGreedily: forming a recipe can make a transitive user match on
+// the next iteration even though that user was not directly modified.
 LogicalResult applyPatternsOutsideDeferredRecipes(func::FuncOp function,
     RewritePatternSet &&patterns, RewriterBase::Listener *listener) {
-  SmallVector<Operation *> operations;
-  function.walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
-    if (op != function)
-      operations.push_back(op);
-    return isa<ONNXDeferredFoldableOp>(op) ? WalkResult::skip()
-                                           : WalkResult::advance();
-  });
-
   FrozenRewritePatternSet frozenPatterns(std::move(patterns));
   GreedyRewriteConfig config;
   config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps)
       .setScope(&function.getBody())
       .setListener(listener);
-  return applyOpPatternsGreedily(operations, frozenPatterns, config);
+
+  for (int64_t iteration = 0; iteration < config.getMaxIterations();
+      ++iteration) {
+    SmallVector<Operation *> operations;
+    function.walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
+      if (op != function)
+        operations.push_back(op);
+      return isa<ONNXDeferredFoldableOp>(op) ? WalkResult::skip()
+                                             : WalkResult::advance();
+    });
+
+    bool changed = false;
+    if (failed(applyOpPatternsGreedily(
+            operations, frozenPatterns, config, &changed)))
+      return failure();
+    if (!changed)
+      return success();
+  }
+  return failure();
 }
 
 LogicalResult formDeferredFoldableExpressions(func::FuncOp function) {
@@ -3102,6 +3115,17 @@ void ConstPropONNXToONNXPass::runOnOperation() {
       maxLoopUnrollCount, enableDequantConstFold, enableDequantConstFoldWeights,
       formDeferredFoldableExpressions);
   onnx_mlir::ResultNamesUpdater rnUpdater;
+  bool containsDeferredRecipe = false;
+  function.walk([&](ONNXDeferredFoldableOp) {
+    containsDeferredRecipe = true;
+    return WalkResult::interrupt();
+  });
+  if (!formDeferredFoldableExpressions && !containsDeferredRecipe) {
+    if (failed(applyPatternsGreedily(function, std::move(patterns),
+            GreedyRewriteConfig().setListener(&rnUpdater))))
+      signalPassFailure();
+    return;
+  }
   if (failed(applyPatternsOutsideDeferredRecipes(
           function, std::move(patterns), &rnUpdater)) ||
       (formDeferredFoldableExpressions &&
@@ -3191,7 +3215,7 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
     // specific constant-propagation pattern. Pattern benefit zero makes this
     // a dialect-wide fallback rather than a competing optimization.
     populateFormDeferredFoldableExpressionPatterns(patterns, PatternBenefit(0),
-        /*requireDeferredSource=*/false);
+        /*requireDeferredSource=*/true);
   }
 }
 

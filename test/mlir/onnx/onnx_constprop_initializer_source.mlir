@@ -159,7 +159,7 @@ func.func @do_not_reassociate_nondeterministic_expression(%arg0: tensor<4xf32>) 
 // CHECK-LABEL: func.func @do_not_reassociate_nondeterministic_expression
 // CHECK-DAG: [[SEED_DATA:%.+]] = "onnx.InitializerSource"() {{.*}}name = "seed_data"
 // CHECK-DAG: [[OFFSET:%.+]] = onnx.Constant dense<5.000000e-01>
-// CHECK: [[RANDOM:%.+]] = "onnx.RandomNormalLike"([[SEED_DATA]])
+// CHECK-DAG: [[RANDOM:%.+]] = "onnx.RandomNormalLike"([[SEED_DATA]])
 // CHECK: [[SUM:%.+]] = "onnx.Add"(%arg0, [[RANDOM]])
 // CHECK: [[RESULT:%.+]] = "onnx.Add"([[SUM]], [[OFFSET]])
 // CHECK: onnx.Return [[RESULT]]
