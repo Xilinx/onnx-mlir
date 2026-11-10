@@ -2686,6 +2686,7 @@ bool shouldInlineConstant(Value value) {
 
 bool canFormDeferredFoldableExpression(Operation *op) {
   if (!op || op->hasAttr("onnx.deferred_foldable_exposed") ||
+      op->hasAttr("onnx.dense_constant_foldable") ||
       op->getParentOfType<ONNXDeferredFoldableOp>() ||
       dyn_cast<DeferredConstantOpInterface>(op) ||
       isa<ONNXDeferredFoldableOp, ONNXDeferredYieldOp>(op) || !isPure(op) ||
@@ -3133,8 +3134,8 @@ void onnx_mlir::populateFormDeferredFoldableExpressionPatterns(
       patterns, patterns.getContext());
 }
 
-LogicalResult onnx_mlir::inlineDenseDeferredFoldableExpressions(
-    Operation *root) {
+LogicalResult onnx_mlir::inlineDenseDeferredFoldableExpressions(Operation *root,
+    llvm::function_ref<void(Operation *)> notifyInlinedOperation) {
   SmallVector<ONNXDeferredFoldableOp> denseRecipes;
   root->walk([&](ONNXDeferredFoldableOp deferred) {
     if (llvm::all_of(deferred.getCaptures(), isConstLikeValue))
@@ -3142,9 +3143,15 @@ LogicalResult onnx_mlir::inlineDenseDeferredFoldableExpressions(
   });
 
   IRRewriter rewriter(root->getContext());
-  for (ONNXDeferredFoldableOp deferred : denseRecipes)
-    if (failed(inlineDeferredFoldableExpression(deferred, rewriter)))
+  for (ONNXDeferredFoldableOp deferred : denseRecipes) {
+    FailureOr<SmallVector<Operation *>> inlined =
+        inlineDeferredFoldableExpression(deferred, rewriter);
+    if (failed(inlined))
       return failure();
+    if (notifyInlinedOperation)
+      for (Operation *operation : *inlined)
+        notifyInlinedOperation(operation);
+  }
   return success();
 }
 

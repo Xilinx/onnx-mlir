@@ -10,6 +10,7 @@
 #include <cstdint>
 
 #include "mlir/IR/PatternMatch.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 
 namespace onnx_mlir {
 
@@ -34,8 +35,11 @@ void populateFormDeferredFoldableExpressionPatterns(
 // be formed temporarily inside a greedy rewrite so newly created dense
 // constant expressions have the same explicit producer classification as
 // initializer-dependent expressions. Recipes with deferred captures remain.
+// If provided, notifyInlinedOperation is called for every operation cloned
+// from an inlined recipe, in program order.
 mlir::LogicalResult inlineDenseDeferredFoldableExpressions(
-    mlir::Operation *root);
+    mlir::Operation *root,
+    llvm::function_ref<void(mlir::Operation *)> notifyInlinedOperation = {});
 
 // Form or extend a deferred recipe for one newly created operation. On
 // success, the insertion point is immediately after the replacement producer.
