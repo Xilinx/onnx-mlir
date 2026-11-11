@@ -648,6 +648,10 @@ bool isDequantQuantSame(mlir::ONNXDequantizeLinearOp dqOp,
 /// is applied) or a `Value` (whose type is inspected the same way).
 bool hasQuantizedElementType(mlir::Type type);
 bool hasQuantizedElementType(mlir::Value value);
+
+/// Whether an intermediate element-type cast is unobservable in
+/// `src -> mid -> dst` and may therefore be removed.
+bool canElideIntermediateCast(mlir::Type src, mlir::Type mid, mlir::Type dst);
 //===----------------------------------------------------------------------===//
 // Support for location.
 //===----------------------------------------------------------------------===//

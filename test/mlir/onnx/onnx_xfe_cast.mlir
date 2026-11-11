@@ -55,6 +55,31 @@ func.func @fold_integer_to_float_rounding() -> (tensor<2xf32>, tensor<2xf32>) {
 // CHECK-DAG: value = #onnx.dense_disposable<{{[0-9]+}}:"0x0100804B000080CB"> : tensor<2xf32>
 // CHECK-DAG: value = #onnx.dense_disposable<{{[0-9]+}}:"0x0000804B010080CB"> : tensor<2xf32>
 
+func.func @fold_boolean_to_float() -> (tensor<2xf32>, tensor<4xf32>) {
+  %splat = onnx.Constant dense<true> : tensor<2xi1>
+  %splat_cast = "onnx.XFECast"(%splat) {nan_mode = "propagate", round_mode = "nearest_even", saturation_mode = "none", to = f32} : (tensor<2xi1>) -> tensor<2xf32>
+  %values = onnx.Constant dense<[false, true, true, false]> : tensor<4xi1>
+  %values_cast = "onnx.XFECast"(%values) {nan_mode = "propagate", round_mode = "nearest_even", saturation_mode = "none", to = f32} : (tensor<4xi1>) -> tensor<4xf32>
+  return %splat_cast, %values_cast : tensor<2xf32>, tensor<4xf32>
+}
+
+// CHECK-LABEL: sym_name = "fold_boolean_to_float"
+// CHECK-NOT: "onnx.XFECast"
+// CHECK-DAG: value = dense<"0x0000803F0000803F"> : tensor<2xf32>
+// CHECK-DAG: value = dense<"0x000000000000803F0000803F00000000"> : tensor<4xf32>
+
+func.func @fold_float8_infinity_saturation() -> (tensor<2xf8E4M3FN>, tensor<2xf8E4M3FN>) {
+  %input = onnx.Constant dense<[0x7F800000, 0xFF800000]> : tensor<2xf32>
+  %finite = "onnx.XFECast"(%input) {nan_mode = "propagate", round_mode = "nearest_even", saturation_mode = "finite", to = f8E4M3FN} : (tensor<2xf32>) -> tensor<2xf8E4M3FN>
+  %negative = "onnx.XFECast"(%input) {nan_mode = "propagate", round_mode = "nearest_even", saturation_mode = "neg_finite", to = f8E4M3FN} : (tensor<2xf32>) -> tensor<2xf8E4M3FN>
+  return %finite, %negative : tensor<2xf8E4M3FN>, tensor<2xf8E4M3FN>
+}
+
+// CHECK-LABEL: sym_name = "fold_float8_infinity_saturation"
+// CHECK-NOT: "onnx.XFECast"
+// CHECK-DAG: value = dense<"0x7EFE"> : tensor<2xf8E4M3FN>
+// CHECK-DAG: value = dense<"0x7FFE"> : tensor<2xf8E4M3FN>
+
 func.func @fold_nan_propagation() -> tensor<2xbf16> {
   %input = onnx.Constant dense<[0x7F800001, 0xFFC00000]> : tensor<2xf32>
   %result = "onnx.XFECast"(%input) {nan_mode = "propagate", round_mode = "nearest_even", saturation_mode = "neg_finite", to = bf16} : (tensor<2xf32>) -> tensor<2xbf16>
@@ -64,3 +89,13 @@ func.func @fold_nan_propagation() -> tensor<2xbf16> {
 // CHECK-LABEL: sym_name = "fold_nan_propagation"
 // CHECK-NOT: "onnx.XFECast"
 // CHECK: value = dense<"0xC07FC0FF"> : tensor<2xbf16>
+
+func.func @fold_consecutive_xfe_casts(%input: tensor<2xi32>) -> tensor<2xbf16> {
+  %wide = "onnx.XFECast"(%input) {nan_mode = "propagate", round_mode = "nearest_even", saturation_mode = "none", to = i64} : (tensor<2xi32>) -> tensor<2xi64>
+  %result = "onnx.XFECast"(%wide) {nan_mode = "propagate", round_mode = "nearest_even", saturation_mode = "none", to = bf16} : (tensor<2xi64>) -> tensor<2xbf16>
+  return %result : tensor<2xbf16>
+}
+
+// CHECK-LABEL: sym_name = "fold_consecutive_xfe_casts"
+// CHECK: "onnx.XFECast"(%arg0)
+// CHECK-NOT: "onnx.XFECast"
