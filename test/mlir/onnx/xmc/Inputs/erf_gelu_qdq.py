@@ -1,6 +1,7 @@
 import pathlib
 import subprocess
 import sys
+import tempfile
 
 
 optimizer, fixture = sys.argv[1:]
@@ -40,6 +41,44 @@ def check(name, model, fuse):
 
 
 check("encoder", source, True)
+input_dq = next(line for line in source.splitlines() if line.startswith("  %x = "))
+for name, scale, fuse in [
+    ("duplicated_input_dq", "%input_scale", True),
+    ("different_input_dq_scale", "%div_scale", False),
+]:
+    duplicate_dq = input_dq.replace("%x =", "%x_copy =").replace("%input_scale", scale)
+    model = source.replace(input_dq, input_dq + "\n" + duplicate_dq).replace(
+        "(%x, %add)", "(%x_copy, %add)"
+    )
+    default = optimize(model, ["--xmc-passes"])
+    assert '"onnx.Erf"' in default and 'type = "GELU"' not in default, (name, default)
+    assert "0.039999999105930328:128" in default, (name, default)
+    with tempfile.TemporaryDirectory() as directory:
+        model_path = pathlib.Path(directory) / "model.mlir"
+        model_path.write_text(model)
+        for enabled in [False, True]:
+            result = subprocess.run(
+                [
+                    str(pathlib.Path(optimizer).with_name("onnx-mlir")),
+                    "--EmitONNXIR",
+                    "--printIR",
+                    "--enable-conv-opt-pass=false",
+                    f"--enable-xmc-passes={str(enabled).lower()}",
+                    str(model_path),
+                ],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            expected_fuse = enabled and fuse
+            context = (name, enabled, result)
+            assert ('type = "GELU"' in result) == expected_fuse, context
+            assert ('"onnx.Erf"' not in result) == expected_fuse, context
+            if expected_fuse:
+                assert '"onnx.Mul"' not in result, context
+                assert "0.019999999552965164:128" in result, context
+            print(f"{name} ({enabled=}): PASS")
+
 for name, code, scale, zero_point, dtype, fuse in [
     ("quantized_divisor", 91, 0.015625, 0, "i8", True),
     ("nonzero_zp", 96, 0.015625, 5, "i8", True),
