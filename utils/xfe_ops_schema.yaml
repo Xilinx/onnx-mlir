@@ -60,6 +60,7 @@
     - SameOperandsAndResultShape
   - verify: True
   - fold: True
+  - canonicalizer: True
   attributes:
   - name: round_mode
     description: Required numerical rounding mode with no default. Unlike ONNX Cast@24 round_mode, which accepts up (the default), down, or nearest and applies only to float8e8m0, this attribute accepts nearest_even, nearest_away, toward_zero, toward_positive, or toward_negative and applies whenever the conversion requires rounding.
