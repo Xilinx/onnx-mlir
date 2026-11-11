@@ -197,8 +197,13 @@ LogicalResult XFECastOpVerify(Operation *op) {
   if (outputElementType != castOp.getTo())
     return castOp.emitOpError(
         "output element type does not match the 'to' attribute");
-  if (castOp.getSaturate() != 0 && castOp.getSaturate() != 1)
-    return castOp.emitOpError("requires 'saturate' to be 0 or 1");
+  StringRef saturationMode = castOp.getSaturationMode();
+  if (!llvm::is_contained({"none", "finite", "neg_finite"}, saturationMode))
+    return castOp.emitOpError("has unsupported saturation_mode '")
+           << saturationMode << "'";
+  StringRef nanMode = castOp.getNanMode();
+  if (!llvm::is_contained({"propagate", "unspecified"}, nanMode))
+    return castOp.emitOpError("has unsupported nan_mode '") << nanMode << "'";
 
   StringRef roundMode = castOp.getRoundMode();
   if (!llvm::is_contained({"nearest_even", "nearest_away", "toward_zero",
