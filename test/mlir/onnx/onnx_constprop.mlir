@@ -2038,6 +2038,21 @@ func.func @test_cast_i64_f32() -> tensor<3x2xf32> {
 
 // -----
 
+func.func @test_cast_bool_f32() -> (tensor<2xf32>, tensor<4xf32>) {
+  %splat = onnx.Constant dense<true> : tensor<2xi1>
+  %splat_cast = "onnx.Cast"(%splat) {to = f32} : (tensor<2xi1>) -> tensor<2xf32>
+  %values = onnx.Constant dense<[false, true, true, false]> : tensor<4xi1>
+  %values_cast = "onnx.Cast"(%values) {to = f32} : (tensor<4xi1>) -> tensor<4xf32>
+  onnx.Return %splat_cast, %values_cast : tensor<2xf32>, tensor<4xf32>
+
+  // CHECK-LABEL:  func @test_cast_bool_f32
+  // CHECK-DAG:       [[SPLAT:%.+]] = onnx.Constant dense<1.000000e+00> : tensor<2xf32>
+  // CHECK-DAG:       [[VALUES:%.+]] = onnx.Constant dense<[0.000000e+00, 1.000000e+00, 1.000000e+00, 0.000000e+00]> : tensor<4xf32>
+  // CHECK:           onnx.Return [[SPLAT]], [[VALUES]] : tensor<2xf32>, tensor<4xf32>
+}
+
+// -----
+
 // Among the float literals below
 // 0x7F800000, 0xFF800000 mean +/-infinity,
 // 0x7F800001, 0xFF800001 mean NaN,

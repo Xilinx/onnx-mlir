@@ -6,11 +6,48 @@
 
 #include "XFECast.hpp"
 
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 
 using namespace mlir;
 
 namespace onnx_mlir {
+
+namespace {
+
+/// Remove an unobservable intermediate cast while retaining the outer XFE
+/// policy, which governs the only conversion that can lose information.
+struct FoldConsecutiveXFECastPattern : OpRewritePattern<XFECastOp> {
+  using OpRewritePattern<XFECastOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      XFECastOp outerCast, PatternRewriter &rewriter) const override {
+    Operation *innerCast = outerCast.getInput().getDefiningOp();
+    Value source;
+    if (auto xfeCast = dyn_cast_or_null<XFECastOp>(innerCast))
+      source = xfeCast.getInput();
+    else if (auto onnxCast = dyn_cast_or_null<ONNXCastOp>(innerCast))
+      source = onnxCast.getInput();
+    else
+      return failure();
+
+    if (!innerCast->getResult(0).hasOneUse())
+      return failure();
+
+    Type src = getElementTypeOrSelf(source.getType());
+    Type mid = getElementTypeOrSelf(innerCast->getResult(0).getType());
+    Type dst = getElementTypeOrSelf(outerCast.getOutput().getType());
+    if (!canElideIntermediateCast(src, mid, dst))
+      return failure();
+
+    rewriter.modifyOpInPlace(
+        outerCast, [&]() { outerCast.getInputMutable().assign(source); });
+    return success();
+  }
+};
+
+} // namespace
 
 XFECastOp createXFECastFromONNXCast(OpBuilder &builder, ONNXCastOp castOp,
     Value input, ONNXCastToXFEOptions options) {
@@ -35,3 +72,8 @@ XFECastOp createXFECastFromONNXCast(OpBuilder &builder, ONNXCastOp castOp,
 }
 
 } // namespace onnx_mlir
+
+void mlir::XFECastOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.add<onnx_mlir::FoldConsecutiveXFECastPattern>(context);
+}

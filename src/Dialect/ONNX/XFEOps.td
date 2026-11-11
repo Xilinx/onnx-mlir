@@ -51,6 +51,7 @@ def XFECastOp:ONNX_Op<"XFECast",
   }];
   let hasVerifier = 1;
   let hasFolder = 1;
+  let hasCanonicalizer = 1;
 }
 
 def XFEAveragePoolOp:ONNX_Op<"XFEAveragePool",

@@ -353,6 +353,8 @@ domain_abrv_dict = {
     "com.amd.xcompiler": "XCOMPILER",
 }
 
+standard_onnx_domains = {"", "ai.onnx.ml", "ai.onnx.preview.training"}
+
 
 def map_op_name_to_onnx_mlir_name(op_name: str, domain: str) -> str:
     assert domain in domain_abrv_dict, f"Domain {domain} not found in domain_abrv_dict"
@@ -514,14 +516,11 @@ class CustomOpSchema:
 
         # Parse attributes
         self.attributes = dict(base.attributes) if base else {}
-        excluded_attributes = set(
-            self.meta_attributes.get("exclude_attributes", [])
-        )
+        excluded_attributes = set(self.meta_attributes.get("exclude_attributes", []))
         unknown_exclusions = excluded_attributes - set(self.attributes)
         if unknown_exclusions:
             raise ValueError(
-                "excludes unknown attributes: "
-                + ", ".join(sorted(unknown_exclusions))
+                "excludes unknown attributes: " + ", ".join(sorted(unknown_exclusions))
             )
         for attr_name in excluded_attributes:
             del self.attributes[attr_name]
@@ -1965,10 +1964,7 @@ def get_onnx_mlir_types(schema, type_str_dict, input):
 def gen_shape_helper_code(s, indent, opName, domain=""):
     # Print getShapeHelper.
     indent = inc_indent(indent)
-    is_custom_domain = domain and domain not in [
-        "ai.onnx.ml",
-        "ai.onnx.preview.training",
-    ]
+    is_custom_domain = domain not in standard_onnx_domains
     operand_separator = "" if is_custom_domain else " "
     s += (
         indent
@@ -1986,7 +1982,7 @@ def gen_shape_helper_code(s, indent, opName, domain=""):
 
     # For custom domains, return nullptr as placeholder
     # Custom ops should implement their own shape helpers
-    if domain and domain not in ["", "ai.onnx.ml", "ai.onnx.preview.training"]:
+    if domain not in standard_onnx_domains:
         s += indent + "// TODO: Implement specific shape helper for this custom op\n"
         s += (
             indent
@@ -2024,7 +2020,7 @@ def gen_op_def(schema, with_version=False):
 
     # For custom domains (non-empty, non-standard ONNX domains), prefix the MLIR op name
     # This makes them appear as onnx.XFEConvChannelLast instead of onnx.ConvChannelLast
-    if domain and domain not in ["", "ai.onnx.ml", "ai.onnx.preview.training"]:
+    if domain not in standard_onnx_domains:
         mlir_op_name = domain_abbrev + opName
     else:
         mlir_op_name = opName
@@ -2282,11 +2278,14 @@ def gen_op_def(schema, with_version=False):
     # Generate decl for verifier/folder.
     custom_has_verifier = bool(custom_meta.get("verify", False))
     custom_has_folder = bool(custom_meta.get("fold", False))
+    custom_has_canonicalizer = bool(custom_meta.get("canonicalizer", False))
 
     if opName in OpsWithVerifier or custom_has_verifier:
         s += indent + "let hasVerifier = 1;\n"
     if opName in OpsWithFolder or custom_has_folder:
         s += indent + "let hasFolder = 1;\n"
+    if custom_has_canonicalizer:
+        s += indent + "let hasCanonicalizer = 1;\n"
     s += "}\n\n"
     return s
 
@@ -2326,14 +2325,14 @@ def gen_op_importer(domain, name, file, since_version=None):
         opName = name
 
     mappedName = map_op_name_to_onnx_mlir_name(opName, domain)
-    if domain and domain not in ["ai.onnx.ml", "ai.onnx.preview.training"]:
+    if domain not in standard_onnx_domains:
         # Custom-domain schemas are maintained in this repository. Keep their
         # newly generated importer entries clang-format clean without
         # rewriting the large body of imported upstream ONNX definitions.
         s = indent + 'import_handler_map_["{}"]["{}"] =\n '.format(domain, opName)
     else:
         s = indent + 'import_handler_map_["{}"]["{}"] = \n '.format(domain, opName)
-    if domain and domain not in ["", "ai.onnx.ml", "ai.onnx.preview.training"]:
+    if domain not in standard_onnx_domains:
         mlir_op_name = domain_abrv_dict[domain] + opName
     else:
         mlir_op_name = opName
@@ -2559,11 +2558,7 @@ def main(args):  # type: (Type[Args]) -> None
         # Group custom ops by domain
         custom_domains = set(op.domain for op in custom_ops)
         for domain in custom_domains:
-            if (
-                domain
-                and domain != ""
-                and domain not in ["", "ai.onnx.ml", "ai.onnx.preview.training"]
-            ):
+            if domain not in standard_onnx_domains:
                 domain_abbrev = domain_abrv_dict.get(
                     domain, domain.split(".")[-1].upper()
                 )
