@@ -72,8 +72,12 @@ OpFoldResult mlir::XFECastOpFold(Operation *op, ArrayRef<Attribute> operands) {
   StringRef nanMode = castOp.getNanMode();
   Type inputElementType = inputType.getElementType();
   Type outputElementType = outputType.getElementType();
-  ShapedType outputAttrType =
-      cast<ShapedType>(input.getType()).clone(outputElementType);
+  ShapedType outputAttrType = inputType;
+  if (!outputAttrType.hasStaticShape())
+    outputAttrType = cast<ShapedType>(input.getType());
+  if (!outputAttrType.hasStaticShape())
+    return {};
+  outputAttrType = outputAttrType.clone(outputElementType);
 
   if (auto outputFloatType = dyn_cast<FloatType>(outputElementType)) {
     auto inputFloatType = dyn_cast<FloatType>(inputElementType);
