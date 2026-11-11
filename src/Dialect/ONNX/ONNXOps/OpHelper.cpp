@@ -21,6 +21,7 @@
 
 #include "mlir/IR/DialectResourceBlobManager.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Path.h"
@@ -39,6 +40,56 @@
 using namespace mlir;
 
 namespace onnx_mlir {
+
+namespace {
+
+/// `src <= mid`: casting `src` to `mid` is lossless.
+bool castPreservesAllValues(Type src, Type mid) {
+  auto srcIntTy = dyn_cast<IntegerType>(src);
+  auto midIntTy = dyn_cast<IntegerType>(mid);
+  auto srcFloatTy = dyn_cast<FloatType>(src);
+  auto midFloatTy = dyn_cast<FloatType>(mid);
+
+  if (srcIntTy && midIntTy) {
+    if (srcIntTy.isUnsigned() == midIntTy.isUnsigned())
+      return srcIntTy.getWidth() <= midIntTy.getWidth();
+    return srcIntTy.isUnsigned() && !midIntTy.isUnsigned() &&
+           srcIntTy.getWidth() < midIntTy.getWidth();
+  }
+
+  // Signless counts as signed; the mantissa width includes the integer bit.
+  if (srcIntTy && midFloatTy) {
+    unsigned intBits = srcIntTy.getWidth();
+    unsigned neededBits = srcIntTy.isUnsigned() ? intBits : intBits - 1;
+    return neededBits <= midFloatTy.getFPMantissaWidth();
+  }
+
+  if (srcFloatTy && midFloatTy)
+    return llvm::APFloatBase::isRepresentableBy(
+        srcFloatTy.getFloatSemantics(), midFloatTy.getFloatSemantics());
+  return false;
+}
+
+/// `mid >= dst`: casting to `dst` discards at least as much as casting to
+/// `mid` did, hiding the intermediate loss.
+bool finalCastSubsumesIntermediate(Type src, Type mid, Type dst) {
+  auto srcIntTy = dyn_cast<IntegerType>(src);
+  auto midIntTy = dyn_cast<IntegerType>(mid);
+  auto dstIntTy = dyn_cast<IntegerType>(dst);
+  if (!srcIntTy || !midIntTy || !dstIntTy)
+    return false;
+
+  return srcIntTy.getSignedness() == midIntTy.getSignedness() &&
+         midIntTy.getSignedness() == dstIntTy.getSignedness() &&
+         dstIntTy.getWidth() <= midIntTy.getWidth();
+}
+
+} // namespace
+
+bool canElideIntermediateCast(Type src, Type mid, Type dst) {
+  return castPreservesAllValues(src, mid) ||
+         finalCastSubsumesIntermediate(src, mid, dst);
+}
 
 //===----------------------------------------------------------------------===//
 // ONNX Tensor support.

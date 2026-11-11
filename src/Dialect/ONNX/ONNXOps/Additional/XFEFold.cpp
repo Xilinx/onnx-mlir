@@ -47,11 +47,12 @@ APFloat convertFloat(APFloat value, FloatType outputType,
     APFloat::roundingMode roundMode, StringRef saturationMode) {
   bool negative = value.isNegative();
   bool isNaN = value.isNaN();
+  bool isInfinity = value.isInfinity();
   bool losesInfo;
   APFloat::opStatus status =
       value.convert(outputType.getFloatSemantics(), roundMode, &losesInfo);
   if (shouldSaturate(saturationMode, negative) && !isNaN &&
-      ((status & APFloat::opOverflow) != 0 || value.isInfinity()))
+      ((status & APFloat::opOverflow) != 0 || isInfinity))
     return APFloat::getLargest(outputType.getFloatSemantics(), negative);
   return value;
 }
@@ -85,7 +86,10 @@ OpFoldResult mlir::XFECastOpFold(Operation *op, ArrayRef<Attribute> operands) {
       auto inputIntegerType = dyn_cast<IntegerType>(inputElementType);
       if (!inputIntegerType)
         return {};
-      bool isSigned = !inputIntegerType.isUnsigned();
+      // ONNX bool is represented by signless i1, whose set bit denotes true
+      // rather than the signed integer -1.
+      bool isSigned = !inputIntegerType.isUnsigned() &&
+                      !inputIntegerType.isSignlessInteger(1);
       auto convert = [=](APInt value) {
         APFloat result(outputFloatType.getFloatSemantics());
         APFloat::opStatus status =
