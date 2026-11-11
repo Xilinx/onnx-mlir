@@ -17,8 +17,8 @@ func.func @fold_xfe_cast() -> (tensor<24xbf16>, tensor<24xbf16>) {
 
 // CHECK-LABEL: sym_name = "fold_xfe_cast"
 // CHECK-NOT: "onnx.XFECast"
-// CHECK-DAG: value = dense<"0x0000008000000000000000807F007F80803F803F803F803F813F80BF80BF81BF7F7F7FFF807F80FF807FC07FC0FFFFFF"> : tensor<24xbf16>
-// CHECK-DAG: value = dense<"0x00000080000000000100018080008080803F803F813F813F823F80BF81BF82BF807F7FFF807F7FFF807FC07FC0FF0000"> : tensor<24xbf16>
+// CHECK-DAG: value = #onnx.dense_disposable<{{[0-9]+}}:"0x0000008000000000000000807F007F80803F803F803F803F813F80BF80BF81BF7F7F7FFF807F80FF807FC07FC0FFFFFF"> : tensor<24xbf16>
+// CHECK-DAG: value = #onnx.dense_disposable<{{[0-9]+}}:"0x00000080000000000100018080008080803F803F813F813F823F80BF81BF82BF807F7FFF807F7FFF807FC07FC0FF0000"> : tensor<24xbf16>
 
 func.func @fold_general_float_casts() -> (tensor<4xf32>, tensor<2xf16>) {
   %f16 = onnx.Constant dense<[1.0, -2.5, 0.0, 65504.0]> : tensor<4xf16>
@@ -65,8 +65,8 @@ func.func @fold_boolean_to_float() -> (tensor<2xf32>, tensor<4xf32>) {
 
 // CHECK-LABEL: sym_name = "fold_boolean_to_float"
 // CHECK-NOT: "onnx.XFECast"
-// CHECK-DAG: value = dense<"0x0000803F0000803F"> : tensor<2xf32>
-// CHECK-DAG: value = dense<"0x000000000000803F0000803F00000000"> : tensor<4xf32>
+// CHECK-DAG: value = #onnx.dense_disposable<{{[0-9]+}}:"0x0000803F0000803F"> : tensor<2xf32>
+// CHECK-DAG: value = #onnx.dense_disposable<{{[0-9]+}}:"0x000000000000803F0000803F00000000"> : tensor<4xf32>
 
 func.func @fold_float8_infinity_saturation() -> (tensor<2xf8E4M3FN>, tensor<2xf8E4M3FN>) {
   %input = onnx.Constant dense<[0x7F800000, 0xFF800000]> : tensor<2xf32>
@@ -77,8 +77,8 @@ func.func @fold_float8_infinity_saturation() -> (tensor<2xf8E4M3FN>, tensor<2xf8
 
 // CHECK-LABEL: sym_name = "fold_float8_infinity_saturation"
 // CHECK-NOT: "onnx.XFECast"
-// CHECK-DAG: value = dense<"0x7EFE"> : tensor<2xf8E4M3FN>
-// CHECK-DAG: value = dense<"0x7FFE"> : tensor<2xf8E4M3FN>
+// CHECK-DAG: value = #onnx.dense_disposable<{{[0-9]+}}:"0x7EFE"> : tensor<2xf8E4M3FN>
+// CHECK-DAG: value = #onnx.dense_disposable<{{[0-9]+}}:"0x7FFE"> : tensor<2xf8E4M3FN>
 
 func.func @fold_nan_propagation() -> tensor<2xbf16> {
   %input = onnx.Constant dense<[0x7F800001, 0xFFC00000]> : tensor<2xf32>
@@ -88,7 +88,7 @@ func.func @fold_nan_propagation() -> tensor<2xbf16> {
 
 // CHECK-LABEL: sym_name = "fold_nan_propagation"
 // CHECK-NOT: "onnx.XFECast"
-// CHECK: value = dense<"0xC07FC0FF"> : tensor<2xbf16>
+// CHECK: value = #onnx.dense_disposable<{{[0-9]+}}:"0xC07FC0FF"> : tensor<2xbf16>
 
 func.func @fold_consecutive_xfe_casts(%input: tensor<2xi32>) -> tensor<2xbf16> {
   %wide = "onnx.XFECast"(%input) {nan_mode = "propagate", round_mode = "nearest_even", saturation_mode = "none", to = i64} : (tensor<2xi32>) -> tensor<2xi64>
