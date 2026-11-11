@@ -18,7 +18,7 @@ func.func @fold_xfe_cast() -> (tensor<24xbf16>, tensor<24xbf16>) {
 // CHECK-LABEL: sym_name = "fold_xfe_cast"
 // CHECK-NOT: "onnx.XFECast"
 // CHECK-DAG: value = #onnx.dense_disposable<{{[0-9]+}}:"0x0000008000000000000000807F007F80803F803F803F803F813F80BF80BF81BF7F7F7FFF807F80FF807FC07FC0FFFFFF"> : tensor<24xbf16>
-// CHECK-DAG: value = #onnx.dense_disposable<{{[0-9]+}}:"0x00000080000000000100018080008080803F803F813F813F823F80BF81BF82BF807F7FFF807F7FFF807FC07FC0FF0000"> : tensor<24xbf16>
+// CHECK-DAG: value = #onnx.dense_disposable<{{[0-9]+}}:"0x00000080000000000100018080008080803F803F813F813F823F80BF81BF82BF807F7FFF807F7FFF807FC07F7FFF0000"> : tensor<24xbf16>
 
 func.func @fold_general_float_casts() -> (tensor<4xf32>, tensor<2xf16>) {
   %f16 = onnx.Constant dense<[1.0, -2.5, 0.0, 65504.0]> : tensor<4xf16>
