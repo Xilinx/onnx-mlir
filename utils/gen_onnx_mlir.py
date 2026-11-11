@@ -514,6 +514,17 @@ class CustomOpSchema:
 
         # Parse attributes
         self.attributes = dict(base.attributes) if base else {}
+        excluded_attributes = set(
+            self.meta_attributes.get("exclude_attributes", [])
+        )
+        unknown_exclusions = excluded_attributes - set(self.attributes)
+        if unknown_exclusions:
+            raise ValueError(
+                "excludes unknown attributes: "
+                + ", ".join(sorted(unknown_exclusions))
+            )
+        for attr_name in excluded_attributes:
+            del self.attributes[attr_name]
         for attr in yaml_dict.get("attributes", []):
             attr_obj = self.Attribute(attr, self.attributes.get(attr["name"]))
             self.attributes[attr_obj.name] = attr_obj
@@ -743,7 +754,8 @@ special_op_handler = dict(
         ("BatchNormalization", "ImportNodeBatchNormalization"),
         ("CategoryMapper", "ImportCategoryMapper"),
         ("Dropout", "ImportNodeDropout"),
-        ("Cast", "ImportNodeCast"),
+        ("Cast", "ImportNodeCast<mlir::ONNXCastOp>"),
+        ("XFECast", "ImportNodeCast<mlir::XFECastOp>"),
         ("MaxPool", "ImportNodeMaxPool"),
         ("Pad", "ImportNodePad"),
         ("Slice", "ImportNodeSlice"),

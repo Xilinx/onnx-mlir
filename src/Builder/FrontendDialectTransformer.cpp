@@ -1520,28 +1520,29 @@ private:
   /*!
    * Special handle for Cast operations.
    */
+  template <typename T>
   [[nodiscard]] std::error_code ImportNodeCast(
       const onnx::NodeProto &node, std::string &errorMessage) {
     std::vector<Value> inputs;
-    int expectedNumOperands = ONNXCastOp::getNumberOfOperands();
-    int expectedNumResults = ONNXCastOp::getNumberOfResults();
-    for (const auto &item : node.input())
-      if (item.empty()) {
-        // Optional inputs using empty string will be imported as NoneType.
-        inputs.emplace_back(createNoneValue());
-      } else {
-        if (const Value *valuePtr = frontend_symbols_.GetByOnnxName(item)) {
-          inputs.push_back(*valuePtr);
-        }
-      }
+    int expectedNumOperands = T::getNumberOfOperands();
+    int expectedNumResults = T::getNumberOfResults();
+    getNodeInputs(node, inputs);
     ErrorOr<std::vector<NamedAttribute>> importedCastAttributes =
         ImportCastAttributes(node, errorMessage);
     if (auto ec = importedCastAttributes.getError()) {
       return ec;
     }
-    return buildOutputAndOperation<ONNXCastOp>(node, inputs,
-        expectedNumOperands, expectedNumResults, *importedCastAttributes,
-        errorMessage);
+    auto to = llvm::find_if(*importedCastAttributes,
+        [](NamedAttribute attr) { return attr.getName() == "to"; });
+    if (to == importedCastAttributes->end()) {
+      errorMessage += "Cast node '" + node.name() +
+                      "' is missing its required 'to' attribute.\n";
+      return InvalidOnnxFormat;
+    }
+    Type outputElementType = cast<TypeAttr>(to->getValue()).getValue();
+    return buildOutputAndOperation<T>(node, inputs, expectedNumOperands,
+        expectedNumResults, *importedCastAttributes, errorMessage,
+        {outputElementType});
   }
 
   /*!
