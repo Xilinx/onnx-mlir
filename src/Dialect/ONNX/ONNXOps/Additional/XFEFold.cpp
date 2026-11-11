@@ -9,12 +9,11 @@
 
 #include "mlir/IR/BuiltinAttributes.h"
 
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 
 #include <cstdint>
-#include <iterator>
 #include <optional>
+#include <type_traits>
 
 using namespace mlir;
 
@@ -57,6 +56,36 @@ APFloat convertFloat(APFloat value, FloatType outputType,
   return value;
 }
 
+template <typename T>
+T apFloatToCpp(APFloat value) {
+  if constexpr (std::is_same_v<T, double>)
+    return value.convertToDouble();
+  else if constexpr (std::is_same_v<T, float>)
+    return value.convertToFloat();
+  else
+    return T::fromAPFloat(value);
+}
+
+template <typename InputType, typename Convert>
+ElementsAttr convertElementsToFloat(ElementsAttr input, ShapedType outputType,
+    onnx_mlir::OnnxElementsAttrBuilder &builder, Convert convert) {
+  return onnx_mlir::dispatchByBType(
+      onnx_mlir::btypeOfMlirType(outputType.getElementType()),
+      [&](auto outputBType) -> ElementsAttr {
+        if constexpr (onnx_mlir::BTypeTrait<outputBType>::isFloat) {
+          using OutputType = onnx_mlir::CppType<outputBType>;
+          return builder.fromArray<OutputType>(
+              outputType, [&](MutableArrayRef<OutputType> output) {
+                size_t i = 0;
+                for (InputType value : input.getValues<InputType>())
+                  output[i++] = apFloatToCpp<OutputType>(convert(value));
+              });
+        } else {
+          llvm_unreachable("expected a floating-point output type");
+        }
+      });
+}
+
 } // namespace
 
 OpFoldResult mlir::XFECastOpFold(Operation *op, ArrayRef<Attribute> operands) {
@@ -74,6 +103,7 @@ OpFoldResult mlir::XFECastOpFold(Operation *op, ArrayRef<Attribute> operands) {
   Type outputElementType = outputType.getElementType();
   ShapedType outputAttrType =
       cast<ShapedType>(input.getType()).clone(outputElementType);
+  onnx_mlir::OnnxElementsAttrBuilder elementsBuilder(op->getContext());
 
   if (auto outputFloatType = dyn_cast<FloatType>(outputElementType)) {
     auto inputFloatType = dyn_cast<FloatType>(inputElementType);
@@ -96,45 +126,32 @@ OpFoldResult mlir::XFECastOpFold(Operation *op, ArrayRef<Attribute> operands) {
             result.convertFromAPInt(value, isSigned, *apRoundMode);
         if ((status & APFloat::opOverflow) != 0 &&
             shouldSaturate(saturationMode, result.isNegative()))
-          return APFloat::getLargest(
+          result = APFloat::getLargest(
               outputFloatType.getFloatSemantics(), result.isNegative());
         return result;
       };
-      if (input.isSplat())
-        return DenseElementsAttr::get(
-            outputAttrType, convert(input.getSplatValue<APInt>()));
-      SmallVector<APFloat> output;
-      output.reserve(input.getNumElements());
-      llvm::transform(
-          input.getValues<APInt>(), std::back_inserter(output), convert);
-      return DenseElementsAttr::get(outputAttrType, output);
+      return convertElementsToFloat<APInt>(
+          input, outputAttrType, elementsBuilder, convert);
     }
 
     bool useOptimizedF32ToBF16 =
         inputFloatType.isF32() && outputFloatType.isBF16() &&
         (roundMode == "toward_zero" || roundMode == "nearest_even");
-    auto convert = [=](APFloat value) {
+    auto convert = [=](APFloat inputValue) {
       if (useOptimizedF32ToBF16)
-        return convertF32ToBf16(value, roundMode, saturationMode, nanMode);
-      return convertFloat(value, outputFloatType, *apRoundMode, saturationMode);
+        return convertF32ToBf16(inputValue, roundMode, saturationMode, nanMode);
+      return convertFloat(
+          inputValue, outputFloatType, *apRoundMode, saturationMode);
     };
-    if (input.isSplat())
-      return DenseElementsAttr::get(
-          outputAttrType, convert(input.getSplatValue<APFloat>()));
-
-    SmallVector<APFloat> output;
-    output.reserve(input.getNumElements());
-    llvm::transform(
-        input.getValues<APFloat>(), std::back_inserter(output), convert);
-    return DenseElementsAttr::get(outputAttrType, output);
+    return convertElementsToFloat<APFloat>(
+        input, outputAttrType, elementsBuilder, convert);
   }
 
   if (auto outputIntegerType = dyn_cast<IntegerType>(outputElementType)) {
     if (roundMode != "toward_zero" && roundMode != "nearest_even")
       return {};
-    return onnx_mlir::OnnxElementsAttrBuilder(op->getContext())
-        .castToIntElementType(
-            input, outputIntegerType, roundMode == "nearest_even");
+    return elementsBuilder.castToIntElementType(
+        input, outputIntegerType, roundMode == "nearest_even");
   }
 
   return {};
