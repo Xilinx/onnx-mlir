@@ -27,9 +27,9 @@ namespace onnx_mlir::xfe_cast {
     converted =
         static_cast<uint16_t>((bits + 0x7fffU + ((bits >> 16) & 1U)) >> 16);
   }
-  if (saturationMode == "finite" && !isNaN && (converted & 0x7fffU) >= 0x7f80U)
+  if (saturationMode == "finite" && (converted & 0x7fffU) >= 0x7f80U)
     return static_cast<uint16_t>((converted & 0x8000U) | 0x7f7fU);
-  if (saturationMode == "neg_finite" && !isNaN && converted > 0xff7fU)
+  if (saturationMode == "neg_finite" && converted > 0xff7fU)
     return 0xff7fU;
   return converted;
 }
