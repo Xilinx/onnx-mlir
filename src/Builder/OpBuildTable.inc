@@ -314,7 +314,7 @@ import_handler_map_[""]["BitwiseXor"] =
 import_handler_map_[""]["BlackmanWindow"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXBlackmanWindowOp>;
 import_handler_map_[""]["Cast"] = 
-   &onnx_mlir::detail::FrontendGenImpl::ImportNodeCast;
+   &onnx_mlir::detail::FrontendGenImpl::ImportNodeCast<mlir::ONNXCastOp>;
 import_handler_map_[""]["CastLike"] = 
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::ONNXCastLikeOp>;
 import_handler_map_[""]["Ceil"] = 
@@ -778,7 +778,7 @@ import_handler_map_["com.amd.xcompiler"]["FusedEltwise"] =
 import_handler_map_["com.amd.xcompiler"]["Requantize"] =
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XCOMPILERRequantizeOp>;
 import_handler_map_["com.amd.xfe"]["Cast"] =
-   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFECastOp>;
+   &onnx_mlir::detail::FrontendGenImpl::ImportNodeCast<mlir::XFECastOp>;
 import_handler_map_["com.amd.xfe"]["AveragePool"] =
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEAveragePoolOp>;
 import_handler_map_["com.amd.xfe"]["BatchNormalization"] =
@@ -822,7 +822,7 @@ import_handler_map_["com.amd.xcompiler"]["Requantize"] =
 import_handler_map_["com.amd.xfe"]["MatMulBias"] =
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEMatMulBiasOp>;
 import_handler_map_["com.amd.xfe"]["Cast"] =
-   &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFECastOp>;
+   &onnx_mlir::detail::FrontendGenImpl::ImportNodeCast<mlir::XFECastOp>;
 import_handler_map_["com.amd.xfe"]["Conv"] =
    &onnx_mlir::detail::FrontendGenImpl::buildOperation<mlir::XFEConvOp>;
 import_handler_map_["com.amd.xfe"]["ConvTranspose"] =

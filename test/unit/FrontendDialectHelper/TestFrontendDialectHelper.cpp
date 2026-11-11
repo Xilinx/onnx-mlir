@@ -13,8 +13,10 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/Verifier.h"
 #include "onnx/onnx_pb.h"
 #include "src/Builder/FrontendDialectHelper.hpp"
+#include "src/Builder/FrontendDialectTransformer.hpp"
 #include "src/Dialect/ONNX/ONNXDialect.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Support/Int4.hpp"
@@ -129,9 +131,8 @@ private:
   // the in-memory and on-file helpers below, which differ only in the values
   // they pass for |location| and |length|.
   static onnx::TensorProto makeExternalTensorProto(
-      onnx::TensorProto::DataType dataType,
-      std::initializer_list<int64_t> dims, llvm::StringRef location,
-      uint64_t offset, llvm::StringRef length) {
+      onnx::TensorProto::DataType dataType, std::initializer_list<int64_t> dims,
+      llvm::StringRef location, uint64_t offset, llvm::StringRef length) {
     onnx::TensorProto tp;
     tp.set_name("test_tensor");
     tp.set_data_type(dataType);
@@ -161,9 +162,9 @@ private:
   bool testInMemoryExternalData(const char *testName, const void *rawBytes,
       size_t byteCount, std::initializer_list<int64_t> dims,
       const Verifier &verifier) {
-    onnx::TensorProto tp = makeExternalTensorProto(OnnxDataType, dims,
-        kInMemoryLocationTag, reinterpret_cast<uintptr_t>(rawBytes),
-        std::to_string(byteCount));
+    onnx::TensorProto tp =
+        makeExternalTensorProto(OnnxDataType, dims, kInMemoryLocationTag,
+            reinterpret_cast<uintptr_t>(rawBytes), std::to_string(byteCount));
     mlir::ElementsAttr attr = onnx_mlir::onnxTensorProtoToElmAttr(&ctx, "", tp);
     return verifier(testName, attr);
   }
@@ -204,16 +205,16 @@ private:
 
   // Verifiers bound to the shared expected data.
   static bool verifyFloat(const char *n, mlir::ElementsAttr a) {
-    return verifyTestData<float, float>(n, a,
-        llvm::ArrayRef<float>(kFloatTestData, kFloatTestNumElements));
+    return verifyTestData<float, float>(
+        n, a, llvm::ArrayRef<float>(kFloatTestData, kFloatTestNumElements));
   }
   static bool verifyBool(const char *n, mlir::ElementsAttr a) {
-    return verifyTestData<bool, bool>(n, a,
-        llvm::ArrayRef<bool>(kBoolTestData, kBoolTestNumElements));
+    return verifyTestData<bool, bool>(
+        n, a, llvm::ArrayRef<bool>(kBoolTestData, kBoolTestNumElements));
   }
   static bool verifyInt4(const char *n, mlir::ElementsAttr a) {
-    return verifyTestData<int_4, int8_t>(n, a,
-        llvm::ArrayRef<int8_t>(kInt4TestValues, kInt4TestNumElements));
+    return verifyTestData<int_4, int8_t>(
+        n, a, llvm::ArrayRef<int8_t>(kInt4TestValues, kInt4TestNumElements));
   }
   static bool verifyInt4Odd(const char *n, mlir::ElementsAttr a) {
     return verifyTestData<int_4, int8_t>(n, a,
@@ -336,6 +337,83 @@ public:
         sizeof(kInt4OddRawBytes), {5}, verifyInt4Odd);
   }
 
+  bool testSerializedXFECastImport() {
+    onnx::ModelProto model;
+    model.set_ir_version(onnx::Version::IR_VERSION);
+    auto *onnxOpset = model.add_opset_import();
+    onnxOpset->set_domain("");
+    onnxOpset->set_version(24);
+    auto *xfeOpset = model.add_opset_import();
+    xfeOpset->set_domain("com.amd.xfe");
+    xfeOpset->set_version(1);
+
+    onnx::GraphProto *graph = model.mutable_graph();
+    graph->set_name("xfe_cast_import");
+    onnx::ValueInfoProto *input = graph->add_input();
+    input->set_name("x");
+    auto *inputTensor = input->mutable_type()->mutable_tensor_type();
+    inputTensor->set_elem_type(onnx::TensorProto::FLOAT);
+    inputTensor->mutable_shape()->add_dim()->set_dim_value(2);
+
+    onnx::NodeProto *cast = graph->add_node();
+    cast->set_name("cast");
+    cast->set_domain("com.amd.xfe");
+    cast->set_op_type("Cast");
+    cast->add_input("x");
+    cast->add_output("y");
+    auto *to = cast->add_attribute();
+    to->set_name("to");
+    to->set_type(onnx::AttributeProto::INT);
+    to->set_i(onnx::TensorProto::BFLOAT16);
+    auto addStringAttribute = [&](llvm::StringRef name, llvm::StringRef value) {
+      auto *attribute = cast->add_attribute();
+      attribute->set_name(name.str());
+      attribute->set_type(onnx::AttributeProto::STRING);
+      attribute->set_s(value.str());
+    };
+    addStringAttribute("round_mode", "toward_positive");
+    addStringAttribute("saturation_mode", "finite");
+    addStringAttribute("nan_mode", "propagate");
+
+    onnx::NodeProto *identity = graph->add_node();
+    identity->set_name("identity");
+    identity->set_op_type("Identity");
+    identity->add_input("y");
+    identity->add_output("z");
+    onnx::ValueInfoProto *output = graph->add_output();
+    output->set_name("z");
+    auto *outputTensor = output->mutable_type()->mutable_tensor_type();
+    outputTensor->set_elem_type(onnx::TensorProto::BFLOAT16);
+    outputTensor->mutable_shape()->add_dim()->set_dim_value(2);
+
+    std::string encoded = model.SerializeAsString();
+    OwningOpRef<ModuleOp> module;
+    std::string error;
+    ImportOptions options;
+    options.runOnnxShapeInference = false;
+    options.allowMissingOutputTypes = true;
+    if (std::error_code ec = ImportFrontendModelArray(
+            encoded.data(), encoded.size(), ctx, module, error, options)) {
+      std::cerr << "[testSerializedXFECastImport] " << error << " ("
+                << ec.message() << ")\n";
+      return false;
+    }
+
+    XFECastOp importedCast;
+    module->walk([&](XFECastOp op) { importedCast = op; });
+    if (!importedCast || !importedCast.getTo().isBF16() ||
+        importedCast.getRoundMode() != "toward_positive" ||
+        importedCast.getSaturationMode() != "finite" ||
+        importedCast.getNanMode() != "propagate" ||
+        !isa<UnrankedTensorType>(importedCast.getOutput().getType()) ||
+        failed(verify(*module))) {
+      std::cerr
+          << "[testSerializedXFECastImport] imported operation mismatch\n";
+      return false;
+    }
+    return true;
+  }
+
   bool runAllTests() {
     bool allPassed = true;
 
@@ -351,6 +429,7 @@ public:
     allPassed = testFileExternalDataWithZeroLengthBool() && allPassed;
     allPassed = testFileExternalDataWithZeroLengthInt4() && allPassed;
     allPassed = testFileExternalDataWithZeroLengthInt4Odd() && allPassed;
+    allPassed = testSerializedXFECastImport() && allPassed;
 
     return allPassed;
   }

@@ -25,13 +25,13 @@ XFECastOp createXFECastFromONNXCast(OpBuilder &builder, ONNXCastOp castOp,
   // ONNX saturation only affects float8 destinations. XFECast deliberately
   // extends it to every floating-point destination, so translating any other
   // ONNX Cast must disable it explicitly.
-  bool saturate = false;
+  StringRef saturationMode = "none";
   if (auto floatType = dyn_cast<FloatType>(outputElementType);
       floatType && floatType.getWidth() == 8)
-    saturate = castOp.getSaturate() != 0;
+    saturationMode = castOp.getSaturate() != 0 ? "finite" : "none";
 
   return builder.create<XFECastOp>(castOp.getLoc(), castOp.getType(), input,
-      roundMode, saturate, outputElementType);
+      "propagate", roundMode, saturationMode, outputElementType);
 }
 
 } // namespace onnx_mlir

@@ -22,11 +22,12 @@ def XFECastOp:ONNX_Op<"XFECast",
   [Pure, OpVersionTrait<1>, SameOperandsAndResultShape, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
   let summary = "Cast operation";
   let description = [{
-  Extends ONNX Cast with an explicit rounding mode and with saturation for every floating-point destination type, rather than only float8 types. Rounding modes name their numerical behavior directly: nearest_even, nearest_away, toward_zero, toward_positive, and toward_negative. When saturate is enabled, out-of-range values are clamped to the finite range of the destination floating-point type. When it is disabled, the conversion is not saturated. Every supported ONNX Cast has an equivalent XFECast with explicit attributes.
+  Extends ONNX Cast with explicit rounding, saturation, and NaN policies. Rounding modes name their numerical behavior directly: nearest_even, nearest_away, toward_zero, toward_positive, and toward_negative. Saturation can be disabled, clamp overflow of either sign to the corresponding finite limit, or clamp only negative overflow. NaNs can be propagated or left unspecified. Every supported ONNX Cast has an equivalent XFECast with explicit attributes.
   }];
   let arguments = (ins AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[F8E4M3FN]>, TensorOf<[F8E4M3FNUZ]>, TensorOf<[F8E5M2]>, TensorOf<[F8E5M2FNUZ]>, TensorOf<[UI<4>]>, TensorOf<[I<4>]>, TensorOf<[quant_QuantizedType]>]>:$input,
+    StrAttr:$nan_mode,
     StrAttr:$round_mode,
-    DefaultValuedAttr<SI64Attr, "1">:$saturate,
+    StrAttr:$saturation_mode,
     TypeAttr:$to);
   let results = (outs AnyTypeOf<[TensorOf<[UI8]>, TensorOf<[UI16]>, TensorOf<[UI32]>, TensorOf<[UI64]>, TensorOf<[I8]>, TensorOf<[I16]>, TensorOf<[I32]>, TensorOf<[I64]>, TensorOf<[BF16]>, TensorOf<[F16]>, TensorOf<[F32]>, TensorOf<[F64]>, TensorOf<[StringType]>, TensorOf<[I1]>, TensorOf<[F8E4M3FN]>, TensorOf<[F8E4M3FNUZ]>, TensorOf<[F8E5M2]>, TensorOf<[F8E5M2FNUZ]>, TensorOf<[UI<4>]>, TensorOf<[I<4>]>, TensorOf<[quant_QuantizedType]>]>:$output);
   let extraClassDeclaration = [{
