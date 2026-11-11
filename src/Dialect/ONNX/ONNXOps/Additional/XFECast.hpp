@@ -15,8 +15,8 @@ namespace onnx_mlir {
 
 struct ONNXCastToXFEOptions {
   // ONNX does not fully specify the rounding of an in-range floating-point
-  // value to an integer. Select the implementation policy explicitly when
-  // translating the operation.
+  // value to an integer. Select nearest-even when true and toward-zero when
+  // false.
   bool roundFPToIntToNearestEven = false;
 };
 
