@@ -20,6 +20,9 @@ namespace onnx_mlir {
 void addXmcMlirPasses(mlir::OpPassManager &pm, OnnxToMlirOptions opts) {
   pm.addNestedPass<func::FuncOp>(createFixNegScalePass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createRecomposeHardSigmoidPass());
+  if (opts.enableXMCPasses)
+    pm.addNestedPass<func::FuncOp>(createDedupDQsPass());
+  pm.addNestedPass<func::FuncOp>(onnx_mlir::createReplaceErfToGeluPass());
   pm.addNestedPass<func::FuncOp>(onnx_mlir::createDQBinaryQOptPass());
   // Replaced by createXmcRequantizePass below (runs post-quant-types).
   // pm.addNestedPass<func::FuncOp>(
