@@ -3958,6 +3958,9 @@ struct MicrosoftSkipSimplifiedLayerNorm : public CustomOpToOnnxOps {
     if (numIn >= 4)
       bias = customOp.getOperand(3);
 
+    if (bias && isNoneValue(bias))
+      bias = {};
+
     auto epsAttr = customOp->getAttrOfType<FloatAttr>("epsilon");
     if (!epsAttr)
       epsAttr =
