@@ -208,6 +208,9 @@ LogicalResult ONNXReshapeOpShapeHelper::computeShape() {
 //===----------------------------------------------------------------------===//
 
 LogicalResult ONNXReshapeOp::verify() {
+  if (getAllowzero() != 0 && getAllowzero() != 1)
+    return emitOpError("allowzero must be 0 or 1");
+
   auto shape = getShape();
 
   // Cannot verify if shape has unknown rank.
@@ -219,29 +222,33 @@ LogicalResult ONNXReshapeOp::verify() {
   if (shapeTy.getRank() != 1)
     return emitOpError("Shape tensor must have rank one");
 
-  // Cannot verify if shape is not from ConstantOp
-  if (!isDenseONNXConstant(shape))
+  ElementsAttr shapeAttr;
+  if (!matchPattern(shape, m_Constant(&shapeAttr)))
     return success();
+  auto dims = shapeAttr.getValues<int64_t>();
 
-  SmallVector<int64_t, 4> dims;
-  if (!getI64ValuesFromONNXConstantOp(shape, dims)) {
-    return emitError(
-        "Shape comes from ConstantOp but cannot get int64_t values from it.");
-  }
-
-  auto isZero = [](int64_t val) { return val == 0; };
-  auto isMinusOne = [](int64_t val) { return val == -1; };
+  if (llvm::any_of(dims, [](int64_t dim) { return dim < -1; }))
+    return emitOpError("shape dimensions must be greater than or equal to -1");
+  if (llvm::count(dims, -1) > 1)
+    return emitOpError("shape must contain at most one -1 dimension");
 
   if (getAllowzero()) {
-    if (llvm::any_of(dims, isZero) && llvm::any_of(dims, isMinusOne)) {
+    if (llvm::is_contained(dims, 0) && llvm::is_contained(dims, -1)) {
       return emitOpError(
           "Allowzero is set and shape contains both -1 and 0. Dimension "
           "corresponding to -1 cannot be determined uniquely.");
     }
   }
 
-  // TODO: Check that any -1 dim is used correctly.
-  // TODO: Check that any 0 dim is used correctly with allowzero.
+  auto dataTy = cast<ShapedType>(getData().getType());
+  if (!getAllowzero() && dataTy.hasRank()) {
+    if (llvm::any_of(llvm::enumerate(dims), [&](auto dim) {
+          return dim.value() == 0 &&
+                 dim.index() >= static_cast<size_t>(dataTy.getRank());
+        }))
+      return emitOpError("0-dim cannot copy dimension beyond rank of input");
+  }
+
   // TODO: Check that data can reshape to shape if data's shape is known.
 
   return success();
