@@ -5164,6 +5164,11 @@ struct MicrosoftMatmulNBits : public CustomOpToOnnxOps {
 
     const Location loc = customOp.getLoc();
 
+    auto prepacked = customOp->getAttrOfType<IntegerAttr>("weight_prepacked");
+    if (prepacked && !prepacked.getValue().isZero())
+      return rewriter.notifyMatchFailure(
+          customOp, "prepacked weights are not supported");
+
     const int64_t numIn = customOp.getNumOperands();
     assert((numIn >= 3 && numIn <= 6) && "expects 3..6 inputs");
     const int64_t numOut = customOp.getNumResults();
@@ -5180,15 +5185,18 @@ struct MicrosoftMatmulNBits : public CustomOpToOnnxOps {
     // 4th input g_idx is deprecated
 
     Value bias;
-    if (numIn > 5)
+    if (numIn > 5 && !onnx_mlir::isNoneValue(customOp.getOperand(5)))
       bias = customOp.getOperand(5);
 
     auto KAttr = customOp->getAttrOfType<IntegerAttr>("K");
-    const int64_t K = KAttr.getSInt();
     auto NAttr = customOp->getAttrOfType<IntegerAttr>("N");
-    const int64_t N = NAttr.getSInt();
-
     auto blockSizeAttr = customOp->getAttrOfType<IntegerAttr>("block_size");
+    if (!KAttr || !NAttr || !blockSizeAttr || KAttr.getSInt() <= 0 ||
+        NAttr.getSInt() <= 0 || blockSizeAttr.getSInt() <= 0)
+      return rewriter.notifyMatchFailure(
+          customOp, "invalid K, N or block_size");
+    const int64_t K = KAttr.getSInt();
+    const int64_t N = NAttr.getSInt();
     const int64_t blockSize = blockSizeAttr.getSInt();
 
     // B matrix should be: N x ceil(K / block_size) x (block_size * 8 / bits)
@@ -5199,35 +5207,45 @@ struct MicrosoftMatmulNBits : public CustomOpToOnnxOps {
     if (!bType.hasStaticShape())
       return rewriter.notifyMatchFailure(
           customOp, "expected 'B' input to have static type");
-    assert(bType.getRank() == 3 && "B input must have rank 3");
-    assert(bType.getElementType().isUnsignedInteger(8) &&
-           "B must be uint8 tensor");
+    if (bType.getRank() != 3 || !bType.getElementType().isUnsignedInteger(8) ||
+        bType.getNumElements() == 0)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected nonempty rank-3 uint8 B");
 
     auto uint8Type = bType.getElementType();
-    if (zeroPoints && !onnx_mlir::isNoneValue(zeroPoints))
-      assert(getElementTypeOrSelf(zeroPoints.getType()) == uint8Type &&
-             "zero_points must be uint8 tensor");
-
-    if (!customOp->hasAttrOfType<IntegerAttr>("bits"))
-      return rewriter.notifyMatchFailure(customOp, "expected 'bits' attribute");
+    if (zeroPoints && !onnx_mlir::isNoneValue(zeroPoints) &&
+        getElementTypeOrSelf(zeroPoints.getType()) != uint8Type)
+      return rewriter.notifyMatchFailure(customOp, "zero_points must be uint8");
 
     auto bitsAttr = customOp->getAttrOfType<IntegerAttr>("bits");
-    const int64_t bits = bitsAttr.getSInt();
+    const int64_t bits = bitsAttr ? bitsAttr.getSInt() : 4;
     // Other bits values are not supported by the Microsoft spec
-    assert((bits == 2 || bits == 4 || bits == 8) &&
-           "expected bits to be 2, 4, or 8");
+    if (bits != 2 && bits != 4 && bits != 8)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected bits to be 2, 4, or 8");
 
     onnx_mlir::OnnxBuilder b(rewriter, loc);
     SmallVector<Value> toCheck;
 
     // number of blocks that the K dim is divided into = ceil(K / blockSize)
-    const int64_t numBlocks = (K + blockSize - 1) / blockSize;
+    const int64_t numBlocks = K / blockSize + (K % blockSize != 0);
     // number of uint8 values in a block
     const int64_t packedBlockSize = (blockSize * bits) / 8;
-    ONNXConstantOp constBOp = dyn_cast<ONNXConstantOp>(bMat.getDefiningOp());
-    if (!constBOp && constBOp->hasAttr("value"))
+    ONNXConstantOp constBOp =
+        dyn_cast_or_null<ONNXConstantOp>(bMat.getDefiningOp());
+    if (!constBOp || !constBOp->hasAttr("value"))
       return rewriter.notifyMatchFailure(
           customOp, "expected 'B' input to be a constant");
+    ONNXConstantOp constZPOp;
+    if (zeroPoints && !onnx_mlir::isNoneValue(zeroPoints)) {
+      constZPOp = dyn_cast_or_null<ONNXConstantOp>(zeroPoints.getDefiningOp());
+      if (!constZPOp || !constZPOp->hasAttr("value"))
+        return rewriter.notifyMatchFailure(
+            customOp, "expected 'zero_points' input to be a constant");
+    }
+    if (bType.getShape() != ArrayRef<int64_t>({N, numBlocks, packedBlockSize}))
+      return rewriter.notifyMatchFailure(
+          customOp, "unsupported packed B shape");
     Value unpackedB = unpackValue(
         b, toCheck, constBOp, bits, N, numBlocks * packedBlockSize, K);
 
@@ -5235,18 +5253,15 @@ struct MicrosoftMatmulNBits : public CustomOpToOnnxOps {
     //  i.e. N x numBlocks as packed uint8s
     Value unpackedZP;
     if (zeroPoints && !onnx_mlir::isNoneValue(zeroPoints)) {
-      ONNXConstantOp constZPOp =
-          dyn_cast<ONNXConstantOp>(zeroPoints.getDefiningOp());
-      if (!constZPOp && constZPOp->hasAttr("value"))
-        return rewriter.notifyMatchFailure(
-            customOp, "expected 'zero_points' input to be a constant");
       // ceil((K / blockSize) * (bits / 8))
       const int64_t zpPackedBlocksSize =
           (K * bits + 8 * blockSize - 1) / (8 * blockSize);
       unpackedZP = unpackValue(
           b, toCheck, constZPOp, bits, N, zpPackedBlocksSize, numBlocks);
     } else {
-      unpackedZP = b.none();
+      unpackedZP = b.constant(DenseElementsAttr::get(
+          RankedTensorType::get({1, N, numBlocks}, uint8Type),
+          ArrayRef<uint8_t>{static_cast<uint8_t>(1 << (bits - 1))}));
       toCheck.push_back(unpackedZP);
     }
 
