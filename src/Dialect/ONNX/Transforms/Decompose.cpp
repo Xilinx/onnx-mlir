@@ -5029,7 +5029,7 @@ struct MicrosoftRotaryEmbedding : public CustomOpToOnnxOps {
       return rewriter.notifyMatchFailure(customOp,
           "attribute 'is_packed_batching' not supported by "
           "onnx.RotaryEmbedding");
-    if (customOp->hasAttrOfType<IntegerAttr>("scale") &&
+    if (customOp->hasAttrOfType<FloatAttr>("scale") &&
         customOp->getAttrOfType<FloatAttr>("scale").getValueAsDouble() != 1.0f)
       return rewriter.notifyMatchFailure(
           customOp, "attribute 'scale' not supported by onnx.RotaryEmbedding");
