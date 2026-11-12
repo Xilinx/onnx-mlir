@@ -4144,6 +4144,7 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
           {"kv_num_heads", nullptr},
           {"local_window_size", validateLocalWindowSize},
           {"num_heads", nullptr}, {"qk_norm_epsilon", validateQKNormEpsilon},
+          {"q_norm_epsilon", nullptr}, {"k_norm_epsilon", nullptr},
           {"qk_output", nullptr}, {"rotary_interleaved", nullptr},
           {"scale", nullptr},
           {"sliding_window_cache", validateSlidingWindowCache},
@@ -4157,7 +4158,8 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   static LogicalResult validateRecognizedAttributes(
       ONNXCustomOp customOp, PatternRewriter &rewriter) {
     const SmallVector<NamedAttribute> semanticAttrs = getFilteredAttrs(
-        customOp->getAttrs(), {"onnx_node_name", "ResultNames", "layout"});
+        customOp->getAttrs(), {"onnx_node_name", "ResultNames", "layout",
+                                  "LayerName", "PartOfLayerName"});
     for (NamedAttribute attr : semanticAttrs) {
       StringRef attrName = attr.getName().getValue();
 
@@ -4648,9 +4650,12 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     using namespace onnx_mlir;
     const Location loc = customOp.getLoc();
     const int64_t numIn = customOp.getNumOperands();
-    if (numIn < 7 || numIn > 16 || numIn == 8)
+    if (numIn < 7 || numIn > 17 || numIn == 8)
       return rewriter.notifyMatchFailure(
-          customOp, "GroupQueryAttention expects 7, 9, or 10..16 inputs");
+          customOp, "GroupQueryAttention expects 7, 9, or 10..17 inputs");
+    if (numIn == 17 && !isNoneValue(customOp.getOperand(16)))
+      return rewriter.notifyMatchFailure(
+          customOp, "input 'query_seqlens' is not supported");
     const int64_t numOut = customOp.getNumResults();
     if (numOut == 1)
       return rewriter.notifyMatchFailure(
