@@ -3673,17 +3673,39 @@ struct MicrosoftFusedConv : public CustomOpToOnnxOps {
     using namespace onnx_mlir;
     assert(customOp.getNumOperands() >= 2 && customOp.getNumOperands() <= 4 &&
            "Expected 2 to 4 operands for FusedConv");
-    if (customOp.getNumOperands() > 3) {
+    if (customOp.getNumOperands() > 3 && !isNoneValue(customOp.getOperand(3))) {
       return rewriter.notifyMatchFailure(
           customOp, "Decomposition does not support 'Sum/Z'");
     }
 
-    assert(customOp->hasAttrOfType<StringAttr>("activation"));
-    assert(customOp->hasAttrOfType<ArrayAttr>("activation_params"));
+    auto activationAttr = customOp->getAttrOfType<StringAttr>("activation");
+    if (customOp->hasAttr("activation") && !activationAttr)
+      return rewriter.notifyMatchFailure(
+          customOp, "activation must be a string");
+    const auto activation =
+        activationAttr ? activationAttr.strref() : StringRef{};
+    auto activationParams =
+        customOp->getAttrOfType<ArrayAttr>("activation_params");
+    SmallVector<FloatAttr> activationParamsValues;
+    for (auto attr :
+        activationParams ? activationParams : rewriter.getArrayAttr({})) {
+      auto asFloatAttr = dyn_cast<FloatAttr>(attr);
+      if (!asFloatAttr || !asFloatAttr.getType().isF32())
+        return rewriter.notifyMatchFailure(
+            customOp, "activation_params must be f32");
+      activationParamsValues.push_back(asFloatAttr);
+    }
+    if ((activation == "LeakyRelu" && activationParamsValues.size() != 1) ||
+        ((activation == "Clip" || activation == "HardSigmoid") &&
+            activationParamsValues.size() != 2))
+      return rewriter.notifyMatchFailure(
+          customOp, "activation_params count mismatch");
 
     const SmallVector<NamedAttribute> filteredAttrs(getFilteredAttrs(
         customOp->getAttrs(), {"activation", "activation_params"}));
     SmallVector<Value> convOperands{customOp.getOperands()};
+    if (convOperands.size() == 4)
+      convOperands.pop_back();
     Value noneBias;
     if (convOperands.size() < 3) {
       noneBias = rewriter.create<ONNXNoneOp>(customOp->getLoc())->getResult(0);
@@ -3693,19 +3715,9 @@ struct MicrosoftFusedConv : public CustomOpToOnnxOps {
     auto conv = rewriter.create<ONNXConvOp>(customOp->getLoc(),
         customOp->getResultTypes(), convOperands, filteredAttrs);
     Value convOpResult = conv.getResult();
-    const auto activation =
-        customOp->getAttrOfType<StringAttr>("activation").strref();
-    auto activationParams =
-        customOp->getAttrOfType<ArrayAttr>("activation_params");
-    SmallVector<FloatAttr> activationParamsValues;
-    for (auto attr : activationParams) {
-      auto asFloatAttr = dyn_cast<FloatAttr>(attr);
-      assert(asFloatAttr && asFloatAttr.getType().isF32() &&
-             "All activation params "
-             "must be f32");
-      activationParamsValues.push_back(asFloatAttr);
-    }
-    Value activationFunc;
+    Value activationFunc = convOpResult;
+    Value minVal;
+    Value maxVal;
     Value castMin;
     Value castMax;
     if (activation == "Relu") {
@@ -3718,32 +3730,26 @@ struct MicrosoftFusedConv : public CustomOpToOnnxOps {
       activationFunc = rewriter.create<ONNXSigmoidOp>(
           customOp->getLoc(), convOpResult.getType(), convOpResult);
     } else if (activation == "LeakyRelu") {
-      assert(activationParamsValues.size() == 1 &&
-             "LeakyRelu must have exactly one parameter");
       activationFunc = rewriter.create<ONNXLeakyReluOp>(customOp->getLoc(),
           convOpResult.getType(), convOpResult, activationParamsValues[0]);
     } else if (activation == "Clip") {
-      assert(activationParamsValues.size() == 2 &&
-             "Clip must have exactly two parameters");
       MultiDialectBuilder<OnnxBuilder> create(rewriter, customOp->getLoc());
       auto scalarType = RankedTensorType::get({}, rewriter.getF32Type());
-      auto minVal = create.onnx.constant(
+      minVal = create.onnx.constant(
           DenseElementsAttr::get(scalarType, activationParamsValues[0]));
       auto castToType =
           cast<ShapedType>(convOpResult.getType()).getElementType();
       castMin = create.onnx.cast(minVal, castToType);
-      auto maxVal = create.onnx.constant(
+      maxVal = create.onnx.constant(
           DenseElementsAttr::get(scalarType, activationParamsValues[1]));
       castMax = create.onnx.cast(maxVal, castToType);
       activationFunc = rewriter.create<ONNXClipOp>(customOp->getLoc(),
           convOpResult.getType(), convOpResult, castMin, castMax);
     } else if (activation == "HardSigmoid") {
-      assert(activationParamsValues.size() == 2 &&
-             "HardSigmoid must have exactly two parameters");
       activationFunc = rewriter.create<ONNXHardSigmoidOp>(customOp->getLoc(),
           convOpResult.getType(), convOpResult, activationParamsValues[0],
           activationParamsValues[1]);
-    } else {
+    } else if (activationAttr) {
       rewriter.eraseOp(conv);
       if (noneBias) {
         rewriter.eraseOp(noneBias.getDefiningOp());
@@ -3753,7 +3759,8 @@ struct MicrosoftFusedConv : public CustomOpToOnnxOps {
           "and HardSigmoid activations");
     }
     if (failed(verifyOpsErasingOnError(
-            {noneBias, conv, castMin, castMax, activationFunc}, rewriter))) {
+            {noneBias, conv, minVal, maxVal, castMin, castMax, activationFunc},
+            rewriter))) {
       return rewriter.notifyMatchFailure(customOp, "Failed verification");
     }
     rewriter.replaceOp(customOp, activationFunc);
