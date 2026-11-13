@@ -61,15 +61,21 @@ def IsFromDenseConstLike:
   "Value is produced by any ConstantLike op that folds to a dense "
   "ElementsAttr (DenseElementsAttr or DisposableElementsAttr)">;
 
-// Use only for algebraic rewrites that do not inspect the payload. Actual
+// Use only for algebraic rewrites that do not inspect the payload. Preserve
+// the historical dense-only treatment of ConstantLike operations while also
+// accepting values represented by deferred constant operations. Actual
 // constant propagation must continue to require IsFromDenseConstLike.
-def IsConstantFoldableExpression:
-    Constraint<CPred<"isConstantFoldable($_self)">,
-  "Value is a constant-foldable expression">;
+def IsDenseOrDeferredConstant:
+    Constraint<CPred<
+      "static_cast<bool>(getDenseOrDisposableConstLikeElements($_self)) || "
+      "isDeferredConstant($_self)">,
+  "Value is a dense or deferred constant">;
 
-def IsNotConstantFoldableExpression:
-    Constraint<CPred<"!isConstantFoldable($_self)">,
-  "Value has a runtime dependency">;
+def IsNotDenseOrDeferredConstant:
+    Constraint<CPred<
+      "!getDenseOrDisposableConstLikeElements($_self) && "
+      "!isDeferredConstant($_self)">,
+  "Value is neither a dense nor deferred constant">;
 
 def IsFromDenseConstLikeOrNone:
   Constraint<
@@ -382,8 +388,8 @@ def AddConstCommutative1 : NamedPat<"AddConstCommutative1",
   (ONNXAddOp $x, $c, (location $addOp)),
   // To avoid infinite loop, constrain the first argument to be a dense constant
   // and the second to not be one.
-  [(IsConstantFoldableExpression:$c),
-   (IsNotConstantFoldableExpression:$x)]>;
+  [(IsDenseOrDeferredConstant:$c),
+   (IsNotDenseOrDeferredConstant:$x)]>;
 
 // Use associativity to add constants together.
 def AddConstAssociative1 : NamedPat<"AddConstAssociative1",
@@ -395,9 +401,9 @@ def AddConstAssociative1 : NamedPat<"AddConstAssociative1",
   (ONNXAddOp
     $x,
     (ONNXAddOp $c1, $c2)),
-  [(IsConstantFoldableExpression:$c1),
-   (IsConstantFoldableExpression:$c2),
-   (IsNotConstantFoldableExpression:$x), (HasOneUse:$lhs)]>;
+  [(IsDenseOrDeferredConstant:$c1),
+   (IsDenseOrDeferredConstant:$c2),
+   (IsNotDenseOrDeferredConstant:$x), (HasOneUse:$lhs)]>;
 
 // Do not apply this when both x and c are scalar since it is cheap to do.
 def AddConstAssociative2 : NamedPat<"AddConstAssociative2",
@@ -409,10 +415,10 @@ def AddConstAssociative2 : NamedPat<"AddConstAssociative2",
   (ONNXAddOp
     (ONNXAddOp $x, $y),
     $c),
-  [(IsConstantFoldableExpression:$c),
-   (IsNotConstantFoldableExpression:$x),
+  [(IsDenseOrDeferredConstant:$c),
+   (IsNotDenseOrDeferredConstant:$x),
    (OpIsUnlikelyToBeFusedWithBias:$x),
-   (IsNotConstantFoldableExpression:$y), (HasOneUse:$lhs),
+   (IsNotDenseOrDeferredConstant:$y), (HasOneUse:$lhs),
    (IsNotScalar:$x), (IsNotScalar:$c)]>;
 
 // Do not apply this when both y and c are scalar since it is cheap to do.
@@ -425,9 +431,9 @@ def AddConstAssociative3 : NamedPat<"AddConstAssociative3",
   (ONNXAddOp
     (ONNXAddOp $x, $y),
     $c),
-  [(IsConstantFoldableExpression:$c),
-   (IsNotConstantFoldableExpression:$x),
-   (IsNotConstantFoldableExpression:$y),
+  [(IsDenseOrDeferredConstant:$c),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y),
    (OpIsUnlikelyToBeFusedWithBias:$y), (HasOneUse:$rhs),
    (IsNotScalar:$y), (IsNotScalar:$c)]>;
 
@@ -440,10 +446,10 @@ def AddConstAssociative4NoFuse : NamedPat<"AddConstAssociative4NoFuse",
   (ONNXAddOp
     (ONNXAddOp $x, $y),
     (ONNXAddOp $c1, $c2)),
-  [(IsConstantFoldableExpression:$c1),
-   (IsConstantFoldableExpression:$c2),
-   (IsNotConstantFoldableExpression:$x),
-   (IsNotConstantFoldableExpression:$y),
+  [(IsDenseOrDeferredConstant:$c1),
+   (IsDenseOrDeferredConstant:$c2),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y),
    (OpIsUnlikelyToBeFusedWithBias:$x), (OpIsUnlikelyToBeFusedWithBias:$y),
    (HasOneUse:$lhs), (HasOneUse:$rhs)]>;
 
@@ -457,10 +463,10 @@ def AddConstAssociative4LhsFuse : NamedPat<"AddConstAssociativeLhsFuse",
     (ONNXAddOp $x, (ONNXAddOp $c1, $c2)),
      $y
     ),
-  [(IsConstantFoldableExpression:$c1),
-   (IsConstantFoldableExpression:$c2),
-   (IsNotConstantFoldableExpression:$x),
-   (IsNotConstantFoldableExpression:$y),
+  [(IsDenseOrDeferredConstant:$c1),
+   (IsDenseOrDeferredConstant:$c2),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y),
    (OpIsLikelyToBeFusedWithBias:$x),
    (HasOneUse:$lhs), (HasOneUse:$rhs)]>;
 
@@ -474,10 +480,10 @@ def AddConstAssociative4RhsFuse : NamedPat<"AddConstAssociativeRhsFuse",
     $x,
     (ONNXAddOp $y, (ONNXAddOp $c1, $c2))
     ),
-  [(IsConstantFoldableExpression:$c1),
-   (IsConstantFoldableExpression:$c2),
-   (IsNotConstantFoldableExpression:$x),
-   (IsNotConstantFoldableExpression:$y),
+  [(IsDenseOrDeferredConstant:$c1),
+   (IsDenseOrDeferredConstant:$c2),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y),
    (OpIsUnlikelyToBeFusedWithBias:$x), (OpIsLikelyToBeFusedWithBias:$y),
    (HasOneUse:$lhs), (HasOneUse:$rhs)]>;
 
@@ -664,8 +670,8 @@ def SubConstToNeg : NamedPat<"SubConstToNeg",
     (ONNXSubOp:$subOp $x, $input),
     // To x + (-c).
     (ONNXAddOp $x, (CreateNegOfConstantExpression $input, $input)),
-    [(IsNotConstantFoldableExpression:$x),
-     (IsConstantFoldableExpression:$input), (IsIntOrFloatType:$input),
+    [(IsNotDenseOrDeferredConstant:$x),
+     (IsDenseOrDeferredConstant:$input), (IsIntOrFloatType:$input),
      (IsNotUnsignedIntType:$input)]>;
 
 // Constant Propagation for Sqrt
@@ -748,8 +754,8 @@ def MulConstCommutative1 : NamedPat<"MulConstCommutative1",
   (ONNXMulOp:$mulOp $c, $x),
   // To mul(x, c).
   (ONNXMulOp $x, $c, (location $mulOp)),
-  [(IsConstantFoldableExpression:$c),
-   (IsNotConstantFoldableExpression:$x)]>;
+  [(IsDenseOrDeferredConstant:$c),
+   (IsNotDenseOrDeferredConstant:$x)]>;
 
 // Use associativity to mul constants together.
 def MulConstAssociative1 : NamedPat<"MulConstAssociative1",
@@ -761,9 +767,9 @@ def MulConstAssociative1 : NamedPat<"MulConstAssociative1",
   (ONNXMulOp
     $x,
     (ONNXMulOp $c1, $c2)),
-  [(IsConstantFoldableExpression:$c1),
-   (IsConstantFoldableExpression:$c2),
-   (IsNotConstantFoldableExpression:$x), (HasOneUse:$lhs)]>;
+  [(IsDenseOrDeferredConstant:$c1),
+   (IsDenseOrDeferredConstant:$c2),
+   (IsNotDenseOrDeferredConstant:$x), (HasOneUse:$lhs)]>;
 
 // Do not apply this when both x and c are scalar since it is cheap to do.
 def MulConstAssociative2 : NamedPat<"MulConstAssociative2",
@@ -775,9 +781,9 @@ def MulConstAssociative2 : NamedPat<"MulConstAssociative2",
   (ONNXMulOp
     (ONNXMulOp $x, $y),
     $c),
-  [(IsConstantFoldableExpression:$c),
-   (IsNotConstantFoldableExpression:$x),
-   (IsNotConstantFoldableExpression:$y), (HasOneUse:$lhs),
+  [(IsDenseOrDeferredConstant:$c),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y), (HasOneUse:$lhs),
    (IsNotScalar:$x), (IsNotScalar:$c)]>;
 
 // Do not apply this when both y and c are scalar since it is cheap to do.
@@ -790,9 +796,9 @@ def MulConstAssociative3 : NamedPat<"MulConstAssociative3",
   (ONNXMulOp
     (ONNXMulOp $x, $y),
     $c),
-  [(IsConstantFoldableExpression:$c),
-   (IsNotConstantFoldableExpression:$x),
-   (IsNotConstantFoldableExpression:$y), (HasOneUse:$rhs),
+  [(IsDenseOrDeferredConstant:$c),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y), (HasOneUse:$rhs),
    (IsNotScalar:$y), (IsNotScalar:$c)]>;
 
 def MulConstAssociative4 : NamedPat<"MulConstAssociative4",
@@ -804,10 +810,10 @@ def MulConstAssociative4 : NamedPat<"MulConstAssociative4",
   (ONNXMulOp
     (ONNXMulOp $x, $y),
     (ONNXMulOp $c1, $c2)),
-  [(IsConstantFoldableExpression:$c1),
-   (IsConstantFoldableExpression:$c2),
-   (IsNotConstantFoldableExpression:$x),
-   (IsNotConstantFoldableExpression:$y),
+  [(IsDenseOrDeferredConstant:$c1),
+   (IsDenseOrDeferredConstant:$c2),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y),
    (HasOneUse:$lhs), (HasOneUse:$rhs)]>;
 
 // mul(add(x, b), a) -> add(mul(x, a), mul(a, b)).
@@ -821,9 +827,9 @@ def MulAddConstDistributive : NamedPat<"MulAddConstDistributive",
   (ONNXAddOp
     (ONNXMulOp $x, $a),
     (ONNXMulOp $a, $b)),
-  [(IsConstantFoldableExpression:$a),
-   (IsConstantFoldableExpression:$b),
-   (IsNotConstantFoldableExpression:$x), (HasOneUse:$addOp),
+  [(IsDenseOrDeferredConstant:$a),
+   (IsDenseOrDeferredConstant:$b),
+   (IsNotDenseOrDeferredConstant:$x), (HasOneUse:$addOp),
    (IsIntOrFloatType:$a),
   (IsIntOrFloatType:$b), (IsIntOrFloatType:$x)]>;
 

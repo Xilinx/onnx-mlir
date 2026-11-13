@@ -24,6 +24,25 @@ func.func @reassociate_adds(%arg0: tensor<4xf32>) -> tensor<4xf32> {
 
 // -----
 
+// Sparse ConstantLike values retain their historical treatment: the
+// dense-constant algebraic rewrites must not reassociate them for folding.
+func.func @do_not_reassociate_sparse_constants(%arg0: tensor<4xf32>) -> tensor<4xf32> {
+  %sparse0 = onnx.Constant sparse<0, 1.000000e+00> : tensor<4xf32>
+  %sparse1 = onnx.Constant sparse<1, 2.000000e+00> : tensor<4xf32>
+  %sum0 = "onnx.Add"(%arg0, %sparse0) : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  %result = "onnx.Add"(%sum0, %sparse1) : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  onnx.Return %result : tensor<4xf32>
+}
+
+// CHECK-LABEL: func.func @do_not_reassociate_sparse_constants
+// CHECK-DAG: [[SPARSE0:%.+]] = onnx.Constant sparse<0, 1.000000e+00>
+// CHECK-DAG: [[SPARSE1:%.+]] = onnx.Constant sparse<1, 2.000000e+00>
+// CHECK: [[SUM0:%.+]] = "onnx.Add"(%arg0, [[SPARSE0]])
+// CHECK: [[RESULT:%.+]] = "onnx.Add"([[SUM0]], [[SPARSE1]])
+// CHECK: onnx.Return [[RESULT]]
+
+// -----
+
 // Merely containing an initializer is insufficient: the complete expression
 // must have no runtime dependency.
 func.func @do_not_defer_runtime_dependent_expression(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>) -> tensor<4xf32> {
