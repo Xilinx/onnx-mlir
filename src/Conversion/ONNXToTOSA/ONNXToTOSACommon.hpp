@@ -5,7 +5,7 @@
 //====------ ONNXToTOSACommon.hpp - ONNX dialects to TOSA lowering --------===//
 //
 // Copyright 2020-2024 The TensorFlow Authors. All Rights Reserved.
-// Copyright (c) 2022-2024 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -81,6 +81,17 @@ mlir::FailureOr<mlir::Value> convertPoolOp(
 } // namespace onnx_mlir
 
 namespace onnx_mlir {
+
+/// Preserve the temporary deferred-expression classification when a lowering
+/// replaces one operation with another operation.
+inline void copyDeferredFoldableExposure(
+    mlir::Operation *source, mlir::Operation *generated) {
+  if (!source || !generated)
+    return;
+  if (mlir::Attribute exposed =
+          source->getAttr("onnx.deferred_foldable_exposed"))
+    generated->setAttr("onnx.deferred_foldable_exposed", exposed);
+}
 
 //===----------------------------------------------------------------------===//
 // Check for valid TOSA types.

@@ -10,6 +10,9 @@
 //
 // This file lowers ONNX reshape operator to TOSA dialect.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "src/Conversion/ONNXToTOSA/DialectBuilder.hpp"
@@ -40,6 +43,7 @@ public:
     Value data = op.getData();
     Value reshapeOp = tosaBuilder.reshape(
         data, mlir::cast<RankedTensorType>(outputTy).getShape());
+    copyDeferredFoldableExposure(op, reshapeOp.getDefiningOp());
     rewriter.replaceOp(op, {reshapeOp});
     return success();
   }

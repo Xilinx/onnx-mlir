@@ -56,10 +56,14 @@ Value createConvInGroups(PatternRewriter &rewriter, Operation *op,
     // Slice kernel
     Value newSliceWeight = create.onnx.slice(
         newWeight, {i * sizeOfSliceKernel, 0, 0, 0}, kernelSize);
+    copyDeferredFoldableExposure(
+        newWeight.getDefiningOp(), newSliceWeight.getDefiningOp());
 
     // Slice bias
     Value newSliceBias =
         create.onnx.slice(bias, {i * sizeOfSliceKernel}, {sizeOfSliceKernel});
+    copyDeferredFoldableExposure(
+        bias.getDefiningOp(), newSliceBias.getDefiningOp());
 
     // Create conv
     Type newConvOutputType = RankedTensorType::get(
@@ -168,6 +172,8 @@ public:
 
     // Convert weights [OC,IC,KH,KW] -> [OC,KH,KW,IC]
     Value newWeight = create.onnx.transposeInt64(weights, {0, 2, 3, 1});
+    copyDeferredFoldableExposure(
+        weights.getDefiningOp(), newWeight.getDefiningOp());
 
     if (mlir::isa<NoneType>(bias.getType())) {
       bias = create.tosa.getSingleValueConst(
@@ -224,11 +230,15 @@ public:
         // Convert weights [OC,IC,KH,KW] -> [KH, KW, OC, M(ChannelMultiplier)]
         Value transposedWeight =
             create.onnx.transposeInt64(weights, {2, 3, 0, 1});
+        copyDeferredFoldableExposure(
+            weights.getDefiningOp(), transposedWeight.getDefiningOp());
         // A reshape op is needed to adhere to the TOSA standard
         // https://www.mlplatform.org/tosa/tosa_spec.html#_depthwise_conv2d
         Value newWeight = create.tosa.reshape(
             transposedWeight, {weightShape[2], weightShape[3], inputChannels,
                                   outputChannels / inputChannels});
+        copyDeferredFoldableExposure(
+            transposedWeight.getDefiningOp(), newWeight.getDefiningOp());
 
         Type newConvOutputType = RankedTensorType::get(
             llvm::SmallVector<int64_t, 4>(4, ShapedType::kDynamic),
