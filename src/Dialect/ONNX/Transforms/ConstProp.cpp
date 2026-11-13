@@ -3068,12 +3068,14 @@ struct ConstPropONNXToONNXPass
 // applyPatternsGreedily: forming a recipe can make a transitive user match on
 // the next iteration even though that user was not directly modified.
 LogicalResult applyPatternsOutsideDeferredRecipes(func::FuncOp function,
-    RewritePatternSet &&patterns, RewriterBase::Listener *listener) {
+    RewritePatternSet &&patterns, RewriterBase::Listener *listener,
+    bool enableFolding) {
   FrozenRewritePatternSet frozenPatterns(std::move(patterns));
   GreedyRewriteConfig config;
   config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps)
       .setScope(&function.getBody())
       .setListener(listener);
+  config.enableFolding(enableFolding);
 
   for (int64_t iteration = 0; iteration < config.getMaxIterations();
       ++iteration) {
@@ -3101,8 +3103,9 @@ LogicalResult formDeferredFoldableExpressions(func::FuncOp function) {
   populateFormDeferredFoldableExpressionPatterns(
       patterns, PatternBenefit(1), /*requireDeferredSource=*/false);
   onnx_mlir::ResultNamesUpdater rnUpdater;
-  if (failed(applyPatternsOutsideDeferredRecipes(
-          function, std::move(patterns), &rnUpdater)))
+  if (failed(applyPatternsOutsideDeferredRecipes(function, std::move(patterns),
+          &rnUpdater,
+          /*enableFolding=*/false)))
     return failure();
   return onnx_mlir::inlineDenseDeferredFoldableExpressions(function);
 }
@@ -3138,8 +3141,9 @@ void ConstPropONNXToONNXPass::runOnOperation() {
       signalPassFailure();
     return;
   }
-  if (failed(applyPatternsOutsideDeferredRecipes(
-          function, std::move(patterns), &rnUpdater)) ||
+  if (failed(applyPatternsOutsideDeferredRecipes(function, std::move(patterns),
+          &rnUpdater,
+          /*enableFolding=*/true)) ||
       (formDeferredFoldableExpressions &&
           failed(onnx_mlir::inlineDenseDeferredFoldableExpressions(function))))
     signalPassFailure();

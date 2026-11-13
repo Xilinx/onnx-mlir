@@ -3,6 +3,7 @@
 // affiliates
 
 // RUN: onnx-mlir-opt --onnx-form-deferred-foldable-expressions %s | FileCheck %s
+// RUN: onnx-mlir-opt --onnx-form-deferred-foldable-expressions --onnx-infer-tensornames %s | FileCheck %s --check-prefix=NAMES
 // RUN: onnx-mlir-opt --canonicalize %s | FileCheck %s --check-prefix=CANON
 // RUN: onnx-mlir-opt --constprop-onnx="form-deferred-foldable-expressions=false" %s | FileCheck %s --check-prefix=NOFORM
 
@@ -69,6 +70,30 @@ func.func @do_not_retain_dense_constant_expression() -> tensor<2x2xf32> {
 // CHECK:         %[[CONSTANT:.+]] = onnx.Constant
 // CHECK-NEXT:    %[[TRANSPOSE:.+]] = "onnx.Transpose"(%[[CONSTANT]])
 // CHECK-NEXT:    onnx.Return %[[TRANSPOSE]]
+
+// Formation must not fold unrelated runtime operations. In particular, tensor
+// name inference must observe both adjacent reshapes and the inner name.
+func.func @preserve_unrelated_runtime_reshapes(%runtime: tensor<1x2x2xf32>) -> (tensor<1x1x4xf32>, tensor<2x2xf32>) {
+  %inner = "tosa.reshape"(%runtime) {ResultNames = ["runtime_inner"], new_shape = array<i64: 1, 4>} : (tensor<1x2x2xf32>) -> tensor<1x4xf32>
+  %outer = "tosa.reshape"(%inner) {new_shape = array<i64: 1, 1, 4>} : (tensor<1x4xf32>) -> tensor<1x1x4xf32>
+  %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "reshape_weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+  %transposed = "onnx.Transpose"(%weight) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+  onnx.Return %outer, %transposed : tensor<1x1x4xf32>, tensor<2x2xf32>
+}
+
+// CHECK-LABEL: func.func @preserve_unrelated_runtime_reshapes
+// CHECK-SAME:  (%[[RUNTIME:.+]]: tensor<1x2x2xf32>)
+// CHECK:         %[[INNER:.+]] = tosa.reshape %[[RUNTIME]] {ResultNames = ["runtime_inner"]
+// CHECK-NEXT:    %[[OUTER:.+]] = tosa.reshape %[[INNER]]
+// CHECK:         %[[DEFERRED:.+]] = "onnx.DeferredFoldable"
+// CHECK:         onnx.Return %[[OUTER]], %[[DEFERRED]]
+
+// NAMES-LABEL: func.func @preserve_unrelated_runtime_reshapes
+// NAMES-SAME:  (%[[RUNTIME:.+]]: tensor<1x2x2xf32>)
+// NAMES:         %[[INNER:.+]] = tosa.reshape %[[RUNTIME]] {ResultNames = ["runtime_inner"]
+// NAMES-NEXT:    %[[OUTER:.+]] = tosa.reshape %[[INNER]] {new_shape = array<i64: 1, 1, 4>}
+// NAMES:         %[[DEFERRED:.+]] = "onnx.DeferredFoldable"
+// NAMES:         onnx.Return %[[OUTER]], %[[DEFERRED]]
 
 // A transient dense recipe is inlined at its terminal consumer rather than at
 // the first operation that was added to the recipe.
