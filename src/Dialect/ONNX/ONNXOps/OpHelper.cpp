@@ -560,7 +560,25 @@ FailureOr<Operation *> peelDeferredFoldableExpression(
   });
 
   mapping.map(prefix, deferred.getResult());
-  rewriter.setInsertionPointAfter(deferred);
+  // Keep the deferred prefix at its constant-side position, but place the
+  // peeled terminal next to the runtime graph that consumes it. This
+  // reproduces the terminal's original program order without moving the
+  // constant expression retained by the wrapper.
+  Operation *firstUserInBlock = nullptr;
+  Block *parentBlock = deferred->getBlock();
+  for (Operation *user : deferred->getUsers()) {
+    Operation *ancestor = user;
+    while (ancestor && ancestor->getBlock() != parentBlock)
+      ancestor = ancestor->getParentOp();
+    if (!ancestor)
+      continue;
+    if (!firstUserInBlock || ancestor->isBeforeInBlock(firstUserInBlock))
+      firstUserInBlock = ancestor;
+  }
+  if (firstUserInBlock)
+    rewriter.setInsertionPoint(firstUserInBlock);
+  else
+    rewriter.setInsertionPointAfter(deferred);
   Operation *peeled = rewriter.clone(*terminal, mapping);
   if (nodeName)
     peeled->setAttr("onnx_node_name", nodeName);

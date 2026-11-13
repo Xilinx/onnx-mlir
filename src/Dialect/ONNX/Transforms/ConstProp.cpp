@@ -18,6 +18,7 @@
 
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -2733,7 +2734,18 @@ private:
       else if (extensible != nested)
         hasMultipleDeferredWrappers = true;
     }
+    bool capturesDominateExtensible = true;
+    if (extensible) {
+      DominanceInfo dominance(extensible->getParentOp());
+      capturesDominateExtensible =
+          llvm::all_of(op->getOperands(), [&](Value operand) {
+            return operand == extensible.getResult() ||
+                   shouldInlineConstant(operand) ||
+                   dominance.dominates(operand, extensible.getOperation());
+          });
+    }
     if (extensible && !hasMultipleDeferredWrappers &&
+        capturesDominateExtensible &&
         llvm::all_of(extensible.getResult().getUses(),
             [&](OpOperand &use) { return use.getOwner() == op; })) {
       Block &body = extensible.getBody().front();
@@ -3168,6 +3180,24 @@ LogicalResult onnx_mlir::inlineDenseDeferredFoldableExpressions(Operation *root,
 
   IRRewriter rewriter(root->getContext());
   for (ONNXDeferredFoldableOp deferred : denseRecipes) {
+    // Formation extends a recipe in place, so the wrapper may still be at its
+    // first producer even though it now represents a later terminal op. A
+    // dense recipe is about to disappear; place it at its first same-block
+    // user so the inlined value occupies the terminal expression's program
+    // position rather than the original source position.
+    Operation *firstUserInBlock = nullptr;
+    Block *parentBlock = deferred->getBlock();
+    for (Operation *user : deferred->getUsers()) {
+      Operation *ancestor = user;
+      while (ancestor && ancestor->getBlock() != parentBlock)
+        ancestor = ancestor->getParentOp();
+      if (!ancestor)
+        continue;
+      if (!firstUserInBlock || ancestor->isBeforeInBlock(firstUserInBlock))
+        firstUserInBlock = ancestor;
+    }
+    if (firstUserInBlock)
+      deferred->moveBefore(firstUserInBlock);
     FailureOr<SmallVector<Operation *>> inlined =
         inlineDeferredFoldableExpression(deferred, rewriter);
     if (failed(inlined))

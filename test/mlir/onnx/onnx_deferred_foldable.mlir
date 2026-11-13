@@ -29,6 +29,26 @@ func.func @retain_expression(%runtime: tensor<2x2xf32>) -> (tensor<2x2xf32>, ten
 // CHECK:         %[[MIXED:.+]] = "onnx.Sub"(%[[RUNTIME]], %[[DEFERRED]])
 // CHECK:         onnx.Return %[[DEFERRED]], %[[MIXED]]
 
+// A later tensor constant cannot be added as a capture to an earlier recipe.
+// Build a new wrapper at the consumer and inline the operand recipe instead.
+func.func @later_capture_does_not_break_dominance() -> tensor<2x2xf32> {
+  %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "later_capture_weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+  %transposed = "onnx.Transpose"(%weight) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+  %bias = onnx.Constant dense<1.0> : tensor<2x2xf32>
+  %result = "onnx.Add"(%transposed, %bias) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+  onnx.Return %result : tensor<2x2xf32>
+}
+
+// CHECK-LABEL: func.func @later_capture_does_not_break_dominance
+// CHECK-DAG:     %[[WEIGHT:.+]] = "onnx.InitializerSource"()
+// CHECK-DAG:     %[[BIAS:.+]] = onnx.Constant dense<1.000000e+00>
+// CHECK:         %[[DEFERRED:.+]] = "onnx.DeferredFoldable"(%[[WEIGHT]], %[[BIAS]]) ({
+// CHECK:         ^bb0(%[[CAPTURED_WEIGHT:.+]]: tensor<2x2xf32>, %[[CAPTURED_BIAS:.+]]: tensor<2x2xf32>):
+// CHECK:           %[[TRANSPOSE:.+]] = "onnx.Transpose"(%[[CAPTURED_WEIGHT]])
+// CHECK:           %[[ADD:.+]] = "onnx.Add"(%[[TRANSPOSE]], %[[CAPTURED_BIAS]])
+// CHECK:           onnx.DeferredYield %[[ADD]] : tensor<2x2xf32>
+// CHECK:         onnx.Return %[[DEFERRED]]
+
 // NOFORM-LABEL: func.func @retain_expression
 // NOFORM-NOT:     "onnx.DeferredFoldable"
 // NOFORM:         %[[TRANSPOSE:.+]] = "onnx.Transpose"
@@ -49,6 +69,25 @@ func.func @do_not_retain_dense_constant_expression() -> tensor<2x2xf32> {
 // CHECK:         %[[CONSTANT:.+]] = onnx.Constant
 // CHECK-NEXT:    %[[TRANSPOSE:.+]] = "onnx.Transpose"(%[[CONSTANT]])
 // CHECK-NEXT:    onnx.Return %[[TRANSPOSE]]
+
+// A transient dense recipe is inlined at its terminal consumer rather than at
+// the first operation that was added to the recipe.
+func.func @inline_dense_recipe_at_terminal(%runtime: tensor<2x2xf32>) -> tensor<2x2xf32> {
+  %constant = onnx.Constant dense<1.0> : tensor<2x2xf32>
+  %transposed = "onnx.Transpose"(%constant) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+  %marker = "onnx.Identity"(%runtime) : (tensor<2x2xf32>) -> tensor<2x2xf32>
+  %sum = "onnx.Add"(%transposed, %constant) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+  %result = "onnx.Sub"(%marker, %sum) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+  onnx.Return %result : tensor<2x2xf32>
+}
+
+// CHECK-LABEL: func.func @inline_dense_recipe_at_terminal
+// CHECK:         %[[CONSTANT:.+]] = onnx.Constant
+// CHECK-NEXT:    %[[MARKER:.+]] = "onnx.Identity"(%{{.+}})
+// CHECK-NEXT:    %[[TRANSPOSE:.+]] = "onnx.Transpose"(%[[CONSTANT]])
+// CHECK-NEXT:    %[[SUM:.+]] = "onnx.Add"(%[[TRANSPOSE]], %[[CONSTANT]])
+// CHECK-NEXT:    %[[RESULT:.+]] = "onnx.Sub"(%[[MARKER]], %[[SUM]])
+// CHECK-NEXT:    onnx.Return %[[RESULT]]
 
 // A pure multi-result operation is retained as one single-result recipe per
 // used result so each producer remains directly classifiable.

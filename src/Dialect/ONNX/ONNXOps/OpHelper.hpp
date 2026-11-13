@@ -214,9 +214,11 @@ mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 
 // Move the terminal operation retained by `deferred` back into its parent
 // block. A single internal operand remains represented by the shortened
-// wrapper; peeling fails if representing the remaining prefix would require
-// multiple wrapper results. The caller can inspect getTerminalOperation()
-// before peeling to select which operations should execute at runtime.
+// wrapper, and the peeled terminal is placed immediately before the earliest
+// user in the wrapper's block. Peeling fails if representing the remaining
+// prefix would require multiple wrapper results. The caller can inspect
+// getTerminalOperation() before peeling to select which operations should
+// execute at runtime.
 mlir::FailureOr<mlir::Operation *> peelDeferredFoldableExpression(
     mlir::ONNXDeferredFoldableOp deferred, mlir::RewriterBase &rewriter);
 
