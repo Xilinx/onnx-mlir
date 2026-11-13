@@ -3673,17 +3673,39 @@ struct MicrosoftFusedConv : public CustomOpToOnnxOps {
     using namespace onnx_mlir;
     assert(customOp.getNumOperands() >= 2 && customOp.getNumOperands() <= 4 &&
            "Expected 2 to 4 operands for FusedConv");
-    if (customOp.getNumOperands() > 3) {
+    if (customOp.getNumOperands() > 3 && !isNoneValue(customOp.getOperand(3))) {
       return rewriter.notifyMatchFailure(
           customOp, "Decomposition does not support 'Sum/Z'");
     }
 
-    assert(customOp->hasAttrOfType<StringAttr>("activation"));
-    assert(customOp->hasAttrOfType<ArrayAttr>("activation_params"));
+    auto activationAttr = customOp->getAttrOfType<StringAttr>("activation");
+    if (customOp->hasAttr("activation") && !activationAttr)
+      return rewriter.notifyMatchFailure(
+          customOp, "activation must be a string");
+    const auto activation =
+        activationAttr ? activationAttr.strref() : StringRef{};
+    auto activationParams =
+        customOp->getAttrOfType<ArrayAttr>("activation_params");
+    SmallVector<FloatAttr> activationParamsValues;
+    for (auto attr :
+        activationParams ? activationParams : rewriter.getArrayAttr({})) {
+      auto asFloatAttr = dyn_cast<FloatAttr>(attr);
+      if (!asFloatAttr || !asFloatAttr.getType().isF32())
+        return rewriter.notifyMatchFailure(
+            customOp, "activation_params must be f32");
+      activationParamsValues.push_back(asFloatAttr);
+    }
+    if ((activation == "LeakyRelu" && activationParamsValues.size() != 1) ||
+        ((activation == "Clip" || activation == "HardSigmoid") &&
+            activationParamsValues.size() != 2))
+      return rewriter.notifyMatchFailure(
+          customOp, "activation_params count mismatch");
 
     const SmallVector<NamedAttribute> filteredAttrs(getFilteredAttrs(
         customOp->getAttrs(), {"activation", "activation_params"}));
     SmallVector<Value> convOperands{customOp.getOperands()};
+    if (convOperands.size() == 4)
+      convOperands.pop_back();
     Value noneBias;
     if (convOperands.size() < 3) {
       noneBias = rewriter.create<ONNXNoneOp>(customOp->getLoc())->getResult(0);
@@ -3693,19 +3715,9 @@ struct MicrosoftFusedConv : public CustomOpToOnnxOps {
     auto conv = rewriter.create<ONNXConvOp>(customOp->getLoc(),
         customOp->getResultTypes(), convOperands, filteredAttrs);
     Value convOpResult = conv.getResult();
-    const auto activation =
-        customOp->getAttrOfType<StringAttr>("activation").strref();
-    auto activationParams =
-        customOp->getAttrOfType<ArrayAttr>("activation_params");
-    SmallVector<FloatAttr> activationParamsValues;
-    for (auto attr : activationParams) {
-      auto asFloatAttr = dyn_cast<FloatAttr>(attr);
-      assert(asFloatAttr && asFloatAttr.getType().isF32() &&
-             "All activation params "
-             "must be f32");
-      activationParamsValues.push_back(asFloatAttr);
-    }
-    Value activationFunc;
+    Value activationFunc = convOpResult;
+    Value minVal;
+    Value maxVal;
     Value castMin;
     Value castMax;
     if (activation == "Relu") {
@@ -3718,32 +3730,26 @@ struct MicrosoftFusedConv : public CustomOpToOnnxOps {
       activationFunc = rewriter.create<ONNXSigmoidOp>(
           customOp->getLoc(), convOpResult.getType(), convOpResult);
     } else if (activation == "LeakyRelu") {
-      assert(activationParamsValues.size() == 1 &&
-             "LeakyRelu must have exactly one parameter");
       activationFunc = rewriter.create<ONNXLeakyReluOp>(customOp->getLoc(),
           convOpResult.getType(), convOpResult, activationParamsValues[0]);
     } else if (activation == "Clip") {
-      assert(activationParamsValues.size() == 2 &&
-             "Clip must have exactly two parameters");
       MultiDialectBuilder<OnnxBuilder> create(rewriter, customOp->getLoc());
       auto scalarType = RankedTensorType::get({}, rewriter.getF32Type());
-      auto minVal = create.onnx.constant(
+      minVal = create.onnx.constant(
           DenseElementsAttr::get(scalarType, activationParamsValues[0]));
       auto castToType =
           cast<ShapedType>(convOpResult.getType()).getElementType();
       castMin = create.onnx.cast(minVal, castToType);
-      auto maxVal = create.onnx.constant(
+      maxVal = create.onnx.constant(
           DenseElementsAttr::get(scalarType, activationParamsValues[1]));
       castMax = create.onnx.cast(maxVal, castToType);
       activationFunc = rewriter.create<ONNXClipOp>(customOp->getLoc(),
           convOpResult.getType(), convOpResult, castMin, castMax);
     } else if (activation == "HardSigmoid") {
-      assert(activationParamsValues.size() == 2 &&
-             "HardSigmoid must have exactly two parameters");
       activationFunc = rewriter.create<ONNXHardSigmoidOp>(customOp->getLoc(),
           convOpResult.getType(), convOpResult, activationParamsValues[0],
           activationParamsValues[1]);
-    } else {
+    } else if (activationAttr) {
       rewriter.eraseOp(conv);
       if (noneBias) {
         rewriter.eraseOp(noneBias.getDefiningOp());
@@ -3753,7 +3759,8 @@ struct MicrosoftFusedConv : public CustomOpToOnnxOps {
           "and HardSigmoid activations");
     }
     if (failed(verifyOpsErasingOnError(
-            {noneBias, conv, castMin, castMax, activationFunc}, rewriter))) {
+            {noneBias, conv, minVal, maxVal, castMin, castMax, activationFunc},
+            rewriter))) {
       return rewriter.notifyMatchFailure(customOp, "Failed verification");
     }
     rewriter.replaceOp(customOp, activationFunc);
@@ -3871,6 +3878,9 @@ struct MicrosoftSkipLayerNorm : public CustomOpToOnnxOps {
     if (numIn == 5)
       bias = customOp.getOperand(4);
 
+    if (bias && isNoneValue(bias))
+      bias = {};
+
     auto epsAttr = customOp->getAttrOfType<FloatAttr>("epsilon");
     if (!epsAttr)
       epsAttr =
@@ -3947,6 +3957,9 @@ struct MicrosoftSkipSimplifiedLayerNorm : public CustomOpToOnnxOps {
 
     if (numIn >= 4)
       bias = customOp.getOperand(3);
+
+    if (bias && isNoneValue(bias))
+      bias = {};
 
     auto epsAttr = customOp->getAttrOfType<FloatAttr>("epsilon");
     if (!epsAttr)
@@ -4137,6 +4150,7 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
           {"kv_num_heads", nullptr},
           {"local_window_size", validateLocalWindowSize},
           {"num_heads", nullptr}, {"qk_norm_epsilon", validateQKNormEpsilon},
+          {"q_norm_epsilon", nullptr}, {"k_norm_epsilon", nullptr},
           {"qk_output", nullptr}, {"rotary_interleaved", nullptr},
           {"scale", nullptr},
           {"sliding_window_cache", validateSlidingWindowCache},
@@ -4150,7 +4164,8 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
   static LogicalResult validateRecognizedAttributes(
       ONNXCustomOp customOp, PatternRewriter &rewriter) {
     const SmallVector<NamedAttribute> semanticAttrs = getFilteredAttrs(
-        customOp->getAttrs(), {"onnx_node_name", "ResultNames", "layout"});
+        customOp->getAttrs(), {"onnx_node_name", "ResultNames", "layout",
+                                  "LayerName", "PartOfLayerName"});
     for (NamedAttribute attr : semanticAttrs) {
       StringRef attrName = attr.getName().getValue();
 
@@ -4641,9 +4656,12 @@ struct MicrosoftGroupQueryAttention : public CustomOpToOnnxOps {
     using namespace onnx_mlir;
     const Location loc = customOp.getLoc();
     const int64_t numIn = customOp.getNumOperands();
-    if (numIn < 7 || numIn > 16 || numIn == 8)
+    if (numIn < 7 || numIn > 17 || numIn == 8)
       return rewriter.notifyMatchFailure(
-          customOp, "GroupQueryAttention expects 7, 9, or 10..16 inputs");
+          customOp, "GroupQueryAttention expects 7, 9, or 10..17 inputs");
+    if (numIn == 17 && !isNoneValue(customOp.getOperand(16)))
+      return rewriter.notifyMatchFailure(
+          customOp, "input 'query_seqlens' is not supported");
     const int64_t numOut = customOp.getNumResults();
     if (numOut == 1)
       return rewriter.notifyMatchFailure(
@@ -5029,7 +5047,7 @@ struct MicrosoftRotaryEmbedding : public CustomOpToOnnxOps {
       return rewriter.notifyMatchFailure(customOp,
           "attribute 'is_packed_batching' not supported by "
           "onnx.RotaryEmbedding");
-    if (customOp->hasAttrOfType<IntegerAttr>("scale") &&
+    if (customOp->hasAttrOfType<FloatAttr>("scale") &&
         customOp->getAttrOfType<FloatAttr>("scale").getValueAsDouble() != 1.0f)
       return rewriter.notifyMatchFailure(
           customOp, "attribute 'scale' not supported by onnx.RotaryEmbedding");
@@ -5164,6 +5182,11 @@ struct MicrosoftMatmulNBits : public CustomOpToOnnxOps {
 
     const Location loc = customOp.getLoc();
 
+    auto prepacked = customOp->getAttrOfType<IntegerAttr>("weight_prepacked");
+    if (prepacked && !prepacked.getValue().isZero())
+      return rewriter.notifyMatchFailure(
+          customOp, "prepacked weights are not supported");
+
     const int64_t numIn = customOp.getNumOperands();
     assert((numIn >= 3 && numIn <= 6) && "expects 3..6 inputs");
     const int64_t numOut = customOp.getNumResults();
@@ -5180,15 +5203,18 @@ struct MicrosoftMatmulNBits : public CustomOpToOnnxOps {
     // 4th input g_idx is deprecated
 
     Value bias;
-    if (numIn > 5)
+    if (numIn > 5 && !onnx_mlir::isNoneValue(customOp.getOperand(5)))
       bias = customOp.getOperand(5);
 
     auto KAttr = customOp->getAttrOfType<IntegerAttr>("K");
-    const int64_t K = KAttr.getSInt();
     auto NAttr = customOp->getAttrOfType<IntegerAttr>("N");
-    const int64_t N = NAttr.getSInt();
-
     auto blockSizeAttr = customOp->getAttrOfType<IntegerAttr>("block_size");
+    if (!KAttr || !NAttr || !blockSizeAttr || KAttr.getSInt() <= 0 ||
+        NAttr.getSInt() <= 0 || blockSizeAttr.getSInt() <= 0)
+      return rewriter.notifyMatchFailure(
+          customOp, "invalid K, N or block_size");
+    const int64_t K = KAttr.getSInt();
+    const int64_t N = NAttr.getSInt();
     const int64_t blockSize = blockSizeAttr.getSInt();
 
     // B matrix should be: N x ceil(K / block_size) x (block_size * 8 / bits)
@@ -5199,35 +5225,45 @@ struct MicrosoftMatmulNBits : public CustomOpToOnnxOps {
     if (!bType.hasStaticShape())
       return rewriter.notifyMatchFailure(
           customOp, "expected 'B' input to have static type");
-    assert(bType.getRank() == 3 && "B input must have rank 3");
-    assert(bType.getElementType().isUnsignedInteger(8) &&
-           "B must be uint8 tensor");
+    if (bType.getRank() != 3 || !bType.getElementType().isUnsignedInteger(8) ||
+        bType.getNumElements() == 0)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected nonempty rank-3 uint8 B");
 
     auto uint8Type = bType.getElementType();
-    if (zeroPoints && !onnx_mlir::isNoneValue(zeroPoints))
-      assert(getElementTypeOrSelf(zeroPoints.getType()) == uint8Type &&
-             "zero_points must be uint8 tensor");
-
-    if (!customOp->hasAttrOfType<IntegerAttr>("bits"))
-      return rewriter.notifyMatchFailure(customOp, "expected 'bits' attribute");
+    if (zeroPoints && !onnx_mlir::isNoneValue(zeroPoints) &&
+        getElementTypeOrSelf(zeroPoints.getType()) != uint8Type)
+      return rewriter.notifyMatchFailure(customOp, "zero_points must be uint8");
 
     auto bitsAttr = customOp->getAttrOfType<IntegerAttr>("bits");
-    const int64_t bits = bitsAttr.getSInt();
+    const int64_t bits = bitsAttr ? bitsAttr.getSInt() : 4;
     // Other bits values are not supported by the Microsoft spec
-    assert((bits == 2 || bits == 4 || bits == 8) &&
-           "expected bits to be 2, 4, or 8");
+    if (bits != 2 && bits != 4 && bits != 8)
+      return rewriter.notifyMatchFailure(
+          customOp, "expected bits to be 2, 4, or 8");
 
     onnx_mlir::OnnxBuilder b(rewriter, loc);
     SmallVector<Value> toCheck;
 
     // number of blocks that the K dim is divided into = ceil(K / blockSize)
-    const int64_t numBlocks = (K + blockSize - 1) / blockSize;
+    const int64_t numBlocks = K / blockSize + (K % blockSize != 0);
     // number of uint8 values in a block
     const int64_t packedBlockSize = (blockSize * bits) / 8;
-    ONNXConstantOp constBOp = dyn_cast<ONNXConstantOp>(bMat.getDefiningOp());
-    if (!constBOp && constBOp->hasAttr("value"))
+    ONNXConstantOp constBOp =
+        dyn_cast_or_null<ONNXConstantOp>(bMat.getDefiningOp());
+    if (!constBOp || !constBOp->hasAttr("value"))
       return rewriter.notifyMatchFailure(
           customOp, "expected 'B' input to be a constant");
+    ONNXConstantOp constZPOp;
+    if (zeroPoints && !onnx_mlir::isNoneValue(zeroPoints)) {
+      constZPOp = dyn_cast_or_null<ONNXConstantOp>(zeroPoints.getDefiningOp());
+      if (!constZPOp || !constZPOp->hasAttr("value"))
+        return rewriter.notifyMatchFailure(
+            customOp, "expected 'zero_points' input to be a constant");
+    }
+    if (bType.getShape() != ArrayRef<int64_t>({N, numBlocks, packedBlockSize}))
+      return rewriter.notifyMatchFailure(
+          customOp, "unsupported packed B shape");
     Value unpackedB = unpackValue(
         b, toCheck, constBOp, bits, N, numBlocks * packedBlockSize, K);
 
@@ -5235,18 +5271,15 @@ struct MicrosoftMatmulNBits : public CustomOpToOnnxOps {
     //  i.e. N x numBlocks as packed uint8s
     Value unpackedZP;
     if (zeroPoints && !onnx_mlir::isNoneValue(zeroPoints)) {
-      ONNXConstantOp constZPOp =
-          dyn_cast<ONNXConstantOp>(zeroPoints.getDefiningOp());
-      if (!constZPOp && constZPOp->hasAttr("value"))
-        return rewriter.notifyMatchFailure(
-            customOp, "expected 'zero_points' input to be a constant");
       // ceil((K / blockSize) * (bits / 8))
       const int64_t zpPackedBlocksSize =
           (K * bits + 8 * blockSize - 1) / (8 * blockSize);
       unpackedZP = unpackValue(
           b, toCheck, constZPOp, bits, N, zpPackedBlocksSize, numBlocks);
     } else {
-      unpackedZP = b.none();
+      unpackedZP = b.constant(DenseElementsAttr::get(
+          RankedTensorType::get({1, N, numBlocks}, uint8Type),
+          ArrayRef<uint8_t>{static_cast<uint8_t>(1 << (bits - 1))}));
       toCheck.push_back(unpackedZP);
     }
 
