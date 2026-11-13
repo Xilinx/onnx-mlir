@@ -6049,14 +6049,10 @@ struct SplitToSlicePattern : public OpRewritePattern<ONNXSplitOp> {
     SmallVector<Value, 4> slices;
     slices.reserve(outputNum);
 
-    // Create starts, ends, axes, steps arrays
-    SmallVector<int64_t, 4> starts(rank, 0);
-    SmallVector<int64_t, 4> ends = llvm::to_vector<4>(inputType.getShape());
-    SmallVector<int64_t, 4> axes(rank);
-    SmallVector<int64_t, 4> steps(rank, 1);
-
-    // Initialize axes array [0, 1, 2, ..., rank-1]
-    std::iota(axes.begin(), axes.end(), 0);
+    // Slice only the split axis. Copying all input dimensions into `ends`
+    // turns the dynamic-dimension sentinel into a literal negative slice
+    // bound, which truncates that dimension instead of preserving it.
+    SmallVector<int64_t, 1> starts{0}, ends{0}, axes{axis}, steps{1};
 
     // Initialize onnxNodeName for new ops
     mlir::StringAttr onnxNodeName;
@@ -6068,8 +6064,8 @@ struct SplitToSlicePattern : public OpRewritePattern<ONNXSplitOp> {
     int64_t currentStart = 0;
     for (uint64_t i = 0; i < outputNum; ++i) {
       // Update start and end for the current slice along the split axis
-      starts[axis] = currentStart;
-      ends[axis] = currentStart + splitSizes[i];
+      starts[0] = currentStart;
+      ends[0] = currentStart + splitSizes[i];
 
       // Create constant tensors for slice parameters
       Value startsConst = create.onnx.constantInt64(starts);
@@ -6092,7 +6088,7 @@ struct SplitToSlicePattern : public OpRewritePattern<ONNXSplitOp> {
           startsConst, endsConst, axesConst, stepsConst);
 
       slices.push_back(sliceOp.getResult());
-      currentStart = ends[axis];
+      currentStart = ends[0];
     }
 
     // The slices all read the same input value, so the producer of that value
