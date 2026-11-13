@@ -54,6 +54,12 @@ struct ONNXOpTransformPass : public mlir::PassWrapper<ONNXOpTransformPass,
   Option<bool> enableRecomposeOptPass{*this, "enable-recompose-opt-pass",
       llvm::cl::desc("Enable the RecomposeOptPass. Default is true."),
       llvm::cl::init(true)};
+  Option<bool> enableReluHardSigmoidRecomposition{*this,
+      "enable-relu-hardsigmoid-recomposition",
+      llvm::cl::desc(
+          "Recompose Relu with a quantization-implied upper clamp "
+          "into HardSigmoid. Does not affect explicit Min or Clip patterns."),
+      llvm::cl::init(true)};
 
   ONNXOpTransformPass() = default;
   ONNXOpTransformPass(const ONNXOpTransformPass &pass)
@@ -61,13 +67,15 @@ struct ONNXOpTransformPass : public mlir::PassWrapper<ONNXOpTransformPass,
             OperationPass<mlir::ModuleOp>>() {}
   ONNXOpTransformPass(int threshold, bool report, bool targetCPU,
       bool enableSimdDataLayoutOpt, bool enableConvOptPass,
-      bool enableRecomposeOptPass) {
+      bool enableRecomposeOptPass, bool enableReluHardSigmoidRecomposition) {
     this->onnxOpTransformThreshold = threshold;
     this->onnxOpTransformReport = report;
     this->onnxOpTransformTargetCPU = targetCPU;
     this->onnxOpTransformEnableSimdDataLayout = enableSimdDataLayoutOpt;
     this->enableConvOptPass = enableConvOptPass;
     this->enableRecomposeOptPass = enableRecomposeOptPass;
+    this->enableReluHardSigmoidRecomposition =
+        enableReluHardSigmoidRecomposition;
   }
 
   void runOnOperation() final;
@@ -87,7 +95,9 @@ void ONNXOpTransformPass::runOnOperation() {
         onnx_mlir::createDecomposeONNXToONNXPass());
     if (enableRecomposeOptPass)
       dynamicPM.addNestedPass<func::FuncOp>(
-          onnx_mlir::createRecomposeONNXToONNXPass());
+          onnx_mlir::createRecomposeONNXToONNXPass(
+              {.enableReluHardSigmoidRecomposition =
+                      enableReluHardSigmoidRecomposition}));
     dynamicPM.addNestedPass<func::FuncOp>(
         onnx_mlir::createShapeInferencePass());
     dynamicPM.addPass(mlir::createCanonicalizerPass());
@@ -133,7 +143,9 @@ std::unique_ptr<mlir::Pass> onnx_mlir::createONNXOpTransformPass() {
 
 std::unique_ptr<mlir::Pass> onnx_mlir::createONNXOpTransformPass(int threshold,
     bool report, bool targetCPU, bool enableSimdDataLayoutOpt,
-    bool enableConvOptPass, bool enableRecomposeOptPass) {
+    bool enableConvOptPass, bool enableRecomposeOptPass,
+    bool enableReluHardSigmoidRecomposition) {
   return std::make_unique<ONNXOpTransformPass>(threshold, report, targetCPU,
-      enableSimdDataLayoutOpt, enableConvOptPass, enableRecomposeOptPass);
+      enableSimdDataLayoutOpt, enableConvOptPass, enableRecomposeOptPass,
+      enableReluHardSigmoidRecomposition);
 }

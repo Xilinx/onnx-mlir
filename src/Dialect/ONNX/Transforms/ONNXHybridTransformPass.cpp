@@ -150,7 +150,7 @@ struct ONNXHybridTransformPass
           enableRotaryEmbeddingRecompose,
           enableReduceL2Recompositions &&
               !(decomposition && enableReduceL2Decompose),
-          enableDepthToSpaceDecompose);
+          enableDepthToSpaceDecompose, enableReluHardSigmoidRecomposition);
     }
 
     patterns = FrozenRewritePatternSet(std::move(cumulativePatterns));

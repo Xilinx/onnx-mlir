@@ -1065,7 +1065,11 @@ static Value matchOptionalPrecedingAdd(
 //   provided representable_max = (typeMax - zeroPoint) * scale <= 1/a'.
 struct RecomposeHardSigmoidFromReluPattern
     : public OpRewritePattern<ONNXReluOp> {
-  using OpRewritePattern<ONNXReluOp>::OpRewritePattern;
+  RecomposeHardSigmoidFromReluPattern(
+      MLIRContext *context, bool enableReluHardSigmoidRecomposition)
+      : OpRewritePattern(context),
+        enableReluHardSigmoidRecomposition(enableReluHardSigmoidRecomposition) {
+  }
 
   static LogicalResult finish(PatternRewriter &rewriter, ONNXReluOp reluOp,
       Operation *explicitMinOp /* or nullptr */, ONNXMulOp mulOp, Value xVal,
@@ -1174,6 +1178,10 @@ struct RecomposeHardSigmoidFromReluPattern
     }
 
     // Path B: Relu -> Mul(., ~a') directly, no explicit upper clamp.
+    if (!enableReluHardSigmoidRecomposition)
+      return rewriter.notifyMatchFailure(
+          reluOp, "bare-Relu HardSigmoid recomposition is disabled");
+
     auto mulOp = dyn_cast<ONNXMulOp>(afterReluUser);
     if (!mulOp)
       return rewriter.notifyMatchFailure(
@@ -1216,6 +1224,9 @@ struct RecomposeHardSigmoidFromReluPattern
     return finish(rewriter, reluOp, /*explicitMinOp=*/nullptr, mulOp, xVal,
         betaPrime, alphaPrime, deadCandidates);
   }
+
+private:
+  bool enableReluHardSigmoidRecomposition;
 };
 
 // TF-style reordering of the canonical explicit-Clip HardSigmoid where the
@@ -2698,7 +2709,7 @@ void RecomposeONNXToONNXPass::runOnOperation() {
   RewritePatternSet patterns(context);
   onnx_mlir::getRecomposeONNXToONNXPatterns(patterns,
       enableRotaryEmbeddingRecompose, enableReduceL2Recompositions,
-      enableDepthToSpaceDecompose);
+      enableDepthToSpaceDecompose, enableReluHardSigmoidRecomposition);
 
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
@@ -2710,13 +2721,15 @@ void RecomposeONNXToONNXPass::runOnOperation() {
 
 void onnx_mlir::getRecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns, bool enableRotaryEmbeddingRecompose,
-    bool enableReduceL2Recompositions, bool enableDepthToSpaceDecompose) {
+    bool enableReduceL2Recompositions, bool enableDepthToSpaceDecompose,
+    bool enableReluHardSigmoidRecomposition) {
   MLIRContext *context = patterns.getContext();
   patterns.insert<RecomposeTfHalfPixelForNnResize>(context);
   patterns.insert<RecomposeHardSwishFromMulPattern>(context);
   patterns.insert<RecomposeMishFromMulPattern>(context);
   patterns.insert<RecomposeHardSigmoidFromMulClipPattern>(context);
-  patterns.insert<RecomposeHardSigmoidFromReluPattern>(context);
+  patterns.insert<RecomposeHardSigmoidFromReluPattern>(
+      context, enableReluHardSigmoidRecomposition);
   patterns.insert<RecomposeHardSigmoidFromClipMulPattern>(context);
   patterns.insert<RecomposeGeluFromMulPattern>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, false>>(context);
