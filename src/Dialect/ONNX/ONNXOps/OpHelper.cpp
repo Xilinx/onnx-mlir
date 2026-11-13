@@ -20,7 +20,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/IR/DialectResourceBlobManager.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -493,6 +495,139 @@ bool isConstLikeValue(Value value) {
 
 bool isConstLikeOperation(mlir::Operation *op) {
   return op && op->hasTrait<OpTrait::ConstantLike>();
+}
+
+bool isConstantFoldable(Value value) {
+  Operation *op = value.getDefiningOp();
+  return isConstLikeOperation(op) || isDeferredConstant(value);
+}
+
+FailureOr<Operation *> peelDeferredFoldableExpression(
+    ONNXDeferredFoldableOp deferred, RewriterBase &rewriter) {
+  Operation *terminal = deferred.getTerminalOperation();
+  if (!terminal)
+    return failure();
+  auto yieldedResult = cast<OpResult>(
+      cast<ONNXDeferredYieldOp>(deferred.getBody().front().getTerminator())
+          .getValue());
+  unsigned yieldedResultNumber = yieldedResult.getResultNumber();
+
+  IRMapping mapping;
+  for (auto [argument, capture] : llvm::zip_equal(
+           deferred.getBody().getArguments(), deferred.getCaptures()))
+    mapping.map(argument, capture);
+
+  llvm::SetVector<Value> internalOperands;
+  Block &body = deferred.getBody().front();
+  for (Value operand : terminal->getOperands()) {
+    auto result = dyn_cast<OpResult>(operand);
+    if (result && result.getOwner()->getBlock() == &body)
+      internalOperands.insert(operand);
+  }
+  if (internalOperands.size() > 1)
+    return failure();
+
+  OpBuilder::InsertionGuard guard(rewriter);
+  if (internalOperands.empty()) {
+    rewriter.setInsertionPoint(deferred);
+    Operation *peeled = rewriter.clone(*terminal, mapping);
+    if (Attribute nodeName = deferred->getAttr("onnx_node_name"))
+      peeled->setAttr("onnx_node_name", nodeName);
+    if (Attribute resultNames = deferred->getAttr("ResultNames"))
+      peeled->setAttr("ResultNames", resultNames);
+    rewriter.replaceOp(deferred, peeled->getResult(yieldedResultNumber));
+    return peeled;
+  }
+
+  Value prefix = internalOperands.front();
+  Operation *prefixOp = prefix.getDefiningOp();
+  if (!prefixOp || prefixOp->getNextNode() != terminal)
+    return failure();
+
+  Attribute nodeName = deferred->getAttr("onnx_node_name");
+  Attribute resultNames = deferred->getAttr("ResultNames");
+  rewriter.modifyOpInPlace(deferred, [&]() {
+    cast<ONNXDeferredYieldOp>(body.getTerminator())
+        .getValueMutable()
+        .assign(prefix);
+    deferred.getResult().setType(prefix.getType());
+    for (StringRef name : {"onnx_node_name", "ResultNames"}) {
+      if (Attribute prefixAttr = prefixOp->getAttr(name))
+        deferred->setAttr(name, prefixAttr);
+      else
+        deferred->removeAttr(name);
+    }
+  });
+
+  mapping.map(prefix, deferred.getResult());
+  // Keep the deferred prefix at its constant-side position, but place the
+  // peeled terminal next to the runtime graph that consumes it. This
+  // reproduces the terminal's original program order without moving the
+  // constant expression retained by the wrapper.
+  Operation *firstUserInBlock = nullptr;
+  Block *parentBlock = deferred->getBlock();
+  for (Operation *user : deferred->getUsers()) {
+    Operation *ancestor = user;
+    while (ancestor && ancestor->getBlock() != parentBlock)
+      ancestor = ancestor->getParentOp();
+    if (!ancestor)
+      continue;
+    if (!firstUserInBlock || ancestor->isBeforeInBlock(firstUserInBlock))
+      firstUserInBlock = ancestor;
+  }
+  if (firstUserInBlock)
+    rewriter.setInsertionPoint(firstUserInBlock);
+  else
+    rewriter.setInsertionPointAfter(deferred);
+  Operation *peeled = rewriter.clone(*terminal, mapping);
+  if (nodeName)
+    peeled->setAttr("onnx_node_name", nodeName);
+  if (resultNames)
+    peeled->setAttr("ResultNames", resultNames);
+  rewriter.replaceAllUsesExcept(
+      deferred.getResult(), peeled->getResult(yieldedResultNumber), peeled);
+  rewriter.eraseOp(terminal);
+  return peeled;
+}
+
+FailureOr<llvm::SmallVector<Operation *>> inlineDeferredFoldableExpression(
+    ONNXDeferredFoldableOp deferred, RewriterBase &rewriter) {
+  if (deferred.getBody().empty())
+    return failure();
+  Block &body = deferred.getBody().front();
+  if (!body.mightHaveTerminator())
+    return failure();
+  auto yield = dyn_cast_or_null<ONNXDeferredYieldOp>(body.getTerminator());
+  if (!yield)
+    return failure();
+
+  IRMapping mapping;
+  for (auto [argument, capture] :
+      llvm::zip_equal(body.getArguments(), deferred.getCaptures()))
+    mapping.map(argument, capture);
+
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPoint(deferred);
+  llvm::SmallVector<Operation *> inlined;
+  for (Operation &operation : body.without_terminator()) {
+    Operation *clone = rewriter.clone(operation, mapping);
+    inlined.push_back(clone);
+    for (auto [oldResult, newResult] :
+        llvm::zip_equal(operation.getResults(), clone->getResults()))
+      mapping.map(oldResult, newResult);
+  }
+
+  Value result = mapping.lookupOrDefault(yield.getValue());
+  if (!result)
+    return failure();
+  if (Operation *producer = result.getDefiningOp()) {
+    if (Attribute nodeName = deferred->getAttr("onnx_node_name"))
+      producer->setAttr("onnx_node_name", nodeName);
+    if (Attribute resultNames = deferred->getAttr("ResultNames"))
+      producer->setAttr("ResultNames", resultNames);
+  }
+  rewriter.replaceOp(deferred, result);
+  return inlined;
 }
 
 // compare two ElementsAttr, except for their internal buffer size

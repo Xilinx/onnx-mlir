@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its affiliates
+
 // RUN: onnx-mlir-opt --decompose-onnx=enable-matmulnbits-decompose --mlir-print-elementsattrs-with-hex-if-larger=128 --mlir-elide-elementsattrs-if-larger=128 %s -split-input-file | FileCheck %s
 
 func.func @matmul_n_bits_no_zp(%a: tensor<1x2x32xf32>) -> tensor<1x2x4xf32> {
@@ -19,10 +22,10 @@ func.func @matmul_n_bits_no_zp(%a: tensor<1x2x32xf32>) -> tensor<1x2x4xf32> {
 // CHECK-SAME:       (%[[ARG0:.*]]: tensor<1x2x32xf32>) -> tensor<1x2x4xf32> {
 // CHECK-DAG:      %[[B:.*]] = onnx.Constant {{.*}} : tensor<1x4x32xui8>
 // CHECK-DAG:      %[[SCALES:.*]] = onnx.Constant {{.*}} : tensor<4x2xf32>
-// CHECK-DAG:      %[[ZPS:.*]] = "onnx.NoValue"() {value} : () -> none
+// CHECK-DAG:      %[[ZPS:.*]] = onnx.Constant dense<8> : tensor<1x4x2xui8>
 // CHECK:          %[[SCALES_R:.*]] = "onnx.Reshape"(%[[SCALES]]
 // CHECK:          %[[DQ:.*]] = "onnx.DequantizeLinear"(%[[B]], %[[SCALES_R]], %[[ZPS]]) {axis = -1 : si64, block_size = 16 : si64} 
-// CHECK-SAME:         (tensor<1x4x32xui8>, tensor<1x4x2xf32>, none) -> tensor<1x4x32xf32>
+// CHECK-SAME:         (tensor<1x4x32xui8>, tensor<1x4x2xf32>, tensor<1x4x2xui8>) -> tensor<1x4x32xf32>
 // CHECK:          %[[TRANSPOSE:.*]] = "onnx.Transpose"(%[[DQ]]) {perm = [0, 2, 1]} : (tensor<1x4x32xf32>) -> tensor<1x32x4xf32>
 // CHECK:          %[[MM:.*]] = "onnx.MatMul"(%[[ARG0]], %[[TRANSPOSE]]) : (tensor<1x2x32xf32>, tensor<1x32x4xf32>) -> tensor<1x2x4xf32>
 // CHECK:          return %[[MM]] : tensor<1x2x4xf32>

@@ -524,7 +524,7 @@ bool areAllDimSizes(ValueRange vals) {
 // shape_transform is a sequence of operations like Reshape, Transpose,
 // Squeeze, Unsqueeze, etc. that do not change the numerical values by data
 // shape.
-// A and B are constants.
+// A and B are constant-foldable expressions.
 bool matchShapeAddMatMul(Value v, Value &matA, Value &biasB,
     Operation *&matmulOrGemmOp, Operation *&addOp, bool &isGemm) {
   if (mlir::isa<BlockArgument>(v))
@@ -548,10 +548,10 @@ bool matchShapeAddMatMul(Value v, Value &matA, Value &biasB,
   // Match Gemm
   auto onnxGemmOp = origV.getDefiningOp<ONNXGemmOp>();
   if (onnxGemmOp) {
-    if (!isDenseONNXConstant(onnxGemmOp.getB()))
+    if (!isConstantFoldable(onnxGemmOp.getB()))
       return false;
     if (!isNoneValue(onnxGemmOp.getC()) &&
-        !isDenseONNXConstant(onnxGemmOp.getC()))
+        !isConstantFoldable(onnxGemmOp.getC()))
       return false;
     matmulOrGemmOp = onnxGemmOp.getOperation();
     matA = onnxGemmOp.getB();
@@ -574,11 +574,11 @@ bool matchShapeAddMatMul(Value v, Value &matA, Value &biasB,
   if (!onnxMatMulOp)
     return false;
   Value rhsMatMul = onnxMatMulOp.getB();
-  if (!isDenseONNXConstant(rhsMatMul))
+  if (!isConstantFoldable(rhsMatMul))
     return false;
 
-  // RHS of Add is a constant.
-  if (!isDenseONNXConstant(rhsAdd))
+  // RHS of Add is constant-foldable.
+  if (!isConstantFoldable(rhsAdd))
     return false;
 
   // Passed all tests.
@@ -830,7 +830,7 @@ public:
           expandShape = expandOp.getShape();
         }
       }
-      if (isDenseONNXConstant(res) && isScalarTensor(res))
+      if (isConstantFoldable(res) && isScalarTensor(res))
         return res;
       return nullptr;
     };
@@ -927,7 +927,7 @@ public:
 
   LogicalResult matchAndRewrite(
       ONNXAddOp addOp, PatternRewriter &r) const override {
-    if (!isConstLikeValue(addOp.getB()))
+    if (!isConstantFoldable(addOp.getB()))
       return r.notifyMatchFailure(addOp, "not a constant rhs operand");
 
     auto transposeOp =
@@ -974,19 +974,20 @@ public:
 // ```
 // shape_transform(X1 * A1 + B1) * shape_transform(X2 * A2/k + B2/k)
 // ```
-// if A2, B2 and k are constants,
+// if A2 and B2 are constant-foldable and k is a scalar constant,
 //
 // or into
 // ```
 // shape_transform(X1 * A1/k + B1/k) * shape_transform(X2 * A2 + B2)
 // ```
-// if A1, B1 and k are constants,
+// if A1 and B1 are constant-foldable and k is a scalar constant,
 //
 // where
 // - * is matrix multiplication; + and / are element-wise addition and division
-// - A1, A2, B1, B2, and k are constants so that A1/k, B1/k, A2/k and B2/k can
-// be folded. k is a scalar constant so that it's broadcastable to all A1, A2,
-// B1, B2.
+// - A1, A2, B1, and B2 are constant-foldable so that A1/k, B1/k, A2/k, and
+// B2/k can be folded. Folding remains deferred when an expression depends on
+// an initializer source. k is a scalar constant so that it is broadcastable to
+// all A1, A2, B1, and B2.
 // - shape_transform includes a sequence of operations that change the data
 // shape of the input but not numerical values, for example: Reshape,
 // Transpose, etc.
@@ -2533,11 +2534,13 @@ struct RecomposeConcatPattern : public OpRewritePattern<ONNXConcatOp> {
       return false;
     if (concatOp.getAxis() != axis || !concatOp.getResult().hasOneUse())
       return false;
-    // Do not flatten an inner concat whose operands are all dense constants:
+    // Do not flatten an inner concat whose operands are all constant-foldable:
     // those groupings are intentionally created by
     // GroupConsecutiveConstantConcatOperandsPattern and will later be
-    // constant-folded to a single constant operand.
-    if (llvm::all_of(concatOp.getOperands(), isDenseONNXConstant))
+    // constant-folded to a single constant operand after any deferred sources
+    // are materialized.
+    if (llvm::all_of(concatOp.getOperands(),
+            [](Value v) { return isConstantFoldable(v); }))
       return false;
     return true;
   }
@@ -2981,9 +2984,9 @@ struct EliminateCarveOutAroundRotaryEmbeddingPattern
   }
 };
 
-// Pull each run of two or more consecutive dense constants into its own Concat
-// so later const-prop can fold that run. Skips all-constant Concat ops (those
-// are already foldable as a whole).
+// Pull each run of two or more consecutive constant-foldable operands into its
+// own Concat so later const-prop can fold that run after any deferred sources
+// are materialized. Skips Concat ops that are already wholly foldable.
 struct GroupConsecutiveConstantConcatOperandsPattern
     : public OpRewritePattern<ONNXConcatOp> {
   using OpRewritePattern<ONNXConcatOp>::OpRewritePattern;
@@ -2991,19 +2994,19 @@ struct GroupConsecutiveConstantConcatOperandsPattern
   LogicalResult matchAndRewrite(
       ONNXConcatOp concatOp, PatternRewriter &rewriter) const final {
     ValueRange inputs = concatOp.getOperands();
-    if (llvm::all_of(inputs, isDenseONNXConstant))
+    if (llvm::all_of(inputs, [](Value v) { return isConstantFoldable(v); }))
       return failure();
 
     SmallVector<Value> newInputs;
     bool grouped = false;
     for (size_t i = 0, e = inputs.size(); i < e;) {
-      if (!isDenseONNXConstant(inputs[i])) {
+      if (!isConstantFoldable(inputs[i])) {
         newInputs.push_back(inputs[i]);
         ++i;
         continue;
       }
       size_t j = i + 1;
-      while (j < e && isDenseONNXConstant(inputs[j]))
+      while (j < e && isConstantFoldable(inputs[j]))
         ++j;
       if (j - i >= 2) {
         ValueRange run = inputs.slice(i, j - i);
@@ -5085,13 +5088,13 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
       return rewriter.notifyMatchFailure(
           conv2, "quantized Conv fusion is not supported");
 
-    // ---- Require constant weights for fold-ability ------------------
-    if (!isDenseONNXConstant(W1))
+    // ---- Require constant-foldable weights --------------------------
+    if (!isConstantFoldable(W1))
       return rewriter.notifyMatchFailure(
-          conv2, "conv1 weight is not a dense ONNX constant");
-    if (!isDenseONNXConstant(W2))
+          conv2, "conv1 weight is not constant-foldable");
+    if (!isConstantFoldable(W2))
       return rewriter.notifyMatchFailure(
-          conv2, "conv2 weight is not a dense ONNX constant");
+          conv2, "conv2 weight is not constant-foldable");
 
     // ---- Bias constraints -------------------------------------------
     // The b1 contribution is spatially uniform only when conv2 pads are all
@@ -5102,12 +5105,12 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
           "conv2 has nonzero pads and conv1 has nonzero bias: "
           "bias fold would require a spatially-varying correction");
 
-    if (!isNoneOrZero(b1) && !isDenseONNXConstant(b1))
+    if (!isNoneValue(b1) && !isConstantFoldable(b1))
       return rewriter.notifyMatchFailure(
-          conv1, "conv1 bias is not a dense ONNX constant");
-    if (!isNoneOrZero(b2) && !isDenseONNXConstant(b2))
+          conv1, "conv1 bias is not constant-foldable");
+    if (!isNoneValue(b2) && !isConstantFoldable(b2))
       return rewriter.notifyMatchFailure(
-          conv2, "conv2 bias is not a dense ONNX constant");
+          conv2, "conv2 bias is not constant-foldable");
 
     // ---- Build fused weight -----------------------------------------
     // Wf[Cout,Cin,K...] = einsum("mc,nm...->nc...", W1_flat, W2)
@@ -5166,8 +5169,8 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
       // b1 contributes nothing; carry b2 through unchanged (may be None).
       bf = b2;
     } else {
-      // conv2PadsAllZero and dense constant biases are guaranteed by previous
-      // guards.
+      // conv2PadsAllZero and constant-foldable biases are guaranteed by the
+      // previous guards.
       // S[Cout, Cmid] = ReduceSum(W2, axes=[2,3,...]) over all spatial
       // dims.
       SmallVector<int64_t> spatialAxes;
@@ -5340,6 +5343,27 @@ struct MoveNegToMulConstantPattern : public OpRewritePattern<ONNXMulOp> {
   }
 };
 
+// Canonicalization may reduce a deferred recipe to yielding one of its
+// captures. Remove that no-op wrapper so an unchanged value is not left behind
+// an artificial deferred-foldable boundary.
+struct ElideEmptyDeferredFoldable
+    : public OpRewritePattern<ONNXDeferredFoldableOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXDeferredFoldableOp op, PatternRewriter &rewriter) const override {
+    if (op.getTerminalOperation())
+      return failure();
+    auto yield =
+        cast<ONNXDeferredYieldOp>(op.getBody().front().getTerminator());
+    auto argument = dyn_cast<BlockArgument>(yield.getValue());
+    if (!argument || argument.getOwner() != &op.getBody().front())
+      return failure();
+    rewriter.replaceOp(op, op.getCaptures()[argument.getArgNumber()]);
+    return success();
+  }
+};
+
 } // namespace
 
 // =============================================================================
@@ -5492,6 +5516,12 @@ void ONNXClipOp::getCanonicalizationPatterns(
 /// on the ONNXConstantOp.
 void ONNXConstantOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {}
+
+/// on the ONNXDeferredFoldableOp.
+void ONNXDeferredFoldableOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<ElideEmptyDeferredFoldable>(context);
+}
 
 /// on the ONNXDepthToSpaceOp.
 void ONNXDepthToSpaceOp::getCanonicalizationPatterns(

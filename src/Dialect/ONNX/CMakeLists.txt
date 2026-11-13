@@ -126,6 +126,7 @@ add_onnx_mlir_library(OMONNXOps
   ONNXOps/Tensor/Upsample.cpp
   
   DEPENDS
+  OMDeferredConstantOpInterfaceIncGen
   OMHasOnnxSubgraphOpInterfaceIncGen
   OMONNXIncGen
   OMONNXCanonicalizeIncGen
@@ -138,6 +139,7 @@ add_onnx_mlir_library(OMONNXOps
   OMDiagnostic
 
   LINK_LIBS PUBLIC
+  OMDeferredConstantOpInterface
   OMMlirDialects
   OMMlirUtilities
   OMShapeHelperOpInterface

@@ -282,6 +282,10 @@ def constants(output):
     return [line for line in output.splitlines() if line.startswith("constant ")]
 
 
+def constant_values(output):
+    return [line.split(" ", 2)[2] for line in constants(output)]
+
+
 def main(driver):
     checks = 0
     with tempfile.TemporaryDirectory(prefix="initializer-source-") as temporary:
@@ -439,6 +443,14 @@ def main(driver):
             "--output",
             saved,
         )
+        run(
+            driver,
+            "--input",
+            saved,
+            "--read-ir",
+            "--concurrent-materializations=8",
+        )
+        checks += 1
         proto = onnx.load_model(model, load_external_data=False)
         for tensor in proto.graph.initializer:
             entries = [field for field in tensor.external_data if field.key != "length"]
@@ -652,6 +664,52 @@ def main(driver):
                         == expected
                     )
                     checks += 1
+
+        # Reloading serialized IR resolves the current payload at its durable
+        # source. Replacing bytes without changing identity, type, or shape is
+        # therefore visible when the source is materialized in a new process.
+        model, data, _ = fixture(folder)
+        rebound_external = folder / "rebound-external.mlir"
+        run(
+            driver,
+            "--input",
+            model,
+            "--skip-all",
+            "--output",
+            rebound_external,
+        )
+        replacement = struct.pack("<4f", 9.0, 8.0, 7.0, 6.0)
+        data.write_bytes(b"padding!" + replacement + replacement)
+        replacement_expected = constants(run(driver, "--input", model, "--legacy"))
+        assert replacement_expected != default
+        assert (
+            constants(run(driver, "--input", rebound_external, "--read-ir"))
+            == replacement_expected
+        )
+        checks += 1
+
+        embedded_model, _ = embedded_fixture(folder, True)
+        rebound_embedded = folder / "rebound-embedded.mlir"
+        run(
+            driver,
+            "--input",
+            embedded_model,
+            "--skip-all",
+            "--output",
+            rebound_embedded,
+        )
+        embedded_proto = onnx.load_model(embedded_model, load_external_data=False)
+        embedded_proto.graph.initializer[0].raw_data = replacement
+        embedded_model.write_bytes(embedded_proto.SerializeToString())
+        replacement_expected = constants(
+            run(driver, "--input", embedded_model, "--legacy")
+        )
+        assert (
+            constants(run(driver, "--input", rebound_embedded, "--read-ir"))
+            == replacement_expected
+        )
+        checks += 1
+
         model, data, _ = fixture(folder)
         # Embedded initializers follow the same source path as external ones.
         proto = onnx.load_model(model, load_external_data=False)
@@ -758,6 +816,32 @@ def main(driver):
         )
         assert len(constants(out)) == 3
         checks += 1
+
+        # Structural consumption snapshots an initializer into compiler-owned
+        # constants. Replacing its backing bytes after serialization must not
+        # change those constants, while the unrelated data source stays lazy.
+        structural_saved = folder / "structural-consumed.mlir"
+        run(
+            driver,
+            "--input",
+            structural_model,
+            "--skip-all",
+            "--output",
+            structural_saved,
+        )
+        consumed = constant_values(out)
+        (folder / "structural.bin").write_bytes(struct.pack("<5q", 1, 4, 1, 0, 1))
+        reloaded = run(
+            driver,
+            "--input",
+            structural_saved,
+            "--read-ir",
+            "--skip-all",
+        )
+        assert constant_values(reloaded) == consumed
+        assert "source data live=0" in reloaded
+        checks += 1
+
         out = run(
             driver,
             "--input",

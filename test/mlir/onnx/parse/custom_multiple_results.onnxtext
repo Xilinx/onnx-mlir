@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+
 // RUN: onnx-mlir --EmitONNXIR --useOnnxModelTypes=false --useOnnxModelTypesForCustomOps=false --printIR %s  | FileCheck %s
 <
     ir_version: 10,

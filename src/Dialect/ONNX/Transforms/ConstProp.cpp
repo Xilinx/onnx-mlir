@@ -18,6 +18,7 @@
 
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -27,6 +28,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Debug.h"
 
@@ -55,6 +57,7 @@ using namespace onnx_mlir;
 
 namespace onnx_mlir {
 #define GEN_PASS_DEF_CONSTPROPONNXTOONNXPASS
+#define GEN_PASS_DEF_FORMDEFERREDFOLDABLEEXPRESSIONSPASS
 #include "src/Dialect/ONNX/Transforms/Passes.h.inc"
 } // namespace onnx_mlir
 
@@ -625,6 +628,16 @@ Value ConstPropElementwiseUnary(
           elementwiseUnaryOpFunction<ElementwiseUnaryOp>(replacingElemType));
   return createReplacingConstantOp(
       rewriter, replacingValue, transposedElements);
+}
+
+Value createNegOfConstantExpression(
+    PatternRewriter &rewriter, Value replacingValue, Value input) {
+  if (getDenseOrDisposableConstLikeElements(input))
+    return ConstPropElementwiseUnary<ONNXNegOp>(
+        rewriter, replacingValue, input);
+
+  return rewriter.create<ONNXNegOp>(
+      input.getLoc(), replacingValue.getType(), input);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2664,6 +2677,378 @@ public:
   }
 };
 
+// Non-tensor ConstantLike values are compiler metadata rather than replaceable
+// initializer payloads. Keep their defining operation in a recipe so dialect
+// verifier contracts, such as TOSA's resolvable shape operands, remain valid
+// inside the isolated body.
+bool shouldInlineConstant(Value value) {
+  return isConstLikeValue(value) && !isa<TensorType, NoneType>(value.getType());
+}
+
+bool canFormDeferredFoldableExpression(Operation *op) {
+  if (!op || op->hasAttr("onnx.deferred_foldable_exposed") ||
+      op->hasAttr("onnx.dense_constant_foldable") ||
+      op->getParentOfType<ONNXDeferredFoldableOp>() ||
+      dyn_cast<DeferredConstantOpInterface>(op) ||
+      isa<ONNXDeferredFoldableOp, ONNXDeferredYieldOp>(op) || !isPure(op) ||
+      op->getNumOperands() == 0 || op->getNumResults() == 0 ||
+      op->getNumRegions() != 0)
+    return false;
+  return llvm::all_of(op->getOperands(), [](Value operand) {
+    return isDeferredConstant(operand) || isConstLikeValue(operand);
+  });
+}
+
+// Construction mechanics for one operation whose direct operands satisfy the
+// deferred-expression contract. Matching policy belongs to the fallback
+// pattern (and the checked public single-operation entry point), rather than
+// this builder.
+class DeferredFoldableExpressionBuilder {
+public:
+  static FailureOr<SmallVector<Value>> build(
+      Operation *op, RewriterBase &rewriter) {
+    assert(canFormDeferredFoldableExpression(op) &&
+           "expected an eligible direct constant expression");
+    if (op->getNumResults() == 1) {
+      FailureOr<Value> result = buildSingleResult(op, rewriter);
+      if (failed(result))
+        return failure();
+      return SmallVector<Value>{*result};
+    }
+    return buildMultiResult(op, rewriter);
+  }
+
+private:
+  static FailureOr<Value> buildSingleResult(
+      Operation *op, RewriterBase &rewriter) {
+    assert(op->getNumResults() == 1);
+    ONNXDeferredFoldableOp extensible;
+    bool hasMultipleDeferredWrappers = false;
+    for (Value operand : op->getOperands()) {
+      auto nested =
+          dyn_cast_or_null<ONNXDeferredFoldableOp>(operand.getDefiningOp());
+      if (!nested)
+        continue;
+      if (!extensible)
+        extensible = nested;
+      else if (extensible != nested)
+        hasMultipleDeferredWrappers = true;
+    }
+    bool capturesDominateExtensible = true;
+    if (extensible) {
+      DominanceInfo dominance(extensible->getParentOp());
+      capturesDominateExtensible =
+          llvm::all_of(op->getOperands(), [&](Value operand) {
+            return operand == extensible.getResult() ||
+                   shouldInlineConstant(operand) ||
+                   dominance.dominates(operand, extensible.getOperation());
+          });
+    }
+    if (extensible && !hasMultipleDeferredWrappers &&
+        capturesDominateExtensible &&
+        llvm::all_of(extensible.getResult().getUses(),
+            [&](OpOperand &use) { return use.getOwner() == op; })) {
+      Block &body = extensible.getBody().front();
+      auto oldYield = cast<ONNXDeferredYieldOp>(body.getTerminator());
+      Value prefix = oldYield.getValue();
+      IRMapping mapping;
+      mapping.map(extensible.getResult(), prefix);
+
+      OpBuilder bodyBuilder(rewriter.getContext());
+      bodyBuilder.setInsertionPoint(oldYield);
+
+      DenseMap<Value, BlockArgument> captureArguments;
+      for (auto [capture, argument] :
+          llvm::zip_equal(extensible.getCaptures(), body.getArguments()))
+        captureArguments.try_emplace(capture, argument);
+      for (Value operand : op->getOperands()) {
+        if (operand == extensible.getResult())
+          continue;
+        if (mapping.contains(operand))
+          continue;
+        if (shouldInlineConstant(operand)) {
+          Operation *clone = bodyBuilder.clone(*operand.getDefiningOp());
+          mapping.map(operand, clone->getResult(0));
+          continue;
+        }
+        BlockArgument argument = captureArguments.lookup(operand);
+        if (!argument) {
+          rewriter.modifyOpInPlace(extensible, [&]() {
+            extensible.getCapturesMutable().append(operand);
+            argument = body.addArgument(operand.getType(), op->getLoc());
+          });
+          captureArguments.try_emplace(operand, argument);
+        }
+        mapping.map(operand, argument);
+      }
+
+      Operation *terminal = bodyBuilder.clone(*op, mapping);
+      bodyBuilder.create<ONNXDeferredYieldOp>(
+          op->getLoc(), terminal->getResult(0));
+      rewriter.eraseOp(oldYield);
+      rewriter.modifyOpInPlace(extensible, [&]() {
+        extensible.getResult().setType(op->getResult(0).getType());
+        extensible->setLoc(op->getLoc());
+        for (StringRef name : {"onnx_node_name", "ResultNames"}) {
+          if (Attribute attr = op->getAttr(name))
+            extensible->setAttr(name, attr);
+          else
+            extensible->removeAttr(name);
+        }
+      });
+      rewriter.replaceOp(op, extensible.getResult());
+      return extensible.getResult();
+    }
+
+    SmallVector<Value> captures;
+    DenseMap<Value, unsigned> captureIndices;
+    auto addCapture = [&](Value capture) {
+      auto [it, inserted] =
+          captureIndices.try_emplace(capture, captures.size());
+      if (inserted)
+        captures.push_back(capture);
+      return it->second;
+    };
+    for (Value operand : op->getOperands()) {
+      if (auto nested = dyn_cast_or_null<ONNXDeferredFoldableOp>(
+              operand.getDefiningOp())) {
+        for (Value capture : nested.getCaptures())
+          addCapture(capture);
+      } else if (!shouldInlineConstant(operand)) {
+        addCapture(operand);
+      }
+    }
+
+    auto deferred = rewriter.create<ONNXDeferredFoldableOp>(
+        op->getLoc(), op->getResult(0).getType(), captures);
+    if (Attribute nodeName = op->getAttr("onnx_node_name"))
+      deferred->setAttr("onnx_node_name", nodeName);
+    if (Attribute resultNames = op->getAttr("ResultNames"))
+      deferred->setAttr("ResultNames", resultNames);
+
+    Region &body = deferred.getBody();
+    Block *block = rewriter.createBlock(&body);
+    SmallVector<BlockArgument> arguments;
+    arguments.reserve(captures.size());
+    for (Value capture : captures)
+      arguments.push_back(block->addArgument(capture.getType(), op->getLoc()));
+
+    OpBuilder bodyBuilder(rewriter.getContext());
+    bodyBuilder.setInsertionPointToStart(block);
+    IRMapping expressionMapping;
+    for (Value operand : op->getOperands()) {
+      if (expressionMapping.contains(operand))
+        continue;
+      if (shouldInlineConstant(operand)) {
+        Operation *clone = bodyBuilder.clone(*operand.getDefiningOp());
+        expressionMapping.map(operand, clone->getResult(0));
+        continue;
+      }
+      if (auto nested = dyn_cast_or_null<ONNXDeferredFoldableOp>(
+              operand.getDefiningOp())) {
+        IRMapping nestedMapping;
+        for (auto [capture, argument] : llvm::zip_equal(
+                 nested.getCaptures(), nested.getBody().getArguments())) {
+          nestedMapping.map(
+              argument, arguments[captureIndices.lookup(capture)]);
+        }
+        for (Operation &nestedOp :
+            nested.getBody().front().without_terminator())
+          bodyBuilder.clone(nestedOp, nestedMapping);
+        auto nestedYield =
+            cast<ONNXDeferredYieldOp>(nested.getBody().front().getTerminator());
+        expressionMapping.map(
+            operand, nestedMapping.lookup(nestedYield.getValue()));
+        continue;
+      }
+
+      expressionMapping.map(operand, arguments[captureIndices.lookup(operand)]);
+    }
+
+    Operation *terminal = bodyBuilder.clone(*op, expressionMapping);
+    bodyBuilder.create<ONNXDeferredYieldOp>(
+        op->getLoc(), terminal->getResult(0));
+    rewriter.replaceOp(op, deferred.getResult());
+    return deferred.getResult();
+  }
+
+  static FailureOr<SmallVector<Value>> buildMultiResult(
+      Operation *op, RewriterBase &rewriter) {
+    assert(op->getNumResults() > 1);
+    SmallVector<Value> captures;
+    DenseMap<Value, unsigned> captureIndices;
+    auto addCapture = [&](Value capture) {
+      auto [it, inserted] =
+          captureIndices.try_emplace(capture, captures.size());
+      if (inserted)
+        captures.push_back(capture);
+      return it->second;
+    };
+    for (Value operand : op->getOperands()) {
+      if (auto nested = dyn_cast_or_null<ONNXDeferredFoldableOp>(
+              operand.getDefiningOp())) {
+        for (Value capture : nested.getCaptures())
+          addCapture(capture);
+      } else if (!shouldInlineConstant(operand)) {
+        addCapture(operand);
+      }
+    }
+
+    SmallVector<Value> replacements;
+    replacements.reserve(op->getNumResults());
+    for (OpResult result : op->getResults()) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(op);
+      auto deferred = rewriter.create<ONNXDeferredFoldableOp>(
+          op->getLoc(), result.getType(), captures);
+      if (Attribute nodeName = op->getAttr("onnx_node_name"))
+        deferred->setAttr("onnx_node_name", nodeName);
+
+      Region &body = deferred.getBody();
+      Block *block = rewriter.createBlock(&body);
+      SmallVector<BlockArgument> arguments;
+      arguments.reserve(captures.size());
+      for (Value capture : captures)
+        arguments.push_back(
+            block->addArgument(capture.getType(), op->getLoc()));
+
+      OpBuilder bodyBuilder(rewriter.getContext());
+      bodyBuilder.setInsertionPointToStart(block);
+      IRMapping expressionMapping;
+      for (Value operand : op->getOperands()) {
+        if (expressionMapping.contains(operand))
+          continue;
+        if (shouldInlineConstant(operand)) {
+          Operation *clone = bodyBuilder.clone(*operand.getDefiningOp());
+          expressionMapping.map(operand, clone->getResult(0));
+          continue;
+        }
+        if (auto nested = dyn_cast_or_null<ONNXDeferredFoldableOp>(
+                operand.getDefiningOp())) {
+          IRMapping nestedMapping;
+          for (auto [capture, argument] : llvm::zip_equal(
+                   nested.getCaptures(), nested.getBody().getArguments()))
+            nestedMapping.map(
+                argument, arguments[captureIndices.lookup(capture)]);
+          for (Operation &nestedOp :
+              nested.getBody().front().without_terminator())
+            bodyBuilder.clone(nestedOp, nestedMapping);
+          auto nestedYield = cast<ONNXDeferredYieldOp>(
+              nested.getBody().front().getTerminator());
+          expressionMapping.map(
+              operand, nestedMapping.lookup(nestedYield.getValue()));
+          continue;
+        }
+        expressionMapping.map(
+            operand, arguments[captureIndices.lookup(operand)]);
+      }
+
+      Operation *terminal = bodyBuilder.clone(*op, expressionMapping);
+      bodyBuilder.create<ONNXDeferredYieldOp>(
+          op->getLoc(), terminal->getResult(result.getResultNumber()));
+      replacements.push_back(deferred.getResult());
+    }
+
+    rewriter.replaceOp(op, replacements);
+    return replacements;
+  }
+};
+
+// Retain a pure, regionless operation with at least one operand and result when
+// every direct operand is ConstantLike or a DeferredConstant. The ordinary
+// fallback additionally requires a DeferredConstant operand. Greedy requeueing
+// grows chains bottom-up, while the builder flattens direct recipe operands.
+// Give this pattern lower benefit than ordinary rewrites so they can consume
+// the original operation first.
+class FormDeferredFoldableExpression : public RewritePattern {
+public:
+  FormDeferredFoldableExpression(
+      MLIRContext *context, PatternBenefit benefit, bool requireDeferredSource)
+      : RewritePattern(MatchAnyOpTypeTag(), benefit, context),
+        requireDeferredSource(requireDeferredSource) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, PatternRewriter &rewriter) const override {
+    if (!canFormDeferredFoldableExpression(op) ||
+        (requireDeferredSource &&
+            llvm::none_of(op->getOperands(), isDeferredConstant)))
+      return failure();
+    return success(
+        succeeded(DeferredFoldableExpressionBuilder::build(op, rewriter)));
+  }
+
+private:
+  bool requireDeferredSource;
+};
+
+// Keep an existing recipe flat when ordinary formation replaces one of its
+// captured producers with another recipe. Formation cannot match the outer
+// wrapper itself, so this recipe-aware canonicalization inlines a direct recipe
+// capture and deduplicates its captures.
+class FlattenDeferredFoldableCapture
+    : public OpRewritePattern<ONNXDeferredFoldableOp> {
+public:
+  FlattenDeferredFoldableCapture(MLIRContext *context, PatternBenefit benefit)
+      : OpRewritePattern(context, benefit) {}
+
+  LogicalResult matchAndRewrite(ONNXDeferredFoldableOp deferred,
+      PatternRewriter &rewriter) const override {
+    ONNXDeferredFoldableOp nested;
+    SmallVector<unsigned> captureIndices;
+    for (auto [index, capture] : llvm::enumerate(deferred.getCaptures())) {
+      auto producer = capture.getDefiningOp<ONNXDeferredFoldableOp>();
+      if (!producer || (nested && producer != nested))
+        continue;
+      nested = producer;
+      captureIndices.push_back(index);
+    }
+    if (!nested)
+      return failure();
+
+    Block &body = deferred.getBody().front();
+    auto getOrAddCaptureArgument = [&](Value capture) -> BlockArgument {
+      for (auto [index, existing] : llvm::enumerate(deferred.getCaptures()))
+        if (existing == capture)
+          return body.getArgument(index);
+
+      BlockArgument argument;
+      rewriter.modifyOpInPlace(deferred, [&]() {
+        deferred.getCapturesMutable().append(capture);
+        argument = body.addArgument(capture.getType(), deferred.getLoc());
+      });
+      return argument;
+    };
+
+    SmallVector<BlockArgument> oldArguments;
+    for (unsigned captureIndex : captureIndices)
+      oldArguments.push_back(body.getArgument(captureIndex));
+    IRMapping mapping;
+    for (auto [nestedCapture, nestedArgument] :
+        llvm::zip_equal(nested.getCaptures(), nested.getBody().getArguments()))
+      mapping.map(nestedArgument, getOrAddCaptureArgument(nestedCapture));
+
+    OpBuilder bodyBuilder(rewriter.getContext());
+    bodyBuilder.setInsertionPointToStart(&body);
+    for (Operation &nestedOp : nested.getBody().front().without_terminator())
+      bodyBuilder.clone(nestedOp, mapping);
+    auto nestedYield =
+        cast<ONNXDeferredYieldOp>(nested.getBody().front().getTerminator());
+    Value replacement = mapping.lookup(nestedYield.getValue());
+
+    for (BlockArgument oldArgument : oldArguments)
+      oldArgument.replaceAllUsesWith(replacement);
+    rewriter.modifyOpInPlace(deferred, [&]() {
+      for (unsigned captureIndex : llvm::reverse(captureIndices)) {
+        deferred->eraseOperand(captureIndex);
+        body.eraseArgument(captureIndex);
+      }
+    });
+    if (nested->use_empty())
+      rewriter.eraseOp(nested);
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Code to manage the pass.
 //===----------------------------------------------------------------------===//
@@ -2676,25 +3061,162 @@ struct ConstPropONNXToONNXPass
   void runOnOperation() final;
 };
 
+// Apply ordinary constant-propagation and recipe-formation patterns without
+// visiting recipe bodies. New recipe bodies are built through an unobserved
+// OpBuilder, so ExistingAndNewOps cannot enqueue their internal operations.
+// Repeat the outer walk to preserve the fixpoint behavior of
+// applyPatternsGreedily: forming a recipe can make a transitive user match on
+// the next iteration even though that user was not directly modified.
+LogicalResult applyPatternsOutsideDeferredRecipes(func::FuncOp function,
+    RewritePatternSet &&patterns, RewriterBase::Listener *listener,
+    bool enableFolding) {
+  FrozenRewritePatternSet frozenPatterns(std::move(patterns));
+  GreedyRewriteConfig config;
+  config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps)
+      .setScope(&function.getBody())
+      .setListener(listener);
+  config.enableFolding(enableFolding);
+
+  for (int64_t iteration = 0; iteration < config.getMaxIterations();
+      ++iteration) {
+    SmallVector<Operation *> operations;
+    function.walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
+      if (op != function)
+        operations.push_back(op);
+      return isa<ONNXDeferredFoldableOp>(op) ? WalkResult::skip()
+                                             : WalkResult::advance();
+    });
+
+    bool changed = false;
+    if (failed(applyOpPatternsGreedily(
+            operations, frozenPatterns, config, &changed)))
+      return failure();
+    if (!changed)
+      return success();
+  }
+  return failure();
+}
+
+LogicalResult formDeferredFoldableExpressions(func::FuncOp function) {
+  MLIRContext *context = function.getContext();
+  RewritePatternSet patterns(context);
+  populateFormDeferredFoldableExpressionPatterns(
+      patterns, PatternBenefit(1), /*requireDeferredSource=*/false);
+  onnx_mlir::ResultNamesUpdater rnUpdater;
+  if (failed(applyPatternsOutsideDeferredRecipes(function, std::move(patterns),
+          &rnUpdater,
+          /*enableFolding=*/false)))
+    return failure();
+  return onnx_mlir::inlineDenseDeferredFoldableExpressions(function);
+}
+
+struct FormDeferredFoldableExpressionsPass
+    : public onnx_mlir::impl::FormDeferredFoldableExpressionsPassBase<
+          FormDeferredFoldableExpressionsPass> {
+  using Base::Base;
+
+  void runOnOperation() final {
+    if (failed(formDeferredFoldableExpressions(getOperation())))
+      signalPassFailure();
+  }
+};
+
 void ConstPropONNXToONNXPass::runOnOperation() {
   auto function = getOperation();
   MLIRContext *context = &getContext();
 
   RewritePatternSet patterns(context);
   getConstPropONNXToONNXPatterns(patterns, enableQDQ, enableQuantConstFold,
-      maxLoopUnrollCount, enableDequantConstFold,
-      enableDequantConstFoldWeights);
+      maxLoopUnrollCount, enableDequantConstFold, enableDequantConstFoldWeights,
+      formDeferredFoldableExpressions);
   onnx_mlir::ResultNamesUpdater rnUpdater;
-  if (failed(applyPatternsGreedily(function, std::move(patterns),
-          GreedyRewriteConfig().setListener(&rnUpdater))))
+  bool containsDeferredRecipe = false;
+  function.walk([&](ONNXDeferredFoldableOp) {
+    containsDeferredRecipe = true;
+    return WalkResult::interrupt();
+  });
+  if (!formDeferredFoldableExpressions && !containsDeferredRecipe) {
+    if (failed(applyPatternsGreedily(function, std::move(patterns),
+            GreedyRewriteConfig().setListener(&rnUpdater))))
+      signalPassFailure();
+    return;
+  }
+  if (failed(applyPatternsOutsideDeferredRecipes(function, std::move(patterns),
+          &rnUpdater,
+          /*enableFolding=*/true)) ||
+      (formDeferredFoldableExpressions &&
+          failed(onnx_mlir::inlineDenseDeferredFoldableExpressions(function))))
     signalPassFailure();
 }
 
 } // end anonymous namespace.
 
+FailureOr<Value> onnx_mlir::formDeferredFoldableExpression(
+    Operation *op, RewriterBase &rewriter) {
+  if (!canFormDeferredFoldableExpression(op) || op->getNumResults() != 1)
+    return failure();
+  FailureOr<SmallVector<Value>> results =
+      DeferredFoldableExpressionBuilder::build(op, rewriter);
+  if (failed(results))
+    return failure();
+  rewriter.setInsertionPointAfter(results->front().getDefiningOp());
+  return results->front();
+}
+
+void onnx_mlir::populateFormDeferredFoldableExpressionPatterns(
+    RewritePatternSet &patterns, PatternBenefit benefit,
+    bool requireDeferredSource) {
+  patterns.insert<FormDeferredFoldableExpression>(
+      patterns.getContext(), benefit, requireDeferredSource);
+  patterns.insert<FlattenDeferredFoldableCapture>(
+      patterns.getContext(), PatternBenefit(benefit.getBenefit() + 1));
+  ONNXDeferredFoldableOp::getCanonicalizationPatterns(
+      patterns, patterns.getContext());
+}
+
+LogicalResult onnx_mlir::inlineDenseDeferredFoldableExpressions(Operation *root,
+    llvm::function_ref<void(Operation *)> notifyInlinedOperation) {
+  SmallVector<ONNXDeferredFoldableOp> denseRecipes;
+  root->walk([&](ONNXDeferredFoldableOp deferred) {
+    if (llvm::all_of(deferred.getCaptures(), isConstLikeValue))
+      denseRecipes.push_back(deferred);
+  });
+
+  IRRewriter rewriter(root->getContext());
+  for (ONNXDeferredFoldableOp deferred : denseRecipes) {
+    // Formation extends a recipe in place, so the wrapper may still be at its
+    // first producer even though it now represents a later terminal op. A
+    // dense recipe is about to disappear; place it at its first same-block
+    // user so the inlined value occupies the terminal expression's program
+    // position rather than the original source position.
+    Operation *firstUserInBlock = nullptr;
+    Block *parentBlock = deferred->getBlock();
+    for (Operation *user : deferred->getUsers()) {
+      Operation *ancestor = user;
+      while (ancestor && ancestor->getBlock() != parentBlock)
+        ancestor = ancestor->getParentOp();
+      if (!ancestor)
+        continue;
+      if (!firstUserInBlock || ancestor->isBeforeInBlock(firstUserInBlock))
+        firstUserInBlock = ancestor;
+    }
+    if (firstUserInBlock)
+      deferred->moveBefore(firstUserInBlock);
+    FailureOr<SmallVector<Operation *>> inlined =
+        inlineDeferredFoldableExpression(deferred, rewriter);
+    if (failed(inlined))
+      return failure();
+    if (notifyInlinedOperation)
+      for (Operation *operation : *inlined)
+        notifyInlinedOperation(operation);
+  }
+  return success();
+}
+
 void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
     bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount,
-    bool enableDequantConstFold, bool enableDequantConstFoldWeights) {
+    bool enableDequantConstFold, bool enableDequantConstFoldWeights,
+    bool formDeferredFoldableExpressions) {
   if (isConstantPropagationDisabled())
     return;
   populateWithGenerated(patterns);
@@ -2721,6 +3243,14 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
   if (enableDequantConstFold || enableDequantConstFoldWeights)
     patterns.add<ConstFoldDequantizeLinearOnConst>(
         patterns.getContext(), enableDequantConstFoldWeights);
+
+  if (formDeferredFoldableExpressions) {
+    // Retain any initializer-dependent expression not consumed by a more
+    // specific constant-propagation pattern. Pattern benefit zero makes this
+    // a dialect-wide fallback rather than a competing optimization.
+    populateFormDeferredFoldableExpressionPatterns(patterns, PatternBenefit(0),
+        /*requireDeferredSource=*/true);
+  }
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,

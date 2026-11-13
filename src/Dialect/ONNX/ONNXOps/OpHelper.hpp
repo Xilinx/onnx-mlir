@@ -37,6 +37,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -206,6 +207,28 @@ mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 [[nodiscard]] bool isConstLikeValue(mlir::Value value);
 
 [[nodiscard]] bool isConstLikeOperation(mlir::Operation *op);
+
+// Return true when `value`'s direct producer has the ConstantLike trait or its
+// DeferredConstantOpInterface reports this result as a deferred constant.
+[[nodiscard]] bool isConstantFoldable(mlir::Value value);
+
+// Move the terminal operation retained by `deferred` back into its parent
+// block. A single internal operand remains represented by the shortened
+// wrapper, and the peeled terminal is placed immediately before the earliest
+// user in the wrapper's block. Peeling fails if representing the remaining
+// prefix would require multiple wrapper results. The caller can inspect
+// getTerminalOperation() before peeling to select which operations should
+// execute at runtime.
+mlir::FailureOr<mlir::Operation *> peelDeferredFoldableExpression(
+    mlir::ONNXDeferredFoldableOp deferred, mlir::RewriterBase &rewriter);
+
+// Move a complete deferred recipe back into its parent block, mapping its
+// captures to the values at the wrapper boundary. Returns the inlined
+// operations in program order. A recipe that yields a capture directly is
+// valid and returns an empty list.
+mlir::FailureOr<llvm::SmallVector<mlir::Operation *>>
+inlineDeferredFoldableExpression(
+    mlir::ONNXDeferredFoldableOp deferred, mlir::RewriterBase &rewriter);
 
 bool compareValueFromElementAttribute(
     mlir::ElementsAttr &attr1, mlir::ElementsAttr &attr2);
