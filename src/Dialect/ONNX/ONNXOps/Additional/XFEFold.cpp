@@ -86,6 +86,40 @@ ElementsAttr convertElementsToFloat(ElementsAttr input, ShapedType outputType,
       });
 }
 
+ElementsAttr convertIntegerElements(ElementsAttr input, ShapedType outputShape,
+    IntegerType inputType, IntegerType outputElementType,
+    onnx_mlir::OnnxElementsAttrBuilder &builder) {
+  bool inputIsSigned =
+      !inputType.isUnsigned() && !inputType.isSignlessInteger(1);
+  unsigned outputWidth = outputElementType.getWidth();
+  return onnx_mlir::dispatchByBType(
+      onnx_mlir::btypeOfMlirType(outputElementType),
+      [&](auto outputBType) -> ElementsAttr {
+        if constexpr (onnx_mlir::BTypeTrait<outputBType>::isInt) {
+          using OutputType = onnx_mlir::CppType<outputBType>;
+          return builder.fromArray<
+              OutputType>(outputShape, [&](MutableArrayRef<OutputType> output) {
+            size_t i = 0;
+            for (APInt value : input.getValues<APInt>()) {
+              if constexpr (std::is_same_v<OutputType, bool>) {
+                output[i++] = !value.isZero();
+              } else {
+                APInt converted = inputIsSigned
+                                      ? value.sextOrTrunc(outputWidth)
+                                      : value.zextOrTrunc(outputWidth);
+                if constexpr (onnx_mlir::BTypeTrait<outputBType>::isSignedInt)
+                  output[i++] = OutputType(converted.getSExtValue());
+                else
+                  output[i++] = OutputType(converted.getZExtValue());
+              }
+            }
+          });
+        } else {
+          llvm_unreachable("expected an integer output type");
+        }
+      });
+}
+
 } // namespace
 
 OpFoldResult mlir::XFECastOpFold(Operation *op, ArrayRef<Attribute> operands) {
@@ -150,6 +184,9 @@ OpFoldResult mlir::XFECastOpFold(Operation *op, ArrayRef<Attribute> operands) {
   if (auto outputIntegerType = dyn_cast<IntegerType>(outputElementType)) {
     if (roundMode != "toward_zero" && roundMode != "nearest_even")
       return {};
+    if (auto inputIntegerType = dyn_cast<IntegerType>(inputElementType))
+      return convertIntegerElements(input, outputAttrType, inputIntegerType,
+          outputIntegerType, elementsBuilder);
     return elementsBuilder.castToIntElementType(
         input, outputIntegerType, roundMode == "nearest_even");
   }
