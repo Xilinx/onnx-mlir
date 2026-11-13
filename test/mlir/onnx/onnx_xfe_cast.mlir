@@ -97,5 +97,17 @@ func.func @fold_consecutive_xfe_casts(%input: tensor<2xi32>) -> tensor<2xbf16> {
 }
 
 // CHECK-LABEL: sym_name = "fold_consecutive_xfe_casts"
-// CHECK: "onnx.XFECast"(%arg0)
+// CHECK: ^bb0([[INPUT:%[^:]+]]:
+// CHECK: "onnx.XFECast"([[INPUT]])
 // CHECK-NOT: "onnx.XFECast"
+
+func.func @preserve_narrowing_xfe_cast_chain(%input: tensor<2xf32>) -> tensor<2xbf16> {
+  %narrow = "onnx.XFECast"(%input) {nan_mode = "propagate", round_mode = "nearest_even", saturation_mode = "none", to = f16} : (tensor<2xf32>) -> tensor<2xf16>
+  %result = "onnx.XFECast"(%narrow) {nan_mode = "propagate", round_mode = "nearest_even", saturation_mode = "none", to = bf16} : (tensor<2xf16>) -> tensor<2xbf16>
+  return %result : tensor<2xbf16>
+}
+
+// CHECK-LABEL: sym_name = "preserve_narrowing_xfe_cast_chain"
+// CHECK: ^bb0([[INPUT:%[^:]+]]:
+// CHECK: [[NARROW:%.+]] = "onnx.XFECast"([[INPUT]]) {{.*}}to = f16
+// CHECK: "onnx.XFECast"([[NARROW]]) {{.*}}to = bf16
