@@ -197,8 +197,18 @@ struct ScaleToDwConv2dPattern : public OpRewritePattern<ONNXMulOp> {
     // Get types
     auto inputType = dyn_cast<RankedTensorType>(input.getType());
     auto scaleType = dyn_cast<RankedTensorType>(scale.getType());
+    auto mulOutputType =
+        dyn_cast<RankedTensorType>(mulOp.getResult().getType());
 
-    if (!inputType || !scaleType)
+    if (!inputType || !scaleType || !mulOutputType)
+      return failure();
+
+    // The input, weight, and output reshapes below use constant shape tensors.
+    // Runtime dimensions cannot be copied into those constants: the MLIR
+    // dynamic-dimension sentinel is not a valid ONNX Reshape dimension.
+    // Defer this conversion until shape inference has resolved every extent.
+    if (!inputType.hasStaticShape() || !scaleType.hasStaticShape() ||
+        !mulOutputType.hasStaticShape())
       return failure();
 
     // Scale-fold to a depthwise XFEConv is only valid for float or quantized
@@ -235,9 +245,11 @@ struct ScaleToDwConv2dPattern : public OpRewritePattern<ONNXMulOp> {
     Operation *activationOp = getFollowingActivation(mulOp);
 
     // Get output shape
-    auto outputType = cast<RankedTensorType>(
+    auto outputType = dyn_cast<RankedTensorType>(
         activationOp ? activationOp->getResult(0).getType()
                      : mulOp.getResult().getType());
+    if (!outputType || !outputType.hasStaticShape())
+      return failure();
     auto outputShape = outputType.getShape();
 
     // Reshape input to 4D (prepend 1s if needed).
