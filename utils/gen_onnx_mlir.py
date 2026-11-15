@@ -530,7 +530,14 @@ special_type_constraints = {
         "I": ["tensor(uint16)", "tensor(uint32)"],
     },
     "ReduceSum": {
-        "T": ["tensor(uint16)"],
+        "T": [
+            "tensor(int8)",
+            "tensor(uint8)",
+            "tensor(int16)",
+            "tensor(uint16)",
+            "tensor(int32)",
+            "tensor(uint32)",
+        ],
     },
     "ReverseSequence": {
         "T": ["tensor(bfloat16)"],
