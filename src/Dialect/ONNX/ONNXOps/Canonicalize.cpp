@@ -6216,9 +6216,57 @@ void ONNXMinOp::getCanonicalizationPatterns(
   results.insert<MinMaxToClipPattern>(context);
 }
 
+// Rewrite Where(x >= c, x, c) to Clip(x, min=c), and
+// Where(x <= c, x, c) to Clip(x, max=c), for a constant bound c.
+// Integer ties select equal values. Float NaNs and signed-zero ties require
+// unsafe math.
+struct WhereToClipPattern : public OpRewritePattern<ONNXWhereOp> {
+  using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXWhereOp op, PatternRewriter &rewriter) const override {
+    Operation *comparison = op->getOperand(0).getDefiningOp();
+    if (!comparison ||
+        !isa<ONNXGreaterOrEqualOp, ONNXLessOrEqualOp>(comparison))
+      return failure();
+    bool greaterEqual = isa<ONNXGreaterOrEqualOp>(comparison);
+    for (unsigned inputIndex = 0; inputIndex < 2; ++inputIndex) {
+      Value input = comparison->getOperand(inputIndex);
+      if (input.getType() != op.getResult().getType())
+        continue;
+      Value comparisonBound = comparison->getOperand(1 - inputIndex);
+      auto bound = getScalarClipBound(comparisonBound, input);
+      if (!bound ||
+          (isa<FloatType>(bound.getElementType()) && !enableUnsafeMath))
+        continue;
+      for (unsigned inputBranch = 1; inputBranch <= 2; ++inputBranch) {
+        if (op->getOperand(inputBranch) != input)
+          continue;
+        auto selectedBound =
+            getScalarClipBound(op->getOperand(3 - inputBranch), input);
+        if (!selectedBound || selectedBound != bound)
+          continue;
+        bool inputAtLeastBound = greaterEqual == (inputIndex == 0);
+        bool lower = inputAtLeastBound == (inputBranch == 1);
+        auto boundOp =
+            rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, bound);
+        onnx_mlir::OnnxBuilder create(rewriter, op.getLoc());
+        Value none = create.none();
+        Value min = lower ? boundOp.getResult() : none;
+        Value max = lower ? none : boundOp.getResult();
+        rewriter.replaceOpWithNewOp<ONNXClipOp>(
+            op, op.getResult().getType(), input, min, max);
+        return success();
+      }
+    }
+    return failure();
+  }
+};
+
 // on the ONNXWhereOp.
 void ONNXWhereOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<WhereToClipPattern>(context);
   result.insert<RemoveWhereConstantConditionPattern>(context);
   result.insert<RemoveWhereEqualPattern>(context);
   result.insert<NotWhereOptPattern>(context);
