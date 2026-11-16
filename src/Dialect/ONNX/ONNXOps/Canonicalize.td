@@ -1158,21 +1158,19 @@ def LessOpSameCastPattern: Pat<
 // Canonicalization for ONNXClipOp
 //===----------------------------------------------------------------------===//
 
-def maxOrDefault: NativeCodeCall<
-  "onnx_mlir::maxOrDefault($_builder, $_loc, $0, $1)">;
+def composeClipLowerBound: NativeCodeCall<
+  "onnx_mlir::composeClipBound($_builder, $_loc, $0, $1, $2, true)">;
 
-def minOrDefault: NativeCodeCall<
-  "onnx_mlir::minOrDefault($_builder, $_loc, $0, $1)">;
+def composeClipUpperBound: NativeCodeCall<
+  "onnx_mlir::composeClipBound($_builder, $_loc, $0, $1, $2, false)">;
 
-// Fuse two consecutive ONNXClipOps into one.
+// Fuse Clip(Clip(x, l1, u1), l2, u2) by clamping both inner bounds to the
+// outer interval. For example, Clip(Clip(x, 0, 1), 2, 3) becomes Clip(x, 2, 2).
 def FuseConsecutiveClipsPattern : Pat<
-  // Match a Clip operation followed by another Clip operation.
   (ONNXClipOp:$res (ONNXClipOp $input, $min1, $max1), $min2, $max2),
-  // This pattern will be handled by the rewrite rule (in C++).
-  (ONNXClipOp $input, 
-   // Call maxOrDefault and minOrDefault in the rewrite
-   (maxOrDefault $min1, $min2), 
-   (minOrDefault $max1, $max2))
+  (ONNXClipOp $input,
+    (composeClipLowerBound $min1, $min2, $max2),
+    (composeClipUpperBound $max1, $min2, $max2))
 >;
 
 //===----------------------------------------------------------------------===//

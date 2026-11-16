@@ -360,26 +360,20 @@ SmallVector<Value, 4> castVariadicInput(PatternRewriter &rewriter, Location loc,
   return castInputs;
 }
 
-Value maxOrDefault(PatternRewriter &rewriter, Location loc, Value a, Value b) {
-  // If A or B is NoneType, return the other value
-  if (mlir::isa<NoneType>(a.getType()))
-    return b;
-  if (mlir::isa<NoneType>(b.getType()))
-    return a;
-
-  // Otherwise, return the max of A and B
-  return rewriter.create<ONNXMaxOp>(loc, a.getType(), ValueRange{a, b});
-}
-
-Value minOrDefault(PatternRewriter &rewriter, Location loc, Value a, Value b) {
-  // If A or B is NoneType, return the other value
-  if (mlir::isa<NoneType>(a.getType()))
-    return b;
-  if (mlir::isa<NoneType>(b.getType()))
-    return a;
-
-  // Otherwise, return the min of A and B
-  return rewriter.create<ONNXMinOp>(loc, a.getType(), ValueRange{a, b});
+// Compose Clip bounds by applying the outer interval to each inner bound.
+// An omitted inner bound takes the corresponding outer bound directly.
+Value composeClipBound(PatternRewriter &rewriter, Location loc, Value inner,
+    Value outerMin, Value outerMax, bool lower) {
+  if (isNoneValue(inner))
+    return lower ? outerMin : outerMax;
+  Value bound = inner;
+  if (!isNoneValue(outerMin))
+    bound = rewriter.create<ONNXMaxOp>(
+        loc, inner.getType(), ValueRange{bound, outerMin});
+  if (!isNoneValue(outerMax))
+    bound = rewriter.create<ONNXMinOp>(
+        loc, inner.getType(), ValueRange{bound, outerMax});
+  return bound;
 }
 
 // Create a DenseElementsAttr based on the shape of type.
