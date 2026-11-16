@@ -51,8 +51,12 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // In future, only the dynamic pass, ONNXOpTransformPass, will be used for
   // this function.
 
-  if (opts.enableXMCPasses)
+  if (opts.enableXMCPasses) {
     opts.enableGatherElementsTileCanonicalization = false;
+    opts.enableReluHardSigmoidRecomposition = false;
+  }
+  opts.hybrid.enableReluHardSigmoidRecomposition =
+      opts.enableReluHardSigmoidRecomposition;
 
   configureBatchNormCanonicalization(opts.disableBatchNormDecompose);
   configureUnsafeMathCanonicalization(opts.enableUnsafeMathOptimizations);
@@ -80,7 +84,9 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
         .enableRotaryEmbeddingRecompose =
             opts.hybrid.enableRotaryEmbeddingRecompose,
         .enableReduceL2Recompositions =
-            opts.hybrid.enableReduceL2Recompositions};
+            opts.hybrid.enableReduceL2Recompositions,
+        .enableReluHardSigmoidRecomposition =
+            opts.enableReluHardSigmoidRecomposition};
     pm.addNestedPass<func::FuncOp>(
         onnx_mlir::createRecomposeONNXToONNXPass(recomposeOpts));
   }
@@ -134,7 +140,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
       pm.addPass(onnx_mlir::createONNXOpTransformPass(
           opts.onnxOpTransformThreshold, opts.onnxOpTransformReport, targetCPU,
           opts.enableSimdDataLayout && !opts.disableSimdOption,
-          opts.enableConvOptPass, opts.hybrid.recomposition));
+          opts.enableConvOptPass, opts.hybrid.recomposition,
+          opts.enableReluHardSigmoidRecomposition));
     } else {
       // Statically add extra passes
       for (int i = 0; i < opts.repeatOnnxTransform; i++) {
