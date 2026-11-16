@@ -268,7 +268,11 @@ Value createMaximumValueForClip(
     return value;
 
   return getClipConstantOfType(rewriter, type, value.getLoc(),
-      llvm::APFloat::getLargest, false, llvm::APInt::getMaxValue);
+      llvm::APFloat::getLargest, false,
+      [isUnsigned = type.getElementType().isUnsignedInteger()](unsigned width) {
+        return isUnsigned ? APInt::getMaxValue(width)
+                          : APInt::getSignedMaxValue(width);
+      });
 }
 
 Value createMinimumValueForClip(
@@ -279,7 +283,11 @@ Value createMinimumValueForClip(
     return value;
 
   return getClipConstantOfType(rewriter, type, value.getLoc(),
-      llvm::APFloat::getLargest, true, llvm::APInt::getMinValue);
+      llvm::APFloat::getLargest, true,
+      [isUnsigned = type.getElementType().isUnsignedInteger()](unsigned width) {
+        return isUnsigned ? APInt::getMinValue(width)
+                          : APInt::getSignedMinValue(width);
+      });
 }
 
 // Extracts number from a scalar constant value.
