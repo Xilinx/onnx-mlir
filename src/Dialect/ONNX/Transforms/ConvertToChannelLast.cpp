@@ -894,10 +894,6 @@ struct ResizeToChannelLastPattern : public OpRewritePattern<ONNXResizeOp> {
           "are being resized). Cannot convert to channel-last layout.");
     }
 
-    // Transpose input to channel-last
-    Value inputChannelLast = createInputTranspose(
-        rewriter, loc, input, rank, inputType.getElementType());
-
     // Get the original output element type (may be quantized)
     auto origOutputType = mlir::dyn_cast<ShapedType>(resizeOp.getType());
     Type outputElemType = origOutputType ? origOutputType.getElementType()
@@ -925,12 +921,16 @@ struct ResizeToChannelLastPattern : public OpRewritePattern<ONNXResizeOp> {
       return nullptr;
     };
 
+    // Prepare permuted attributes without changing the IR. A failed match must
+    // not leave a transpose or constants behind: greedy rewriting would keep
+    // creating and deleting them until it reaches its iteration limit.
     // Permute a rank-sized constant 1D tensor from NCHW to NHWC order.
     // Returns std::nullopt if the value is non-None and not a foldable
-    // constant.
-    auto permuteForChannelLast = [&](Value tensor) -> std::optional<Value> {
+    // constant, or a null attribute for a None operand.
+    auto permuteForChannelLast =
+        [&](Value tensor) -> std::optional<DenseElementsAttr> {
       if (isa<NoneType>(tensor.getType()))
-        return tensor;
+        return DenseElementsAttr{};
 
       auto tensorType = mlir::dyn_cast<RankedTensorType>(tensor.getType());
       if (!tensorType || !tensorType.hasStaticShape() ||
@@ -947,21 +947,15 @@ struct ResizeToChannelLastPattern : public OpRewritePattern<ONNXResizeOp> {
         SmallVector<float, 4> permuted;
         for (int64_t p : perm)
           permuted.push_back(values[p]);
-        return rewriter
-            .create<ONNXConstantOp>(loc, mlir::Attribute(),
-                DenseElementsAttr::get(
-                    tensorType, llvm::ArrayRef<float>(permuted)))
-            .getResult();
+        return DenseElementsAttr::get(
+            tensorType, llvm::ArrayRef<float>(permuted));
       }
       if (elemType.isInteger(64)) {
         auto values = constAttr.getValues<int64_t>();
         SmallVector<int64_t, 4> permuted;
         for (int64_t p : perm)
           permuted.push_back(values[p]);
-        return rewriter
-            .create<ONNXConstantOp>(loc, mlir::Attribute(),
-                DenseIntElementsAttr::get(tensorType, permuted))
-            .getResult();
+        return DenseIntElementsAttr::get(tensorType, permuted);
       }
       return std::nullopt;
     };
@@ -969,9 +963,10 @@ struct ResizeToChannelLastPattern : public OpRewritePattern<ONNXResizeOp> {
     // Permute Roi which has 2*rank elements:
     // [start_dim0..start_dimN, end_dim0..end_dimN].
     // Each half is permuted with the NCHW->NHWC mapping independently.
-    auto permuteRoiForChannelLast = [&](Value tensor) -> std::optional<Value> {
+    auto permuteRoiForChannelLast =
+        [&](Value tensor) -> std::optional<DenseElementsAttr> {
       if (isa<NoneType>(tensor.getType()))
-        return tensor;
+        return DenseElementsAttr{};
 
       auto tensorType = mlir::dyn_cast<RankedTensorType>(tensor.getType());
       if (!tensorType || !tensorType.hasStaticShape() ||
@@ -988,11 +983,8 @@ struct ResizeToChannelLastPattern : public OpRewritePattern<ONNXResizeOp> {
         permuted.push_back(values[p]);
       for (int64_t p : perm)
         permuted.push_back(values[rank + p]);
-      return rewriter
-          .create<ONNXConstantOp>(loc, mlir::Attribute(),
-              DenseElementsAttr::get(
-                  tensorType, llvm::ArrayRef<float>(permuted)))
-          .getResult();
+      return DenseElementsAttr::get(
+          tensorType, llvm::ArrayRef<float>(permuted));
     };
 
     auto roiResult = permuteRoiForChannelLast(roi);
@@ -1004,8 +996,7 @@ struct ResizeToChannelLastPattern : public OpRewritePattern<ONNXResizeOp> {
     // paired with the axes entries. They don't need position-based permutation
     // since the axes attribute is remapped separately.
     bool hasAxes = resizeOp.getAxesAttr() != nullptr;
-    Value scalesChannelLast = scales;
-    Value sizesChannelLast = sizes;
+    DenseElementsAttr scalesAttr, sizesAttr;
     if (!hasAxes) {
       auto scalesResult = permuteForChannelLast(scales);
       if (!scalesResult)
@@ -1015,11 +1006,24 @@ struct ResizeToChannelLastPattern : public OpRewritePattern<ONNXResizeOp> {
       if (!sizesResult)
         return rewriter.notifyMatchFailure(
             resizeOp, "non-constant sizes not supported");
-      scalesChannelLast = *scalesResult;
-      sizesChannelLast = *sizesResult;
+      scalesAttr = *scalesResult;
+      sizesAttr = *sizesResult;
     }
 
-    Value roiChannelLast = *roiResult;
+    auto materializePermutation = [&](Value original,
+                                      DenseElementsAttr attr) -> Value {
+      if (!attr)
+        return original;
+      return rewriter.create<ONNXConstantOp>(loc, mlir::Attribute(), attr)
+          .getResult();
+    };
+    Value roiChannelLast = materializePermutation(roi, *roiResult);
+    Value scalesChannelLast = materializePermutation(scales, scalesAttr);
+    Value sizesChannelLast = materializePermutation(sizes, sizesAttr);
+
+    // All operand checks succeeded. It is now safe to create the replacement.
+    Value inputChannelLast = createInputTranspose(
+        rewriter, loc, input, rank, inputType.getElementType());
 
     // Remap axes attribute from NCHW indices to NHWC indices.
     // NCHW->NHWC mapping: 0->0, 1->3, 2->1, 3->2

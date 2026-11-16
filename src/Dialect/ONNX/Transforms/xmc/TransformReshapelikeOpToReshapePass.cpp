@@ -161,7 +161,11 @@ struct TransformTrivialTransposeToReshape
     auto inputTensorType = dyn_cast<RankedTensorType>(inputType);
     auto outputTensorType = dyn_cast<RankedTensorType>(outputType);
 
-    if (!inputTensorType || !outputTensorType) {
+    // Dynamic dimensions are not known to be singleton dimensions, and they
+    // cannot be materialized as values of the Reshape shape operand.
+    if (!inputTensorType || !outputTensorType ||
+        !inputTensorType.hasStaticShape() ||
+        !outputTensorType.hasStaticShape()) {
       return failure();
     }
 
@@ -215,7 +219,11 @@ struct TransformReshapelikeToReshape : public OpRewritePattern<OpTy> {
     auto inputTensorType = dyn_cast<RankedTensorType>(inputType);
     auto outputTensorType = dyn_cast<RankedTensorType>(outputType);
 
-    if (!inputTensorType || !outputTensorType) {
+    // A type's dynamic dimension marker is not a valid ONNX shape value.
+    // Keep the original operation when its shape is only known at runtime.
+    if (!inputTensorType || !outputTensorType ||
+        !inputTensorType.hasStaticShape() ||
+        !outputTensorType.hasStaticShape()) {
       return failure();
     }
 

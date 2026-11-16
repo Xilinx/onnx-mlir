@@ -903,7 +903,7 @@ ONNXCustomOpShapeHelper::ONNXCustomOpShapeHelper(Operation *op,
     : ONNXUnaryOpShapeHelper(op, operands, ieBuilder, scope) {
   ONNXCustomOp customOp = cast<ONNXCustomOp>(op);
   if (!customOp.getShapeInferPattern().has_value()) {
-    pattern = 0;
+    pattern = usesMatMulNBitsShapeRule(customOp) ? 3 : 0;
     return;
   }
 
@@ -939,8 +939,32 @@ LogicalResult ONNXCustomOpShapeHelper::computeShape() {
     return ONNXUnaryOpShapeHelper::computeShape();
   } else if (pattern == 2) {
     return ONNXBroadcastOpShapeHelper::computeShape();
+  } else if (pattern == 3) {
+    // MatMulNBits is Y = A x dequantize(B): A is [..., K] and B holds N
+    // columns, so Y is the shape of A with its last dimension replaced by N.
+    DimsExpr outputDims;
+    createIE->getShapeAsDims(operands[0], outputDims);
+    if (outputDims.empty())
+      return op->emitError("MatMulNBits input A must have a last dimension");
+    auto K = op->getAttrOfType<IntegerAttr>("K");
+    if (K && outputDims.back().isLiteral() &&
+        outputDims.back().getLiteral() != K.getSInt())
+      return op->emitError(
+          "MatMulNBits attribute K differs from the last dimension of A");
+    outputDims.back() = LitIE(op->getAttrOfType<IntegerAttr>("N").getSInt());
+    setOutputDims(outputDims);
+    return success();
   }
   return success();
+}
+
+bool usesMatMulNBitsShapeRule(ONNXCustomOp customOp) {
+  if (customOp.getShapeInferPattern().has_value())
+    return false;
+  auto domain = customOp->getAttrOfType<StringAttr>("domain_name");
+  return domain && domain.getValue() == "com.microsoft" &&
+         customOp.getFunctionName().equals_insensitive("MatMulNBits") &&
+         customOp->getAttrOfType<IntegerAttr>("N");
 }
 
 //===----------------------------------------------------------------------===//
