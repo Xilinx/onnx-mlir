@@ -30,6 +30,7 @@ struct OnnxToMlirOptions {
   bool enableRemoveBinary = false;
   bool enableFusePadIntoAvgpool = false;
   bool enableXMCPasses = false;
+  bool enableReluHardSigmoidRecomposition = true;
   // Leave the DisposablePool open after scrubbing, so that later passes can
   // still build views of existing constants (reshape, transpose) without
   // copying them. Attributes created from then on are DisposableElementsAttr

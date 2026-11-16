@@ -247,6 +247,17 @@ public:
 
     Location loc = transposeOp.getLoc();
     Value input = transposeOp.getData();
+    auto inputType = dyn_cast<RankedTensorType>(input.getType());
+    auto outputType =
+        dyn_cast<RankedTensorType>(transposeOp.getResult().getType());
+    // Both reshapes below encode their entire shape as a constant. Runtime
+    // dimensions must stay in the original Transpose, not become literal
+    // dynamic-dimension sentinels (or products of those sentinels).
+    if (!inputType || !outputType || !inputType.hasStaticShape() ||
+        !outputType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          transposeOp, "constant reshapes require static input/output shapes");
+
     auto inputShape = getShapeFromType(input.getType());
     auto outputShape = getShapeFromType(transposeOp.getResult().getType());
     Type elementType = getElementType(input.getType());
@@ -309,6 +320,12 @@ public:
 
     auto outputType =
         dyn_cast<RankedTensorType>(transposeOp.getResult().getType());
+    // Even dimensions outside the merged pair are copied into constant
+    // reshape operands, so checking only the merged dimensions is insufficient.
+    if (!inputType.hasStaticShape() || !outputType ||
+        !outputType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          transposeOp, "constant reshapes require static input/output shapes");
 
     // Get perm attribute
     auto permAttr = transposeOp.getPermAttr();
