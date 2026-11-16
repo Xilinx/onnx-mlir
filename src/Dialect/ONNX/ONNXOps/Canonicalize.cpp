@@ -1519,6 +1519,32 @@ struct FusePadPadPattern : public OpRewritePattern<ONNXPadOp> {
 /// Backfill a Slice's discarded data into poison padding. Widen the slice to
 /// the overlap of the padded window with the original input, retaining poison
 /// only outside that input. Defined elements keep their output positions.
+///
+/// One-dimensional example (slice ends are exclusive; P denotes poison):
+///
+///   Before:
+///     Input          [ a | b | c | d | e | f | g | h ]
+///                             +---------------+
+///     Slice [2, 6)            | c | d | e | f |
+///                             +---------------+
+///                                    |
+///                          Pad(poison, low=3, high=1)
+///                                    v
+///     Output         [ P | P | P | c | d | e | f | P ]
+///
+///   After:
+///     Input          [ a | b | c | d | e | f | g | h ]
+///                     +---------------------------+
+///     Slice [0, 7)    | a | b | c | d | e | f | g |
+///                     +---------------------------+
+///                                    |
+///                          Pad(poison, low=1, high=0)
+///                                    v
+///     Output         [ P | a | b | c | d | e | f | g ]
+///
+/// The padded window covers input coordinates [-1, 7). Backfilling a, b and g
+/// leaves c, d, e and f at the same output positions. Only coordinate -1 lies
+/// outside the input and still needs poison padding.
 struct SlicePadPoisonOptimization : public OpRewritePattern<ONNXPadOp> {
   using OpRewritePattern<ONNXPadOp>::OpRewritePattern;
 
