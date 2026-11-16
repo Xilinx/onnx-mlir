@@ -109,12 +109,13 @@ public:
     }
     if (llvm::any_of(pads, [](int64_t pad) { return pad > 0; })) {
       Value constPads =
-          tosa::buildOnnxToTosaPaddingConstOp(rewriter, pads, loc, {}, {});
+          tosaBuilder.getConst(pads, {static_cast<int64_t>(pads.size())});
       auto constTosaTensor =
           tosaBuilder.getSplattedConst(0.0, inTy.getElementType(), 0);
-      val = rewriter.create<mlir::tosa::PadOp>(loc,
+      val = rewriter.create<ONNXPadOp>(loc,
           mlir::RankedTensorType::get(paddedOutShape, inTy.getElementType()),
-          val, constPads, constTosaTensor);
+          val, constPads, constTosaTensor, rewriter.create<ONNXNoneOp>(loc),
+          rewriter.getStringAttr("constant"));
     }
 
     // 2: Slice the edges leaving enough data to fit the final step

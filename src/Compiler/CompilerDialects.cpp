@@ -26,6 +26,7 @@
 #include "mlir/Dialect/MemRef/Transforms/RuntimeOpVerification.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Shape/IR/Shape.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Target/LLVMIR/Dialect/OpenMP/OpenMPToLLVMIRTranslation.h"
 
@@ -49,6 +50,7 @@ void registerDialects(
   registry.insert<math::MathDialect>();
   registry.insert<memref::MemRefDialect>();
   registry.insert<ONNXDialect>();
+  registry.insert<ub::UBDialect>();
 #ifdef ONNX_MLIR_ENABLE_KRNL
   registry.insert<KrnlDialect>();
 #endif
