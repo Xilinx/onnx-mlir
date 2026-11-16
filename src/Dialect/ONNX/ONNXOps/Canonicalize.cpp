@@ -5732,8 +5732,36 @@ void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
 }
 
 /// on the ONNXMulOp.
+// Fold Mul(x, 0) or Mul(0, x) to a zero tensor with the result shape.
+// Floating-point zero multiplication
+// requires unsafe math because it can change NaNs, infinities and signed zeros.
+struct MulZeroPattern : public OpRewritePattern<ONNXMulOp> {
+  using OpRewritePattern<ONNXMulOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXMulOp op, PatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return failure();
+    Type elementType = resultType.getElementType();
+    if (isInQuantizedDomain(op, op.getResult()))
+      return failure();
+    if (!isa<IntegerType>(elementType) &&
+        !(isa<FloatType>(elementType) && enableUnsafeMath))
+      return failure();
+    if (!isConstOf(op->getOperand(0), 0.0) &&
+        !isConstOf(op->getOperand(1), 0.0))
+      return failure();
+    Attribute zero = rewriter.getZeroAttr(elementType);
+    auto value = DenseElementsAttr::get(resultType, zero);
+    rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
+    return success();
+  }
+};
+
 void ONNXMulOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
+  results.insert<MulZeroPattern>(context);
   results.insert<NormalizeMulPattern>(context);
   results.insert<MoveNegToMulConstantPattern>(context);
   results.insert<FuseMulConvNullBiasPattern>(context);
