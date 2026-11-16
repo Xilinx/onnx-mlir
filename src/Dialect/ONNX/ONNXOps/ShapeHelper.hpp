@@ -974,6 +974,11 @@ protected:
   int pattern;
 };
 
+/// True for a com.microsoft MatMulNBits CustomOp without a shape_infer_pattern.
+/// Its result shape is known from the operation itself: the shape of A
+/// (operand 0) with the last dimension replaced by the attribute N.
+bool usesMatMulNBitsShapeRule(mlir::ONNXCustomOp customOp);
+
 //===----------------------------------------------------------------------===//
 // Setting a new constant or attribute value.
 //===----------------------------------------------------------------------===//

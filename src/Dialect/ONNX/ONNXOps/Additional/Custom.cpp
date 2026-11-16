@@ -24,12 +24,15 @@ using namespace onnx_mlir;
 
 LogicalResult ONNXCustomOp::inferShapes(
     std::function<void(Region &)> doShapeInference) {
+  // MatMulNBits reads only the shape of A: its optional inputs may be none.
+  const bool matMulNBitsRule = usesMatMulNBitsShapeRule(*this);
   // ToDo: this check could be refined to the shape related input,
   // if inputs_for_infer is specified
-  if (!hasShapeAndRank(getOperation()))
+  if (matMulNBitsRule ? !hasShapeAndRank(getInputs()[0])
+                      : !hasShapeAndRank(getOperation()))
     return success();
 
-  if (!getShapeInferPattern().has_value()) {
+  if (!getShapeInferPattern().has_value() && !matMulNBitsRule) {
     // When no shape inference pattern provided, Just return.
     return success();
   } else if (getResults().size() > 1) {
