@@ -5577,8 +5577,34 @@ void ONNXDimOp::getCanonicalizationPatterns(
 }
 
 /// on the ONNXEqualOp.
+// Fold Equal(x, x) to a true tensor with the result shape.
+// Integer self-comparison is always true. Floating-point self-comparison
+// requires unsafe math because NaN is not equal to itself.
+struct EqualSelfPattern : public OpRewritePattern<ONNXEqualOp> {
+  using OpRewritePattern<ONNXEqualOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXEqualOp op, PatternRewriter &rewriter) const override {
+    if (op->getOperand(0) != op->getOperand(1))
+      return failure();
+    auto resultType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return failure();
+    Type elementType = getElementType(op->getOperand(0).getType());
+    if (isInQuantizedDomain(op, op.getResult()))
+      return failure();
+    if (!isa<IntegerType>(elementType) &&
+        !(isa<FloatType>(elementType) && enableUnsafeMath))
+      return failure();
+    auto value = DenseElementsAttr::get(resultType, rewriter.getBoolAttr(true));
+    rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
+    return success();
+  }
+};
+
 void ONNXEqualOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<EqualSelfPattern>(context);
   result.insert<FoldEqualDimSizesNegativePattern>(context);
   result.insert<BinaryOpBroadcastAxisPattern<ONNXEqualOp>>(context);
 }
