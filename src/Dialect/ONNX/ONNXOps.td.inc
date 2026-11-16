@@ -5048,6 +5048,7 @@ def ONNXMelWeightMatrixOp:ONNX_Op<"MelWeightMatrix",
 
 def ONNXMinOp:ONNX_Op<"Min",
   [Pure, OpVersionTrait<13>, ONNXElementwiseTrait, Commutative, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Min operation";
   let description = [{
   Element-wise min of each of the input tensors (with Numpy-style broadcasting support).

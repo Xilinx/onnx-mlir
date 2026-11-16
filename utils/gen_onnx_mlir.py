@@ -709,6 +709,7 @@ OpsWithCanonicalizer = [
     "Log",
     "Loop",
     "LSTM",
+    "Min",
     "Mul",
     "Neg",
     "Not",

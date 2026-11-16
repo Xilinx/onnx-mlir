@@ -6149,6 +6149,73 @@ void ONNXXorOp::getCanonicalizationPatterns(
   result.insert<BinaryOpBroadcastAxisPattern<ONNXXorOp>>(context);
 }
 
+// Clip bounds are scalars. A splat tensor can supply a bound only when its
+// broadcasting preserves the input shape; retain its exact element value.
+static DenseElementsAttr getScalarClipBound(Value bound, Value input) {
+  Type elementType = getElementType(input.getType());
+  if (isa<quant::QuantizedType>(elementType) ||
+      (!isa<IntegerType>(elementType) && !isa<FloatType>(elementType)) ||
+      elementType.isInteger(1) ||
+      getElementType(bound.getType()) != elementType ||
+      !isShapePreservingBroadcast(bound, input))
+    return {};
+  ElementsAttr elements = getDenseOrDisposableConstLikeElements(bound);
+  DenseElementsAttr dense = dyn_cast_or_null<DenseElementsAttr>(elements);
+  if (auto disposable = dyn_cast_or_null<DisposableElementsAttr>(elements)) {
+    if (!disposable.isSplat())
+      return {};
+    dense = disposable.toDenseElementsAttr();
+  }
+  if (!dense || dense.getNumElements() == 0 || !dense.isSplat())
+    return {};
+  return DenseElementsAttr::get(
+      RankedTensorType::get({}, elementType), dense.getSplatValue<Attribute>());
+}
+
+// Rewrite Min(Max(x, lower), upper) to Clip(x, lower, upper) for constant
+// scalar or shape-preserving splat bounds.
+// Floating-point operand ordering can affect NaNs and signed zeros, so
+// require unsafe math.
+struct MinMaxToClipPattern : public OpRewritePattern<ONNXMinOp> {
+  using OpRewritePattern<ONNXMinOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXMinOp op, PatternRewriter &rewriter) const override {
+    if (op->getNumOperands() != 2)
+      return failure();
+    for (unsigned outerIndex = 0; outerIndex < 2; ++outerIndex) {
+      auto maxOp = op->getOperand(outerIndex).getDefiningOp<ONNXMaxOp>();
+      if (!maxOp || maxOp->getNumOperands() != 2 || !maxOp->hasOneUse())
+        continue;
+      for (unsigned innerIndex = 0; innerIndex < 2; ++innerIndex) {
+        Value input = maxOp->getOperand(innerIndex);
+        if (input.getType() != maxOp.getResult().getType() ||
+            input.getType() != op.getResult().getType())
+          continue;
+        auto lower =
+            getScalarClipBound(maxOp->getOperand(1 - innerIndex), input);
+        auto upper = getScalarClipBound(op->getOperand(1 - outerIndex), input);
+        if (!lower || !upper ||
+            (isa<FloatType>(lower.getElementType()) && !enableUnsafeMath))
+          continue;
+        auto lowerOp =
+            rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, lower);
+        auto upperOp =
+            rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, upper);
+        rewriter.replaceOpWithNewOp<ONNXClipOp>(op, op.getResult().getType(),
+            input, lowerOp.getResult(), upperOp.getResult());
+        return success();
+      }
+    }
+    return failure();
+  }
+};
+
+void ONNXMinOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<MinMaxToClipPattern>(context);
+}
+
 // on the ONNXWhereOp.
 void ONNXWhereOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
