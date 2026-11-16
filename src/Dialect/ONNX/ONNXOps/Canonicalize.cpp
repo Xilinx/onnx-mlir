@@ -5555,8 +5555,36 @@ void ONNXDepthToSpaceOp::getCanonicalizationPatterns(
 }
 
 /// on the ONNXDivOp.
+// Fold Div(0, x) to a zero tensor with the broadcasted result shape.
+// Integer division by zero is undefined, as in constant propagation, so a
+// zero numerator yields zero on every defined input. Floating-point division
+// requires unsafe math because of NaNs, zero divisors and signed zeros.
+struct DivZeroPattern : public OpRewritePattern<ONNXDivOp> {
+  using OpRewritePattern<ONNXDivOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXDivOp op, PatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return failure();
+    Type elementType = resultType.getElementType();
+    if (isInQuantizedDomain(op, op.getResult()))
+      return failure();
+    if (!isa<IntegerType>(elementType) &&
+        !(isa<FloatType>(elementType) && enableUnsafeMath))
+      return failure();
+    if (!isConstOf(op->getOperand(0), 0.0))
+      return failure();
+    Attribute zero = rewriter.getZeroAttr(elementType);
+    auto value = DenseElementsAttr::get(resultType, zero);
+    rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
+    return success();
+  }
+};
+
 void ONNXDivOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<DivZeroPattern>(context);
   result.insert<BinaryOpBroadcastAxisPattern<ONNXDivOp>>(context);
   result.insert<PropagateScalarConstantExpandPattern<ONNXDivOp>>(context);
   result.insert<PropagateReshapeThroughBinaryOpPattern<ONNXDivOp>>(context);
