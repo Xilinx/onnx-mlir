@@ -46,7 +46,8 @@ namespace onnx_mlir {
 void getRecomposeONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
     bool enableRotaryEmbeddingRecompose = false,
     bool enableReduceL2Recompositions = false,
-    bool enableDepthToSpaceDecompose = false);
+    bool enableDepthToSpaceDecompose = false,
+    bool enableReluHardSigmoidRecomposition = true);
 
 } // namespace onnx_mlir
 #endif

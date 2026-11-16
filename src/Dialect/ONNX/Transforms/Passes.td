@@ -169,7 +169,11 @@ def ONNXRecomposePatternOptions {
            "enable-reducel2-recompositions",
            "bool", /*default=*/"false",
            "Recompose ReduceL2 from Sqrt/Pow(0.5) square-reduction "
-           "chains into ReduceL2. Off by default.">
+           "chains into ReduceL2. Off by default.">,
+    Option<"enableReluHardSigmoidRecomposition", "enable-relu-hardsigmoid-recomposition",
+           "bool", /*default=*/"true",
+           "Recompose Relu with a quantization-implied upper clamp into HardSigmoid. "
+           "Does not affect explicit Min or Clip patterns.">
   ];
 }
 
