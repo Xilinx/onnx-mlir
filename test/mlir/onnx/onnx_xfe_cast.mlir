@@ -67,6 +67,19 @@ func.func @fold_integer_narrowing_and_sign_change() -> tensor<3xui16> {
 // CHECK-NOT: "onnx.XFECast"
 // CHECK: value = #onnx.dense_disposable<{{[0-9]+}}:"0xFFFF00000100"> : tensor<3xui16>
 
+// The i16 step must truncate before widening: 65537 becomes 1, not 65537.
+func.func @fold_integer_intermediate_narrowing() -> tensor<3xi32> {
+  %input = onnx.Constant dense<[-1, 65536, 65537]> : tensor<3xi64>
+  %narrow = "onnx.XFECast"(%input) {nan_mode = "propagate", round_mode = "toward_zero", saturation_mode = "none", to = i16} : (tensor<3xi64>) -> tensor<3xi16>
+  %wide = "onnx.XFECast"(%narrow) {nan_mode = "propagate", round_mode = "toward_zero", saturation_mode = "none", to = i64} : (tensor<3xi16>) -> tensor<3xi64>
+  %result = "onnx.XFECast"(%wide) {nan_mode = "propagate", round_mode = "toward_zero", saturation_mode = "none", to = i32} : (tensor<3xi64>) -> tensor<3xi32>
+  return %result : tensor<3xi32>
+}
+
+// CHECK-LABEL: sym_name = "fold_integer_intermediate_narrowing"
+// CHECK-NOT: "onnx.XFECast"
+// CHECK: value = #onnx.dense_disposable<{{[0-9]+}}:"0xFFFFFFFF0000000001000000"> : tensor<3xi32>
+
 func.func @fold_boolean_to_float() -> (tensor<2xf32>, tensor<4xf32>) {
   %splat = onnx.Constant dense<true> : tensor<2xi1>
   %splat_cast = "onnx.XFECast"(%splat) {nan_mode = "propagate", round_mode = "nearest_even", saturation_mode = "none", to = f32} : (tensor<2xi1>) -> tensor<2xf32>
