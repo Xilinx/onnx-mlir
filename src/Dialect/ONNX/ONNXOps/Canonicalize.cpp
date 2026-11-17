@@ -1516,6 +1516,8 @@ struct FusePadPadPattern : public OpRewritePattern<ONNXPadOp> {
   }
 };
 
+namespace {
+
 /// Backfill a Slice's discarded data into poison padding. Widen the slice to
 /// the overlap of the padded window with the original input, retaining poison
 /// only outside that input. Defined elements keep their output positions.
@@ -1633,6 +1635,8 @@ struct SlicePadPoisonOptimization : public OpRewritePattern<ONNXPadOp> {
     return success();
   }
 };
+
+} // namespace
 
 // =============================================================================
 // Rewrite pattern for loop (not handled in Rewrite.td).
