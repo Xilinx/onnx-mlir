@@ -84,19 +84,19 @@ def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
     `captures` correspond positionally to the arguments of `body`. The body is
     a flattened DAG of pure, regionless operations followed by
     `onnx.Yield`; forming a larger expression inlines the bodies of its
-    deferred operands. The yielded value's producer is normally the terminal
-    operation, allowing the compiler to inspect or peel it in constant time
-    before choosing whether to evaluate it during materialization. If
-    canonicalization removes the last operation, the body may yield a capture
-    directly and has no peelable terminal.
+    deferred operands. Each result's producer can be inspected in constant
+    time through its yield operand. A result forwarded from a body argument
+    has no peelable terminal operation.
 
     Formation captures pure, regionless operations with one or more results
-    whose inputs are constants or deferred constants. Each result retained
-    from a multi-result operation has its own wrapper, whose body yields that
-    result from a clone of the operation. Operations may come from any dialect,
-    including ONNX/XFE and operations introduced by later lowering. Ordinary passes treat
-    the body as opaque. A materializer evaluates it explicitly and diagnoses
-    any operation for which no fold is available.
+    whose inputs are constants or deferred constants. Multiple results share
+    computation within one body. Peeling a result clones its terminal operation
+    outside and yields the required body-local operands from the remaining
+    DeferredFoldable operation, preserving the other results.
+    Operations may come from any dialect, including ONNX/XFE and operations
+    introduced by later lowering. Ordinary passes treat the body as opaque.
+    A materializer evaluates it explicitly and diagnoses any operation for
+    which no fold is available.
 
     For example, this body retains a transpose of `%weights`, produced by
     `onnx.InitializerSource`, without loading its contents:
@@ -115,17 +115,18 @@ def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
   }];
 
   let arguments = (ins Variadic<AnyType>:$captures);
-  let results = (outs AnyType:$result);
+  let results = (outs Variadic<AnyType>:$results);
   let regions = (region SizedRegion<1>:$body);
   let hasCanonicalizer = 1;
   let hasVerifier = 1;
   let extraClassDeclaration = [{
-    /// Return the terminal operation retained by this wrapper.
-    Operation *getTerminalOperation();
+    /// Return the body operation producing the selected result, or null for
+    /// a forwarded capture. Single-result callers may omit the index.
+    Operation *getTerminalOperation(unsigned resultIndex = 0);
 
     template <typename OpTy>
-    OpTy getTerminalOperation() {
-      return dyn_cast_or_null<OpTy>(getTerminalOperation());
+    OpTy getTerminalOperation(unsigned resultIndex = 0) {
+      return dyn_cast_or_null<OpTy>(getTerminalOperation(resultIndex));
     }
   }];
 }

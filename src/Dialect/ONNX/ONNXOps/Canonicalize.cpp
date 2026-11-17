@@ -5642,13 +5642,18 @@ struct ElideEmptyDeferredFoldable
 
   LogicalResult matchAndRewrite(
       ONNXDeferredFoldableOp op, PatternRewriter &rewriter) const override {
-    if (op.getTerminalOperation())
+    Block &body = op.getBody().front();
+    if (body.getOperations().size() != 1)
       return failure();
-    auto yield = cast<ONNXYieldOp>(op.getBody().front().getTerminator());
-    auto argument = dyn_cast<BlockArgument>(yield.getOperand(0));
-    if (!argument || argument.getOwner() != &op.getBody().front())
-      return failure();
-    rewriter.replaceOp(op, op.getCaptures()[argument.getArgNumber()]);
+    auto yield = cast<ONNXYieldOp>(body.getTerminator());
+    SmallVector<Value> replacements;
+    for (Value value : yield.getOperands()) {
+      auto argument = dyn_cast<BlockArgument>(value);
+      if (!argument || argument.getOwner() != &body)
+        return failure();
+      replacements.push_back(op.getCaptures()[argument.getArgNumber()]);
+    }
+    rewriter.replaceOp(op, replacements);
     return success();
   }
 };

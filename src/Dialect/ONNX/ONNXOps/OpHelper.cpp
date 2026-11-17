@@ -25,6 +25,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Path.h"
 
@@ -504,48 +505,64 @@ bool isConstantFoldable(Value value) {
 
 namespace {
 
-// Peeling changes Deferred(prefix -> terminal) into Deferred(prefix) ->
-// terminal. Planning checks representability without changing the IR.
+// Peeling exposes the selected result's terminal operation. Other results and
+// each unique body-local terminal operand remain results of the deferred body.
 struct DeferredPeelPlan {
-  // Operation to clone into the surrounding block and remove from the body.
-  Operation *terminal;
-  // Body-local value yielded by the shortened body; null when the terminal
-  // uses only captures and the wrapper can be removed entirely.
-  Value prefix;
+  // DeferredFoldable operation being peeled.
+  ONNXDeferredFoldableOp deferredOp;
+  // Operation producing the selected yield operand; cloned outside deferredOp.
+  Operation *terminalOp;
+  // Index of the deferredOp result to replace, also its yield operand index.
+  unsigned selectedResultIndex;
+  // Original body values to yield from the remaining prefix: other original
+  // results first (including alias slots), then unique body-local terminal
+  // operands not already present. Captures are used directly; ConstantLike
+  // operands are cloned outside instead of becoming prefix results.
+  SmallVector<Value> prefixYieldValues;
+  // Maps each original result index to its replacement prefix result index.
+  // The selected result's entry is unused: the peeled operation replaces it.
+  SmallVector<unsigned> originalResultToPrefixResultIndex;
 };
 
-FailureOr<DeferredPeelPlan> getDeferredPeelPlan(
-    ONNXDeferredFoldableOp deferred) {
-  Operation *terminal = deferred.getTerminalOperation();
+} // namespace
+
+static FailureOr<DeferredPeelPlan> getDeferredPeelPlan(Value selected) {
+  auto result = dyn_cast<OpResult>(selected);
+  auto deferred = selected.getDefiningOp<ONNXDeferredFoldableOp>();
+  if (!result || !deferred)
+    return failure();
+  Operation *terminal = deferred.getTerminalOperation(result.getResultNumber());
   if (!terminal)
     return failure();
-
-  llvm::SetVector<Value> internalOperands;
+  DeferredPeelPlan plan{deferred, terminal, result.getResultNumber(), {},
+      SmallVector<unsigned>(deferred.getNumResults())};
   Block &body = deferred.getBody().front();
+  auto yield = cast<ONNXYieldOp>(body.getTerminator());
+  // Preserve the other original result slots, including aliases, in the prefix.
+  for (auto [index, value] : llvm::enumerate(yield.getOperands()))
+    if (index != plan.selectedResultIndex) {
+      plan.originalResultToPrefixResultIndex[index] =
+          plan.prefixYieldValues.size();
+      plan.prefixYieldValues.push_back(value);
+    }
+  // Add prefix results for distinct computed operands of the peeled operation.
   for (Value operand : terminal->getOperands()) {
-    auto result = dyn_cast<OpResult>(operand);
-    if (result && result.getOwner()->getBlock() == &body)
-      internalOperands.insert(operand);
+    Operation *producer = operand.getDefiningOp();
+    if (!producer || producer->getBlock() != &body)
+      continue;
+    if (isConstLikeOperation(producer))
+      continue;
+    if (!llvm::is_contained(plan.prefixYieldValues, operand))
+      plan.prefixYieldValues.push_back(operand);
   }
-  if (internalOperands.size() > 1)
-    return failure();
-  if (internalOperands.empty())
-    return DeferredPeelPlan{terminal, {}};
-
-  Value prefix = internalOperands.front();
-  Operation *prefixOp = prefix.getDefiningOp();
-  if (!prefixOp || prefixOp->getNextNode() != terminal)
-    return failure();
-  return DeferredPeelPlan{terminal, prefix};
+  return plan;
 }
 
-Operation *findEarliestUserInBlock(Operation *op) {
+static Operation *findEarliestUserInBlock(Value value) {
   Operation *firstUserInBlock = nullptr;
-  Block *parentBlock = op->getBlock();
-  for (Operation *user : op->getUsers()) {
-    Operation *ancestor = user;
-    while (ancestor && ancestor->getBlock() != parentBlock)
-      ancestor = ancestor->getParentOp();
+  Block *parentBlock = value.getDefiningOp()->getBlock();
+  for (Operation *user : value.getUsers()) {
+    Operation *ancestor = parentBlock->findAncestorOpInBlock(*user);
     if (!ancestor)
       continue;
     if (!firstUserInBlock || ancestor->isBeforeInBlock(firstUserInBlock))
@@ -554,76 +571,180 @@ Operation *findEarliestUserInBlock(Operation *op) {
   return firstUserInBlock;
 }
 
-} // namespace
+static llvm::SmallPtrSet<Operation *, 16> collectDeferredPrefixOperations(
+    const DeferredPeelPlan &plan) {
+  ONNXDeferredFoldableOp deferred = plan.deferredOp;
+  Block &body = deferred.getBody().front();
+  llvm::SmallPtrSet<Operation *, 16> needed;
+  SmallVector<Value> worklist(
+      plan.prefixYieldValues.begin(), plan.prefixYieldValues.end());
+  while (!worklist.empty()) {
+    Operation *producer = worklist.pop_back_val().getDefiningOp();
+    if (producer && producer->getBlock() == &body &&
+        needed.insert(producer).second)
+      llvm::append_range(worklist, producer->getOperands());
+  }
+  return needed;
+}
+
+static ONNXDeferredFoldableOp createDeferredPrefixOp(
+    const DeferredPeelPlan &plan, RewriterBase &rewriter) {
+  ONNXDeferredFoldableOp deferred = plan.deferredOp;
+  SmallVector<Type> types;
+  for (Value value : plan.prefixYieldValues)
+    types.push_back(value.getType());
+  auto prefix = rewriter.create<ONNXDeferredFoldableOp>(
+      deferred.getLoc(), types, deferred.getCaptures());
+  // Names refer to the original results and must be remapped separately.
+  for (NamedAttribute attr : deferred->getAttrs())
+    if (attr.getName() != "onnx_node_name" && attr.getName() != "ResultNames")
+      prefix->setAttr(attr.getName(), attr.getValue());
+  return prefix;
+}
+
+// Peeling changes which values the prefix returns. Preserve names for retained
+// original results and use producer names for newly exposed terminal operands.
+static void setDeferredPrefixNames(const DeferredPeelPlan &plan,
+    ONNXDeferredFoldableOp prefix, RewriterBase &rewriter) {
+  ONNXDeferredFoldableOp deferred = plan.deferredOp;
+  if (plan.prefixYieldValues.size() == 1)
+    if (Operation *producer = plan.prefixYieldValues.front().getDefiningOp())
+      if (Attribute name = producer->getAttr("onnx_node_name"))
+        prefix->setAttr("onnx_node_name", name);
+  SmallVector<Attribute> names(
+      plan.prefixYieldValues.size(), rewriter.getStringAttr(""));
+  for (auto [index, value] : llvm::enumerate(plan.prefixYieldValues))
+    if (auto result = dyn_cast<OpResult>(value))
+      if (auto sourceNames =
+              result.getOwner()->getAttrOfType<ArrayAttr>("ResultNames"))
+        if (result.getResultNumber() < sourceNames.size())
+          names[index] = sourceNames[result.getResultNumber()];
+  // Original external result names take precedence over body-local names.
+  if (auto oldNames = deferred->getAttrOfType<ArrayAttr>("ResultNames"))
+    if (oldNames.size() == deferred.getNumResults())
+      for (unsigned index = 0; index < deferred.getNumResults(); ++index)
+        if (index != plan.selectedResultIndex)
+          names[plan.originalResultToPrefixResultIndex[index]] =
+              oldNames[index];
+  if (llvm::any_of(names, [](Attribute name) {
+        auto stringName = dyn_cast<StringAttr>(name);
+        return !stringName || !stringName.getValue().empty();
+      }))
+    prefix->setAttr("ResultNames", rewriter.getArrayAttr(names));
+}
+
+// Clone dependencies in original order, preserving shared computation once.
+static void cloneDeferredPrefixBody(const DeferredPeelPlan &plan,
+    ONNXDeferredFoldableOp prefix,
+    const llvm::SmallPtrSetImpl<Operation *> &needed, RewriterBase &rewriter) {
+  ONNXDeferredFoldableOp deferred = plan.deferredOp;
+  Block &body = deferred.getBody().front();
+  Block *block = rewriter.createBlock(&prefix.getBody());
+  IRMapping mapping;
+  for (BlockArgument argument : body.getArguments())
+    mapping.map(
+        argument, block->addArgument(argument.getType(), argument.getLoc()));
+  OpBuilder builder(rewriter.getContext());
+  builder.setInsertionPointToStart(block);
+  for (Operation &operation : body.without_terminator())
+    if (needed.contains(&operation))
+      builder.clone(operation, mapping);
+  SmallVector<Value> results;
+  for (Value value : plan.prefixYieldValues)
+    results.push_back(mapping.lookup(value));
+  builder.create<ONNXYieldOp>(deferred.getLoc(), results);
+}
+
+static ONNXDeferredFoldableOp buildDeferredPrefix(
+    const DeferredPeelPlan &plan, RewriterBase &rewriter) {
+  auto needed = collectDeferredPrefixOperations(plan);
+  auto prefix = createDeferredPrefixOp(plan, rewriter);
+  setDeferredPrefixNames(plan, prefix, rewriter);
+  cloneDeferredPrefixBody(plan, prefix, needed, rewriter);
+  return prefix;
+}
+
+bool canPeelDeferredFoldableExpression(Value selected) {
+  return succeeded(getDeferredPeelPlan(selected));
+}
 
 bool canPeelDeferredFoldableExpression(ONNXDeferredFoldableOp deferred) {
-  return succeeded(getDeferredPeelPlan(deferred));
+  return deferred.getNumResults() == 1 &&
+         canPeelDeferredFoldableExpression(deferred->getResult(0));
 }
 
 FailureOr<Operation *> peelDeferredFoldableExpression(
-    ONNXDeferredFoldableOp deferred, RewriterBase &rewriter) {
-  FailureOr<DeferredPeelPlan> plan = getDeferredPeelPlan(deferred);
+    Value selected, RewriterBase &rewriter) {
+  FailureOr<DeferredPeelPlan> plan = getDeferredPeelPlan(selected);
   if (failed(plan))
     return failure();
-  Operation *terminal = plan->terminal;
-  auto yieldedResult = cast<OpResult>(
-      cast<ONNXYieldOp>(deferred.getBody().front().getTerminator())
-          .getOperand(0));
-  unsigned yieldedResultNumber = yieldedResult.getResultNumber();
-
+  ONNXDeferredFoldableOp deferred = plan->deferredOp;
+  Operation *terminal = plan->terminalOp;
+  auto yield = cast<ONNXYieldOp>(deferred.getBody().front().getTerminator());
+  unsigned terminalResult =
+      cast<OpResult>(yield.getOperand(plan->selectedResultIndex))
+          .getResultNumber();
+  Operation *firstUser = findEarliestUserInBlock(selected);
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPoint(deferred);
   IRMapping mapping;
   for (auto [argument, capture] : llvm::zip_equal(
            deferred.getBody().getArguments(), deferred.getCaptures()))
     mapping.map(argument, capture);
+  ONNXDeferredFoldableOp prefix;
+  if (!plan->prefixYieldValues.empty()) {
+    prefix = buildDeferredPrefix(*plan, rewriter);
+    for (auto [index, value] : llvm::enumerate(plan->prefixYieldValues))
+      mapping.map(value, prefix->getResult(index));
+  }
+  SmallVector<Value> replacements(deferred.getNumResults());
+  for (unsigned index = 0; index < deferred.getNumResults(); ++index)
+    if (index != plan->selectedResultIndex)
+      replacements[index] =
+          prefix.getResult(plan->originalResultToPrefixResultIndex[index]);
 
-  Block &body = deferred.getBody().front();
-
-  OpBuilder::InsertionGuard guard(rewriter);
-  if (!plan->prefix) {
+  if (firstUser)
+    rewriter.setInsertionPoint(firstUser);
+  else
     rewriter.setInsertionPoint(deferred);
-    Operation *peeled = rewriter.clone(*terminal, mapping);
+  llvm::SmallPtrSet<Operation *, 4> clonedConstants;
+  for (Value operand : terminal->getOperands()) {
+    Operation *producer = operand.getDefiningOp();
+    if (producer && producer->getBlock() == &deferred.getBody().front() &&
+        isConstLikeOperation(producer)) {
+      if (clonedConstants.insert(producer).second)
+        rewriter.clone(*producer, mapping);
+    } else {
+      assert(
+          mapping.contains(operand) && "expected a capture or prefix result");
+    }
+  }
+  Operation *peeled = rewriter.clone(*terminal, mapping);
+  if (deferred.getNumResults() == 1) {
     if (Attribute nodeName = deferred->getAttr("onnx_node_name"))
       peeled->setAttr("onnx_node_name", nodeName);
-    if (Attribute resultNames = deferred->getAttr("ResultNames"))
-      peeled->setAttr("ResultNames", resultNames);
-    rewriter.replaceOp(deferred, peeled->getResult(yieldedResultNumber));
-    return peeled;
   }
-
-  Value prefix = plan->prefix;
-  Operation *prefixOp = prefix.getDefiningOp();
-
-  Attribute nodeName = deferred->getAttr("onnx_node_name");
-  Attribute resultNames = deferred->getAttr("ResultNames");
-  rewriter.modifyOpInPlace(deferred, [&]() {
-    cast<ONNXYieldOp>(body.getTerminator()).getOperandsMutable().assign(prefix);
-    deferred.getResult().setType(prefix.getType());
-    for (StringRef name : {"onnx_node_name", "ResultNames"}) {
-      if (Attribute prefixAttr = prefixOp->getAttr(name))
-        deferred->setAttr(name, prefixAttr);
-      else
-        deferred->removeAttr(name);
+  if (auto oldNames = deferred->getAttrOfType<ArrayAttr>("ResultNames")) {
+    if (oldNames.size() == deferred.getNumResults()) {
+      SmallVector<Attribute> names(
+          peeled->getNumResults(), rewriter.getStringAttr(""));
+      if (auto terminalNames = peeled->getAttrOfType<ArrayAttr>("ResultNames"))
+        if (terminalNames.size() == names.size())
+          llvm::copy(terminalNames, names.begin());
+      names[terminalResult] = oldNames[plan->selectedResultIndex];
+      peeled->setAttr("ResultNames", rewriter.getArrayAttr(names));
     }
-  });
-
-  mapping.map(prefix, deferred.getResult());
-  // Keep the deferred prefix at its constant-side position, but place the
-  // peeled terminal next to the runtime graph that consumes it. This
-  // reproduces the terminal's original program order without moving the
-  // constant expression retained by the wrapper.
-  if (Operation *firstUserInBlock = findEarliestUserInBlock(deferred))
-    rewriter.setInsertionPoint(firstUserInBlock);
-  else
-    rewriter.setInsertionPointAfter(deferred);
-  Operation *peeled = rewriter.clone(*terminal, mapping);
-  if (nodeName)
-    peeled->setAttr("onnx_node_name", nodeName);
-  if (resultNames)
-    peeled->setAttr("ResultNames", resultNames);
-  rewriter.replaceAllUsesExcept(
-      deferred.getResult(), peeled->getResult(yieldedResultNumber), peeled);
-  rewriter.eraseOp(terminal);
+  }
+  replacements[plan->selectedResultIndex] = peeled->getResult(terminalResult);
+  rewriter.replaceOp(deferred, replacements);
   return peeled;
+}
+
+FailureOr<Operation *> peelDeferredFoldableExpression(
+    ONNXDeferredFoldableOp deferred, RewriterBase &rewriter) {
+  if (deferred.getNumResults() != 1)
+    return failure();
+  return peelDeferredFoldableExpression(deferred->getResult(0), rewriter);
 }
 
 FailureOr<llvm::SmallVector<Operation *>> inlineDeferredFoldableExpression(
@@ -634,7 +755,7 @@ FailureOr<llvm::SmallVector<Operation *>> inlineDeferredFoldableExpression(
   if (!body.mightHaveTerminator())
     return failure();
   auto yield = dyn_cast_or_null<ONNXYieldOp>(body.getTerminator());
-  if (!yield || yield.getNumOperands() != 1)
+  if (!yield || yield.getNumOperands() != deferred.getNumResults())
     return failure();
 
   IRMapping mapping;
@@ -653,16 +774,15 @@ FailureOr<llvm::SmallVector<Operation *>> inlineDeferredFoldableExpression(
       mapping.map(oldResult, newResult);
   }
 
-  Value result = mapping.lookupOrDefault(yield.getOperand(0));
-  if (!result)
-    return failure();
-  if (Operation *producer = result.getDefiningOp()) {
-    if (Attribute nodeName = deferred->getAttr("onnx_node_name"))
-      producer->setAttr("onnx_node_name", nodeName);
-    if (Attribute resultNames = deferred->getAttr("ResultNames"))
-      producer->setAttr("ResultNames", resultNames);
-  }
-  rewriter.replaceOp(deferred, result);
+  SmallVector<Value> results;
+  for (Value value : yield.getOperands())
+    results.push_back(mapping.lookupOrDefault(value));
+  if (results.size() == 1)
+    if (Operation *producer = results.front().getDefiningOp())
+      for (StringRef name : {"onnx_node_name", "ResultNames"})
+        if (Attribute attr = deferred->getAttr(name))
+          producer->setAttr(name, attr);
+  rewriter.replaceOp(deferred, results);
   return inlined;
 }
 

@@ -89,6 +89,8 @@ private:
     for (Value operand : op->getOperands()) {
       auto nested =
           dyn_cast_or_null<ONNXDeferredFoldableOp>(operand.getDefiningOp());
+      if (nested && nested.getNumResults() != 1)
+        return {};
       if (!nested)
         continue;
       if (!extensible)
@@ -101,14 +103,14 @@ private:
       DominanceInfo dominance(extensible->getParentOp());
       capturesDominateExtensible =
           llvm::all_of(op->getOperands(), [&](Value operand) {
-            return operand == extensible.getResult() ||
+            return operand == extensible.getResult(0) ||
                    shouldInlineConstant(operand) ||
                    dominance.dominates(operand, extensible.getOperation());
           });
     }
     if (extensible && !hasMultipleDeferredWrappers &&
         capturesDominateExtensible &&
-        llvm::all_of(extensible.getResult().getUses(),
+        llvm::all_of(extensible.getResult(0).getUses(),
             [&](OpOperand &use) { return use.getOwner() == op; }))
       return extensible;
     return {};
@@ -122,7 +124,7 @@ private:
     auto oldYield = cast<ONNXYieldOp>(body.getTerminator());
     Value prefix = oldYield.getOperand(0);
     IRMapping mapping;
-    mapping.map(extensible.getResult(), prefix);
+    mapping.map(extensible.getResult(0), prefix);
 
     OpBuilder bodyBuilder(rewriter.getContext());
     bodyBuilder.setInsertionPoint(oldYield);
@@ -132,7 +134,7 @@ private:
         llvm::zip_equal(extensible.getCaptures(), body.getArguments()))
       captureArguments.try_emplace(capture, argument);
     for (Value operand : op->getOperands()) {
-      if (operand == extensible.getResult())
+      if (operand == extensible.getResult(0))
         continue;
       if (mapping.contains(operand))
         continue;
@@ -156,7 +158,7 @@ private:
     bodyBuilder.create<ONNXYieldOp>(op->getLoc(), terminal->getResult(0));
     rewriter.eraseOp(oldYield);
     rewriter.modifyOpInPlace(extensible, [&]() {
-      extensible.getResult().setType(op->getResult(0).getType());
+      extensible.getResult(0).setType(op->getResult(0).getType());
       extensible->setLoc(op->getLoc());
       for (StringRef name : {"onnx_node_name", "ResultNames"}) {
         if (Attribute attr = op->getAttr(name))
@@ -165,8 +167,8 @@ private:
           extensible->removeAttr(name);
       }
     });
-    rewriter.replaceOp(op, extensible.getResult());
-    return extensible.getResult();
+    rewriter.replaceOp(op, extensible.getResult(0));
+    return extensible.getResult(0);
   }
 
   // Collect unique external inputs in operand order. Nested expressions
@@ -196,8 +198,8 @@ private:
 
   // Inline a nested body using the new wrapper's capture arguments and return
   // the mapped value that the nested body yielded.
-  static Value cloneNestedDeferredFoldable(ONNXDeferredFoldableOp nested,
-      ArrayRef<BlockArgument> arguments,
+  static SmallVector<Value> cloneNestedDeferredFoldable(
+      ONNXDeferredFoldableOp nested, ArrayRef<BlockArgument> arguments,
       const DenseMap<Value, unsigned> &captureIndices, OpBuilder &builder) {
     IRMapping mapping;
     for (auto [capture, argument] :
@@ -206,24 +208,26 @@ private:
     for (Operation &operation : nested.getBody().front().without_terminator())
       builder.clone(operation, mapping);
     auto yield = cast<ONNXYieldOp>(nested.getBody().front().getTerminator());
-    return mapping.lookup(yield.getOperand(0));
+    SmallVector<Value> values;
+    for (Value value : yield.getOperands())
+      values.push_back(mapping.lookup(value));
+    return values;
   }
 
   // Build an isolated body for one result, inlining nested deferred operands
   // and cloning non-tensor metadata constants needed by body verifiers.
-  static Value buildDeferredFoldableForResult(Operation *op, OpResult result,
-      ArrayRef<Value> captures, bool copyResultNames, RewriterBase &rewriter) {
+  static ONNXDeferredFoldableOp buildDeferredFoldableForResults(
+      Operation *op, ArrayRef<Value> captures, RewriterBase &rewriter) {
     DenseMap<Value, unsigned> captureIndices;
     for (auto [index, capture] : llvm::enumerate(captures))
       captureIndices.try_emplace(capture, index);
     auto deferred = rewriter.create<ONNXDeferredFoldableOp>(
-        op->getLoc(), result.getType(), captures);
+        op->getLoc(), op->getResultTypes(), captures);
     if (Attribute nodeName = op->getAttr("onnx_node_name"))
       deferred->setAttr("onnx_node_name", nodeName);
 
-    if (copyResultNames)
-      if (Attribute resultNames = op->getAttr("ResultNames"))
-        deferred->setAttr("ResultNames", resultNames);
+    if (Attribute resultNames = op->getAttr("ResultNames"))
+      deferred->setAttr("ResultNames", resultNames);
 
     Region &body = deferred.getBody();
     Block *block = rewriter.createBlock(&body);
@@ -245,18 +249,23 @@ private:
       }
       if (auto nested = dyn_cast_or_null<ONNXDeferredFoldableOp>(
               operand.getDefiningOp())) {
-        expressionMapping.map(
-            operand, cloneNestedDeferredFoldable(
-                         nested, arguments, captureIndices, bodyBuilder));
+        SmallVector<Value> values = cloneNestedDeferredFoldable(
+            nested, arguments, captureIndices, bodyBuilder);
+        for (auto [result, value] :
+            llvm::zip_equal(nested.getResults(), values))
+          expressionMapping.map(result, value);
         continue;
       }
       expressionMapping.map(operand, arguments[captureIndices.lookup(operand)]);
     }
 
     Operation *terminal = bodyBuilder.clone(*op, expressionMapping);
-    bodyBuilder.create<ONNXYieldOp>(
-        op->getLoc(), terminal->getResult(result.getResultNumber()));
-    return deferred.getResult();
+    bodyBuilder.create<ONNXYieldOp>(op->getLoc(), terminal->getResults());
+    for (Operation &operation :
+        llvm::make_early_inc_range(llvm::reverse(block->without_terminator())))
+      if (operation.use_empty())
+        rewriter.eraseOp(&operation);
+    return deferred;
   }
 
   // Prefer extending an unshared operand body over cloning its computation.
@@ -267,26 +276,18 @@ private:
       return extendDeferredFoldable(op, extensible, rewriter);
     SmallVector<Value> captures = collectCaptures(op);
     Value replacement =
-        buildDeferredFoldableForResult(op, op->getResult(0), captures,
-            /*copyResultNames=*/true, rewriter);
+        buildDeferredFoldableForResults(op, captures, rewriter).getResult(0);
     rewriter.replaceOp(op, replacement);
     return replacement;
   }
 
-  // Give each result its own single-result wrapper. Each body retains a
-  // clone of the producer and yields the corresponding result.
+  // Retain a multi-result producer once, preserving sharing between results.
   static FailureOr<SmallVector<Value>> buildMultiResult(
       Operation *op, RewriterBase &rewriter) {
-    assert(op->getNumResults() > 1);
     SmallVector<Value> captures = collectCaptures(op);
-    SmallVector<Value> replacements;
-    replacements.reserve(op->getNumResults());
-    for (OpResult result : op->getResults()) {
-      OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPoint(op);
-      replacements.push_back(buildDeferredFoldableForResult(
-          op, result, captures, /*copyResultNames=*/false, rewriter));
-    }
+    auto deferred = buildDeferredFoldableForResults(op, captures, rewriter);
+    SmallVector<Value> replacements(
+        deferred.getResults().begin(), deferred.getResults().end());
     rewriter.replaceOp(op, replacements);
     return replacements;
   }
@@ -371,16 +372,24 @@ public:
       bodyBuilder.clone(nestedOp, mapping);
     auto nestedYield =
         cast<ONNXYieldOp>(nested.getBody().front().getTerminator());
-    Value replacement = mapping.lookup(nestedYield.getOperand(0));
-
-    for (BlockArgument oldArgument : oldArguments)
-      oldArgument.replaceAllUsesWith(replacement);
+    for (auto [captureIndex, oldArgument] :
+        llvm::zip_equal(captureIndices, oldArguments)) {
+      unsigned resultIndex =
+          cast<OpResult>(deferred.getCaptures()[captureIndex])
+              .getResultNumber();
+      oldArgument.replaceAllUsesWith(
+          mapping.lookup(nestedYield.getOperand(resultIndex)));
+    }
     rewriter.modifyOpInPlace(deferred, [&]() {
       for (unsigned captureIndex : llvm::reverse(captureIndices)) {
         deferred->eraseOperand(captureIndex);
         body.eraseArgument(captureIndex);
       }
     });
+    for (Operation &operation :
+        llvm::make_early_inc_range(llvm::reverse(body.without_terminator())))
+      if (operation.use_empty())
+        rewriter.eraseOp(&operation);
     if (nested->use_empty())
       rewriter.eraseOp(nested);
     return success();

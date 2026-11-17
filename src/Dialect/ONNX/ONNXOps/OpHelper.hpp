@@ -212,25 +212,24 @@ mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 // DeferredConstantOpInterface reports this result as a deferred constant.
 [[nodiscard]] bool isConstantFoldable(mlir::Value value);
 
-// Return whether peeling can represent the remaining deferred expression
-// without changing the IR.
+// Inspect or peel the terminal operation for one selected deferred result.
+// Peeling retains other results and exposes computed body-local operands as
+// results of the remaining deferred expression. ConstantLike operands are
+// cloned outside; captures are used directly.
+// Place the peeled operation before its earliest user in the parent block.
+[[nodiscard]] bool canPeelDeferredFoldableExpression(mlir::Value selected);
+mlir::FailureOr<mlir::Operation *> peelDeferredFoldableExpression(
+    mlir::Value selected, mlir::RewriterBase &rewriter);
+
+// Overloads for a DeferredFoldable operation with exactly one result.
 [[nodiscard]] bool canPeelDeferredFoldableExpression(
     mlir::ONNXDeferredFoldableOp deferred);
-
-// Move the terminal operation retained by `deferred` back into its parent
-// block. A single internal operand remains represented by the shortened
-// wrapper, and the peeled terminal is placed immediately before the earliest
-// user in the wrapper's block. Peeling fails if representing the remaining
-// prefix would require multiple wrapper results. The caller can inspect
-// getTerminalOperation() before peeling to select which operations should
-// execute at runtime.
 mlir::FailureOr<mlir::Operation *> peelDeferredFoldableExpression(
     mlir::ONNXDeferredFoldableOp deferred, mlir::RewriterBase &rewriter);
 
 // Move a complete deferred expression back into its parent block, mapping its
-// captures to the values at the wrapper boundary. Returns the inlined
-// operations in program order. A body that yields a capture directly is
-// valid and returns an empty list.
+// body arguments to its captures. Return the inlined operations in program
+// order, or an empty list when the body only forwards captures.
 mlir::FailureOr<llvm::SmallVector<mlir::Operation *>>
 inlineDeferredFoldableExpression(
     mlir::ONNXDeferredFoldableOp deferred, mlir::RewriterBase &rewriter);
