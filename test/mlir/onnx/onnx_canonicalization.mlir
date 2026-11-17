@@ -985,10 +985,11 @@ func.func @consecutive_clips(%arg0: tensor<3x1024x1024xf32> {onnx.name = "input"
   // CHECK: %[[VAR_2:.*]] = onnx.Constant dense<{{.*}}> : tensor<f32>
   // CHECK: %[[VAR_3:.*]] = onnx.Constant dense<{{.*}}> : tensor<f32>
   // CHECK: %[[VAR_4:.*]] = onnx.Constant dense<{{.*}}> : tensor<f32>
-  // CHECK: %[[CONST_MAX:.*]] = "onnx.Max"(%[[VAR_1]], %[[VAR_3]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
-  // CHECK: %[[CONST_MIN:.*]] = "onnx.Min"(%[[VAR_2]], %[[VAR_4]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
-
-  // CHECK: %[[FUSED_CLIP:.*]] = "onnx.Clip"(%[[ARG0]], %[[CONST_MAX]], %[[CONST_MIN]]) : (tensor<3x1024x1024xf32>, tensor<f32>, tensor<f32>) -> tensor<3x1024x1024xf32>
+  // CHECK: %[[LOWER_MAX:.*]] = "onnx.Max"(%[[VAR_1]], %[[VAR_3]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
+  // CHECK: %[[FUSED_LOWER:.*]] = "onnx.Min"(%[[LOWER_MAX]], %[[VAR_4]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
+  // CHECK: %[[UPPER_MAX:.*]] = "onnx.Max"(%[[VAR_2]], %[[VAR_3]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
+  // CHECK: %[[FUSED_UPPER:.*]] = "onnx.Min"(%[[UPPER_MAX]], %[[VAR_4]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
+  // CHECK: %[[FUSED_CLIP:.*]] = "onnx.Clip"(%[[ARG0]], %[[FUSED_LOWER]], %[[FUSED_UPPER]]) : (tensor<3x1024x1024xf32>, tensor<f32>, tensor<f32>) -> tensor<3x1024x1024xf32>
 
   // CHECK: onnx.Return %[[FUSED_CLIP]] : tensor<3x1024x1024xf32>
 

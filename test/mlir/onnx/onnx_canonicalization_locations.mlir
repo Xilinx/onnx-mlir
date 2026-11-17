@@ -58,11 +58,14 @@ func.func @consecutive_clips(%arg0: tensor<3x1024x1024xf32>) -> (tensor<3x1024x1
   onnx.Return %5 : tensor<3x1024x1024xf32>
 
   // CHECK-LABEL: func.func @consecutive_clips
-  // CHECK: onnx.Max  
+  // CHECK: onnx.Max
   // CHECK-SAME: loc([[FUSED_LOC:#.+]])
   // CHECK: onnx.Min
   // CHECK-SAME: loc([[FUSED_LOC]])
-
+  // CHECK: onnx.Max
+  // CHECK-SAME: loc([[FUSED_LOC]])
+  // CHECK: onnx.Min
+  // CHECK-SAME: loc([[FUSED_LOC]])
   // CHECK: onnx.Clip
   // CHECK-SAME: loc([[FUSED_LOC]])
 

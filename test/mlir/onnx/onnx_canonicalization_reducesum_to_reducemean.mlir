@@ -63,6 +63,7 @@ func.func @no_fuse_wrong_scale(%arg0: tensor<2x3x4xf32>) -> tensor<2x1x4xf32> {
 // -----
 
 // An integer Mul by zero is not 1/N. isConstOf would truncate 1/N to 0.
+// Zero multiplication folds the result without introducing ReduceMean.
 // CHECK-LABEL: func.func @no_fuse_integer_zero_scale
 func.func @no_fuse_integer_zero_scale(%arg0: tensor<2x3xi32>) -> tensor<2x1xi32> {
   %axes = onnx.Constant dense<[1]> : tensor<1xi64>
@@ -71,9 +72,11 @@ func.func @no_fuse_integer_zero_scale(%arg0: tensor<2x3xi32>) -> tensor<2x1xi32>
       : (tensor<2x3xi32>, tensor<1xi64>) -> tensor<2x1xi32>
   %0 = "onnx.Mul"(%sum, %scale) : (tensor<2x1xi32>, tensor<i32>) -> tensor<2x1xi32>
   onnx.Return %0 : tensor<2x1xi32>
-  // CHECK: "onnx.ReduceSum"
-  // CHECK: "onnx.Mul"
+  // CHECK: [[ZERO:%[^ ]+]] = onnx.Constant dense<0> : tensor<2x1xi32>
+  // CHECK-NOT: "onnx.ReduceSum"
+  // CHECK-NOT: "onnx.Mul"
   // CHECK-NOT: "onnx.ReduceMean"
+  // CHECK: onnx.Return [[ZERO]] : tensor<2x1xi32>
 }
 
 // -----

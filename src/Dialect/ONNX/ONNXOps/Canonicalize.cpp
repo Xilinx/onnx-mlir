@@ -362,26 +362,20 @@ SmallVector<Value, 4> castVariadicInput(PatternRewriter &rewriter, Location loc,
   return castInputs;
 }
 
-Value maxOrDefault(PatternRewriter &rewriter, Location loc, Value a, Value b) {
-  // If A or B is NoneType, return the other value
-  if (mlir::isa<NoneType>(a.getType()))
-    return b;
-  if (mlir::isa<NoneType>(b.getType()))
-    return a;
-
-  // Otherwise, return the max of A and B
-  return rewriter.create<ONNXMaxOp>(loc, a.getType(), ValueRange{a, b});
-}
-
-Value minOrDefault(PatternRewriter &rewriter, Location loc, Value a, Value b) {
-  // If A or B is NoneType, return the other value
-  if (mlir::isa<NoneType>(a.getType()))
-    return b;
-  if (mlir::isa<NoneType>(b.getType()))
-    return a;
-
-  // Otherwise, return the min of A and B
-  return rewriter.create<ONNXMinOp>(loc, a.getType(), ValueRange{a, b});
+// Compose Clip bounds by applying the outer interval to each inner bound.
+// An omitted inner bound takes the corresponding outer bound directly.
+Value composeClipBound(PatternRewriter &rewriter, Location loc, Value inner,
+    Value outerMin, Value outerMax, bool lower) {
+  if (isNoneValue(inner))
+    return lower ? outerMin : outerMax;
+  Value bound = inner;
+  if (!isNoneValue(outerMin))
+    bound = rewriter.create<ONNXMaxOp>(
+        loc, inner.getType(), ValueRange{bound, outerMin});
+  if (!isNoneValue(outerMax))
+    bound = rewriter.create<ONNXMinOp>(
+        loc, inner.getType(), ValueRange{bound, outerMax});
+  return bound;
 }
 
 // Create a DenseElementsAttr based on the shape of type.
@@ -5439,6 +5433,202 @@ struct MoveNegToMulConstantPattern : public OpRewritePattern<ONNXMulOp> {
   }
 };
 
+// Fold integer Div(0, x) to a zero tensor with the broadcasted result shape.
+// Integer division by zero is undefined, as in constant propagation, so a
+// zero numerator yields zero on every defined input.
+struct DivZeroPattern : public OpRewritePattern<ONNXDivOp> {
+  using OpRewritePattern<ONNXDivOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXDivOp op, PatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return failure();
+    Type elementType = resultType.getElementType();
+    if (isInQuantizedDomain(op, op.getResult()))
+      return failure();
+    if (!isa<IntegerType>(elementType))
+      return failure();
+    if (!isConstOf(op->getOperand(0), 0.0))
+      return failure();
+    Attribute zero = rewriter.getZeroAttr(elementType);
+    auto value = DenseElementsAttr::get(resultType, zero);
+    rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
+    return success();
+  }
+};
+
+// Fold integer Equal(x, x) to a true tensor with the result shape.
+struct EqualSelfPattern : public OpRewritePattern<ONNXEqualOp> {
+  using OpRewritePattern<ONNXEqualOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXEqualOp op, PatternRewriter &rewriter) const override {
+    if (op->getOperand(0) != op->getOperand(1))
+      return failure();
+    auto resultType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return failure();
+    Type elementType = getElementType(op->getOperand(0).getType());
+    if (isInQuantizedDomain(op, op.getResult()))
+      return failure();
+    if (!isa<IntegerType>(elementType))
+      return failure();
+    auto value = DenseElementsAttr::get(resultType, rewriter.getBoolAttr(true));
+    rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
+    return success();
+  }
+};
+
+// Fold integer Mul(x, 0) or Mul(0, x) to a zero tensor with the result shape.
+struct MulZeroPattern : public OpRewritePattern<ONNXMulOp> {
+  using OpRewritePattern<ONNXMulOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXMulOp op, PatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return failure();
+    Type elementType = resultType.getElementType();
+    if (isInQuantizedDomain(op, op.getResult()))
+      return failure();
+    if (!isa<IntegerType>(elementType))
+      return failure();
+    if (!isConstOf(op->getOperand(0), 0.0) &&
+        !isConstOf(op->getOperand(1), 0.0))
+      return failure();
+    Attribute zero = rewriter.getZeroAttr(elementType);
+    auto value = DenseElementsAttr::get(resultType, zero);
+    rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
+    return success();
+  }
+};
+
+// Clip bounds are scalars. A splat tensor can supply a bound only when its
+// broadcasting preserves the input shape; retain its exact element value.
+static DenseElementsAttr getScalarClipBound(Value bound, Value input) {
+  Type elementType = getElementType(input.getType());
+  if (isa<quant::QuantizedType>(elementType) ||
+      !isa<IntegerType>(elementType) || elementType.isInteger(1) ||
+      getElementType(bound.getType()) != elementType ||
+      !isShapePreservingBroadcast(bound, input))
+    return {};
+  ElementsAttr elements = getDenseOrDisposableConstLikeElements(bound);
+  DenseElementsAttr dense = dyn_cast_or_null<DenseElementsAttr>(elements);
+  if (auto disposable = dyn_cast_or_null<DisposableElementsAttr>(elements)) {
+    if (!disposable.isSplat())
+      return {};
+    dense = disposable.toDenseElementsAttr();
+  }
+  if (!dense || dense.getNumElements() == 0 || !dense.isSplat())
+    return {};
+  return DenseElementsAttr::get(
+      RankedTensorType::get({}, elementType), dense.getSplatValue<Attribute>());
+}
+
+// Normalize binary Min(c, x) and Max(c, x) to put the constant on the right.
+template <typename Op>
+struct NormalizeMinMaxPattern : public OpRewritePattern<Op> {
+  using OpRewritePattern<Op>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      Op op, PatternRewriter &rewriter) const override {
+    if (op->getNumOperands() != 2)
+      return failure();
+    Value lhs = op->getOperand(0);
+    Value rhs = op->getOperand(1);
+    if (!isConstLikeValue(lhs) || isConstLikeValue(rhs))
+      return failure();
+    rewriter.modifyOpInPlace(op, [&]() {
+      op->setOperand(0, rhs);
+      op->setOperand(1, lhs);
+    });
+    return success();
+  }
+};
+
+// Rewrite integer Min(Max(x, lower), upper) to Clip(x, lower, upper) for
+// constant scalar or shape-preserving splat bounds.
+struct MinMaxToClipPattern : public OpRewritePattern<ONNXMinOp> {
+  using OpRewritePattern<ONNXMinOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXMinOp op, PatternRewriter &rewriter) const override {
+    if (op->getNumOperands() != 2)
+      return failure();
+    auto maxOp = op->getOperand(0).getDefiningOp<ONNXMaxOp>();
+    if (!maxOp || maxOp->getNumOperands() != 2 || !maxOp->hasOneUse())
+      return failure();
+    Value input = maxOp->getOperand(0);
+    if (input.getType() != maxOp.getResult().getType() ||
+        input.getType() != op.getResult().getType())
+      return failure();
+    auto lower = getScalarClipBound(maxOp->getOperand(1), input);
+    auto upper = getScalarClipBound(op->getOperand(1), input);
+    if (!lower || !upper)
+      return failure();
+    auto lowerOp =
+        rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, lower);
+    auto upperOp =
+        rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, upper);
+    rewriter.replaceOpWithNewOp<ONNXClipOp>(op, op.getResult().getType(), input,
+        lowerOp.getResult(), upperOp.getResult());
+    return success();
+  }
+};
+
+// Rewrite integer Where(x >= c, x, c) to Max(x, c), and
+// Where(x <= c, x, c) to Min(x, c), for a constant bound c.
+struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
+  using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXWhereOp op, PatternRewriter &rewriter) const override {
+    Operation *comparison = op->getOperand(0).getDefiningOp();
+    if (!comparison ||
+        !isa<ONNXGreaterOrEqualOp, ONNXLessOrEqualOp>(comparison))
+      return failure();
+    Value lhs = comparison->getOperand(0);
+    Value rhs = comparison->getOperand(1);
+    Value trueValue = op->getOperand(1);
+    Value falseValue = op->getOperand(2);
+    auto getBoundForSelectedInput = [&](Value input, Value bound) {
+      if (input.getType() != op.getResult().getType() ||
+          (input != trueValue && input != falseValue))
+        return DenseElementsAttr{};
+      return getScalarClipBound(bound, input);
+    };
+
+    auto bound = getBoundForSelectedInput(lhs, rhs);
+    const bool inputOnLeft = static_cast<bool>(bound);
+    Value input = inputOnLeft ? lhs : rhs;
+    if (!bound)
+      bound = getBoundForSelectedInput(rhs, lhs);
+    if (!bound)
+      return failure();
+
+    const bool inputOnTrueBranch = trueValue == input;
+    Value selectedValue = inputOnTrueBranch ? falseValue : trueValue;
+    auto selectedBound = getScalarClipBound(selectedValue, input);
+    if (!selectedBound || selectedBound != bound)
+      return failure();
+
+    const bool inputAtLeastBound =
+        isa<ONNXGreaterOrEqualOp>(comparison) == inputOnLeft;
+    const bool lower = inputAtLeastBound == inputOnTrueBranch;
+    auto boundOp =
+        rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, bound);
+    SmallVector<Value, 2> operands{input, boundOp.getResult()};
+    if (lower)
+      rewriter.replaceOpWithNewOp<ONNXMaxOp>(
+          op, op.getResult().getType(), operands);
+    else
+      rewriter.replaceOpWithNewOp<ONNXMinOp>(
+          op, op.getResult().getType(), operands);
+    return success();
+  }
+};
+
 } // namespace
 
 // =============================================================================
@@ -5602,6 +5792,7 @@ void ONNXDepthToSpaceOp::getCanonicalizationPatterns(
 /// on the ONNXDivOp.
 void ONNXDivOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<DivZeroPattern>(context);
   result.insert<BinaryOpBroadcastAxisPattern<ONNXDivOp>>(context);
   result.insert<PropagateScalarConstantExpandPattern<ONNXDivOp>>(context);
   result.insert<PropagateReshapeThroughBinaryOpPattern<ONNXDivOp>>(context);
@@ -5624,6 +5815,7 @@ void ONNXDimOp::getCanonicalizationPatterns(
 /// on the ONNXEqualOp.
 void ONNXEqualOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<EqualSelfPattern>(context);
   result.insert<FoldEqualDimSizesNegativePattern>(context);
   result.insert<BinaryOpBroadcastAxisPattern<ONNXEqualOp>>(context);
 }
@@ -5743,6 +5935,12 @@ void ONNXLSTMOp::getCanonicalizationPatterns(
   results.insert<RNNOpRewriteSeqLenPattern<ONNXLSTMOp>>(context);
 }
 
+/// on the ONNXMaxOp.
+void ONNXMaxOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<NormalizeMinMaxPattern<ONNXMaxOp>>(context);
+}
+
 /// on the ONNXMaxPoolSingleOutOp.
 void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
@@ -5750,9 +5948,17 @@ void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
   results.insert<FuseBackToBackMaxpools>(context);
 }
 
+/// on the ONNXMinOp.
+void ONNXMinOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<NormalizeMinMaxPattern<ONNXMinOp>>(context);
+  results.insert<MinMaxToClipPattern>(context);
+}
+
 /// on the ONNXMulOp.
 void ONNXMulOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
+  results.insert<MulZeroPattern>(context);
   results.insert<NormalizeMulPattern>(context);
   results.insert<MoveNegToMulConstantPattern>(context);
   results.insert<FuseMulConvNullBiasPattern>(context);
@@ -6116,6 +6322,7 @@ void ONNXXorOp::getCanonicalizationPatterns(
 // on the ONNXWhereOp.
 void ONNXWhereOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<WhereToMinMaxPattern>(context);
   result.insert<RemoveWhereConstantConditionPattern>(context);
   result.insert<RemoveWhereEqualPattern>(context);
   result.insert<NotWhereOptPattern>(context);
