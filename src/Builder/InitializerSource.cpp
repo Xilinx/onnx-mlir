@@ -566,10 +566,15 @@ std::shared_ptr<InitializerSourceCache> createInitializerSourceCache() {
   return std::make_shared<InitializerSourceCache>();
 }
 
+FailureOr<ElementsAttr> loadInitializerSource(
+    ONNXInitializerSourceOp op, InitializerSourceCache &cache) {
+  return resolveInitializerContents(op, cache.models);
+}
+
 FailureOr<ONNXConstantOp> materializeInitializerSource(
     ONNXInitializerSourceOp op, RewriterBase &rewriter,
     InitializerSourceCache &cache) {
-  auto value = resolveInitializerContents(op, cache.models);
+  auto value = loadInitializerSource(op, cache);
   if (failed(value))
     return failure();
   OpBuilder::InsertionGuard guard(rewriter);
