@@ -4756,6 +4756,7 @@ def ONNXMatMulIntegerOp:ONNX_Op<"MatMulInteger",
 
 def ONNXMaxOp:ONNX_Op<"Max",
   [Pure, OpVersionTrait<13>, ONNXElementwiseTrait, Commutative, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  let hasCanonicalizer = 1;
   let summary = "ONNX Max operation";
   let description = [{
   Element-wise max of each of the input tensors (with Numpy-style broadcasting support).

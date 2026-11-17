@@ -5464,8 +5464,7 @@ struct MulZeroPattern : public OpRewritePattern<ONNXMulOp> {
 static DenseElementsAttr getScalarClipBound(Value bound, Value input) {
   Type elementType = getElementType(input.getType());
   if (isa<quant::QuantizedType>(elementType) ||
-      !isa<IntegerType>(elementType) ||
-      elementType.isInteger(1) ||
+      !isa<IntegerType>(elementType) || elementType.isInteger(1) ||
       getElementType(bound.getType()) != elementType ||
       !isShapePreservingBroadcast(bound, input))
     return {};
@@ -5482,6 +5481,27 @@ static DenseElementsAttr getScalarClipBound(Value bound, Value input) {
       RankedTensorType::get({}, elementType), dense.getSplatValue<Attribute>());
 }
 
+// Normalize binary Min(c, x) and Max(c, x) to put the constant on the right.
+template <typename Op>
+struct NormalizeMinMaxPattern : public OpRewritePattern<Op> {
+  using OpRewritePattern<Op>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      Op op, PatternRewriter &rewriter) const override {
+    if (op->getNumOperands() != 2)
+      return failure();
+    Value lhs = op->getOperand(0);
+    Value rhs = op->getOperand(1);
+    if (!isConstLikeValue(lhs) || isConstLikeValue(rhs))
+      return failure();
+    rewriter.modifyOpInPlace(op, [&]() {
+      op->setOperand(0, rhs);
+      op->setOperand(1, lhs);
+    });
+    return success();
+  }
+};
+
 // Rewrite integer Min(Max(x, lower), upper) to Clip(x, lower, upper) for
 // constant scalar or shape-preserving splat bounds.
 struct MinMaxToClipPattern : public OpRewritePattern<ONNXMinOp> {
@@ -5491,30 +5511,24 @@ struct MinMaxToClipPattern : public OpRewritePattern<ONNXMinOp> {
       ONNXMinOp op, PatternRewriter &rewriter) const override {
     if (op->getNumOperands() != 2)
       return failure();
-    for (unsigned outerIndex = 0; outerIndex < 2; ++outerIndex) {
-      auto maxOp = op->getOperand(outerIndex).getDefiningOp<ONNXMaxOp>();
-      if (!maxOp || maxOp->getNumOperands() != 2 || !maxOp->hasOneUse())
-        continue;
-      for (unsigned innerIndex = 0; innerIndex < 2; ++innerIndex) {
-        Value input = maxOp->getOperand(innerIndex);
-        if (input.getType() != maxOp.getResult().getType() ||
-            input.getType() != op.getResult().getType())
-          continue;
-        auto lower =
-            getScalarClipBound(maxOp->getOperand(1 - innerIndex), input);
-        auto upper = getScalarClipBound(op->getOperand(1 - outerIndex), input);
-        if (!lower || !upper)
-          continue;
-        auto lowerOp =
-            rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, lower);
-        auto upperOp =
-            rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, upper);
-        rewriter.replaceOpWithNewOp<ONNXClipOp>(op, op.getResult().getType(),
-            input, lowerOp.getResult(), upperOp.getResult());
-        return success();
-      }
-    }
-    return failure();
+    auto maxOp = op->getOperand(0).getDefiningOp<ONNXMaxOp>();
+    if (!maxOp || maxOp->getNumOperands() != 2 || !maxOp->hasOneUse())
+      return failure();
+    Value input = maxOp->getOperand(0);
+    if (input.getType() != maxOp.getResult().getType() ||
+        input.getType() != op.getResult().getType())
+      return failure();
+    auto lower = getScalarClipBound(maxOp->getOperand(1), input);
+    auto upper = getScalarClipBound(op->getOperand(1), input);
+    if (!lower || !upper)
+      return failure();
+    auto lowerOp =
+        rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, lower);
+    auto upperOp =
+        rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, upper);
+    rewriter.replaceOpWithNewOp<ONNXClipOp>(op, op.getResult().getType(), input,
+        lowerOp.getResult(), upperOp.getResult());
+    return success();
   }
 };
 
@@ -5869,6 +5883,12 @@ void ONNXLSTMOp::getCanonicalizationPatterns(
   results.insert<RNNOpRewriteSeqLenPattern<ONNXLSTMOp>>(context);
 }
 
+/// on the ONNXMaxOp.
+void ONNXMaxOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<NormalizeMinMaxPattern<ONNXMaxOp>>(context);
+}
+
 /// on the ONNXMaxPoolSingleOutOp.
 void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
@@ -5879,6 +5899,7 @@ void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
 /// on the ONNXMinOp.
 void ONNXMinOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
+  results.insert<NormalizeMinMaxPattern<ONNXMinOp>>(context);
   results.insert<MinMaxToClipPattern>(context);
 }
 
@@ -6244,8 +6265,6 @@ void ONNXXorOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<BinaryOpBroadcastAxisPattern<ONNXXorOp>>(context);
 }
-
-
 
 // on the ONNXWhereOp.
 void ONNXWhereOp::getCanonicalizationPatterns(
