@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
+# Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+# affiliates
 
 set(LLVM_TARGET_DEFINITIONS Passes.td)
 mlir_tablegen(Passes.h.inc -gen-pass-decls -name ONNXTransforms
@@ -147,6 +149,7 @@ add_onnx_mlir_library(OMONNXRewrite
   OMONNXDecomposeConvTransposePhasedIncGen
   OMONNXDecomposeConvTranspose1dPhasedIncGen
   OMONNXConstPropIncGen
+  OMQuantizationBoundaryOpInterfaceIncGen
   OMONNXConvOptIncGen
 
   LINK_LIBS PUBLIC

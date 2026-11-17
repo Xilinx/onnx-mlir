@@ -1,3 +1,6 @@
+<!--- SPDX-License-Identifier: Apache-2.0 -->
+<!--- Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its affiliates -->
+
 # Constant Propagation for ONNX operations
 
 This document describes `--constprop-onnx` pass which is used to do
@@ -5,6 +8,31 @@ constant propagation for operations in the ONNX dialect.
 
 [source
 code](https://github.com/onnx/onnx-mlir/blob/main/src/Transform/ONNX/ConstProp.td).
+
+## Deferred expressions and quantization boundaries
+
+A deferred constant expression can participate in algebraic rewrites without
+reading initializer contents. The expression remains constant-foldable when
+its data is supplied at materialization time.
+
+Existing recipes remain opaque to ordinary constant propagation, including
+recipes whose captures are compiler-owned dense or disposable constants.
+Availability of the captures does not itself request evaluation. Downstream
+pipelines can use `populateFormDeferredFoldableExpressionPatterns` with
+`requireDeferredSource=false` to normalize those expressions as recipes too.
+
+The Add/Mul rules that move constant operands to the right preserve the
+position of a recipe ending at a quantization boundary. This matches an
+explicit boundary and avoids changing runtime operand order solely because
+its representation is deferred. Other algebraic rewrites retain their normal
+constant eligibility.
+
+The commutation rules use `QuantizationBoundaryOpInterface` to recognize
+quantize, dequantize, and combined Q/DQ operations at the end of a deferred
+recipe. The interface does not change purity, constant-foldability or
+materialization.
+Other dialects can attach external models to their quantize/dequantize
+operations without adding a dependency from the ONNX dialect to those dialects.
 
 ## Example
 Given the following code:

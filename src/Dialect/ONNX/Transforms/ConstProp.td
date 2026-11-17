@@ -61,6 +61,29 @@ def IsFromDenseConstLike:
   "Value is produced by any ConstantLike op that folds to a dense "
   "ElementsAttr (DenseElementsAttr or DisposableElementsAttr)">;
 
+// Use only for algebraic rewrites that do not inspect the payload. Preserve
+// the historical dense-only treatment of ConstantLike operations while also
+// accepting values represented by deferred constant operations. Actual
+// constant propagation must continue to require IsFromDenseConstLike.
+def IsDenseOrDeferredConstant:
+    Constraint<CPred<
+      "static_cast<bool>(getDenseOrDisposableConstLikeElements($_self)) || "
+      "isDeferredConstant($_self)">,
+  "Value is a dense or deferred constant">;
+
+def IsNotDenseOrDeferredConstant:
+    Constraint<CPred<
+      "!getDenseOrDisposableConstLikeElements($_self) && "
+      "!isDeferredConstant($_self)">,
+  "Value is neither a dense nor deferred constant">;
+
+// Ordering policy is separate from constant availability: an explicit Q/DQ
+// boundary must keep its position when represented inside a deferred recipe.
+def IsCommutationConstant:
+    Constraint<CPred<"isCommutationConstant($_self)">>;
+def IsNotCommutationConstant:
+    Constraint<CPred<"!isCommutationConstant($_self)">>;
+
 def IsFromDenseConstLikeOrNone:
   Constraint<
     CPred<"static_cast<bool>(getDenseOrDisposableConstLikeElements($_self)) || mlir::isa<NoneType>($_self.getType())">,
@@ -206,6 +229,9 @@ def CreateLogOfConst :
 
 def CreateNegOfConst :
    NativeCodeCall<"ConstPropElementwiseUnary<mlir::ONNXNegOp>($_builder, $0, $1)">;
+
+def CreateNegOfConstantExpression :
+   NativeCodeCall<"createNegOfConstantExpression($_builder, $0, $1)">;
 
 def CreateNotOfConst :
    NativeCodeCall<"ConstPropElementwiseUnary<mlir::ONNXNotOp>($_builder, $0, $1)">;
@@ -369,7 +395,8 @@ def AddConstCommutative1 : NamedPat<"AddConstCommutative1",
   (ONNXAddOp $x, $c, (location $addOp)),
   // To avoid infinite loop, constrain the first argument to be a dense constant
   // and the second to not be one.
-  [(IsFromDenseConstLike:$c), (IsNotAConstant:$x)]>;
+  [(IsCommutationConstant:$c),
+   (IsNotCommutationConstant:$x)]>;
 
 // Use associativity to add constants together.
 def AddConstAssociative1 : NamedPat<"AddConstAssociative1",
@@ -381,7 +408,9 @@ def AddConstAssociative1 : NamedPat<"AddConstAssociative1",
   (ONNXAddOp
     $x,
     (ONNXAddOp $c1, $c2)),
-  [(IsFromDenseConstLike:$c1), (IsFromDenseConstLike:$c2), (IsNotAConstant:$x), (HasOneUse:$lhs)]>;
+  [(IsDenseOrDeferredConstant:$c1),
+   (IsDenseOrDeferredConstant:$c2),
+   (IsNotDenseOrDeferredConstant:$x), (HasOneUse:$lhs)]>;
 
 // Do not apply this when both x and c are scalar since it is cheap to do.
 def AddConstAssociative2 : NamedPat<"AddConstAssociative2",
@@ -393,7 +422,10 @@ def AddConstAssociative2 : NamedPat<"AddConstAssociative2",
   (ONNXAddOp
     (ONNXAddOp $x, $y),
     $c),
-  [(IsFromDenseConstLike:$c), (IsNotAConstant:$x), (OpIsUnlikelyToBeFusedWithBias:$x), (IsNotAConstant:$y), (HasOneUse:$lhs),
+  [(IsDenseOrDeferredConstant:$c),
+   (IsNotDenseOrDeferredConstant:$x),
+   (OpIsUnlikelyToBeFusedWithBias:$x),
+   (IsNotDenseOrDeferredConstant:$y), (HasOneUse:$lhs),
    (IsNotScalar:$x), (IsNotScalar:$c)]>;
 
 // Do not apply this when both y and c are scalar since it is cheap to do.
@@ -406,7 +438,10 @@ def AddConstAssociative3 : NamedPat<"AddConstAssociative3",
   (ONNXAddOp
     (ONNXAddOp $x, $y),
     $c),
-  [(IsFromDenseConstLike:$c), (IsNotAConstant:$x), (IsNotAConstant:$y), (OpIsUnlikelyToBeFusedWithBias:$y), (HasOneUse:$rhs),
+  [(IsDenseOrDeferredConstant:$c),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y),
+   (OpIsUnlikelyToBeFusedWithBias:$y), (HasOneUse:$rhs),
    (IsNotScalar:$y), (IsNotScalar:$c)]>;
 
 def AddConstAssociative4NoFuse : NamedPat<"AddConstAssociative4NoFuse",
@@ -418,8 +453,10 @@ def AddConstAssociative4NoFuse : NamedPat<"AddConstAssociative4NoFuse",
   (ONNXAddOp
     (ONNXAddOp $x, $y),
     (ONNXAddOp $c1, $c2)),
-  [(IsFromDenseConstLike:$c1), (IsFromDenseConstLike:$c2),
-   (IsNotAConstant:$x), (IsNotAConstant:$y), 
+  [(IsDenseOrDeferredConstant:$c1),
+   (IsDenseOrDeferredConstant:$c2),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y),
    (OpIsUnlikelyToBeFusedWithBias:$x), (OpIsUnlikelyToBeFusedWithBias:$y),
    (HasOneUse:$lhs), (HasOneUse:$rhs)]>;
 
@@ -433,8 +470,10 @@ def AddConstAssociative4LhsFuse : NamedPat<"AddConstAssociativeLhsFuse",
     (ONNXAddOp $x, (ONNXAddOp $c1, $c2)),
      $y
     ),
-  [(IsFromDenseConstLike:$c1), (IsFromDenseConstLike:$c2),
-   (IsNotAConstant:$x), (IsNotAConstant:$y), 
+  [(IsDenseOrDeferredConstant:$c1),
+   (IsDenseOrDeferredConstant:$c2),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y),
    (OpIsLikelyToBeFusedWithBias:$x),
    (HasOneUse:$lhs), (HasOneUse:$rhs)]>;
 
@@ -448,8 +487,10 @@ def AddConstAssociative4RhsFuse : NamedPat<"AddConstAssociativeRhsFuse",
     $x,
     (ONNXAddOp $y, (ONNXAddOp $c1, $c2))
     ),
-  [(IsFromDenseConstLike:$c1), (IsFromDenseConstLike:$c2),
-   (IsNotAConstant:$x), (IsNotAConstant:$y), 
+  [(IsDenseOrDeferredConstant:$c1),
+   (IsDenseOrDeferredConstant:$c2),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y),
    (OpIsUnlikelyToBeFusedWithBias:$x), (OpIsLikelyToBeFusedWithBias:$y),
    (HasOneUse:$lhs), (HasOneUse:$rhs)]>;
 
@@ -628,15 +669,17 @@ def RoundConstProp : NamedPat<"RoundofConst",
     (CreateRoundOfConst $roundOp, $input),
     [(IsFromDenseConstLike:$input), (IsIntOrFloatType:$input)]>;
 
-// Change a subtraction of a constant c by an addition of -c. Helpfull to combine
-// with other add optimizations.
+// Change subtraction of a constant-foldable expression c into addition of -c.
+// Dense c is folded immediately; otherwise Neg remains in the expression until
+// its deferred payload is materialized.
 def SubConstToNeg : NamedPat<"SubConstToNeg",
     // From x - c.
     (ONNXSubOp:$subOp $x, $input),
     // To x + (-c).
-    (ONNXAddOp $x, (CreateNegOfConst $input, $input)),
-    [(IsNotAConstant:$x), (IsFromDenseConstLike:$input),
-     (IsIntOrFloatType:$input), (IsNotUnsignedIntType:$input)]>;
+    (ONNXAddOp $x, (CreateNegOfConstantExpression $input, $input)),
+    [(IsNotDenseOrDeferredConstant:$x),
+     (IsDenseOrDeferredConstant:$input), (IsIntOrFloatType:$input),
+     (IsNotUnsignedIntType:$input)]>;
 
 // Constant Propagation for Sqrt
 def SqrtofConst : NamedPat<"SqrtofConst",
@@ -718,7 +761,8 @@ def MulConstCommutative1 : NamedPat<"MulConstCommutative1",
   (ONNXMulOp:$mulOp $c, $x),
   // To mul(x, c).
   (ONNXMulOp $x, $c, (location $mulOp)),
-  [(IsFromDenseConstLike:$c), (IsNotAConstant:$x)]>;
+  [(IsCommutationConstant:$c),
+   (IsNotCommutationConstant:$x)]>;
 
 // Use associativity to mul constants together.
 def MulConstAssociative1 : NamedPat<"MulConstAssociative1",
@@ -730,7 +774,9 @@ def MulConstAssociative1 : NamedPat<"MulConstAssociative1",
   (ONNXMulOp
     $x,
     (ONNXMulOp $c1, $c2)),
-  [(IsFromDenseConstLike:$c1), (IsFromDenseConstLike:$c2), (IsNotAConstant:$x), (HasOneUse:$lhs)]>;
+  [(IsDenseOrDeferredConstant:$c1),
+   (IsDenseOrDeferredConstant:$c2),
+   (IsNotDenseOrDeferredConstant:$x), (HasOneUse:$lhs)]>;
 
 // Do not apply this when both x and c are scalar since it is cheap to do.
 def MulConstAssociative2 : NamedPat<"MulConstAssociative2",
@@ -742,7 +788,9 @@ def MulConstAssociative2 : NamedPat<"MulConstAssociative2",
   (ONNXMulOp
     (ONNXMulOp $x, $y),
     $c),
-  [(IsFromDenseConstLike:$c), (IsNotAConstant:$x), (IsNotAConstant:$y), (HasOneUse:$lhs),
+  [(IsDenseOrDeferredConstant:$c),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y), (HasOneUse:$lhs),
    (IsNotScalar:$x), (IsNotScalar:$c)]>;
 
 // Do not apply this when both y and c are scalar since it is cheap to do.
@@ -755,7 +803,9 @@ def MulConstAssociative3 : NamedPat<"MulConstAssociative3",
   (ONNXMulOp
     (ONNXMulOp $x, $y),
     $c),
-  [(IsFromDenseConstLike:$c), (IsNotAConstant:$x), (IsNotAConstant:$y), (HasOneUse:$rhs),
+  [(IsDenseOrDeferredConstant:$c),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y), (HasOneUse:$rhs),
    (IsNotScalar:$y), (IsNotScalar:$c)]>;
 
 def MulConstAssociative4 : NamedPat<"MulConstAssociative4",
@@ -767,8 +817,11 @@ def MulConstAssociative4 : NamedPat<"MulConstAssociative4",
   (ONNXMulOp
     (ONNXMulOp $x, $y),
     (ONNXMulOp $c1, $c2)),
-  [(IsFromDenseConstLike:$c1), (IsFromDenseConstLike:$c2),
-   (IsNotAConstant:$x), (IsNotAConstant:$y), (HasOneUse:$lhs), (HasOneUse:$rhs)]>;
+  [(IsDenseOrDeferredConstant:$c1),
+   (IsDenseOrDeferredConstant:$c2),
+   (IsNotDenseOrDeferredConstant:$x),
+   (IsNotDenseOrDeferredConstant:$y),
+   (HasOneUse:$lhs), (HasOneUse:$rhs)]>;
 
 // mul(add(x, b), a) -> add(mul(x, a), mul(a, b)).
 // mul(a, b) is folded to a single constant by MulConstProp.
@@ -781,8 +834,10 @@ def MulAddConstDistributive : NamedPat<"MulAddConstDistributive",
   (ONNXAddOp
     (ONNXMulOp $x, $a),
     (ONNXMulOp $a, $b)),
-  [(IsFromDenseConstLike:$a), (IsFromDenseConstLike:$b),
-   (IsNotAConstant:$x), (HasOneUse:$addOp), (IsIntOrFloatType:$a),
+  [(IsDenseOrDeferredConstant:$a),
+   (IsDenseOrDeferredConstant:$b),
+   (IsNotDenseOrDeferredConstant:$x), (HasOneUse:$addOp),
+   (IsIntOrFloatType:$a),
   (IsIntOrFloatType:$b), (IsIntOrFloatType:$x)]>;
 
 // Distribute multiplication into clip: mul(clip(x, l, u), a) -> clip(mul(x, a), mul(a, l), mul(a, u)).
