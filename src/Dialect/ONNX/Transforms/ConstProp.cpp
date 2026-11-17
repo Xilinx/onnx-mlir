@@ -102,10 +102,8 @@ bool satisfiesMaxTileFoldSize(Value result) {
   return getSizeInBytes(resultType) <= maxSize;
 }
 
-// Precondition: result has ranked tensor type with static shape and int or
-// float element type.
-bool satisfiesExpansionBound(Value result) {
-  auto resultType = dyn_cast<RankedTensorType>(result.getType());
+bool satisfiesExpansionBound(Type type, TypeRange operandTypes) {
+  auto resultType = dyn_cast<RankedTensorType>(type);
   if (!resultType || !resultType.hasStaticShape())
     return true;
   // SmallVector<WideNum> uses uint32_t for capacity when sizeof(WideNum) >= 4
@@ -118,13 +116,20 @@ bool satisfiesExpansionBound(Value result) {
     return true; // -1 == no bound
   }
   int64_t sum = 0;
-  for (auto operand : result.getDefiningOp()->getOperands()) {
-    if (auto type = dyn_cast<RankedTensorType>(operand.getType()))
+  for (Type operandType : operandTypes) {
+    if (auto type = dyn_cast<RankedTensorType>(operandType))
       if (type.hasStaticShape())
         sum += getSizeInBytes(type);
   }
   return sum * ConstPropONNXToONNXPassConfiguration::expansionBound >=
          getSizeInBytes(resultType);
+}
+
+// Precondition: result has ranked tensor type with static shape and int or
+// float element type.
+bool satisfiesExpansionBound(Value result) {
+  return satisfiesExpansionBound(
+      result.getType(), result.getDefiningOp()->getOperandTypes());
 }
 
 /// True if the transpose result's element type matches the constant input's
@@ -496,6 +501,69 @@ Value ConstPropVariadicElementwiseBinary(
   }
   return createReplacingConstantOp(rewriter, replacingValue, lhs);
 }
+
+/// Folds the dense-constant operands of a variadic elementwise op (Max, Min)
+/// into one constant and keeps the other operands. A single-operand op is
+/// replaced by its operand.
+template <typename ElementwiseVariadicOp>
+class VariadicElementwiseConstProp
+    : public OpRewritePattern<ElementwiseVariadicOp> {
+public:
+  VariadicElementwiseConstProp(MLIRContext *context, StringRef patternName)
+      : OpRewritePattern<ElementwiseVariadicOp>(context),
+        patternName(patternName) {}
+
+  LogicalResult matchAndRewrite(
+      ElementwiseVariadicOp op, PatternRewriter &rewriter) const override {
+    if (!isNotDisabled(patternName))
+      return failure();
+
+    ValueRange inputs = op.getData_0();
+    if (inputs.size() == 1) {
+      if (inputs.front().getType() != op.getType())
+        return failure();
+      rewriter.replaceOp(op, inputs.front());
+      return success();
+    }
+
+    SmallVector<Value> nonConstants;
+    SmallVector<Value> constants;
+    for (Value v : inputs)
+      (getDenseOrDisposableConstLikeElements(v) ? constants : nonConstants)
+          .push_back(v);
+    if (constants.size() < 2)
+      return failure();
+
+    ElementsAttr folded = getConstValueElements(constants.front());
+    Type elemType = folded.getElementType();
+    if (!isa<IntegerType, FloatType>(elemType))
+      return failure();
+
+    // Fold in operand order: std::max and std::min are not commutative for
+    // NaN.
+    OnnxElementsAttrBuilder elementsBuilder(rewriter.getContext());
+    for (Value rhsValue : llvm::drop_begin(constants)) {
+      auto foldedType =
+          dyn_cast_or_null<RankedTensorType>(OpTrait::util::getBroadcastedType(
+              folded.getType(), rhsValue.getType()));
+      if (!foldedType || !satisfiesExpansionBound(foldedType,
+                             {folded.getType(), rhsValue.getType()}))
+        return failure();
+      folded = elementsBuilder.combine(folded, getConstValueElements(rhsValue),
+          foldedType,
+          elementwiseBinaryOpCombiner<ElementwiseVariadicOp>(elemType));
+    }
+
+    SmallVector<Value> newOperands = std::move(nonConstants);
+    newOperands.push_back(OnnxBuilder(rewriter, op.getLoc()).constant(folded));
+    rewriter.replaceOpWithNewOp<ElementwiseVariadicOp>(
+        op, op.getType(), newOperands);
+    return success();
+  }
+
+private:
+  StringRef patternName;
+};
 
 //===----------------------------------------------------------------------===//
 //// Code to perform constant propagation for unary operation.
@@ -2698,6 +2766,10 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
   if (isConstantPropagationDisabled())
     return;
   populateWithGenerated(patterns);
+  patterns.insert<VariadicElementwiseConstProp<ONNXMaxOp>>(
+      patterns.getContext(), "MaxConstProp");
+  patterns.insert<VariadicElementwiseConstProp<ONNXMinOp>>(
+      patterns.getContext(), "MinConstProp");
   if (isNotDisabled("SplitOfConst"))
     patterns.insert<SplitOfConst>(patterns.getContext());
   patterns.insert<IfOfConst>(patterns.getContext());
