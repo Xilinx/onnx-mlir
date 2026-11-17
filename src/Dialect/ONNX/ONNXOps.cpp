@@ -164,19 +164,10 @@ LogicalResult ONNXInitializerSourceOp::verify() {
   return success();
 }
 
-Operation *ONNXDeferredFoldableOp::getTerminalOperation() {
-  if (getBody().empty())
-    return nullptr;
-  Block &body = getBody().front();
-  if (!body.mightHaveTerminator())
-    return nullptr;
-  auto yield = dyn_cast_or_null<ONNXYieldOp>(body.getTerminator());
-  if (!yield || yield.getNumOperands() != 1)
-    return nullptr;
-  auto result = dyn_cast<OpResult>(yield.getOperand(0));
-  if (!result || result.getOwner()->getBlock() != &body)
-    return nullptr;
-  return result.getOwner();
+Operation *ONNXDeferredFoldableOp::getTerminalOperation(unsigned resultIndex) {
+  assert(resultIndex < getNumResults() && "result index out of bounds");
+  auto yield = cast<ONNXYieldOp>(getBody().front().getTerminator());
+  return yield.getOperand(resultIndex).getDefiningOp();
 }
 
 OperandRange ONNXDeferredFoldableOp::getEntrySuccessorOperands(
@@ -242,20 +233,24 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
   auto yield = dyn_cast<ONNXYieldOp>(body.getTerminator());
   if (!yield)
     return emitOpError("body must terminate with onnx.Yield");
-  if (yield.getNumOperands() != 1)
-    return emitOpError("body must yield exactly one value");
-  Operation *terminal = getTerminalOperation();
-  if (!terminal) {
-    auto argument = dyn_cast<BlockArgument>(yield.getOperand(0));
-    if (!argument || argument.getOwner() != &body)
-      return emitOpError(
-          "must yield a value produced in its body or a body argument");
-    if (body.getOperations().size() != 1)
-      return emitOpError(
-          "a body that yields a capture directly must contain no other "
-          "operations");
-  } else if (terminal->getNextNode() != yield.getOperation())
-    return emitOpError("terminal operation must immediately precede its yield");
+  if (getNumResults() == 0)
+    return emitOpError("requires at least one result");
+  if (yield.getNumOperands() != getNumResults())
+    return emitOpError("body yield count must match result count");
+  for (auto [yielded, result] :
+      llvm::zip_equal(yield.getOperands(), getResults())) {
+    if (yielded.getType() != result.getType())
+      return emitOpError("yielded value type must match result type");
+    if (auto argument = dyn_cast<BlockArgument>(yielded)) {
+      if (argument.getOwner() == &body)
+        continue;
+    } else if (Operation *producer = yielded.getDefiningOp()) {
+      if (producer->getBlock() == &body)
+        continue;
+    }
+    return emitOpError(
+        "must yield a value produced in its body or a body argument");
+  }
 
   for (Operation &operation : body.without_terminator()) {
     if (!isPure(&operation))
@@ -274,8 +269,6 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
              << operation.getName();
   }
 
-  if (terminal && yield.getOperand(0).getDefiningOp() != terminal)
-    return emitOpError("must yield a result of the terminal operation");
   return success();
 }
 

@@ -23,7 +23,7 @@ func.func @nested_wrapper() -> tensor<2x2xf32> {
 
 func.func @nonterminal_yield() -> tensor<2x2xf32> {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
-  // expected-error@+1 {{'onnx.DeferredFoldable' op terminal operation must immediately precede its yield}}
+  // expected-error@+1 {{'onnx.DeferredFoldable' op body operation must contribute to the yielded value: onnx.Identity}}
   %result = "onnx.DeferredFoldable"(%weight) ({
   ^bb0(%arg0: tensor<2x2xf32>):
     %0 = "onnx.Transpose"(%arg0) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
@@ -88,7 +88,7 @@ func.func @capture_type_mismatch() -> tensor<2x2xi32> {
 
 func.func @yield_type_mismatch() -> tensor<2x2xi32> {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
-  // expected-error@+1 {{'onnx.DeferredFoldable' op along control flow edge from Operation onnx.Yield to parent results: source type #0 'tensor<2x2xf32>' should match input type #0 'tensor<2x2xi32>'}}
+  // expected-error@+1 {{'onnx.DeferredFoldable' op yielded value type must match result type}}
   %result = "onnx.DeferredFoldable"(%weight) ({
   ^bb0(%arg0: tensor<2x2xf32>):
     %0 = "onnx.Identity"(%arg0) : (tensor<2x2xf32>) -> tensor<2x2xf32>
@@ -101,7 +101,7 @@ func.func @yield_type_mismatch() -> tensor<2x2xi32> {
 
 func.func @empty_yield() -> tensor<2x2xf32> {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
-  // expected-error@+1 {{body must yield exactly one value}}
+  // expected-error@+1 {{body yield count must match result count}}
   %result = "onnx.DeferredFoldable"(%weight) ({
   ^bb0(%arg0: tensor<2x2xf32>):
     onnx.Yield
@@ -113,7 +113,7 @@ func.func @empty_yield() -> tensor<2x2xf32> {
 
 func.func @multiple_yield_values() -> tensor<2x2xf32> {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
-  // expected-error@+1 {{body must yield exactly one value}}
+  // expected-error@+1 {{body yield count must match result count}}
   %result = "onnx.DeferredFoldable"(%weight) ({
   ^bb0(%arg0: tensor<2x2xf32>):
     onnx.Yield %arg0, %arg0 : tensor<2x2xf32>, tensor<2x2xf32>

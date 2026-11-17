@@ -1746,7 +1746,9 @@ bool isCommutationConstant(Value value) {
   if (!isDeferredConstant(value))
     return false;
   auto deferred = value.getDefiningOp<ONNXDeferredFoldableOp>();
-  Operation *terminal = deferred ? deferred.getTerminalOperation() : nullptr;
+  Operation *terminal = deferred ? deferred.getTerminalOperation(
+                                       cast<OpResult>(value).getResultNumber())
+                                 : nullptr;
   // FIXME: DQ(constant) should count as a constant here. For now, reproduce
   // the existing bug for DeferredFoldable { DQ(constant) }. Canonicalizing
   // these constants to the right is desirable, but users may need to retune.

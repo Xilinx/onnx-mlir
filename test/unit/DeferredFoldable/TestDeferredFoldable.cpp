@@ -7,6 +7,7 @@
 #include "src/Dialect/ONNX/ONNXDialect.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
 #include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
+#include "src/Dialect/ONNX/TensorName.hpp"
 #include "src/Dialect/ONNX/Transforms/ConstProp.hpp"
 #include "src/Interface/QuantizationBoundaryOpInterface.hpp"
 
@@ -318,12 +319,12 @@ int testPeelOneInternalOperand(MLIRContext &context) {
   auto peeled = peelDeferredFoldableExpression(deferred, rewriter);
   if (failed(peeled) || !isa<ONNXTileOp>(*peeled) || failed(verify(*module)))
     return 1;
-  if (!isa<ONNXTransposeOp>(deferred.getTerminalOperation()))
+  if (!isa<ONNXTransposeOp>(findDeferred(*module).getTerminalOperation()))
     return 1;
   return 0;
 }
 
-int testRejectMultipleInternalOperands(MLIRContext &context) {
+int testPeelMultipleInternalOperands(MLIRContext &context) {
   auto module = parseModule(context, R"mlir(
     module {
       func.func @test() -> tensor<2x2xf32> {
@@ -343,12 +344,126 @@ int testRejectMultipleInternalOperands(MLIRContext &context) {
     return 1;
 
   ONNXDeferredFoldableOp deferred = findDeferred(*module);
-  if (canPeelDeferredFoldableExpression(deferred))
+  if (!canPeelDeferredFoldableExpression(deferred))
     return 1;
   IRRewriter rewriter(&context);
-  if (succeeded(peelDeferredFoldableExpression(deferred, rewriter)))
+  auto peeled = peelDeferredFoldableExpression(deferred, rewriter);
+  if (failed(peeled) || !isa<ONNXAddOp>(*peeled))
+    return 1;
+  auto prefix = findDeferred(*module);
+  if (!prefix || prefix.getNumResults() != 2 ||
+      (*peeled)->getOperand(0) != prefix.getResult(0) ||
+      (*peeled)->getOperand(1) != prefix.getResult(1))
     return 1;
   return failed(verify(*module));
+}
+
+int testPeelSelectedResultAndDeduplicateOperands(MLIRContext &context) {
+  auto module = parseModule(context, R"mlir(
+    module {
+      func.func @test() -> (tensor<2x2xf32>, tensor<2x2xf32>, tensor<2x2xf32>) {
+        %w = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "w", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+        %out:3 = "onnx.DeferredFoldable"(%w) ({
+        ^bb0(%a: tensor<2x2xf32>):
+          %t = "onnx.Transpose"(%a) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+          %other = "onnx.Identity"(%a) : (tensor<2x2xf32>) -> tensor<2x2xf32>
+          %sum = "onnx.Add"(%t, %t) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+          onnx.Yield %other, %sum, %other : tensor<2x2xf32>, tensor<2x2xf32>, tensor<2x2xf32>
+        }) : (tensor<2x2xf32>) -> (tensor<2x2xf32>, tensor<2x2xf32>, tensor<2x2xf32>)
+        return %out#0, %out#1, %out#2 : tensor<2x2xf32>, tensor<2x2xf32>, tensor<2x2xf32>
+      }
+    }
+  )mlir");
+  if (!module)
+    return 1;
+  auto deferred = findDeferred(*module);
+  Builder attrs(&context);
+  deferred->setAttr("onnx_node_name", attrs.getStringAttr("original"));
+  deferred->setAttr(
+      "ResultNames", attrs.getStrArrayAttr({"other", "selected", "alias"}));
+  deferred->setAttr("test.marker", attrs.getUnitAttr());
+  TensorName transposed("transposed");
+  transposed.push_back(
+      std::make_unique<TransposeTransform>(ArrayRef<int64_t>{2, 2},
+          ArrayRef<int64_t>{1, 0}, ArrayRef<int64_t>{2, 2}));
+  if (failed(transposed.setTo(deferred.getBody().front().front().getResult(0))))
+    return 1;
+  Value selected = deferred.getResult(1);
+  if (!isa<ONNXAddOp>(deferred.getTerminalOperation(1)))
+    return 1;
+  IRRewriter rewriter(&context);
+  auto peeled = peelDeferredFoldableExpression(selected, rewriter);
+  if (failed(peeled) || !isa<ONNXAddOp>(*peeled))
+    return 1;
+  auto prefix = findDeferred(*module);
+  auto function = module->lookupSymbol<func::FuncOp>("test");
+  auto ret = cast<func::ReturnOp>(function.front().getTerminator());
+  unsigned transposes = 0;
+  module->walk([&](ONNXTransposeOp) { ++transposes; });
+  if (prefix.getNumResults() != 3 || transposes != 1 ||
+      (*peeled)->getOperand(0) != (*peeled)->getOperand(1) ||
+      ret.getOperand(0) != prefix.getResult(0) ||
+      ret.getOperand(2) != prefix.getResult(1) ||
+      ret.getOperand(1) != (*peeled)->getResult(0))
+    return 1;
+  if (prefix->hasAttr("onnx_node_name") || !prefix->hasAttr("test.marker") ||
+      prefix->getAttr("ResultNames") !=
+          attrs.getArrayAttr({attrs.getStringAttr("other"),
+              attrs.getStringAttr("alias"), transposed.toAttr(&context)}) ||
+      (*peeled)->getAttr("ResultNames") != attrs.getStrArrayAttr({"selected"}))
+    return 1;
+  if (failed(verify(*module)))
+    return 1;
+  SmallString<1024> bytecode;
+  llvm::raw_svector_ostream output(bytecode);
+  if (failed(writeBytecodeToFile(*module, output)))
+    return 1;
+  auto roundTripped = parseSourceString<ModuleOp>(bytecode, &context);
+  return !roundTripped || findDeferred(*roundTripped).getNumResults() != 3 ||
+         failed(verify(*roundTripped));
+}
+
+int testPeelDQWithInternalParameters(MLIRContext &context) {
+  auto module = parseModule(context, R"mlir(
+    module {
+      func.func @test() -> tensor<4x2xf32> {
+        %w = "onnx.InitializerSource"() {kind = "external_data", length = 8 : i64, name = "w", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x4xi8>
+        %out = "onnx.DeferredFoldable"(%w) ({
+        ^bb0(%a: tensor<2x4xi8>):
+          %t = "onnx.Transpose"(%a) {perm = [1, 0]} : (tensor<2x4xi8>) -> tensor<4x2xi8>
+          %s = onnx.Constant dense<0.125> : tensor<f32>
+          %z = onnx.Constant dense<0> : tensor<i8>
+          %dq = "onnx.DequantizeLinear"(%t, %s, %z) : (tensor<4x2xi8>, tensor<f32>, tensor<i8>) -> tensor<4x2xf32>
+          onnx.Yield %dq : tensor<4x2xf32>
+        }) : (tensor<2x4xi8>) -> tensor<4x2xf32>
+        return %out : tensor<4x2xf32>
+      }
+    }
+  )mlir");
+  if (!module)
+    return 1;
+  IRRewriter rewriter(&context);
+  auto peeled = peelDeferredFoldableExpression(findDeferred(*module), rewriter);
+  if (failed(peeled) || !isa<ONNXDequantizeLinearOp>(*peeled))
+    return 1;
+  auto prefix = findDeferred(*module);
+  if (prefix.getNumResults() != 1 ||
+      (*peeled)->getOperand(0) != prefix.getResult(0))
+    return 1;
+  for (unsigned index : {1u, 2u})
+    if (!isConstLikeValue((*peeled)->getOperand(index)) ||
+        (*peeled)->getOperand(index).getDefiningOp()->getBlock() !=
+            (*peeled)->getBlock())
+      return 1;
+  if (failed(verify(*module)))
+    return 1;
+  SmallString<1024> bytecode;
+  llvm::raw_svector_ostream output(bytecode);
+  if (failed(writeBytecodeToFile(*module, output)))
+    return 1;
+  auto roundTripped = parseSourceString<ModuleOp>(bytecode, &context);
+  return !roundTripped || findDeferred(*roundTripped).getNumResults() != 1 ||
+         failed(verify(*roundTripped));
 }
 
 int testInlineCompleteRecipe(MLIRContext &context) {
@@ -394,7 +509,9 @@ int main() {
                  testBottomUpFormationWithDenseSibling(context) +
                  testRejectNondeterministicFormation(context) +
                  testPeelOneInternalOperand(context) +
-                 testRejectMultipleInternalOperands(context) +
+                 testPeelMultipleInternalOperands(context) +
+                 testPeelSelectedResultAndDeduplicateOperands(context) +
+                 testPeelDQWithInternalParameters(context) +
                  testInlineCompleteRecipe(context);
   if (failures)
     llvm::errs() << failures << " DeferredFoldable test(s) failed\n";

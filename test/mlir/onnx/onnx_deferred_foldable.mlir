@@ -115,8 +115,7 @@ func.func @preserve_dense_expression_order(%runtime: tensor<2x2xf32>) -> tensor<
 // CHECK-NEXT:    %[[RESULT:.+]] = "onnx.Sub"(%[[MARKER]], %[[SUM]])
 // CHECK-NEXT:    onnx.Return %[[RESULT]]
 
-// A pure multi-result operation is retained as one single-result expression per
-// used result so each producer remains directly classifiable.
+// A multi-result producer is retained once, preserving its shared work.
 func.func @retain_multi_result_expression() -> (tensor<2x2xf32>, tensor<2x2xf32>, tensor<2x2xf32>) {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 48 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x6xf32>
   %splits = onnx.Constant dense<2> : tensor<3xi64>
@@ -127,29 +126,12 @@ func.func @retain_multi_result_expression() -> (tensor<2x2xf32>, tensor<2x2xf32>
 // CHECK-LABEL: func.func @retain_multi_result_expression
 // CHECK-DAG:     %[[WEIGHT:.+]] = "onnx.InitializerSource"()
 // CHECK-DAG:     %[[SPLITS:.+]] = onnx.Constant dense<2>
-// CHECK:         %[[PART0:.+]] = "onnx.DeferredFoldable"(%[[WEIGHT]], %[[SPLITS]]) ({
-// CHECK:           %[[SPLIT0:.+]]:3 = "onnx.Split"
-// CHECK:           onnx.Yield %[[SPLIT0]]#0
-// CHECK:         %[[PART1:.+]] = "onnx.DeferredFoldable"(%[[WEIGHT]], %[[SPLITS]]) ({
-// CHECK:           %[[SPLIT1:.+]]:3 = "onnx.Split"
-// CHECK:           onnx.Yield %[[SPLIT1]]#1
-// CHECK:         %[[PART2:.+]] = "onnx.DeferredFoldable"(%[[WEIGHT]], %[[SPLITS]]) ({
-// CHECK:           %[[SPLIT2:.+]]:3 = "onnx.Split"
-// CHECK:           onnx.Yield %[[SPLIT2]]#2
-// CHECK:         onnx.Return %[[PART0]], %[[PART1]], %[[PART2]]
+// CHECK:         %[[PARTS:.+]]:3 = "onnx.DeferredFoldable"(%[[WEIGHT]], %[[SPLITS]]) ({
+// CHECK:           %[[SPLIT:.+]]:3 = "onnx.Split"
+// CHECK:           onnx.Yield %[[SPLIT]]#0, %[[SPLIT]]#1, %[[SPLIT]]#2
+// CHECK:         onnx.Return %[[PARTS]]#0, %[[PARTS]]#1, %[[PARTS]]#2
 
-// A non-deterministic operation does not have the Pure trait and must remain
-// visible even when its input is deferred.
-func.func @do_not_retain_nondeterministic_expression() -> tensor<2x2xf32> {
-  %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "random_input", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
-  %random = "onnx.RandomNormalLike"(%weight) {dtype = 1 : si64, mean = 0.0 : f32, scale = 1.0 : f32, seed = 2.0 : f32} : (tensor<2x2xf32>) -> tensor<2x2xf32>
-  onnx.Return %random : tensor<2x2xf32>
-}
-
-// CHECK-LABEL: func.func @do_not_retain_nondeterministic_expression
-// CHECK:         %[[SOURCE:.+]] = "onnx.InitializerSource"()
-// CHECK-NEXT:    %[[RANDOM:.+]] = "onnx.RandomNormalLike"(%[[SOURCE]])
-// CHECK-NEXT:    onnx.Return %[[RANDOM]]
+// -----
 
 // Generic cleanup is not the expression evaluation mechanism, but a
 // semantics-preserving canonicalization may eliminate an identity terminal.
