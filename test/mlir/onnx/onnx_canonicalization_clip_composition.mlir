@@ -189,5 +189,7 @@ func.func @where_after_clip(%x: tensor<2xi32>) -> tensor<2xi32> {
   return %r : tensor<2xi32>
 }
 // CHECK-LABEL: func.func @where_after_clip(
-// CHECK: [[R:%[^ ]+]] = onnx.Constant dense<2> : tensor<2xi32>
+// CHECK-DAG: [[TWO:%[^ ]+]] = onnx.Constant dense<2> : tensor<i32>
+// CHECK: [[Y:%[^ ]+]] = "onnx.Clip"(%arg0,
+// CHECK: [[R:%[^ ]+]] = "onnx.Max"([[Y]], [[TWO]])
 // CHECK: return [[R]]

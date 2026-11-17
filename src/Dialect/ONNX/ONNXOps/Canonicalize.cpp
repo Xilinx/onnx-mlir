@@ -6199,9 +6199,9 @@ void ONNXMinOp::getCanonicalizationPatterns(
   results.insert<MinMaxToClipPattern>(context);
 }
 
-// Rewrite integer Where(x >= c, x, c) to Clip(x, min=c), and
-// Where(x <= c, x, c) to Clip(x, max=c), for a constant bound c.
-struct WhereToClipPattern : public OpRewritePattern<ONNXWhereOp> {
+// Rewrite integer Where(x >= c, x, c) to Max(x, c), and
+// Where(x <= c, x, c) to Min(x, c), for a constant bound c.
+struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
   using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
@@ -6230,12 +6230,13 @@ struct WhereToClipPattern : public OpRewritePattern<ONNXWhereOp> {
         bool lower = inputAtLeastBound == (inputBranch == 1);
         auto boundOp =
             rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, bound);
-        onnx_mlir::OnnxBuilder create(rewriter, op.getLoc());
-        Value none = create.none();
-        Value min = lower ? boundOp.getResult() : none;
-        Value max = lower ? none : boundOp.getResult();
-        rewriter.replaceOpWithNewOp<ONNXClipOp>(
-            op, op.getResult().getType(), input, min, max);
+        SmallVector<Value, 2> operands{input, boundOp.getResult()};
+        if (lower)
+          rewriter.replaceOpWithNewOp<ONNXMaxOp>(
+              op, op.getResult().getType(), operands);
+        else
+          rewriter.replaceOpWithNewOp<ONNXMinOp>(
+              op, op.getResult().getType(), operands);
         return success();
       }
     }
@@ -6246,7 +6247,7 @@ struct WhereToClipPattern : public OpRewritePattern<ONNXWhereOp> {
 // on the ONNXWhereOp.
 void ONNXWhereOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  result.insert<WhereToClipPattern>(context);
+  result.insert<WhereToMinMaxPattern>(context);
   result.insert<RemoveWhereConstantConditionPattern>(context);
   result.insert<RemoveWhereEqualPattern>(context);
   result.insert<NotWhereOptPattern>(context);
