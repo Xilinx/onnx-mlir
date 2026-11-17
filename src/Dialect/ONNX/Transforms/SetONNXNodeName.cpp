@@ -64,21 +64,20 @@ void SetONNXNodeNamePass::runOnOperation() {
   // Collect
   // - all onnx_node_name strings and
   // - operations that have an empty onnx_node_name or a duplicated name.
-  moduleOp.walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
+  moduleOp.walk([&](Operation *op, const WalkStage &stage) -> WalkResult {
+    // Skip deferred bodies while retaining post-order naming elsewhere.
+    if (isa<ONNXDeferredFoldableOp>(op))
+      return WalkResult::skip();
+    if (!stage.isAfterAllRegions())
+      return WalkResult::advance();
     // Only deal with ONNX ops.
     if (op->getDialect()->getNamespace() != ONNXDialect::getDialectNamespace())
       return WalkResult::advance();
-    // A deferred expression is an implementation detail, not a collection of
-    // model nodes. Its wrapper carries any externally visible identity.
-    if (isa<ONNXDeferredFoldableOp>(op))
-      return WalkResult::skip();
-    // Constant expressions do not represent model nodes and may disappear
-    // when their payloads become available.
     if (isa<ONNXEntryPointOp, ONNXReturnOp, ONNXConstantOp>(op))
       return WalkResult::advance();
+    // Deferred sources replace constants, which are skipped above.
     if (op->getNumResults() != 0 &&
-        llvm::all_of(op->getResults(),
-            [&](Value result) { return isConstantFoldable(result); }))
+        llvm::all_of(op->getResults(), isDeferredConstant))
       return WalkResult::advance();
     StringAttr nodeName = op->getAttrOfType<mlir::StringAttr>(nodeNameAttr);
     if (nodeName && !nodeName.getValue().empty()) {
