@@ -5388,6 +5388,181 @@ struct MoveNegToMulConstantPattern : public OpRewritePattern<ONNXMulOp> {
   }
 };
 
+// Fold integer Div(0, x) to a zero tensor with the broadcasted result shape.
+// Integer division by zero is undefined, as in constant propagation, so a
+// zero numerator yields zero on every defined input.
+struct DivZeroPattern : public OpRewritePattern<ONNXDivOp> {
+  using OpRewritePattern<ONNXDivOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXDivOp op, PatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return failure();
+    Type elementType = resultType.getElementType();
+    if (isInQuantizedDomain(op, op.getResult()))
+      return failure();
+    if (!isa<IntegerType>(elementType))
+      return failure();
+    if (!isConstOf(op->getOperand(0), 0.0))
+      return failure();
+    Attribute zero = rewriter.getZeroAttr(elementType);
+    auto value = DenseElementsAttr::get(resultType, zero);
+    rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
+    return success();
+  }
+};
+
+// Fold integer Equal(x, x) to a true tensor with the result shape.
+struct EqualSelfPattern : public OpRewritePattern<ONNXEqualOp> {
+  using OpRewritePattern<ONNXEqualOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXEqualOp op, PatternRewriter &rewriter) const override {
+    if (op->getOperand(0) != op->getOperand(1))
+      return failure();
+    auto resultType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return failure();
+    Type elementType = getElementType(op->getOperand(0).getType());
+    if (isInQuantizedDomain(op, op.getResult()))
+      return failure();
+    if (!isa<IntegerType>(elementType))
+      return failure();
+    auto value = DenseElementsAttr::get(resultType, rewriter.getBoolAttr(true));
+    rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
+    return success();
+  }
+};
+
+// Fold integer Mul(x, 0) or Mul(0, x) to a zero tensor with the result shape.
+struct MulZeroPattern : public OpRewritePattern<ONNXMulOp> {
+  using OpRewritePattern<ONNXMulOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXMulOp op, PatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<RankedTensorType>(op.getResult().getType());
+    if (!resultType || !resultType.hasStaticShape())
+      return failure();
+    Type elementType = resultType.getElementType();
+    if (isInQuantizedDomain(op, op.getResult()))
+      return failure();
+    if (!isa<IntegerType>(elementType))
+      return failure();
+    if (!isConstOf(op->getOperand(0), 0.0) &&
+        !isConstOf(op->getOperand(1), 0.0))
+      return failure();
+    Attribute zero = rewriter.getZeroAttr(elementType);
+    auto value = DenseElementsAttr::get(resultType, zero);
+    rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
+    return success();
+  }
+};
+
+// Clip bounds are scalars. A splat tensor can supply a bound only when its
+// broadcasting preserves the input shape; retain its exact element value.
+static DenseElementsAttr getScalarClipBound(Value bound, Value input) {
+  Type elementType = getElementType(input.getType());
+  if (isa<quant::QuantizedType>(elementType) ||
+      !isa<IntegerType>(elementType) ||
+      elementType.isInteger(1) ||
+      getElementType(bound.getType()) != elementType ||
+      !isShapePreservingBroadcast(bound, input))
+    return {};
+  ElementsAttr elements = getDenseOrDisposableConstLikeElements(bound);
+  DenseElementsAttr dense = dyn_cast_or_null<DenseElementsAttr>(elements);
+  if (auto disposable = dyn_cast_or_null<DisposableElementsAttr>(elements)) {
+    if (!disposable.isSplat())
+      return {};
+    dense = disposable.toDenseElementsAttr();
+  }
+  if (!dense || dense.getNumElements() == 0 || !dense.isSplat())
+    return {};
+  return DenseElementsAttr::get(
+      RankedTensorType::get({}, elementType), dense.getSplatValue<Attribute>());
+}
+
+// Rewrite integer Min(Max(x, lower), upper) to Clip(x, lower, upper) for
+// constant scalar or shape-preserving splat bounds.
+struct MinMaxToClipPattern : public OpRewritePattern<ONNXMinOp> {
+  using OpRewritePattern<ONNXMinOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXMinOp op, PatternRewriter &rewriter) const override {
+    if (op->getNumOperands() != 2)
+      return failure();
+    for (unsigned outerIndex = 0; outerIndex < 2; ++outerIndex) {
+      auto maxOp = op->getOperand(outerIndex).getDefiningOp<ONNXMaxOp>();
+      if (!maxOp || maxOp->getNumOperands() != 2 || !maxOp->hasOneUse())
+        continue;
+      for (unsigned innerIndex = 0; innerIndex < 2; ++innerIndex) {
+        Value input = maxOp->getOperand(innerIndex);
+        if (input.getType() != maxOp.getResult().getType() ||
+            input.getType() != op.getResult().getType())
+          continue;
+        auto lower =
+            getScalarClipBound(maxOp->getOperand(1 - innerIndex), input);
+        auto upper = getScalarClipBound(op->getOperand(1 - outerIndex), input);
+        if (!lower || !upper)
+          continue;
+        auto lowerOp =
+            rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, lower);
+        auto upperOp =
+            rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, upper);
+        rewriter.replaceOpWithNewOp<ONNXClipOp>(op, op.getResult().getType(),
+            input, lowerOp.getResult(), upperOp.getResult());
+        return success();
+      }
+    }
+    return failure();
+  }
+};
+
+// Rewrite integer Where(x >= c, x, c) to Max(x, c), and
+// Where(x <= c, x, c) to Min(x, c), for a constant bound c.
+struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
+  using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXWhereOp op, PatternRewriter &rewriter) const override {
+    Operation *comparison = op->getOperand(0).getDefiningOp();
+    if (!comparison ||
+        !isa<ONNXGreaterOrEqualOp, ONNXLessOrEqualOp>(comparison))
+      return failure();
+    bool greaterEqual = isa<ONNXGreaterOrEqualOp>(comparison);
+    for (unsigned inputIndex = 0; inputIndex < 2; ++inputIndex) {
+      Value input = comparison->getOperand(inputIndex);
+      if (input.getType() != op.getResult().getType())
+        continue;
+      Value comparisonBound = comparison->getOperand(1 - inputIndex);
+      auto bound = getScalarClipBound(comparisonBound, input);
+      if (!bound)
+        continue;
+      for (unsigned inputBranch = 1; inputBranch <= 2; ++inputBranch) {
+        if (op->getOperand(inputBranch) != input)
+          continue;
+        auto selectedBound =
+            getScalarClipBound(op->getOperand(3 - inputBranch), input);
+        if (!selectedBound || selectedBound != bound)
+          continue;
+        bool inputAtLeastBound = greaterEqual == (inputIndex == 0);
+        bool lower = inputAtLeastBound == (inputBranch == 1);
+        auto boundOp =
+            rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, bound);
+        SmallVector<Value, 2> operands{input, boundOp.getResult()};
+        if (lower)
+          rewriter.replaceOpWithNewOp<ONNXMaxOp>(
+              op, op.getResult().getType(), operands);
+        else
+          rewriter.replaceOpWithNewOp<ONNXMinOp>(
+              op, op.getResult().getType(), operands);
+        return success();
+      }
+    }
+    return failure();
+  }
+};
+
 } // namespace
 
 // =============================================================================
@@ -5549,31 +5724,6 @@ void ONNXDepthToSpaceOp::getCanonicalizationPatterns(
 }
 
 /// on the ONNXDivOp.
-// Fold integer Div(0, x) to a zero tensor with the broadcasted result shape.
-// Integer division by zero is undefined, as in constant propagation, so a
-// zero numerator yields zero on every defined input.
-struct DivZeroPattern : public OpRewritePattern<ONNXDivOp> {
-  using OpRewritePattern<ONNXDivOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(
-      ONNXDivOp op, PatternRewriter &rewriter) const override {
-    auto resultType = dyn_cast<RankedTensorType>(op.getResult().getType());
-    if (!resultType || !resultType.hasStaticShape())
-      return failure();
-    Type elementType = resultType.getElementType();
-    if (isInQuantizedDomain(op, op.getResult()))
-      return failure();
-    if (!isa<IntegerType>(elementType))
-      return failure();
-    if (!isConstOf(op->getOperand(0), 0.0))
-      return failure();
-    Attribute zero = rewriter.getZeroAttr(elementType);
-    auto value = DenseElementsAttr::get(resultType, zero);
-    rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
-    return success();
-  }
-};
-
 void ONNXDivOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<DivZeroPattern>(context);
@@ -5597,28 +5747,6 @@ void ONNXDimOp::getCanonicalizationPatterns(
 }
 
 /// on the ONNXEqualOp.
-// Fold integer Equal(x, x) to a true tensor with the result shape.
-struct EqualSelfPattern : public OpRewritePattern<ONNXEqualOp> {
-  using OpRewritePattern<ONNXEqualOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(
-      ONNXEqualOp op, PatternRewriter &rewriter) const override {
-    if (op->getOperand(0) != op->getOperand(1))
-      return failure();
-    auto resultType = dyn_cast<RankedTensorType>(op.getResult().getType());
-    if (!resultType || !resultType.hasStaticShape())
-      return failure();
-    Type elementType = getElementType(op->getOperand(0).getType());
-    if (isInQuantizedDomain(op, op.getResult()))
-      return failure();
-    if (!isa<IntegerType>(elementType))
-      return failure();
-    auto value = DenseElementsAttr::get(resultType, rewriter.getBoolAttr(true));
-    rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
-    return success();
-  }
-};
-
 void ONNXEqualOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
   result.insert<EqualSelfPattern>(context);
@@ -5748,31 +5876,13 @@ void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
   results.insert<FuseBackToBackMaxpools>(context);
 }
 
+/// on the ONNXMinOp.
+void ONNXMinOp::getCanonicalizationPatterns(
+    RewritePatternSet &results, MLIRContext *context) {
+  results.insert<MinMaxToClipPattern>(context);
+}
+
 /// on the ONNXMulOp.
-// Fold integer Mul(x, 0) or Mul(0, x) to a zero tensor with the result shape.
-struct MulZeroPattern : public OpRewritePattern<ONNXMulOp> {
-  using OpRewritePattern<ONNXMulOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(
-      ONNXMulOp op, PatternRewriter &rewriter) const override {
-    auto resultType = dyn_cast<RankedTensorType>(op.getResult().getType());
-    if (!resultType || !resultType.hasStaticShape())
-      return failure();
-    Type elementType = resultType.getElementType();
-    if (isInQuantizedDomain(op, op.getResult()))
-      return failure();
-    if (!isa<IntegerType>(elementType))
-      return failure();
-    if (!isConstOf(op->getOperand(0), 0.0) &&
-        !isConstOf(op->getOperand(1), 0.0))
-      return failure();
-    Attribute zero = rewriter.getZeroAttr(elementType);
-    auto value = DenseElementsAttr::get(resultType, zero);
-    rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
-    return success();
-  }
-};
-
 void ONNXMulOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<MulZeroPattern>(context);
@@ -6135,114 +6245,7 @@ void ONNXXorOp::getCanonicalizationPatterns(
   result.insert<BinaryOpBroadcastAxisPattern<ONNXXorOp>>(context);
 }
 
-// Clip bounds are scalars. A splat tensor can supply a bound only when its
-// broadcasting preserves the input shape; retain its exact element value.
-static DenseElementsAttr getScalarClipBound(Value bound, Value input) {
-  Type elementType = getElementType(input.getType());
-  if (isa<quant::QuantizedType>(elementType) ||
-      !isa<IntegerType>(elementType) ||
-      elementType.isInteger(1) ||
-      getElementType(bound.getType()) != elementType ||
-      !isShapePreservingBroadcast(bound, input))
-    return {};
-  ElementsAttr elements = getDenseOrDisposableConstLikeElements(bound);
-  DenseElementsAttr dense = dyn_cast_or_null<DenseElementsAttr>(elements);
-  if (auto disposable = dyn_cast_or_null<DisposableElementsAttr>(elements)) {
-    if (!disposable.isSplat())
-      return {};
-    dense = disposable.toDenseElementsAttr();
-  }
-  if (!dense || dense.getNumElements() == 0 || !dense.isSplat())
-    return {};
-  return DenseElementsAttr::get(
-      RankedTensorType::get({}, elementType), dense.getSplatValue<Attribute>());
-}
 
-// Rewrite integer Min(Max(x, lower), upper) to Clip(x, lower, upper) for
-// constant scalar or shape-preserving splat bounds.
-struct MinMaxToClipPattern : public OpRewritePattern<ONNXMinOp> {
-  using OpRewritePattern<ONNXMinOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(
-      ONNXMinOp op, PatternRewriter &rewriter) const override {
-    if (op->getNumOperands() != 2)
-      return failure();
-    for (unsigned outerIndex = 0; outerIndex < 2; ++outerIndex) {
-      auto maxOp = op->getOperand(outerIndex).getDefiningOp<ONNXMaxOp>();
-      if (!maxOp || maxOp->getNumOperands() != 2 || !maxOp->hasOneUse())
-        continue;
-      for (unsigned innerIndex = 0; innerIndex < 2; ++innerIndex) {
-        Value input = maxOp->getOperand(innerIndex);
-        if (input.getType() != maxOp.getResult().getType() ||
-            input.getType() != op.getResult().getType())
-          continue;
-        auto lower =
-            getScalarClipBound(maxOp->getOperand(1 - innerIndex), input);
-        auto upper = getScalarClipBound(op->getOperand(1 - outerIndex), input);
-        if (!lower || !upper)
-          continue;
-        auto lowerOp =
-            rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, lower);
-        auto upperOp =
-            rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, upper);
-        rewriter.replaceOpWithNewOp<ONNXClipOp>(op, op.getResult().getType(),
-            input, lowerOp.getResult(), upperOp.getResult());
-        return success();
-      }
-    }
-    return failure();
-  }
-};
-
-void ONNXMinOp::getCanonicalizationPatterns(
-    RewritePatternSet &results, MLIRContext *context) {
-  results.insert<MinMaxToClipPattern>(context);
-}
-
-// Rewrite integer Where(x >= c, x, c) to Max(x, c), and
-// Where(x <= c, x, c) to Min(x, c), for a constant bound c.
-struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
-  using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(
-      ONNXWhereOp op, PatternRewriter &rewriter) const override {
-    Operation *comparison = op->getOperand(0).getDefiningOp();
-    if (!comparison ||
-        !isa<ONNXGreaterOrEqualOp, ONNXLessOrEqualOp>(comparison))
-      return failure();
-    bool greaterEqual = isa<ONNXGreaterOrEqualOp>(comparison);
-    for (unsigned inputIndex = 0; inputIndex < 2; ++inputIndex) {
-      Value input = comparison->getOperand(inputIndex);
-      if (input.getType() != op.getResult().getType())
-        continue;
-      Value comparisonBound = comparison->getOperand(1 - inputIndex);
-      auto bound = getScalarClipBound(comparisonBound, input);
-      if (!bound)
-        continue;
-      for (unsigned inputBranch = 1; inputBranch <= 2; ++inputBranch) {
-        if (op->getOperand(inputBranch) != input)
-          continue;
-        auto selectedBound =
-            getScalarClipBound(op->getOperand(3 - inputBranch), input);
-        if (!selectedBound || selectedBound != bound)
-          continue;
-        bool inputAtLeastBound = greaterEqual == (inputIndex == 0);
-        bool lower = inputAtLeastBound == (inputBranch == 1);
-        auto boundOp =
-            rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, bound);
-        SmallVector<Value, 2> operands{input, boundOp.getResult()};
-        if (lower)
-          rewriter.replaceOpWithNewOp<ONNXMaxOp>(
-              op, op.getResult().getType(), operands);
-        else
-          rewriter.replaceOpWithNewOp<ONNXMinOp>(
-              op, op.getResult().getType(), operands);
-        return success();
-      }
-    }
-    return failure();
-  }
-};
 
 // on the ONNXWhereOp.
 void ONNXWhereOp::getCanonicalizationPatterns(
