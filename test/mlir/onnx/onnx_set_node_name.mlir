@@ -71,3 +71,33 @@ func.func @skip_constant_foldable_expression(%arg0: tensor<2x2xf32>) -> tensor<2
 // CHECK:           onnx.Return [[RESULT]]
 }
 
+
+// -----
+
+func.func @optional_operand_keeps_name_counter(%arg0: tensor<2xf32>) -> tensor<2xf32> {
+  %none = "onnx.NoValue"() {value} : () -> none
+  %result = "onnx.Clip"(%arg0, %none, %none) : (tensor<2xf32>, none, none) -> tensor<2xf32>
+  onnx.Return %result : tensor<2xf32>
+}
+
+// CHECK-LABEL: func.func @optional_operand_keeps_name_counter
+// CHECK: "onnx.NoValue"() {onnx_node_name = "onnx.NoValue_0", value}
+// CHECK: "onnx.Clip"{{.*}}onnx_node_name = "onnx.Clip_1"
+
+// -----
+
+func.func @nested_ops_keep_postorder_names(%condition: tensor<i1>, %input: tensor<2xf32>) -> tensor<2xf32> {
+  %result = "onnx.If"(%condition) ({
+    %relu = "onnx.Relu"(%input) : (tensor<2xf32>) -> tensor<2xf32>
+    onnx.Yield %relu : tensor<2xf32>
+  }, {
+    %abs = "onnx.Abs"(%input) : (tensor<2xf32>) -> tensor<2xf32>
+    onnx.Yield %abs : tensor<2xf32>
+  }) : (tensor<i1>) -> tensor<2xf32>
+  onnx.Return %result : tensor<2xf32>
+}
+
+// CHECK-LABEL: func.func @nested_ops_keep_postorder_names
+// CHECK: "onnx.Relu"{{.*}}onnx_node_name = "onnx.Relu_0"
+// CHECK: "onnx.Abs"{{.*}}onnx_node_name = "onnx.Abs_2"
+// CHECK: onnx_node_name = "onnx.If_4"
