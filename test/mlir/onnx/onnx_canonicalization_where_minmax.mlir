@@ -282,3 +282,33 @@ func.func @paired_bounds(%x: tensor<2xi32>) -> tensor<2xi32> {
 // CHECK: [[R:%[^ ]+]] = "onnx.Clip"(%arg0, [[L]], [[U]])
 // CHECK-NOT: "onnx.Where"
 // CHECK: return [[R]]
+
+// -----
+
+func.func @constant_input_reversed_greater_equal() -> tensor<2xi32> {
+  %c = onnx.Constant dense<2> : tensor<2xi32>
+  %x = onnx.Constant dense<[1, 4]> : tensor<2xi32>
+  %p = "onnx.GreaterOrEqual"(%c, %x) : (tensor<2xi32>, tensor<2xi32>) -> tensor<2xi1>
+  %r = "onnx.Where"(%p, %x, %c) : (tensor<2xi1>, tensor<2xi32>, tensor<2xi32>) -> tensor<2xi32>
+  return %r : tensor<2xi32>
+}
+// CHECK-LABEL: func.func @constant_input_reversed_greater_equal(
+// CHECK-DAG: [[X:%[^ ]+]] = onnx.Constant dense<[1, 4]> : tensor<2xi32>
+// CHECK-DAG: [[C:%[^ ]+]] = onnx.Constant dense<2> : tensor<i32>
+// CHECK: [[R:%[^ ]+]] = "onnx.Min"([[X]], [[C]])
+// CHECK: return [[R]]
+
+// -----
+
+func.func @constant_input_reversed_less_equal() -> tensor<2xi32> {
+  %c = onnx.Constant dense<2> : tensor<2xi32>
+  %x = onnx.Constant dense<[1, 4]> : tensor<2xi32>
+  %p = "onnx.LessOrEqual"(%c, %x) : (tensor<2xi32>, tensor<2xi32>) -> tensor<2xi1>
+  %r = "onnx.Where"(%p, %x, %c) : (tensor<2xi1>, tensor<2xi32>, tensor<2xi32>) -> tensor<2xi32>
+  return %r : tensor<2xi32>
+}
+// CHECK-LABEL: func.func @constant_input_reversed_less_equal(
+// CHECK-DAG: [[X:%[^ ]+]] = onnx.Constant dense<[1, 4]> : tensor<2xi32>
+// CHECK-DAG: [[C:%[^ ]+]] = onnx.Constant dense<2> : tensor<i32>
+// CHECK: [[R:%[^ ]+]] = "onnx.Max"([[X]], [[C]])
+// CHECK: return [[R]]

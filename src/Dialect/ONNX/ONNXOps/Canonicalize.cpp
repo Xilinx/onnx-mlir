@@ -5543,37 +5543,44 @@ struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
     if (!comparison ||
         !isa<ONNXGreaterOrEqualOp, ONNXLessOrEqualOp>(comparison))
       return failure();
-    bool greaterEqual = isa<ONNXGreaterOrEqualOp>(comparison);
-    for (unsigned inputIndex = 0; inputIndex < 2; ++inputIndex) {
-      Value input = comparison->getOperand(inputIndex);
-      if (input.getType() != op.getResult().getType())
-        continue;
-      Value comparisonBound = comparison->getOperand(1 - inputIndex);
-      auto bound = getScalarClipBound(comparisonBound, input);
-      if (!bound)
-        continue;
-      for (unsigned inputBranch = 1; inputBranch <= 2; ++inputBranch) {
-        if (op->getOperand(inputBranch) != input)
-          continue;
-        auto selectedBound =
-            getScalarClipBound(op->getOperand(3 - inputBranch), input);
-        if (!selectedBound || selectedBound != bound)
-          continue;
-        bool inputAtLeastBound = greaterEqual == (inputIndex == 0);
-        bool lower = inputAtLeastBound == (inputBranch == 1);
-        auto boundOp =
-            rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, bound);
-        SmallVector<Value, 2> operands{input, boundOp.getResult()};
-        if (lower)
-          rewriter.replaceOpWithNewOp<ONNXMaxOp>(
-              op, op.getResult().getType(), operands);
-        else
-          rewriter.replaceOpWithNewOp<ONNXMinOp>(
-              op, op.getResult().getType(), operands);
-        return success();
-      }
-    }
-    return failure();
+    Value lhs = comparison->getOperand(0);
+    Value rhs = comparison->getOperand(1);
+    Value trueValue = op->getOperand(1);
+    Value falseValue = op->getOperand(2);
+    auto getBoundForSelectedInput = [&](Value input, Value bound) {
+      if (input.getType() != op.getResult().getType() ||
+          (input != trueValue && input != falseValue))
+        return DenseElementsAttr{};
+      return getScalarClipBound(bound, input);
+    };
+
+    auto bound = getBoundForSelectedInput(lhs, rhs);
+    const bool inputOnLeft = static_cast<bool>(bound);
+    Value input = inputOnLeft ? lhs : rhs;
+    if (!bound)
+      bound = getBoundForSelectedInput(rhs, lhs);
+    if (!bound)
+      return failure();
+
+    const bool inputOnTrueBranch = trueValue == input;
+    Value selectedValue = inputOnTrueBranch ? falseValue : trueValue;
+    auto selectedBound = getScalarClipBound(selectedValue, input);
+    if (!selectedBound || selectedBound != bound)
+      return failure();
+
+    const bool inputAtLeastBound =
+        isa<ONNXGreaterOrEqualOp>(comparison) == inputOnLeft;
+    const bool lower = inputAtLeastBound == inputOnTrueBranch;
+    auto boundOp =
+        rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, bound);
+    SmallVector<Value, 2> operands{input, boundOp.getResult()};
+    if (lower)
+      rewriter.replaceOpWithNewOp<ONNXMaxOp>(
+          op, op.getResult().getType(), operands);
+    else
+      rewriter.replaceOpWithNewOp<ONNXMinOp>(
+          op, op.getResult().getType(), operands);
+    return success();
   }
 };
 
