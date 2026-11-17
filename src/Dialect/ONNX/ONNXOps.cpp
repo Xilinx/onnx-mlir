@@ -182,7 +182,7 @@ Operation *ONNXDeferredFoldableOp::getTerminalOperation() {
 OperandRange ONNXDeferredFoldableOp::getEntrySuccessorOperands(
     RegionSuccessor successor) {
   assert(successor.getSuccessor() == &getBody() &&
-         "expected the deferred recipe body");
+         "expected the DeferredFoldable body");
   return getCaptures();
 }
 
@@ -194,7 +194,7 @@ void ONNXDeferredFoldableOp::getSuccessorRegions(
   }
   assert(
       point.getTerminatorPredecessorOrNull()->getParentRegion() == &getBody() &&
-      "expected the deferred recipe body");
+      "expected the DeferredFoldable body");
   regions.emplace_back(getOperation(), getOperation()->getResults());
 }
 
@@ -252,7 +252,7 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
           "must yield a value produced in its body or a body argument");
     if (body.getOperations().size() != 1)
       return emitOpError(
-          "a recipe that yields a capture directly must contain no other "
+          "a body that yields a capture directly must contain no other "
           "operations");
   } else if (terminal->getNextNode() != yield.getOperation())
     return emitOpError("terminal operation must immediately precede its yield");
@@ -270,7 +270,7 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
     if (llvm::all_of(operation.getResults(),
             [](Value result) { return result.use_empty(); }))
       return emitOpError(
-                 "body operation must contribute to the yielded recipe: ")
+                 "body operation must contribute to the yielded value: ")
              << operation.getName();
   }
 

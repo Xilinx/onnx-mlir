@@ -12,10 +12,10 @@
 namespace onnx_mlir {
 struct InitializerSourceCache;
 
-// Loads the source value without changing the IR. This supports speculative
-// inspection: if the contents affect a committed compiler decision, the
-// caller must materialize the source first so it is no longer replaceable.
-// The returned attribute retains any storage needed for its payload.
+// Reads the tensor contents without changing the source or its uses.
+// Before using the contents to choose a transformation, call
+// materializeInitializerSource so the initializer is no longer replaceable.
+// The returned attribute keeps its payload storage alive.
 mlir::FailureOr<mlir::ElementsAttr> loadInitializerSource(
     mlir::ONNXInitializerSourceOp op, InitializerSourceCache &cache);
 

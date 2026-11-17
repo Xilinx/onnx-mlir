@@ -5633,7 +5633,7 @@ struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
   }
 };
 
-// Canonicalization may reduce a deferred recipe to yielding one of its
+// Canonicalization may reduce a deferred expression to yielding one of its
 // captures. Remove that no-op wrapper so an unchanged value is not left behind
 // an artificial deferred-foldable boundary.
 struct ElideEmptyDeferredFoldable

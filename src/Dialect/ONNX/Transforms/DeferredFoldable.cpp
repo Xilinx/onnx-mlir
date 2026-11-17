@@ -83,7 +83,7 @@ public:
 private:
   // Reuse a single unshared operand wrapper only when its new captures
   // dominate it; otherwise build a new wrapper at the consuming operation.
-  static ONNXDeferredFoldableOp findExtensibleRecipe(Operation *op) {
+  static ONNXDeferredFoldableOp findExtensibleDeferredFoldable(Operation *op) {
     ONNXDeferredFoldableOp extensible;
     bool hasMultipleDeferredWrappers = false;
     for (Value operand : op->getOperands()) {
@@ -116,8 +116,8 @@ private:
 
   // Append the consumer to a reusable body, adding captures and updating the
   // yielded value, result type and provenance before replacing the consumer.
-  static Value extendRecipe(Operation *op, ONNXDeferredFoldableOp extensible,
-      RewriterBase &rewriter) {
+  static Value extendDeferredFoldable(Operation *op,
+      ONNXDeferredFoldableOp extensible, RewriterBase &rewriter) {
     Block &body = extensible.getBody().front();
     auto oldYield = cast<ONNXYieldOp>(body.getTerminator());
     Value prefix = oldYield.getOperand(0);
@@ -196,7 +196,7 @@ private:
 
   // Inline a nested body using the new wrapper's capture arguments and return
   // the mapped value that the nested body yielded.
-  static Value cloneNestedRecipe(ONNXDeferredFoldableOp nested,
+  static Value cloneNestedDeferredFoldable(ONNXDeferredFoldableOp nested,
       ArrayRef<BlockArgument> arguments,
       const DenseMap<Value, unsigned> &captureIndices, OpBuilder &builder) {
     IRMapping mapping;
@@ -211,7 +211,7 @@ private:
 
   // Build an isolated body for one result, inlining nested deferred operands
   // and cloning non-tensor metadata constants needed by body verifiers.
-  static Value buildRecipeForResult(Operation *op, OpResult result,
+  static Value buildDeferredFoldableForResult(Operation *op, OpResult result,
       ArrayRef<Value> captures, bool copyResultNames, RewriterBase &rewriter) {
     DenseMap<Value, unsigned> captureIndices;
     for (auto [index, capture] : llvm::enumerate(captures))
@@ -245,8 +245,9 @@ private:
       }
       if (auto nested = dyn_cast_or_null<ONNXDeferredFoldableOp>(
               operand.getDefiningOp())) {
-        expressionMapping.map(operand,
-            cloneNestedRecipe(nested, arguments, captureIndices, bodyBuilder));
+        expressionMapping.map(
+            operand, cloneNestedDeferredFoldable(
+                         nested, arguments, captureIndices, bodyBuilder));
         continue;
       }
       expressionMapping.map(operand, arguments[captureIndices.lookup(operand)]);
@@ -262,11 +263,12 @@ private:
   static FailureOr<Value> buildSingleResult(
       Operation *op, RewriterBase &rewriter) {
     assert(op->getNumResults() == 1);
-    if (auto extensible = findExtensibleRecipe(op))
-      return extendRecipe(op, extensible, rewriter);
+    if (auto extensible = findExtensibleDeferredFoldable(op))
+      return extendDeferredFoldable(op, extensible, rewriter);
     SmallVector<Value> captures = collectCaptures(op);
-    Value replacement = buildRecipeForResult(op, op->getResult(0), captures,
-        /*copyResultNames=*/true, rewriter);
+    Value replacement =
+        buildDeferredFoldableForResult(op, op->getResult(0), captures,
+            /*copyResultNames=*/true, rewriter);
     rewriter.replaceOp(op, replacement);
     return replacement;
   }
@@ -282,7 +284,7 @@ private:
     for (OpResult result : op->getResults()) {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPoint(op);
-      replacements.push_back(buildRecipeForResult(
+      replacements.push_back(buildDeferredFoldableForResult(
           op, result, captures, /*copyResultNames=*/false, rewriter));
     }
     rewriter.replaceOp(op, replacements);

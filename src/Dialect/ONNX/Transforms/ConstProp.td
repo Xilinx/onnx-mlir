@@ -77,8 +77,6 @@ def IsNotDenseOrDeferredConstant:
       "!isDeferredConstant($_self)">,
   "Value is neither a dense nor deferred constant">;
 
-// Ordering policy is separate from constant availability: an explicit Q/DQ
-// boundary must keep its position when represented inside a deferred recipe.
 def IsCommutationConstant:
     Constraint<CPred<"isCommutationConstant($_self)">>;
 def IsNotCommutationConstant:
@@ -393,8 +391,7 @@ def AddConstCommutative1 : NamedPat<"AddConstCommutative1",
   (ONNXAddOp:$addOp $c, $x),
   // To add(x, c).
   (ONNXAddOp $x, $c, (location $addOp)),
-  // To avoid infinite loop, constrain the first argument to be a dense constant
-  // and the second to not be one.
+  // Require exactly one operand to qualify, preventing repeated swapping.
   [(IsCommutationConstant:$c),
    (IsNotCommutationConstant:$x)]>;
 

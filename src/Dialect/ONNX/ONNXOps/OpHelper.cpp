@@ -507,9 +507,9 @@ namespace {
 // Peeling changes Deferred(prefix -> terminal) into Deferred(prefix) ->
 // terminal. Planning checks representability without changing the IR.
 struct DeferredPeelPlan {
-  // Operation to clone into the surrounding block and remove from the recipe.
+  // Operation to clone into the surrounding block and remove from the body.
   Operation *terminal;
-  // Body-local value yielded by the shortened recipe; null when the terminal
+  // Body-local value yielded by the shortened body; null when the terminal
   // uses only captures and the wrapper can be removed entirely.
   Value prefix;
 };
