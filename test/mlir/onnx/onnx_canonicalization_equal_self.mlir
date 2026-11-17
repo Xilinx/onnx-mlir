@@ -1,5 +1,4 @@
-// RUN: onnx-mlir-opt --unsafe-math-optimizations=false --canonicalize %s --split-input-file | FileCheck %s --check-prefixes=CHECK,STRICT
-// RUN: onnx-mlir-opt --unsafe-math-optimizations=true --canonicalize %s --split-input-file | FileCheck %s --check-prefixes=CHECK,UNSAFE
+// RUN: onnx-mlir-opt --canonicalize %s --split-input-file | FileCheck %s
 
 func.func @integer(%x: tensor<2x3xi32>) -> tensor<2x3xi1> {
   %r = "onnx.Equal"(%x, %x) : (tensor<2x3xi32>, tensor<2x3xi32>) -> tensor<2x3xi1>
@@ -28,8 +27,7 @@ func.func @float(%x: tensor<2xf32>) -> tensor<2xi1> {
   return %r : tensor<2xi1>
 }
 // CHECK-LABEL: func.func @float(
-// STRICT: [[R:%[^ ]+]] = "onnx.Equal"
-// UNSAFE: [[R:%[^ ]+]] = onnx.Constant dense<true>
+// CHECK: [[R:%[^ ]+]] = "onnx.Equal"
 // CHECK: return [[R]]
 
 // -----
@@ -60,8 +58,7 @@ func.func @nan() -> tensor<2xi1> {
   return %r : tensor<2xi1>
 }
 // CHECK-LABEL: func.func @nan(
-// STRICT: [[R:%[^ ]+]] = "onnx.Equal"
-// UNSAFE: [[R:%[^ ]+]] = onnx.Constant dense<true>
+// CHECK: [[R:%[^ ]+]] = "onnx.Equal"
 // CHECK: return [[R]]
 
 // -----

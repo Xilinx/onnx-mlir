@@ -5549,10 +5549,9 @@ void ONNXDepthToSpaceOp::getCanonicalizationPatterns(
 }
 
 /// on the ONNXDivOp.
-// Fold Div(0, x) to a zero tensor with the broadcasted result shape.
+// Fold integer Div(0, x) to a zero tensor with the broadcasted result shape.
 // Integer division by zero is undefined, as in constant propagation, so a
-// zero numerator yields zero on every defined input. Floating-point division
-// requires unsafe math because of NaNs, zero divisors and signed zeros.
+// zero numerator yields zero on every defined input.
 struct DivZeroPattern : public OpRewritePattern<ONNXDivOp> {
   using OpRewritePattern<ONNXDivOp>::OpRewritePattern;
 
@@ -5564,8 +5563,7 @@ struct DivZeroPattern : public OpRewritePattern<ONNXDivOp> {
     Type elementType = resultType.getElementType();
     if (isInQuantizedDomain(op, op.getResult()))
       return failure();
-    if (!isa<IntegerType>(elementType) &&
-        !(isa<FloatType>(elementType) && enableUnsafeMath))
+    if (!isa<IntegerType>(elementType))
       return failure();
     if (!isConstOf(op->getOperand(0), 0.0))
       return failure();
@@ -5599,9 +5597,7 @@ void ONNXDimOp::getCanonicalizationPatterns(
 }
 
 /// on the ONNXEqualOp.
-// Fold Equal(x, x) to a true tensor with the result shape.
-// Integer self-comparison is always true. Floating-point self-comparison
-// requires unsafe math because NaN is not equal to itself.
+// Fold integer Equal(x, x) to a true tensor with the result shape.
 struct EqualSelfPattern : public OpRewritePattern<ONNXEqualOp> {
   using OpRewritePattern<ONNXEqualOp>::OpRewritePattern;
 
@@ -5615,8 +5611,7 @@ struct EqualSelfPattern : public OpRewritePattern<ONNXEqualOp> {
     Type elementType = getElementType(op->getOperand(0).getType());
     if (isInQuantizedDomain(op, op.getResult()))
       return failure();
-    if (!isa<IntegerType>(elementType) &&
-        !(isa<FloatType>(elementType) && enableUnsafeMath))
+    if (!isa<IntegerType>(elementType))
       return failure();
     auto value = DenseElementsAttr::get(resultType, rewriter.getBoolAttr(true));
     rewriter.replaceOpWithNewOp<ONNXConstantOp>(op, Attribute{}, value);
@@ -5754,9 +5749,7 @@ void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
 }
 
 /// on the ONNXMulOp.
-// Fold Mul(x, 0) or Mul(0, x) to a zero tensor with the result shape.
-// Floating-point zero multiplication
-// requires unsafe math because it can change NaNs, infinities and signed zeros.
+// Fold integer Mul(x, 0) or Mul(0, x) to a zero tensor with the result shape.
 struct MulZeroPattern : public OpRewritePattern<ONNXMulOp> {
   using OpRewritePattern<ONNXMulOp>::OpRewritePattern;
 
@@ -5768,8 +5761,7 @@ struct MulZeroPattern : public OpRewritePattern<ONNXMulOp> {
     Type elementType = resultType.getElementType();
     if (isInQuantizedDomain(op, op.getResult()))
       return failure();
-    if (!isa<IntegerType>(elementType) &&
-        !(isa<FloatType>(elementType) && enableUnsafeMath))
+    if (!isa<IntegerType>(elementType))
       return failure();
     if (!isConstOf(op->getOperand(0), 0.0) &&
         !isConstOf(op->getOperand(1), 0.0))
@@ -6148,7 +6140,7 @@ void ONNXXorOp::getCanonicalizationPatterns(
 static DenseElementsAttr getScalarClipBound(Value bound, Value input) {
   Type elementType = getElementType(input.getType());
   if (isa<quant::QuantizedType>(elementType) ||
-      (!isa<IntegerType>(elementType) && !isa<FloatType>(elementType)) ||
+      !isa<IntegerType>(elementType) ||
       elementType.isInteger(1) ||
       getElementType(bound.getType()) != elementType ||
       !isShapePreservingBroadcast(bound, input))
@@ -6166,10 +6158,8 @@ static DenseElementsAttr getScalarClipBound(Value bound, Value input) {
       RankedTensorType::get({}, elementType), dense.getSplatValue<Attribute>());
 }
 
-// Rewrite Min(Max(x, lower), upper) to Clip(x, lower, upper) for constant
-// scalar or shape-preserving splat bounds.
-// Floating-point operand ordering can affect NaNs and signed zeros, so
-// require unsafe math.
+// Rewrite integer Min(Max(x, lower), upper) to Clip(x, lower, upper) for
+// constant scalar or shape-preserving splat bounds.
 struct MinMaxToClipPattern : public OpRewritePattern<ONNXMinOp> {
   using OpRewritePattern<ONNXMinOp>::OpRewritePattern;
 
@@ -6189,8 +6179,7 @@ struct MinMaxToClipPattern : public OpRewritePattern<ONNXMinOp> {
         auto lower =
             getScalarClipBound(maxOp->getOperand(1 - innerIndex), input);
         auto upper = getScalarClipBound(op->getOperand(1 - outerIndex), input);
-        if (!lower || !upper ||
-            (isa<FloatType>(lower.getElementType()) && !enableUnsafeMath))
+        if (!lower || !upper)
           continue;
         auto lowerOp =
             rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, lower);
@@ -6210,10 +6199,8 @@ void ONNXMinOp::getCanonicalizationPatterns(
   results.insert<MinMaxToClipPattern>(context);
 }
 
-// Rewrite Where(x >= c, x, c) to Clip(x, min=c), and
+// Rewrite integer Where(x >= c, x, c) to Clip(x, min=c), and
 // Where(x <= c, x, c) to Clip(x, max=c), for a constant bound c.
-// Integer ties select equal values. Float NaNs and signed-zero ties require
-// unsafe math.
 struct WhereToClipPattern : public OpRewritePattern<ONNXWhereOp> {
   using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
 
@@ -6230,8 +6217,7 @@ struct WhereToClipPattern : public OpRewritePattern<ONNXWhereOp> {
         continue;
       Value comparisonBound = comparison->getOperand(1 - inputIndex);
       auto bound = getScalarClipBound(comparisonBound, input);
-      if (!bound ||
-          (isa<FloatType>(bound.getElementType()) && !enableUnsafeMath))
+      if (!bound)
         continue;
       for (unsigned inputBranch = 1; inputBranch <= 2; ++inputBranch) {
         if (op->getOperand(inputBranch) != input)

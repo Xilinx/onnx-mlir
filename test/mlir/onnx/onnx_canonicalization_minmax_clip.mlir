@@ -1,5 +1,4 @@
-// RUN: onnx-mlir-opt --unsafe-math-optimizations=false --canonicalize="test-convergence=true" %s --split-input-file | FileCheck %s --check-prefixes=CHECK,STRICT
-// RUN: onnx-mlir-opt --unsafe-math-optimizations=true --canonicalize="test-convergence=true" %s --split-input-file | FileCheck %s --check-prefixes=CHECK,UNSAFE
+// RUN: onnx-mlir-opt --canonicalize="test-convergence=true" %s --split-input-file | FileCheck %s
 
 func.func @integer(%x: tensor<2x3xi32>) -> tensor<2x3xi32> {
   %l = onnx.Constant dense<-2> : tensor<1xi32>
@@ -92,9 +91,8 @@ func.func @float(%x: tensor<2xf32>) -> tensor<2xf32> {
   return %r : tensor<2xf32>
 }
 // CHECK-LABEL: func.func @float(
-// STRICT: "onnx.Max"
-// STRICT: [[R:%[^ ]+]] = "onnx.Min"
-// UNSAFE: [[R:%[^ ]+]] = "onnx.Clip"(%arg0,
+// CHECK: "onnx.Max"
+// CHECK: [[R:%[^ ]+]] = "onnx.Min"
 // CHECK: return [[R]]
 
 // -----
@@ -107,9 +105,8 @@ func.func @double(%x: tensor<2xf64>) -> tensor<2xf64> {
   return %r : tensor<2xf64>
 }
 // CHECK-LABEL: func.func @double(
-// STRICT: "onnx.Max"
-// STRICT: [[R:%[^ ]+]] = "onnx.Min"
-// UNSAFE: [[R:%[^ ]+]] = "onnx.Clip"(%arg0,
+// CHECK: "onnx.Max"
+// CHECK: [[R:%[^ ]+]] = "onnx.Min"
 // CHECK: return [[R]]
 
 // -----

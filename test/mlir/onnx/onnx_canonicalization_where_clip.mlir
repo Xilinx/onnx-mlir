@@ -1,5 +1,4 @@
-// RUN: onnx-mlir-opt --unsafe-math-optimizations=false --canonicalize="test-convergence=true" %s --split-input-file | FileCheck %s --check-prefixes=CHECK,STRICT
-// RUN: onnx-mlir-opt --unsafe-math-optimizations=true --canonicalize="test-convergence=true" %s --split-input-file | FileCheck %s --check-prefixes=CHECK,UNSAFE
+// RUN: onnx-mlir-opt --canonicalize="test-convergence=true" %s --split-input-file | FileCheck %s
 
 func.func @greaterorequal_input_true(%x: tensor<2xi32>) -> tensor<2xi32> {
   %c = onnx.Constant dense<3> : tensor<1xi32>
@@ -148,9 +147,8 @@ func.func @float(%x: tensor<2xf32>) -> tensor<2xf32> {
   return %r : tensor<2xf32>
 }
 // CHECK-LABEL: func.func @float(
-// STRICT: "onnx.GreaterOrEqual"
-// STRICT: [[R:%[^ ]+]] = "onnx.Where"
-// UNSAFE: [[R:%[^ ]+]] = "onnx.Clip"(%arg0,
+// CHECK: "onnx.GreaterOrEqual"
+// CHECK: [[R:%[^ ]+]] = "onnx.Where"
 // CHECK: return [[R]]
 
 // -----
@@ -229,9 +227,8 @@ func.func @nan() -> tensor<2xf32> {
   return %r : tensor<2xf32>
 }
 // CHECK-LABEL: func.func @nan(
-// STRICT: "onnx.GreaterOrEqual"
-// STRICT: [[R:%[^ ]+]] = "onnx.Where"
-// UNSAFE: [[R:%[^ ]+]] = "onnx.Clip"
+// CHECK: "onnx.GreaterOrEqual"
+// CHECK: [[R:%[^ ]+]] = "onnx.Where"
 // CHECK: return [[R]]
 
 // -----
@@ -244,9 +241,8 @@ func.func @infinity() -> tensor<2xf32> {
   return %r : tensor<2xf32>
 }
 // CHECK-LABEL: func.func @infinity(
-// STRICT: "onnx.GreaterOrEqual"
-// STRICT: [[R:%[^ ]+]] = "onnx.Where"
-// UNSAFE: [[R:%[^ ]+]] = "onnx.Clip"
+// CHECK: "onnx.GreaterOrEqual"
+// CHECK: [[R:%[^ ]+]] = "onnx.Where"
 // CHECK: return [[R]]
 
 // -----
@@ -259,9 +255,8 @@ func.func @negative_zero() -> tensor<2xf32> {
   return %r : tensor<2xf32>
 }
 // CHECK-LABEL: func.func @negative_zero(
-// STRICT: "onnx.GreaterOrEqual"
-// STRICT: [[R:%[^ ]+]] = "onnx.Where"
-// UNSAFE: [[R:%[^ ]+]] = "onnx.Clip"
+// CHECK: "onnx.GreaterOrEqual"
+// CHECK: [[R:%[^ ]+]] = "onnx.Where"
 // CHECK: return [[R]]
 
 // -----

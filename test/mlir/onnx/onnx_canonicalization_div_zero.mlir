@@ -1,5 +1,4 @@
-// RUN: onnx-mlir-opt --unsafe-math-optimizations=false --canonicalize %s --split-input-file | FileCheck %s --check-prefixes=CHECK,STRICT
-// RUN: onnx-mlir-opt --unsafe-math-optimizations=true --canonicalize %s --split-input-file | FileCheck %s --check-prefixes=CHECK,UNSAFE
+// RUN: onnx-mlir-opt --canonicalize %s --split-input-file | FileCheck %s
 
 func.func @integer_broadcast(%x: tensor<2x1xi32>) -> tensor<2x3xi32> {
   %z = onnx.Constant dense<0> : tensor<1x3xi32>
@@ -31,8 +30,7 @@ func.func @float_broadcast(%x: tensor<2x1xf32>) -> tensor<2x3xf32> {
   return %r : tensor<2x3xf32>
 }
 // CHECK-LABEL: func.func @float_broadcast(
-// STRICT: [[R:%[^ ]+]] = "onnx.Div"
-// UNSAFE: [[R:%[^ ]+]] = onnx.Constant dense<0.000000e+00> : tensor<2x3xf32>
+// CHECK: [[R:%[^ ]+]] = "onnx.Div"
 // CHECK: return [[R]]
 
 // -----
@@ -43,8 +41,7 @@ func.func @double(%x: tensor<2xf64>) -> tensor<2xf64> {
   return %r : tensor<2xf64>
 }
 // CHECK-LABEL: func.func @double(
-// STRICT: [[R:%[^ ]+]] = "onnx.Div"
-// UNSAFE: [[R:%[^ ]+]] = onnx.Constant dense<0.000000e+00> : tensor<2xf64>
+// CHECK: [[R:%[^ ]+]] = "onnx.Div"
 // CHECK: return [[R]]
 
 // -----
@@ -89,8 +86,7 @@ func.func @nan() -> tensor<2xf32> {
   return %r : tensor<2xf32>
 }
 // CHECK-LABEL: func.func @nan(
-// STRICT: [[R:%[^ ]+]] = "onnx.Div"
-// UNSAFE: [[R:%[^ ]+]] = onnx.Constant dense<0.000000e+00> : tensor<2xf32>
+// CHECK: [[R:%[^ ]+]] = "onnx.Div"
 // CHECK: return [[R]]
 
 // -----
@@ -102,8 +98,7 @@ func.func @infinity() -> tensor<2xf32> {
   return %r : tensor<2xf32>
 }
 // CHECK-LABEL: func.func @infinity(
-// STRICT: [[R:%[^ ]+]] = "onnx.Div"
-// UNSAFE: [[R:%[^ ]+]] = onnx.Constant dense<0.000000e+00> : tensor<2xf32>
+// CHECK: [[R:%[^ ]+]] = "onnx.Div"
 // CHECK: return [[R]]
 
 // -----
@@ -115,8 +110,7 @@ func.func @negative() -> tensor<2xf32> {
   return %r : tensor<2xf32>
 }
 // CHECK-LABEL: func.func @negative(
-// STRICT: [[R:%[^ ]+]] = "onnx.Div"
-// UNSAFE: [[R:%[^ ]+]] = onnx.Constant dense<0.000000e+00> : tensor<2xf32>
+// CHECK: [[R:%[^ ]+]] = "onnx.Div"
 // CHECK: return [[R]]
 
 // -----
@@ -128,8 +122,7 @@ func.func @zero() -> tensor<2xf32> {
   return %r : tensor<2xf32>
 }
 // CHECK-LABEL: func.func @zero(
-// STRICT: [[R:%[^ ]+]] = "onnx.Div"
-// UNSAFE: [[R:%[^ ]+]] = onnx.Constant dense<0.000000e+00> : tensor<2xf32>
+// CHECK: [[R:%[^ ]+]] = "onnx.Div"
 // CHECK: return [[R]]
 
 
@@ -152,8 +145,7 @@ func.func @half(%x: tensor<2xf16>) -> tensor<2xf16> {
   return %r : tensor<2xf16>
 }
 // CHECK-LABEL: func.func @half(
-// STRICT: [[R:%[^ ]+]] = "onnx.Div"
-// UNSAFE: [[R:%[^ ]+]] = onnx.Constant dense<0.000000e+00> : tensor<2xf16>
+// CHECK: [[R:%[^ ]+]] = "onnx.Div"
 // CHECK: return [[R]]
 
 // -----
@@ -191,9 +183,8 @@ func.func @qdq(%x: tensor<2xi8>) -> tensor<2xi8> {
   return %q : tensor<2xi8>
 }
 // CHECK-LABEL: func.func @qdq(
-// STRICT: "onnx.DequantizeLinear"
-// STRICT: [[R:%[^ ]+]] = "onnx.Div"
-// UNSAFE: [[R:%[^ ]+]] = onnx.Constant dense<0.000000e+00> : tensor<2xf32>
+// CHECK: "onnx.DequantizeLinear"
+// CHECK: [[R:%[^ ]+]] = "onnx.Div"
 // CHECK: [[Q:%[^ ]+]] = "onnx.QuantizeLinear"([[R]],
 // CHECK: return [[Q]]
 
