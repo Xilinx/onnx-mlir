@@ -233,7 +233,10 @@ LogicalResult ONNXReshapeOp::verify() {
     return emitOpError("shape must contain at most one -1 dimension");
 
   if (getAllowzero()) {
-    if (llvm::is_contained(dims, 0) && llvm::is_contained(dims, -1)) {
+    // Work around MSVC's std::find assigning non-assignable ElementsAttr
+    // iterators.
+    if (llvm::any_of(dims, [](int64_t dim) { return dim == 0; }) &&
+        llvm::any_of(dims, [](int64_t dim) { return dim == -1; })) {
       return emitOpError(
           "Allowzero is set and shape contains both -1 and 0. Dimension "
           "corresponding to -1 cannot be determined uniquely.");
