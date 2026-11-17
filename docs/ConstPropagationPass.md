@@ -21,17 +21,16 @@ constants. Availability of the captures does not request evaluation. Downstream
 pipelines can use `populateFormDeferredFoldableExpressionPatterns` with
 `requireDeferredSource=false` to retain those expressions too.
 
-The Add/Mul rules that move constant operands to the right preserve the
-position of a deferred expression ending at a quantization boundary. This
-matches an explicit boundary and avoids changing runtime operand order solely
-because its representation is deferred. Other algebraic rewrites retain their
-normal constant eligibility.
+The Add/Mul constant-to-right rules currently fail to recognize
+`DQ(constant)` as a constant. `isCommutationConstant` reproduces this bug for
+`DeferredFoldable { DQ(constant) }` by checking the terminal operation's
+`QuantizationBoundaryOpInterface`. The interface identifies quantization and
+dequantization operations; it does not change their constant-foldability.
 
-The commutation rules use `QuantizationBoundaryOpInterface` to recognize
-quantize, dequantize, and combined Q/DQ operations at the end of a deferred
-body. The interface does not change purity, constant-foldability or
-materialization. Other dialects can attach external models to their Q/DQ
-operations without adding a dependency from ONNX to those dialects.
+Canonicalizing these constants to the right is desirable. Fixing the existing
+behavior may require users to retune. Until then, both representations retain
+the existing ordering. For example, `Add(DQ(constant), runtime)` remains unchanged,
+while `Add(literal, DQ(constant))` moves the literal to the right.
 
 ## Example
 Given the following code:

@@ -208,10 +208,10 @@ void FrontendToTosaLoweringPass::runOnOperation() {
           return true;
         return std::nullopt;
       });
-  // Deferred recipes are evaluated after their sources are materialized.
-  // Lowering operations inside a recipe can change the value that will be
-  // produced, for example by replacing floating-point division with a rounded
-  // reciprocal and multiplication.
+  // Deferred expressions are evaluated after their sources are materialized.
+  // Lowering operations inside a deferred body can change the value that will
+  // be produced, for example by replacing floating-point division with a
+  // rounded reciprocal and multiplication.
   target.addLegalOp<ONNXDeferredFoldableOp>();
   target.markOpRecursivelyLegal<ONNXDeferredFoldableOp>();
 

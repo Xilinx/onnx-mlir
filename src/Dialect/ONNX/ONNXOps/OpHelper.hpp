@@ -212,8 +212,8 @@ mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 // DeferredConstantOpInterface reports this result as a deferred constant.
 [[nodiscard]] bool isConstantFoldable(mlir::Value value);
 
-// Return whether peelDeferredFoldableExpression can represent the recipe's
-// remaining prefix without changing the IR.
+// Return whether peeling can represent the remaining deferred expression
+// without changing the IR.
 [[nodiscard]] bool canPeelDeferredFoldableExpression(
     mlir::ONNXDeferredFoldableOp deferred);
 
@@ -227,9 +227,9 @@ mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 mlir::FailureOr<mlir::Operation *> peelDeferredFoldableExpression(
     mlir::ONNXDeferredFoldableOp deferred, mlir::RewriterBase &rewriter);
 
-// Move a complete deferred recipe back into its parent block, mapping its
+// Move a complete deferred expression back into its parent block, mapping its
 // captures to the values at the wrapper boundary. Returns the inlined
-// operations in program order. A recipe that yields a capture directly is
+// operations in program order. A body that yields a capture directly is
 // valid and returns an empty list.
 mlir::FailureOr<llvm::SmallVector<mlir::Operation *>>
 inlineDeferredFoldableExpression(

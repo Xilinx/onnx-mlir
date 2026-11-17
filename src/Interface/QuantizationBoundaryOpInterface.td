@@ -10,10 +10,7 @@ include "mlir/IR/OpBase.td"
 def QuantizationBoundaryOpInterface : OpInterface<"QuantizationBoundaryOpInterface"> {
   let cppNamespace = "::mlir";
   let description = [{
-    Identifies operations that establish quantization or dequantization
-    boundaries. This marker does not change purity or constant-foldability.
-    Ordering-only rewrites can use it to preserve the position of a boundary
-    represented inside a deferred recipe, just as for an explicit operation.
+    Identifies operations that quantize, dequantize, or perform both conversions.
   }];
 }
 

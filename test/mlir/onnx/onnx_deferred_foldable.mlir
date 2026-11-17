@@ -31,8 +31,8 @@ func.func @retain_expression(%runtime: tensor<2x2xf32>) -> (tensor<2x2xf32>, ten
 // CHECK:         %[[MIXED:.+]] = "onnx.Sub"(%[[RUNTIME]], %[[DEFERRED]])
 // CHECK:         onnx.Return %[[DEFERRED]], %[[MIXED]]
 
-// A later tensor constant cannot be added as a capture to an earlier recipe.
-// Build a new wrapper at the consumer and inline the operand recipe instead.
+// A later tensor constant cannot be added as a capture to an earlier expression.
+// Build a new wrapper at the consumer and inline the operand expression instead.
 func.func @later_capture_does_not_break_dominance() -> tensor<2x2xf32> {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "later_capture_weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
   %transposed = "onnx.Transpose"(%weight) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
@@ -115,7 +115,7 @@ func.func @preserve_dense_expression_order(%runtime: tensor<2x2xf32>) -> tensor<
 // CHECK-NEXT:    %[[RESULT:.+]] = "onnx.Sub"(%[[MARKER]], %[[SUM]])
 // CHECK-NEXT:    onnx.Return %[[RESULT]]
 
-// A pure multi-result operation is retained as one single-result recipe per
+// A pure multi-result operation is retained as one single-result expression per
 // used result so each producer remains directly classifiable.
 func.func @retain_multi_result_expression() -> (tensor<2x2xf32>, tensor<2x2xf32>, tensor<2x2xf32>) {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 48 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x6xf32>
@@ -151,9 +151,9 @@ func.func @do_not_retain_nondeterministic_expression() -> tensor<2x2xf32> {
 // CHECK-NEXT:    %[[RANDOM:.+]] = "onnx.RandomNormalLike"(%[[SOURCE]])
 // CHECK-NEXT:    onnx.Return %[[RANDOM]]
 
-// Generic cleanup is not the recipe evaluation mechanism, but a
+// Generic cleanup is not the expression evaluation mechanism, but a
 // semantics-preserving canonicalization may eliminate an identity terminal.
-// Once the recipe directly yields a capture, it is redundant and is removed.
+// Once the expression directly yields a capture, it is redundant and is removed.
 func.func @canonicalized_identity_recipe() -> tensor<2x2xf32> {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
   %result = "onnx.DeferredFoldable"(%weight) ({
@@ -170,8 +170,8 @@ func.func @canonicalized_identity_recipe() -> tensor<2x2xf32> {
 // CANON-NOT:     "onnx.Identity"
 // CANON:         onnx.Return %[[SOURCE]]
 
-// Constprop treats a retained recipe as opaque. Dense work inside the recipe
-// is evaluated only when the recipe is explicitly materialized.
+// Constprop treats a retained expression as opaque. Dense work inside the expression
+// is evaluated only when the expression is explicitly materialized.
 func.func @constprop_does_not_enter_recipe() -> tensor<2x2xf32> {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
   %result = "onnx.DeferredFoldable"(%weight) ({
@@ -193,7 +193,7 @@ func.func @constprop_does_not_enter_recipe() -> tensor<2x2xf32> {
 // NOFORM:           %[[SUM:.+]] = "onnx.Add"(%{{.+}}, %[[THREE]])
 // NOFORM:           onnx.Yield %[[SUM]]
 
-// A retained recipe remains valid when later dialect conversion lowers an
+// A retained expression remains valid when later dialect conversion lowers an
 // operation in its body.
 func.func @lowered_recipe_operation() -> tensor<2x2xf32> {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
@@ -205,7 +205,7 @@ func.func @lowered_recipe_operation() -> tensor<2x2xf32> {
   return %result : tensor<2x2xf32>
 }
 
-// Compiler-owned recipes created by downstream normalization remain opaque to
+// Compiler-owned expressions created by downstream normalization remain opaque to
 // constant propagation; available captures do not request their evaluation.
 func.func @retain_compiler_owned_recipe(%runtime: tensor<2x2xf32>) -> tensor<2x2xf32> {
   %constant = onnx.Constant dense<[[1.0, 2.0], [3.0, 4.0]]> : tensor<2x2xf32>

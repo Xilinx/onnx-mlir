@@ -1745,8 +1745,11 @@ bool isCommutationConstant(Value value) {
     return true;
   if (!isDeferredConstant(value))
     return false;
-  auto recipe = value.getDefiningOp<ONNXDeferredFoldableOp>();
-  Operation *terminal = recipe ? recipe.getTerminalOperation() : nullptr;
+  auto deferred = value.getDefiningOp<ONNXDeferredFoldableOp>();
+  Operation *terminal = deferred ? deferred.getTerminalOperation() : nullptr;
+  // FIXME: DQ(constant) should count as a constant here. For now, reproduce
+  // the existing bug for DeferredFoldable { DQ(constant) }. Canonicalizing
+  // these constants to the right is desirable, but users may need to retune.
   return !terminal || !isa<QuantizationBoundaryOpInterface>(terminal);
 }
 
@@ -2714,12 +2717,12 @@ void ConstPropONNXToONNXPass::runOnOperation() {
       maxLoopUnrollCount, enableDequantConstFold, enableDequantConstFoldWeights,
       formDeferredFoldableExpressions);
   onnx_mlir::ResultNamesUpdater rnUpdater;
-  bool containsDeferredRecipe = false;
+  bool containsDeferredExpression = false;
   function.walk([&](ONNXDeferredFoldableOp) {
-    containsDeferredRecipe = true;
+    containsDeferredExpression = true;
     return WalkResult::interrupt();
   });
-  if (!formDeferredFoldableExpressions && !containsDeferredRecipe) {
+  if (!formDeferredFoldableExpressions && !containsDeferredExpression) {
     if (failed(applyPatternsGreedily(function, std::move(patterns),
             GreedyRewriteConfig().setListener(&rnUpdater))))
       signalPassFailure();

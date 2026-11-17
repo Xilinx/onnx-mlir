@@ -68,7 +68,7 @@ void SetONNXNodeNamePass::runOnOperation() {
     // Only deal with ONNX ops.
     if (op->getDialect()->getNamespace() != ONNXDialect::getDialectNamespace())
       return WalkResult::advance();
-    // A deferred recipe is an implementation detail, not a collection of
+    // A deferred expression is an implementation detail, not a collection of
     // model nodes. Its wrapper carries any externally visible identity.
     if (isa<ONNXDeferredFoldableOp>(op))
       return WalkResult::skip();
