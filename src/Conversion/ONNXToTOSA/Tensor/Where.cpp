@@ -1,4 +1,4 @@
-// (c) Copyright 2022 - 2024 Advanced Micro Devices, Inc. All Rights Reserved.
+// (c) Copyright 2022-2026 Advanced Micro Devices, Inc. All Rights Reserved.
 
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/IR/PatternMatch.h"
@@ -17,6 +17,8 @@ public:
 
   LogicalResult matchAndRewrite(ONNXWhereOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticRankBroadcast(op, rewriter)))
+      return failure();
 
     auto loc = op.getLoc();
     Value pred = adaptor.getCondition();
@@ -39,18 +41,12 @@ public:
           "onnx.Where");
     }
 
-    // Broadcast dimensions
-    IndexExprBuilderForTosa createTosaIE(rewriter, op->getLoc());
-    ONNXBroadcastOpShapeHelper shapeHelper(op, {}, &createTosaIE);
-    if (shapeHelper.computeShape().succeeded() &&
-        shapeHelper.hasRankBroadcast()) {
-      TosaBuilder tosaBuilder(rewriter, loc);
-      llvm::SmallVector<Value, 4> newValues =
-          tosaBuilder.equalizeRanks({pred, lhs, rhs});
-      pred = newValues[0];
-      lhs = newValues[1];
-      rhs = newValues[2];
-    }
+    OnnxBuilder onnxBuilder(rewriter, loc);
+    llvm::SmallVector<Value, 4> newValues =
+        tosa::equalizeRanks(onnxBuilder, {pred, lhs, rhs});
+    pred = newValues[0];
+    lhs = newValues[1];
+    rhs = newValues[2];
 
     rewriter.replaceOpWithNewOp<mlir::tosa::SelectOp>(
         op, op.getType(), pred, lhs, rhs);

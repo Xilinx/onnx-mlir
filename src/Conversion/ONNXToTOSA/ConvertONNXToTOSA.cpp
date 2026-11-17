@@ -15,7 +15,6 @@
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Shape/IR/Shape.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -104,7 +103,7 @@ struct FrontendToTosaLoweringPass
       : PassWrapper<FrontendToTosaLoweringPass, OperationPass<ModuleOp>>() {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<mlir::tosa::TosaDialect, mlir::shape::ShapeDialect>();
+    registry.insert<mlir::tosa::TosaDialect>();
   }
   void runOnOperation() final;
 
@@ -195,12 +194,19 @@ void FrontendToTosaLoweringPass::runOnOperation() {
 
   // Define legal dialects and operations
   target.addLegalDialect<mlir::tosa::TosaDialect, func::FuncDialect,
-      mlir::arith::ArithDialect, mlir::shape::ShapeDialect,
-      mlir::affine::AffineDialect>();
+      mlir::arith::ArithDialect, mlir::affine::AffineDialect>();
   // Make ONNXNoneOp legal so that patterns can create ONNX ops with optional
   // operands (e.g. onnx.Pad axes) that are lowered recursively. Dangling
   // ONNXNoneOps are removed by later DCE/canonicalization.
   target.addLegalOp<ONNXNoneOp>();
+
+  // Keep literal-zero reshapes legal until their TOSA lowering is supported.
+  target.addDynamicallyLegalOp<ONNXReshapeOp>(
+      [](ONNXReshapeOp op) -> std::optional<bool> {
+        if (op.getAllowzero())
+          return true;
+        return std::nullopt;
+      });
 
   for (const std::string &opName : excludedOps)
     target.addLegalOp(OperationName("onnx." + opName, context));

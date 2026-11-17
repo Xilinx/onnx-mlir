@@ -1,4 +1,7 @@
+// (c) Copyright 2026 Advanced Micro Devices, Inc. All Rights Reserved.
+
 // RUN: onnx-mlir-opt --convert-onnx-to-tosa -cse %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --convert-onnx-to-tosa="excluded-ops=Reshape" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDED --implicit-check-not=tosa.reshape
 
 func.func @test_unsqueeze(%arg0 : tensor<10x10xf32>) -> tensor<1x10x10x1xf32> {
   %0 = "onnx.Constant"() {value = dense<[0, 3]> : tensor<2xi64>} : () -> tensor<2xi64>
@@ -49,3 +52,31 @@ func.func @unsqueeze_dynamic(%arg0: tensor<1x3x4x5xf32> , %arg1: tensor<1xi64> )
 // CHECK-LABEL: unsqueeze_dynamic
 // CHECK: onnx.Unsqueeze
 }
+
+// EXCLUDED-LABEL: func.func @test_unsqueeze(
+// EXCLUDED-SAME: %[[INPUT:.*]]: tensor<10x10xf32>
+// EXCLUDED: %[[SHAPE:.*]] = "tosa.const"() <{value = dense<[1, 10, 10, 1]> : tensor<4xi64>}>
+// EXCLUDED: %[[RESULT:.*]] = "onnx.Reshape"(%[[INPUT]], %[[SHAPE]]) {{.*}} -> tensor<1x10x10x1xf32>
+// EXCLUDED: return %[[RESULT]] : tensor<1x10x10x1xf32>
+
+// EXCLUDED-LABEL: func.func @test_unsqueeze_negative_axis(
+// EXCLUDED-SAME: %[[INPUT:.*]]: tensor<16x32x64xf32>
+// EXCLUDED: %[[SHAPE:.*]] = "tosa.const"() <{value = dense<[16, 32, 1, 64]> : tensor<4xi64>}>
+// EXCLUDED: %[[RESULT:.*]] = "onnx.Reshape"(%[[INPUT]], %[[SHAPE]]) {{.*}} -> tensor<16x32x1x64xf32>
+// EXCLUDED: return %[[RESULT]] : tensor<16x32x1x64xf32>
+
+// EXCLUDED-LABEL: func.func @test_unsqueeze_mix(
+// EXCLUDED-SAME: %[[INPUT:.*]]: tensor<16x32x64xf32>
+// EXCLUDED: %[[SHAPE:.*]] = "tosa.const"() <{value = dense<[16, 1, 32, 1, 64]> : tensor<5xi64>}>
+// EXCLUDED: %[[RESULT:.*]] = "onnx.Reshape"(%[[INPUT]], %[[SHAPE]]) {{.*}} -> tensor<16x1x32x1x64xf32>
+// EXCLUDED: return %[[RESULT]] : tensor<16x1x32x1x64xf32>
+
+// EXCLUDED-LABEL: func.func @unsqueeze_runtime(
+// EXCLUDED-SAME: %[[INPUT:.*]]: tensor<3x4x5xf32>
+// EXCLUDED: %[[SHAPE:.*]] = "tosa.const"() <{value = dense<[3, 4, 1, 5]> : tensor<4xi64>}>
+// EXCLUDED: %[[RESULT:.*]] = "onnx.Reshape"(%[[INPUT]], %[[SHAPE]]) {{.*}} -> tensor<3x4x1x5xf32>
+// EXCLUDED: return %[[RESULT]] : tensor<3x4x1x5xf32>
+
+// EXCLUDED-LABEL: func.func @unsqueeze_dynamic(
+// EXCLUDED: "onnx.Unsqueeze"
+// EXCLUDED: return

@@ -21,6 +21,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "src/Conversion/ONNXToTOSA/DialectBuilder.hpp"
+#include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
@@ -33,7 +34,7 @@ namespace {
 
 // TOSA matmul is performed on two 3D inputs and generates a 3D output.
 // Lower ranked tensors are dim-1 reshaped up to 3D
-Value reshapeUpTo3DTensor(Value tensor, TosaBuilder &builder) {
+Value reshapeUpTo3DTensor(Value tensor, OnnxBuilder &builder) {
   auto tensorTy = cast<TensorType>(tensor.getType());
   auto rank = tensorTy.getRank();
 
@@ -105,6 +106,8 @@ public:
 
   LogicalResult matchAndRewrite(ONNXMatMulOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
         rewriter, op->getLoc());
@@ -153,13 +156,13 @@ public:
     getRankBroadcastedShape(lhs, maxInputRank, false, lhsBroadcastedShape);
     getRankBroadcastedShape(rhs, maxInputRank, true, rhsBroadcastedShape);
 
-    auto rankBroadcastedLhs = lhsRank == maxInputRank
-                                  ? lhs
-                                  : builder.reshape(lhs, lhsBroadcastedShape);
+    auto rankBroadcastedLhs =
+        lhsRank == maxInputRank ? lhs
+                                : create.onnx.reshape(lhs, lhsBroadcastedShape);
 
-    auto rankBroadcastedRhs = rhsRank == maxInputRank
-                                  ? rhs
-                                  : builder.reshape(rhs, rhsBroadcastedShape);
+    auto rankBroadcastedRhs =
+        rhsRank == maxInputRank ? rhs
+                                : create.onnx.reshape(rhs, rhsBroadcastedShape);
 
     // Where broadcasting is required in one or more batch dims, the following
     // is done.
@@ -223,8 +226,8 @@ public:
     const bool performBatchDimBroadcast = needsBatchDimBroadcast();
     if (!performBatchDimBroadcast) {
       // Simple with no broadcasting artifacts. Just reshape up to 3D
-      matmulLhs = reshapeUpTo3DTensor(rankBroadcastedLhs, builder);
-      matmulRhs = reshapeUpTo3DTensor(rankBroadcastedRhs, builder);
+      matmulLhs = reshapeUpTo3DTensor(rankBroadcastedLhs, create.onnx);
+      matmulRhs = reshapeUpTo3DTensor(rankBroadcastedRhs, create.onnx);
     } else {
       // In this case, either or both input matrices involve broadcasting on
       // their batch dimensions. For example:
@@ -315,7 +318,7 @@ public:
       newLhsShape[0] = commonValue;
       newLhsShape[1] = lhsSqueezedValue;
 
-      matmulLhs = builder.reshape(lhsReshapeInput, newLhsShape);
+      matmulLhs = create.onnx.reshape(lhsReshapeInput, newLhsShape);
 
       SmallVector<int64_t> transposedRhsShape;
       SmallVector<int32_t> transposedRhsDims;
@@ -353,7 +356,7 @@ public:
       // reshape
       SmallVector<int64_t> newRhsShape({commonValue,
           rhsBroadcastedShape[maxInputRank - 2], rhsSqueezedValue});
-      matmulRhs = builder.reshape(transposedRhsValue, newRhsShape);
+      matmulRhs = create.onnx.reshape(transposedRhsValue, newRhsShape);
     }
 
     auto matmulLhsShape =
@@ -466,7 +469,7 @@ public:
       computeOpShape(reshapedOpShape, transposedOpDims, transposedOpShape);
 
       // Perform reshape
-      auto reshapeOp = builder.reshape(castToOrigOp, reshapedOpShape);
+      auto reshapeOp = create.onnx.reshape(castToOrigOp, reshapedOpShape);
 
       SmallVector<int32_t> transposedOpDimsI32;
       llvm::copy(transposedOpDims, std::back_inserter(transposedOpDimsI32));

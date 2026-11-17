@@ -33,6 +33,8 @@ public:
   using OpAdaptor = typename ONNXGatherOp::Adaptor;
   LogicalResult matchAndRewrite(ONNXGatherOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     auto loc = op.getLoc();
 
@@ -75,7 +77,7 @@ public:
 
       size[axis] = 1;
       Value sliceOp = create.onnx.slice(input, starts, size);
-      auto reshape = create.tosa.reshape(sliceOp, resultTy.getShape());
+      auto reshape = create.onnx.reshape(sliceOp, resultTy.getShape());
       rewriter.replaceOp(op, reshape);
       return success();
     }

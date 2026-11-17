@@ -82,12 +82,12 @@ func.func @reduce_prod_dynamic_input_static_output(%arg0: tensor<?x5x9x11xf32>) 
 %0 = "onnx.Constant"() {value = dense<[2, 3]> : tensor<2xi64>} : () -> tensor<2xi64>
 %1 = "onnx.ReduceProd"(%arg0, %0) : (tensor<?x5x9x11xf32>, tensor<2xi64>) -> tensor<1x5x1x1xf32>
 return %1 : tensor<1x5x1x1xf32>
-// CHECK-LABEL:   func.func @reduce_prod_dynamic_input_static_output(
-// CHECK-SAME:                                                 %[[VAL_0:.*]]: tensor<?x5x9x11xf32>) -> tensor<1x5x1x1xf32> {
-// CHECK:           %[[VAL_1:.*]] = tosa.reduce_prod %[[VAL_0]] {axis = 2 : i32} : (tensor<?x5x9x11xf32>) -> tensor<?x5x1x11xf32>
-// CHECK:           %[[VAL_2:.*]] = tosa.reduce_prod %[[VAL_1]] {axis = 3 : i32} : (tensor<?x5x1x11xf32>) -> tensor<1x5x1x1xf32>
-// CHECK:           return %[[VAL_2]] : tensor<1x5x1x1xf32>
 }
+
+// CHECK-LABEL: func.func @reduce_prod_dynamic_input_static_output(
+// CHECK: %[[RESULT:.*]] = "onnx.ReduceProd"
+// CHECK-NOT: tosa.
+// CHECK: return %[[RESULT]]
 
 // -----
 

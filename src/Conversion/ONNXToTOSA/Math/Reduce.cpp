@@ -4,7 +4,7 @@
 
 //===---------------- Reduce.cpp - ReduceMax Op --------------------===//
 //
-// Copyright (c) 2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -110,6 +110,8 @@ public:
   using OpAdaptor = typename ONNXReduceOp::Adaptor;
   LogicalResult matchAndRewrite(ONNXReduceOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     auto inputType = dyn_cast<RankedTensorType>(adaptor.getData().getType());
     if (!inputType)

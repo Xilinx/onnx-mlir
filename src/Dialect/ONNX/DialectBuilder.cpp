@@ -356,6 +356,19 @@ Value OnnxBuilder::reshape(
       toTensor(outputType), toTensor(input), toTensor(shape), allowZero);
 }
 
+Value OnnxBuilder::reshape(Value input, ArrayRef<int64_t> shape) const {
+  Type outputType = UnrankedTensorType::get(getElementType(input.getType()));
+  SmallVector<int64_t> shapeValues(shape);
+  for (int64_t &dim : shapeValues)
+    if (ShapedType::isDynamic(dim))
+      dim = -1;
+  // Explicit shapes use literal zeros rather than ONNX's copy-dimension rule.
+  if (llvm::is_contained(shapeValues, 0))
+    return reshape(
+        outputType, input, constantInt64(shapeValues), getSignedInt64Attr(1));
+  return reshape(outputType, input, constantInt64(shapeValues));
+}
+
 Value OnnxBuilder::reverseSequence(Type outputType, Value input,
     Value sequenceLens, int64_t batchAxis, int64_t timeAxis) const {
   IntegerAttr batchAxisAttr = getSignedInt64Attr(batchAxis);

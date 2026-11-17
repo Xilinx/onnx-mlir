@@ -5,7 +5,7 @@
 //====------ ONNXToTOSACommon.hpp - ONNX dialects to TOSA lowering --------===//
 //
 // Copyright 2020-2024 The TensorFlow Authors. All Rights Reserved.
-// Copyright (c) 2022-2024 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -39,6 +39,21 @@
 //===----------------------------------------------------------------------===//
 namespace onnx_mlir {
 namespace tosa {
+
+/// Require static tensor operands and results.
+mlir::LogicalResult checkStaticTensorShapes(
+    mlir::Operation *op, mlir::PatternRewriter &rewriter);
+
+/// Require static shapes for the operands that rank broadcasting reshapes.
+mlir::LogicalResult checkStaticRankBroadcast(
+    mlir::Operation *op, mlir::PatternRewriter &rewriter);
+
+/// Prepend unit dimensions with ONNX Reshape before constructing TOSA ops.
+/// Leave the shaped values unchanged if any is unranked.
+llvm::SmallVector<mlir::Value, 4> equalizeRanks(
+    const OnnxBuilder &builder, mlir::ValueRange values);
+void equalizeRanks(
+    const OnnxBuilder &builder, mlir::Value &lhs, mlir::Value &rhs);
 
 // Lowers Gather operators to a sequence of TOSA ops.
 std::optional<mlir::Value> convertGatherOp(mlir::PatternRewriter &rewriter,

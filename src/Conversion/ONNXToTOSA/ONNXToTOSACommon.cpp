@@ -25,6 +25,69 @@ using namespace mlir;
 namespace onnx_mlir {
 namespace tosa {
 
+LogicalResult checkStaticTensorShapes(
+    Operation *op, PatternRewriter &rewriter) {
+  auto isStatic = [](Type type) {
+    auto tensorType = dyn_cast<TensorType>(type);
+    return !tensorType || tensorType.hasStaticShape();
+  };
+  if (!llvm::all_of(op->getOperandTypes(), isStatic) ||
+      !llvm::all_of(op->getResultTypes(), isStatic))
+    return rewriter.notifyMatchFailure(
+        op, "All operands and results require static tensor shapes");
+  return success();
+}
+
+LogicalResult checkStaticRankBroadcast(
+    Operation *op, PatternRewriter &rewriter) {
+  // equalizeRanks leaves all values unchanged if any of them is unranked.
+  if (llvm::any_of(op->getOperandTypes(),
+          [](Type type) { return isa<UnrankedTensorType>(type); }))
+    return success();
+
+  int64_t maxRank = 0;
+  for (Type type : op->getOperandTypes())
+    if (auto tensorType = dyn_cast<RankedTensorType>(type))
+      maxRank = std::max(maxRank, tensorType.getRank());
+  if (llvm::any_of(op->getOperandTypes(), [&](Type type) {
+        auto tensorType = dyn_cast<RankedTensorType>(type);
+        return tensorType && tensorType.getRank() < maxRank &&
+               !tensorType.hasStaticShape();
+      }))
+    return rewriter.notifyMatchFailure(
+        op, "Operands broadcast to a higher rank require static shapes");
+  return success();
+}
+
+SmallVector<Value, 4> equalizeRanks(
+    const OnnxBuilder &builder, ValueRange values) {
+  SmallVector<Value, 4> result(values.begin(), values.end());
+  if (llvm::any_of(values, [](Value value) {
+        return !cast<ShapedType>(value.getType()).hasRank();
+      }))
+    return result;
+
+  int64_t maxRank = 0;
+  for (Value value : values)
+    maxRank = std::max(maxRank, cast<ShapedType>(value.getType()).getRank());
+
+  for (Value &value : result) {
+    auto type = cast<ShapedType>(value.getType());
+    if (type.getRank() == maxRank)
+      continue;
+    SmallVector<int64_t> shape(maxRank - type.getRank(), 1);
+    llvm::append_range(shape, type.getShape());
+    value = builder.reshape(value, shape);
+  }
+  return result;
+}
+
+void equalizeRanks(const OnnxBuilder &builder, Value &lhs, Value &rhs) {
+  auto values = equalizeRanks(builder, {lhs, rhs});
+  lhs = values[0];
+  rhs = values[1];
+}
+
 static int64_t multiplyDims(llvm::ArrayRef<int64_t> dims, int64_t res = 1) {
   for (auto dim : dims) {
     if (ShapedType::isDynamic(dim)) {
@@ -55,7 +118,9 @@ std::optional<Value> convertGatherOp(PatternRewriter &rewriter, Location loc,
   auto inputType = dyn_cast<RankedTensorType>(inputValue.getType());
   auto indicesType = dyn_cast<RankedTensorType>(indicesValue.getType());
 
-  if (!resultType || !inputType || !indicesType)
+  if (!resultType || !inputType || !indicesType ||
+      !resultType.hasStaticShape() || !inputType.hasStaticShape() ||
+      !indicesType.hasStaticShape())
     return std::nullopt;
 
   // batchDims indicates the number of batch dimensions in input and
@@ -251,7 +316,7 @@ std::optional<Value> convertGatherOp(PatternRewriter &rewriter, Location loc,
   }
 
   auto tosaValuesReshapeOp =
-      create.tosa.reshape(inputTransposeOp, tosaValuesShape);
+      create.onnx.reshape(inputTransposeOp, tosaValuesShape);
 
   if (countDynamicDims(tosaIndicesShape) > 1) {
     return (void)rewriter.notifyMatchFailure(loc,
@@ -260,7 +325,7 @@ std::optional<Value> convertGatherOp(PatternRewriter &rewriter, Location loc,
   }
 
   auto tosaIndicesReshapeOp =
-      create.tosa.reshape(indicesValue, tosaIndicesShape);
+      create.onnx.reshape(indicesValue, tosaIndicesShape);
 
   Value tosaGatherOp = CreateOpAndInfer<mlir::tosa::GatherOp>(rewriter, loc,
       RankedTensorType::get(llvm::SmallVector<int64_t>(3, ShapedType::kDynamic),
@@ -274,7 +339,7 @@ std::optional<Value> convertGatherOp(PatternRewriter &rewriter, Location loc,
   }
 
   Value tosaResultReshapeOp =
-      create.tosa.reshape(tosaGatherOp, resultReshapeShape);
+      create.onnx.reshape(tosaGatherOp, resultReshapeShape);
 
   SmallVector<int64_t> resultTransposePermI64(
       resultTransposePerm.begin(), resultTransposePerm.end());

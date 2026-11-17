@@ -4,7 +4,7 @@
 
 //===---------------- Softmax.cpp - Softmax Op ----------------------------===//
 //
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -62,6 +62,8 @@ public:
   using OpAdaptor = typename SoftmaxOp::Adaptor;
   LogicalResult matchAndRewrite(SoftmaxOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     Location loc = op->getLoc();
     TosaBuilder tosaBuilder(rewriter, loc);

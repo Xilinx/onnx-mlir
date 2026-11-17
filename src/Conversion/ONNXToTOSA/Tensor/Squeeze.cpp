@@ -4,7 +4,7 @@
 
 //===---------------- Unsqueeze.cpp - Unsqueeze Op ------------------------===//
 //
-// Copyright (c) 2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -30,6 +30,8 @@ public:
   using OpAdaptor = typename SqueezeOp::Adaptor;
   LogicalResult matchAndRewrite(SqueezeOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     Location loc = op->getLoc();
 
@@ -39,9 +41,9 @@ public:
           op, "expected ranked tensor type with static shape");
     }
 
-    TosaBuilder tosaBuilder(rewriter, loc);
-    rewriter.replaceOp(
-        op, tosaBuilder.reshape(adaptor.getData(), resultTy.getShape()));
+    OnnxBuilder create(rewriter, loc);
+    Value reshape = create.reshape(adaptor.getData(), resultTy.getShape());
+    rewriter.replaceOp(op, reshape);
     return success();
   }
 };
