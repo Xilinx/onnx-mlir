@@ -26,7 +26,7 @@ func.func @retain_expression(%runtime: tensor<2x2xf32>) -> (tensor<2x2xf32>, ten
 // CHECK:         ^bb0(%[[CAPTURED_WEIGHT:.+]]: tensor<2x2xf32>, %[[CAPTURED_BIAS:.+]]: tensor<2x2xf32>):
 // CHECK:           %[[TRANSPOSE:.+]] = "onnx.Transpose"(%[[CAPTURED_WEIGHT]])
 // CHECK:           %[[ADD:.+]] = "onnx.Add"(%[[TRANSPOSE]], %[[CAPTURED_BIAS]])
-// CHECK:           onnx.DeferredYield %[[ADD]] : tensor<2x2xf32>
+// CHECK:           onnx.Yield %[[ADD]] : tensor<2x2xf32>
 // CHECK:         }) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
 // CHECK:         %[[MIXED:.+]] = "onnx.Sub"(%[[RUNTIME]], %[[DEFERRED]])
 // CHECK:         onnx.Return %[[DEFERRED]], %[[MIXED]]
@@ -48,7 +48,7 @@ func.func @later_capture_does_not_break_dominance() -> tensor<2x2xf32> {
 // CHECK:         ^bb0(%[[CAPTURED_WEIGHT:.+]]: tensor<2x2xf32>, %[[CAPTURED_BIAS:.+]]: tensor<2x2xf32>):
 // CHECK:           %[[TRANSPOSE:.+]] = "onnx.Transpose"(%[[CAPTURED_WEIGHT]])
 // CHECK:           %[[ADD:.+]] = "onnx.Add"(%[[TRANSPOSE]], %[[CAPTURED_BIAS]])
-// CHECK:           onnx.DeferredYield %[[ADD]] : tensor<2x2xf32>
+// CHECK:           onnx.Yield %[[ADD]] : tensor<2x2xf32>
 // CHECK:         onnx.Return %[[DEFERRED]]
 
 // NOFORM-LABEL: func.func @retain_expression
@@ -129,13 +129,13 @@ func.func @retain_multi_result_expression() -> (tensor<2x2xf32>, tensor<2x2xf32>
 // CHECK-DAG:     %[[SPLITS:.+]] = onnx.Constant dense<2>
 // CHECK:         %[[PART0:.+]] = "onnx.DeferredFoldable"(%[[WEIGHT]], %[[SPLITS]]) ({
 // CHECK:           %[[SPLIT0:.+]]:3 = "onnx.Split"
-// CHECK:           onnx.DeferredYield %[[SPLIT0]]#0
+// CHECK:           onnx.Yield %[[SPLIT0]]#0
 // CHECK:         %[[PART1:.+]] = "onnx.DeferredFoldable"(%[[WEIGHT]], %[[SPLITS]]) ({
 // CHECK:           %[[SPLIT1:.+]]:3 = "onnx.Split"
-// CHECK:           onnx.DeferredYield %[[SPLIT1]]#1
+// CHECK:           onnx.Yield %[[SPLIT1]]#1
 // CHECK:         %[[PART2:.+]] = "onnx.DeferredFoldable"(%[[WEIGHT]], %[[SPLITS]]) ({
 // CHECK:           %[[SPLIT2:.+]]:3 = "onnx.Split"
-// CHECK:           onnx.DeferredYield %[[SPLIT2]]#2
+// CHECK:           onnx.Yield %[[SPLIT2]]#2
 // CHECK:         onnx.Return %[[PART0]], %[[PART1]], %[[PART2]]
 
 // A non-deterministic operation does not have the Pure trait and must remain
@@ -159,7 +159,7 @@ func.func @canonicalized_identity_recipe() -> tensor<2x2xf32> {
   %result = "onnx.DeferredFoldable"(%weight) ({
   ^bb0(%captured: tensor<2x2xf32>):
     %identity = "onnx.Identity"(%captured) : (tensor<2x2xf32>) -> tensor<2x2xf32>
-    onnx.DeferredYield %identity : tensor<2x2xf32>
+    onnx.Yield %identity : tensor<2x2xf32>
   }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
   onnx.Return %result : tensor<2x2xf32>
 }
@@ -180,7 +180,7 @@ func.func @constprop_does_not_enter_recipe() -> tensor<2x2xf32> {
     %two = onnx.Constant dense<2.0> : tensor<2x2xf32>
     %three = "onnx.Add"(%one, %two) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
     %sum = "onnx.Add"(%captured, %three) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
-    onnx.DeferredYield %sum : tensor<2x2xf32>
+    onnx.Yield %sum : tensor<2x2xf32>
   }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
   onnx.Return %result : tensor<2x2xf32>
 }
@@ -191,7 +191,7 @@ func.func @constprop_does_not_enter_recipe() -> tensor<2x2xf32> {
 // NOFORM:           %[[TWO:.+]] = onnx.Constant dense<2.000000e+00>
 // NOFORM:           %[[THREE:.+]] = "onnx.Add"(%[[ONE]], %[[TWO]])
 // NOFORM:           %[[SUM:.+]] = "onnx.Add"(%{{.+}}, %[[THREE]])
-// NOFORM:           onnx.DeferredYield %[[SUM]]
+// NOFORM:           onnx.Yield %[[SUM]]
 
 // A retained recipe remains valid when later dialect conversion lowers an
 // operation in its body.
@@ -200,7 +200,7 @@ func.func @lowered_recipe_operation() -> tensor<2x2xf32> {
   %result = "onnx.DeferredFoldable"(%weight) ({
   ^bb0(%arg0: tensor<2x2xf32>):
     %reshaped = "tosa.reshape"(%arg0) {new_shape = array<i64: 2, 2>} : (tensor<2x2xf32>) -> tensor<2x2xf32>
-    onnx.DeferredYield %reshaped : tensor<2x2xf32>
+    onnx.Yield %reshaped : tensor<2x2xf32>
   }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
   return %result : tensor<2x2xf32>
 }
@@ -212,7 +212,7 @@ func.func @retain_compiler_owned_recipe(%runtime: tensor<2x2xf32>) -> tensor<2x2
   %recipe = "onnx.DeferredFoldable"(%constant) ({
   ^bb0(%captured: tensor<2x2xf32>):
     %transposed = "onnx.Transpose"(%captured) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
-    onnx.DeferredYield %transposed : tensor<2x2xf32>
+    onnx.Yield %transposed : tensor<2x2xf32>
   }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
   %result = "onnx.Add"(%runtime, %recipe) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
   onnx.Return %result : tensor<2x2xf32>
@@ -222,5 +222,5 @@ func.func @retain_compiler_owned_recipe(%runtime: tensor<2x2xf32>) -> tensor<2x2
 // RETAIN: %[[CONSTANT:.+]] = onnx.Constant
 // RETAIN: %[[RECIPE:.+]] = "onnx.DeferredFoldable"(%[[CONSTANT]])
 // RETAIN: %[[TRANSPOSE:.+]] = "onnx.Transpose"
-// RETAIN: onnx.DeferredYield %[[TRANSPOSE]]
+// RETAIN: onnx.Yield %[[TRANSPOSE]]
 // RETAIN: "onnx.Add"(%{{.+}}, %[[RECIPE]])

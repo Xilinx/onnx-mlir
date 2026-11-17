@@ -78,35 +78,35 @@ def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
   let description = [{
     Represents a deterministic expression with constant semantics whose
     evaluation is deferred. Captures may be compiler-owned constants or
-    deferred sources. The body keeps the expression recipe so an explicit
-    materialization API can load any deferred sources and evaluate it later.
+    deferred sources. The body retains the operations for an explicit
+    materialization API to evaluate after loading any deferred sources.
 
     `captures` correspond positionally to the arguments of `body`. The body is
     a flattened DAG of pure, regionless operations followed by
-    `onnx.DeferredYield`; forming a larger expression inlines the bodies of its
+    `onnx.Yield`; forming a larger expression inlines the bodies of its
     deferred operands. The yielded value's producer is normally the terminal
     operation, allowing the compiler to inspect or peel it in constant time
-    before choosing whether to evaluate it during materialization. A recipe
-    may yield a capture directly after semantics-preserving canonicalization
-    removes its last operation; such a recipe has no peelable terminal.
+    before choosing whether to evaluate it during materialization. If
+    canonicalization removes the last operation, the body may yield a capture
+    directly and has no peelable terminal.
 
     Formation captures pure, regionless operations with one or more results
     whose inputs are constants or deferred constants. Each result retained
-    from a multi-result operation has its own recipe, yielding that result from
-    a clone of the operation. Operations may come from any dialect, including
-    ONNX/XFE and operations introduced by later lowering. Ordinary passes treat
+    from a multi-result operation has its own wrapper, whose body yields that
+    result from a clone of the operation. Operations may come from any dialect,
+    including ONNX/XFE and operations introduced by later lowering. Ordinary passes treat
     the body as opaque. A materializer evaluates it explicitly and diagnoses
     any operation for which no fold is available.
 
-    For example, this recipe retains a transpose of `%weights`, which is
-    produced by `onnx.InitializerSource`, without loading its contents:
+    For example, this body retains a transpose of `%weights`, produced by
+    `onnx.InitializerSource`, without loading its contents:
 
     ```mlir
     %transposed = "onnx.DeferredFoldable"(%weights) ({
     ^bb0(%captured: tensor<4x8xf32>):
       %result = "onnx.Transpose"(%captured) {perm = [1, 0]} :
           (tensor<4x8xf32>) -> tensor<8x4xf32>
-      onnx.DeferredYield %result : tensor<8x4xf32>
+      onnx.Yield %result : tensor<8x4xf32>
     }) : (tensor<4x8xf32>) -> tensor<8x4xf32>
     ```
 
@@ -128,14 +128,6 @@ def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
       return dyn_cast_or_null<OpTy>(getTerminalOperation());
     }
   }];
-}
-
-def ONNXDeferredYieldOp : ONNX_Op<"DeferredYield",
-    [DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>,
-     HasParent<"ONNXDeferredFoldableOp">, Pure, ReturnLike, Terminator]> {
-  let summary = "Return the retained deferred expression value";
-  let arguments = (ins AnyType:$value);
-  let assemblyFormat = "$value attr-dict `:` type($value)";
 }
 
 //===----------------------------------------------------------------------===//
@@ -474,7 +466,9 @@ def ONNXYieldOp : ONNX_Op<"Yield", [Pure, ReturnLike, Terminator]> {
     The operation takes variable number of operands and produces no results.
 
     This operation is not part of the standard and was added to assist onnx-mlir.
-    It terminates a ONNXLoop/Scan/IfOp region.
+    It terminates an ONNXLoop/Scan/IfOp region or the body of
+    `onnx.DeferredFoldable`. The parent operation defines how yielded operands
+    map to region arguments or operation results.
   }];
 
   let arguments = (ins Variadic<AnyType>:$operands);

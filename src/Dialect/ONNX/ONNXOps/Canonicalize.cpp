@@ -5644,9 +5644,8 @@ struct ElideEmptyDeferredFoldable
       ONNXDeferredFoldableOp op, PatternRewriter &rewriter) const override {
     if (op.getTerminalOperation())
       return failure();
-    auto yield =
-        cast<ONNXDeferredYieldOp>(op.getBody().front().getTerminator());
-    auto argument = dyn_cast<BlockArgument>(yield.getValue());
+    auto yield = cast<ONNXYieldOp>(op.getBody().front().getTerminator());
+    auto argument = dyn_cast<BlockArgument>(yield.getOperand(0));
     if (!argument || argument.getOwner() != &op.getBody().front())
       return failure();
     rewriter.replaceOp(op, op.getCaptures()[argument.getArgNumber()]);

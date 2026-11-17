@@ -25,7 +25,7 @@ func.func @deferred_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, te
   %recipe = "onnx.DeferredFoldable"(%source) ({
   ^bb0(%data: tensor<2xf32>):
     %negative = "onnx.Neg"(%data) : (tensor<2xf32>) -> tensor<2xf32>
-    onnx.DeferredYield %negative : tensor<2xf32>
+    onnx.Yield %negative : tensor<2xf32>
   }) : (tensor<2xf32>) -> tensor<2xf32>
   %add = "onnx.Add"(%recipe, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
   %mul = "onnx.Mul"(%recipe, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
@@ -60,7 +60,7 @@ func.func @dequantized_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>,
     %scale = onnx.Constant dense<0.125> : tensor<f32>
     %zero = onnx.Constant dense<0> : tensor<i8>
     %dq = "onnx.DequantizeLinear"(%data, %scale, %zero) {axis = 0 : si64} : (tensor<2xi8>, tensor<f32>, tensor<i8>) -> tensor<2xf32>
-    onnx.DeferredYield %dq : tensor<2xf32>
+    onnx.Yield %dq : tensor<2xf32>
   }) : (tensor<2xi8>) -> tensor<2xf32>
   %add = "onnx.Add"(%recipe, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
   %mul = "onnx.Mul"(%recipe, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
@@ -82,7 +82,7 @@ func.func @literal_before_dequantized_operand() -> (tensor<2xf32>, tensor<2xf32>
     %scale = onnx.Constant dense<0.125> : tensor<f32>
     %zero = onnx.Constant dense<0> : tensor<i8>
     %dq = "onnx.DequantizeLinear"(%data, %scale, %zero) {axis = 0 : si64} : (tensor<2xi8>, tensor<f32>, tensor<i8>) -> tensor<2xf32>
-    onnx.DeferredYield %dq : tensor<2xf32>
+    onnx.Yield %dq : tensor<2xf32>
   }) : (tensor<2xi8>) -> tensor<2xf32>
   %add = "onnx.Add"(%literal, %recipe) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
   %mul = "onnx.Mul"(%literal, %recipe) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
@@ -95,3 +95,22 @@ func.func @literal_before_dequantized_operand() -> (tensor<2xf32>, tensor<2xf32>
 // RHS: %[[ADD:.*]] = "onnx.Add"(%[[RECIPE]], %[[LITERAL]])
 // RHS: %[[MUL:.*]] = "onnx.Mul"(%[[RECIPE]], %[[LITERAL]])
 // RHS: return %[[ADD]], %[[MUL]]
+
+// An explicit DQ of literal weights is not a literal constant for the
+// pre-existing Add/Mul commutation rules, even though it can be evaluated.
+func.func @explicit_dequantized_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, tensor<2xf32>) {
+  %data = onnx.Constant dense<8> : tensor<2xi8>
+  %scale = onnx.Constant dense<0.125> : tensor<f32>
+  %zero = onnx.Constant dense<0> : tensor<i8>
+  %dq = "onnx.DequantizeLinear"(%data, %scale, %zero) {axis = 0 : si64} : (tensor<2xi8>, tensor<f32>, tensor<i8>) -> tensor<2xf32>
+  %add = "onnx.Add"(%dq, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  %mul = "onnx.Mul"(%dq, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  return %add, %mul : tensor<2xf32>, tensor<2xf32>
+}
+
+// CHECK-LABEL: func.func @explicit_dequantized_operand_order(
+// CHECK-SAME: %[[RUNTIME:[^: ]+]]:
+// CHECK: %[[DQ:.*]] = "onnx.DequantizeLinear"
+// CHECK: %[[ADD:.*]] = "onnx.Add"(%[[DQ]], %[[RUNTIME]])
+// CHECK: %[[MUL:.*]] = "onnx.Mul"(%[[DQ]], %[[RUNTIME]])
+// CHECK: return %[[ADD]], %[[MUL]]
