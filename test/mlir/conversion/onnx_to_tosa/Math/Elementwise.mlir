@@ -374,7 +374,7 @@ func.func @test_div_deferred_initializer() -> tensor<4xf32> {
 // CHECK:           "onnx.DeferredFoldable"([[WEIGHT]], [[SCALE]]) ({
 // CHECK:           ^bb0([[CAPTURED_WEIGHT:%.+]]: tensor<4xf32>, [[CAPTURED_SCALE:%.+]]: tensor<f32>):
 // CHECK-NEXT:        [[DIV:%.+]] = "onnx.Div"([[CAPTURED_WEIGHT]], [[CAPTURED_SCALE]])
-// CHECK-NEXT:        onnx.DeferredYield [[DIV]]
+// CHECK-NEXT:        onnx.Yield [[DIV]]
 // CHECK-NOT:         tosa.reciprocal
 // CHECK-NOT:         tosa.mul
 // CHECK:           })

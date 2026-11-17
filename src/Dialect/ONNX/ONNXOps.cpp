@@ -170,10 +170,10 @@ Operation *ONNXDeferredFoldableOp::getTerminalOperation() {
   Block &body = getBody().front();
   if (!body.mightHaveTerminator())
     return nullptr;
-  auto yield = dyn_cast_or_null<ONNXDeferredYieldOp>(body.getTerminator());
-  if (!yield)
+  auto yield = dyn_cast_or_null<ONNXYieldOp>(body.getTerminator());
+  if (!yield || yield.getNumOperands() != 1)
     return nullptr;
-  auto result = dyn_cast<OpResult>(yield.getValue());
+  auto result = dyn_cast<OpResult>(yield.getOperand(0));
   if (!result || result.getOwner()->getBlock() != &body)
     return nullptr;
   return result.getOwner();
@@ -239,12 +239,14 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
     }
   }
 
-  auto yield = dyn_cast<ONNXDeferredYieldOp>(body.getTerminator());
+  auto yield = dyn_cast<ONNXYieldOp>(body.getTerminator());
   if (!yield)
-    return emitOpError("body must terminate with onnx.DeferredYield");
+    return emitOpError("body must terminate with onnx.Yield");
+  if (yield.getNumOperands() != 1)
+    return emitOpError("body must yield exactly one value");
   Operation *terminal = getTerminalOperation();
   if (!terminal) {
-    auto argument = dyn_cast<BlockArgument>(yield.getValue());
+    auto argument = dyn_cast<BlockArgument>(yield.getOperand(0));
     if (!argument || argument.getOwner() != &body)
       return emitOpError(
           "must yield a value produced in its body or a body argument");
@@ -272,7 +274,7 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
              << operation.getName();
   }
 
-  if (terminal && yield.getValue().getDefiningOp() != terminal)
+  if (terminal && yield.getOperand(0).getDefiningOp() != terminal)
     return emitOpError("must yield a result of the terminal operation");
   return success();
 }

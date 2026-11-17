@@ -14,9 +14,6 @@ def QuantizationBoundaryOpInterface : OpInterface<"QuantizationBoundaryOpInterfa
     boundaries. This marker does not change purity or constant-foldability.
     Ordering-only rewrites can use it to preserve the position of a boundary
     represented inside a deferred recipe, just as for an explicit operation.
-
-    External models allow other dialects to identify their boundaries without
-    introducing a dependency from ONNX to those dialects.
   }];
 }
 

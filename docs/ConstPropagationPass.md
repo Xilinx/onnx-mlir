@@ -15,24 +15,23 @@ A deferred constant expression can participate in algebraic rewrites without
 reading initializer contents. The expression remains constant-foldable when
 its data is supplied at materialization time.
 
-Existing recipes remain opaque to ordinary constant propagation, including
-recipes whose captures are compiler-owned dense or disposable constants.
-Availability of the captures does not itself request evaluation. Downstream
+Existing deferred bodies remain opaque to ordinary constant propagation,
+including bodies whose captures are compiler-owned dense or disposable
+constants. Availability of the captures does not request evaluation. Downstream
 pipelines can use `populateFormDeferredFoldableExpressionPatterns` with
-`requireDeferredSource=false` to normalize those expressions as recipes too.
+`requireDeferredSource=false` to retain those expressions too.
 
 The Add/Mul rules that move constant operands to the right preserve the
-position of a recipe ending at a quantization boundary. This matches an
-explicit boundary and avoids changing runtime operand order solely because
-its representation is deferred. Other algebraic rewrites retain their normal
-constant eligibility.
+position of a deferred expression ending at a quantization boundary. This
+matches an explicit boundary and avoids changing runtime operand order solely
+because its representation is deferred. Other algebraic rewrites retain their
+normal constant eligibility.
 
 The commutation rules use `QuantizationBoundaryOpInterface` to recognize
 quantize, dequantize, and combined Q/DQ operations at the end of a deferred
-recipe. The interface does not change purity, constant-foldability or
-materialization.
-Other dialects can attach external models to their quantize/dequantize
-operations without adding a dependency from the ONNX dialect to those dialects.
+body. The interface does not change purity, constant-foldability or
+materialization. Other dialects can attach external models to their Q/DQ
+operations without adding a dependency from ONNX to those dialects.
 
 ## Example
 Given the following code:

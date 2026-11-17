@@ -64,7 +64,7 @@ func.func @skip_constant_foldable_expression(%arg0: tensor<2x2xf32>) -> tensor<2
 // CHECK-NOT:       onnx_node_name
 // CHECK:             [[TRANSPOSED:%.+]] = "onnx.Transpose"
 // CHECK-NOT:         onnx_node_name
-// CHECK:             onnx.DeferredYield [[TRANSPOSED]]
+// CHECK:             onnx.Yield [[TRANSPOSED]]
 // CHECK-NOT:         onnx_node_name
 // CHECK:           }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
 // CHECK:           [[RESULT:%.+]] = "onnx.Add"(%arg0, [[DEFERRED]]) {onnx_node_name = "onnx.Add_0"}

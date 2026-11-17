@@ -13,11 +13,6 @@ def DeferredConstantOpInterface : OpInterface<"DeferredConstantOpInterface"> {
     Identifies operation results that have constant semantics but whose
     contents are deliberately unavailable to ordinary folding. Reading the
     contents requires an explicit materialization step.
-
-    This is an operation interface rather than a native trait so downstream
-    compilers can attach an external model to existing operations in other
-    dialects. Those dialects do not need to depend on the ONNX dialect or be
-    modified to participate in deferred ONNX folding.
   }];
 
   let methods = [

@@ -28,14 +28,16 @@ def FormDeferredFoldableExpressionsPass
     : Pass<"onnx-form-deferred-foldable-expressions", "::mlir::func::FuncOp"> {
   let summary = "Retain deferred constant expressions behind an explicit IR boundary";
   let description = [{
-    Groups pure, regionless operations whose operands are constants or deferred
-    constants into `onnx.DeferredFoldable` recipes when at least one operand is
-    deferred. Formation proceeds through eligible users until no further recipes
-    can be formed, flattening captured recipes into their users' bodies.
+    Groups pure, regionless operations where all operands are constants or
+    deferred constants into `onnx.DeferredFoldable` operations when at least
+    one operand is deferred. Formation proceeds through eligible users until
+    no further expressions can be formed, flattening captured deferred bodies
+    into their users' bodies.
 
-    Existing recipes remain explicit even when all captures are compiler-owned
-    constants. Later passes can recognize foldable expressions by inspecting
-    their direct producer; evaluating a recipe requires an explicit request.
+    Existing deferred expressions remain explicit even when all captures are
+    compiler-owned constants. Later passes can recognize foldable expressions
+    by inspecting their direct producer; evaluation requires an explicit
+    request.
 
     For example, in pseudocode, the following expression:
 
@@ -334,8 +336,8 @@ def ConstPropONNXToONNXPass : Pass<"constprop-onnx", "::mlir::func::FuncOp"> {
     Option<"formDeferredFoldableExpressions",
            "form-deferred-foldable-expressions", "bool", "false",
            "Retain otherwise-unfolded initializer-dependent expressions as "
-           "onnx.DeferredFoldable recipes. Transformation pipelines should "
-           "leave this disabled and form recipes explicitly at the boundary "
+           "onnx.DeferredFoldable deferred expressions. Transformation pipelines should "
+           "leave this disabled and form deferred expressions explicitly at the boundary "
            "where constant expressions become opaque.">
   ];
 }

@@ -567,8 +567,8 @@ FailureOr<Operation *> peelDeferredFoldableExpression(
     return failure();
   Operation *terminal = plan->terminal;
   auto yieldedResult = cast<OpResult>(
-      cast<ONNXDeferredYieldOp>(deferred.getBody().front().getTerminator())
-          .getValue());
+      cast<ONNXYieldOp>(deferred.getBody().front().getTerminator())
+          .getOperand(0));
   unsigned yieldedResultNumber = yieldedResult.getResultNumber();
 
   IRMapping mapping;
@@ -596,9 +596,7 @@ FailureOr<Operation *> peelDeferredFoldableExpression(
   Attribute nodeName = deferred->getAttr("onnx_node_name");
   Attribute resultNames = deferred->getAttr("ResultNames");
   rewriter.modifyOpInPlace(deferred, [&]() {
-    cast<ONNXDeferredYieldOp>(body.getTerminator())
-        .getValueMutable()
-        .assign(prefix);
+    cast<ONNXYieldOp>(body.getTerminator()).getOperandsMutable().assign(prefix);
     deferred.getResult().setType(prefix.getType());
     for (StringRef name : {"onnx_node_name", "ResultNames"}) {
       if (Attribute prefixAttr = prefixOp->getAttr(name))
@@ -635,8 +633,8 @@ FailureOr<llvm::SmallVector<Operation *>> inlineDeferredFoldableExpression(
   Block &body = deferred.getBody().front();
   if (!body.mightHaveTerminator())
     return failure();
-  auto yield = dyn_cast_or_null<ONNXDeferredYieldOp>(body.getTerminator());
-  if (!yield)
+  auto yield = dyn_cast_or_null<ONNXYieldOp>(body.getTerminator());
+  if (!yield || yield.getNumOperands() != 1)
     return failure();
 
   IRMapping mapping;
@@ -655,7 +653,7 @@ FailureOr<llvm::SmallVector<Operation *>> inlineDeferredFoldableExpression(
       mapping.map(oldResult, newResult);
   }
 
-  Value result = mapping.lookupOrDefault(yield.getValue());
+  Value result = mapping.lookupOrDefault(yield.getOperand(0));
   if (!result)
     return failure();
   if (Operation *producer = result.getDefiningOp()) {

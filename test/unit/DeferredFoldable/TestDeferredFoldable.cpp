@@ -139,7 +139,7 @@ int testNormalizeDuplicateCaptureUses(MLIRContext &context) {
         %result = "onnx.DeferredFoldable"(%cast, %cast) ({
         ^bb0(%lhs: tensor<2x2xf32>, %rhs: tensor<2x2xf32>):
           %sum = "onnx.Add"(%lhs, %rhs) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
-          onnx.DeferredYield %sum : tensor<2x2xf32>
+          onnx.Yield %sum : tensor<2x2xf32>
         }) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
         return %result : tensor<2x2xf32>
       }
@@ -302,7 +302,7 @@ int testPeelOneInternalOperand(MLIRContext &context) {
         ^bb0(%arg1: tensor<2x2xf32>, %arg2: tensor<2xi64>):
           %1 = "onnx.Transpose"(%arg1) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
           %2 = "onnx.Tile"(%1, %arg2) : (tensor<2x2xf32>, tensor<2xi64>) -> tensor<4x4xf32>
-          onnx.DeferredYield %2 : tensor<4x4xf32>
+          onnx.Yield %2 : tensor<4x4xf32>
         }) : (tensor<2x2xf32>, tensor<2xi64>) -> tensor<4x4xf32>
         return %0 : tensor<4x4xf32>
       }
@@ -333,7 +333,7 @@ int testRejectMultipleInternalOperands(MLIRContext &context) {
           %1 = "onnx.Transpose"(%arg1) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
           %2 = "onnx.Identity"(%arg1) : (tensor<2x2xf32>) -> tensor<2x2xf32>
           %3 = "onnx.Add"(%1, %2) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
-          onnx.DeferredYield %3 : tensor<2x2xf32>
+          onnx.Yield %3 : tensor<2x2xf32>
         }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
         return %0 : tensor<2x2xf32>
       }
@@ -361,7 +361,7 @@ int testInlineCompleteRecipe(MLIRContext &context) {
         ^bb0(%arg1: tensor<2x2xf32>, %arg2: tensor<2xi64>):
           %1 = "onnx.Transpose"(%arg1) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
           %2 = "onnx.Tile"(%1, %arg2) : (tensor<2x2xf32>, tensor<2xi64>) -> tensor<4x4xf32>
-          onnx.DeferredYield %2 : tensor<4x4xf32>
+          onnx.Yield %2 : tensor<4x4xf32>
         }) : (tensor<2x2xf32>, tensor<2xi64>) -> tensor<4x4xf32>
         return %0 : tensor<4x4xf32>
       }
