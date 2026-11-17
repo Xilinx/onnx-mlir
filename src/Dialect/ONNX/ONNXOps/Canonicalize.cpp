@@ -628,8 +628,6 @@ void inferShapes(ONNXOp op) {
     llvm_unreachable("unexpected inferShapes failure");
 }
 
-} // namespace
-
 /// Two Pad operations have the same fill value when their operands are the
 /// same value, or when they are distinct ConstantLike values with equal
 /// attributes.
@@ -1516,8 +1514,6 @@ struct FusePadPadPattern : public OpRewritePattern<ONNXPadOp> {
   }
 };
 
-namespace {
-
 /// Backfill a Slice's discarded data into poison padding. Widen the slice to
 /// the overlap of the padded window with the original input, retaining poison
 /// only outside that input. Defined elements keep their output positions.
@@ -1635,8 +1631,6 @@ struct SlicePadPoisonOptimization : public OpRewritePattern<ONNXPadOp> {
     return success();
   }
 };
-
-} // namespace
 
 // =============================================================================
 // Rewrite pattern for loop (not handled in Rewrite.td).
@@ -1942,7 +1936,6 @@ private:
 // Rewrite pattern for RNNs
 // =============================================================================
 
-namespace {
 // RNNOpRewriteLayoutPattern helper functions and classes.
 
 // To transpose between [batch_size, seq_length/num_directions, size]
@@ -1987,7 +1980,6 @@ private:
 
   onnx_mlir::OnnxBuilder create;
 };
-} // namespace
 
 // Rewrites layout=1 to layout=0 by transposing inputs and outputs.
 template <typename ONNXOp>
@@ -2761,8 +2753,6 @@ struct ConcatSingleOperandPattern : public OpRewritePattern<ONNXConcatOp> {
   }
 };
 
-namespace {
-
 [[nodiscard]] bool isPlainFloatType(Type t) {
   Type elem = getElementTypeOrSelf(t);
   return mlir::isa<FloatType>(elem);
@@ -3530,8 +3520,6 @@ struct PropagateBiasOrScaleIntoLayerNormRewritePatternBase
     return success();
   }
 };
-
-} // namespace
 
 template <typename LN_TYPE>
 struct PropagateScaleIntoLayerNormPattern
@@ -4540,8 +4528,6 @@ public:
   }
 };
 
-namespace {
-
 // Normalizes a scalar `axis` attribute in place.
 bool normalizeAxisAttr(
     Operation *op, const ONNXAxisValueSpec &spec, PatternRewriter &rewriter) {
@@ -4694,9 +4680,6 @@ struct ONNXPositiveAxisCanonicalizationPattern : public RewritePattern {
   }
 };
 
-} // namespace
-
-namespace {
 bool hasScalarConstantQDQParams(ONNXDequantizeLinearOp op) {
   return isScalarConstantTensor(op.getXScale()) &&
          isScalarConstantTensor(op.getXZeroPoint());
@@ -4763,8 +4746,6 @@ LogicalResult hasSupportedQDQMovementSemantics(
   return rewriter.notifyMatchFailure(
       op, "QDQ movement semantics are not explicitly supported for this op");
 }
-
-} // namespace
 
 template <typename T>
 class SinkDequantLinearOpAfterDataMovementOp : public OpRewritePattern<T> {
@@ -4982,8 +4963,6 @@ struct FuseCastBetweenReshapesPattern : public OpRewritePattern<ONNXReshapeOp> {
 // ONNXConvOp canonicalization
 //===----------------------------------------------------------------------===//
 
-namespace {
-
 // Derive spatial rank from kernel_shape when present, otherwise from weight
 // rank.
 static std::optional<int64_t> getConvSpatialRank(ONNXConvOp convOp) {
@@ -5003,8 +4982,6 @@ static std::optional<int64_t> getConvSpatialRank(ONNXConvOp convOp) {
     return spatialRank;
   return std::nullopt;
 }
-
-} // namespace
 
 // Materialize ONNX-default Conv attributes when omitted:
 //   strides/dilations -> 1 on each spatial axis
@@ -5103,8 +5080,6 @@ struct NormalizeConvAutoPadPattern : public OpRewritePattern<ONNXConvOp> {
 //   bf[n] = b2[n] + sum_m (sum_{i,j} W2[n,m,i,j]) * b1[m]
 //
 //===----------------------------------------------------------------------===//
-
-namespace {
 
 // True when every element of the optional I64 array attr equals 1.
 // An absent attribute is treated as "all ones"
@@ -6071,7 +6046,7 @@ void ONNXTileOp::getCanonicalizationPatterns(
 /// on the ONNXTransposeOp.
 void ONNXTransposeOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
-  result.insert<FuseTransposePattern>(context);
+  result.addWithLabel<FuseTransposePattern>({"FuseTransposePattern"}, context);
   result.insert<FuseTransposeAndAtanPattern>(context);
   result.insert<FuseTransposeAndCastPattern>(context);
   result.insert<FuseTransposeAndCeilPattern>(context);
