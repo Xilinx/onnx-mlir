@@ -37,6 +37,7 @@
 #include "src/Dialect/ONNX/ONNXLayoutHelper.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
+#include "src/Dialect/ONNX/TensorName.hpp"
 #include "src/Support/TypeUtilities.hpp"
 
 // Identity affine
@@ -749,40 +750,38 @@ FailureOr<Operation *> peelDeferredFoldableExpression(
 
 FailureOr<llvm::SmallVector<Operation *>> inlineDeferredFoldableExpression(
     ONNXDeferredFoldableOp deferred, RewriterBase &rewriter) {
-  if (deferred.getBody().empty())
-    return failure();
   Block &body = deferred.getBody().front();
-  if (!body.mightHaveTerminator())
-    return failure();
-  auto yield = dyn_cast_or_null<ONNXYieldOp>(body.getTerminator());
-  if (!yield || yield.getNumOperands() != deferred.getNumResults())
-    return failure();
+  auto yield = cast<ONNXYieldOp>(body.getTerminator());
 
-  IRMapping mapping;
-  for (auto [argument, capture] :
-      llvm::zip_equal(body.getArguments(), deferred.getCaptures()))
-    mapping.map(argument, capture);
-
-  OpBuilder::InsertionGuard guard(rewriter);
-  rewriter.setInsertionPoint(deferred);
-  llvm::SmallVector<Operation *> inlined;
-  for (Operation &operation : body.without_terminator()) {
-    Operation *clone = rewriter.clone(operation, mapping);
-    inlined.push_back(clone);
-    for (auto [oldResult, newResult] :
-        llvm::zip_equal(operation.getResults(), clone->getResults()))
-      mapping.map(oldResult, newResult);
+  // Transfer result provenance to the exact yielded OpResult. Keep names for
+  // the producer's other results and never rename a forwarded capture.
+  for (auto [wrapperResult, yielded] : llvm::enumerate(yield.getOperands())) {
+    auto opResult = dyn_cast<OpResult>(yielded);
+    if (!opResult || opResult.getOwner()->getBlock() != &body)
+      continue;
+    Operation *producer = opResult.getOwner();
+    TensorName tensorName(deferred.getResult(wrapperResult));
+    Attribute nodeName = deferred.getNumResults() == 1
+                             ? deferred->getAttr("onnx_node_name")
+                             : Attribute();
+    if (!tensorName && !nodeName)
+      continue;
+    rewriter.modifyOpInPlace(producer, [&] {
+      if (tensorName)
+        (void)tensorName.setTo(yielded);
+      if (nodeName)
+        producer->setAttr("onnx_node_name", nodeName);
+    });
   }
 
-  SmallVector<Value> results;
-  for (Value value : yield.getOperands())
-    results.push_back(mapping.lookupOrDefault(value));
-  if (results.size() == 1)
-    if (Operation *producer = results.front().getDefiningOp())
-      for (StringRef name : {"onnx_node_name", "ResultNames"})
-        if (Attribute attr = deferred->getAttr(name))
-          producer->setAttr(name, attr);
+  OpBuilder::InsertionGuard guard(rewriter);
+  llvm::SmallVector<Operation *> inlined;
+  for (Operation &operation : body.without_terminator())
+    inlined.push_back(&operation);
+  ValueRange results = yield.getOperands();
+  rewriter.inlineBlockBefore(&body, deferred, deferred.getCaptures());
   rewriter.replaceOp(deferred, results);
+  rewriter.eraseOp(yield);
   return inlined;
 }
 
