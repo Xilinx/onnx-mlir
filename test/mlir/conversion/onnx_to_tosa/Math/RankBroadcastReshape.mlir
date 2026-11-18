@@ -351,6 +351,6 @@ func.func @mul_unranked(%lhs: tensor<*xf32>, %rhs: tensor<3xf32>) -> tensor<*xf3
 }
 
 // CHECK-LABEL: func.func @mul_unranked(
-// CHECK: %[[RESULT:.*]] = "onnx.Mul"
-// CHECK-NOT: tosa.
+// CHECK-SAME: %[[LHS:.*]]: tensor<*xf32>, %[[RHS:.*]]: tensor<3xf32>
+// CHECK: %[[RESULT:.*]] = tosa.mul %[[LHS]], %[[RHS]], %{{.*}} : (tensor<*xf32>, tensor<3xf32>, tensor<1xi8>) -> tensor<*xf32>
 // CHECK: return %[[RESULT]]
