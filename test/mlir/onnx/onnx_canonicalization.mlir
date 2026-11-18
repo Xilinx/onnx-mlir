@@ -4089,14 +4089,15 @@ func.func @reduce_mean_no_unit_axes_unchanged(%arg0: tensor<2x3x4x5xbf16>) -> te
 
 // -----
 
-// CHECK-LABEL: func.func @reduce_mean_keepdims_zero_unchanged
-func.func @reduce_mean_keepdims_zero_unchanged(%arg0: tensor<1x3x1x5xf32>) -> tensor<3x5xf32> {
+// CHECK-LABEL: func.func @reduce_mean_keepdims_zero_unit_axes
+func.func @reduce_mean_keepdims_zero_unit_axes(%arg0: tensor<1x3x1x5xf32>) -> tensor<3x5xf32> {
   %axes = onnx.Constant dense<[0, 2]> : tensor<2xi64>
   %0 = "onnx.ReduceMean"(%arg0, %axes) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64} : (tensor<1x3x1x5xf32>, tensor<2xi64>) -> tensor<3x5xf32>
   onnx.Return %0 : tensor<3x5xf32>
-  // CHECK: "onnx.ReduceMean"(%arg0, %{{.*}}) {keepdims = 0 : si64, noop_with_empty_axes = 0 : si64}
-  // CHECK: onnx.Return %{{.*}}
-  // CHECK-NOT: "onnx.Reshape"
+  // CHECK-NOT: "onnx.ReduceMean"
+  // CHECK: %[[SHAPE:.+]] = onnx.Constant dense<[3, 5]> : tensor<2xi64>
+  // CHECK: %[[RES:.+]] = "onnx.Reshape"(%arg0, %[[SHAPE]]) {allowzero = 0 : si64}
+  // CHECK: onnx.Return %[[RES]]
 }
 
 // -----

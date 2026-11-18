@@ -1068,9 +1068,7 @@ struct PropagateConstantScalingInAttentionLayerPattern
 // Reducing a unit-sized dimension is a no-op, so the axis can be removed from
 // the `axes` operand without changing the result.
 //
-// Only `keepdims = 1` is handled here. With `keepdims = 0`, dropping a
-// size-1 axis would change the output rank and require inserting a Squeeze,
-// which is left to other rewrites.
+// With `keepdims = 0`, reshape the result to remove the dropped unit axes.
 //
 // Empty axes with `noop_with_empty_axes = 1` forward the data input.
 template <typename OP_TYPE>
@@ -1080,9 +1078,6 @@ public:
 
   LogicalResult matchAndRewrite(
       OP_TYPE op, PatternRewriter &rewriter) const override {
-    if (op.getKeepdims() != 1)
-      return rewriter.notifyMatchFailure(op, "only keepdims=1 is handled");
-
     auto dataType = mlir::dyn_cast<RankedTensorType>(op.getData().getType());
     if (!dataType || !dataType.hasStaticShape())
       return rewriter.notifyMatchFailure(op, "data must have static shape");
@@ -1093,8 +1088,9 @@ public:
     // inference, so we only need to handle the constant-vs-empty cases here.
     SmallVector<int64_t> axes;
     if (!isNoneValue(op.getAxes())) {
-      if (!getI64ValuesFromONNXConstantOp(op.getAxes(), axes))
+      if (!getDenseOrDisposableConstLikeElements(op.getAxes()))
         return rewriter.notifyMatchFailure(op, "axes is not a constant");
+      axes = valToVector(op.getAxes());
     }
     if (axes.empty() && op.getNoopWithEmptyAxes() == 0) {
       // Empty axes with default semantics means reduce all dims.
@@ -1115,18 +1111,49 @@ public:
     if (remainingAxes.size() == axes.size())
       return rewriter.notifyMatchFailure(op, "no unit-sized axes to drop");
 
-    // All reduction axes were unit-sized: with keepdims=1 the result shape
-    // equals the input shape, so the op is equivalent to its data input.
-    if (remainingAxes.empty()) {
-      rewriter.replaceOp(op, op.getData());
+    OnnxBuilder create(rewriter, op.getLoc());
+    if (op.getKeepdims() == 1) {
+      // With keepdims=1, reducing only unit axes leaves the input shape
+      // unchanged, so the op is equivalent to its data input.
+      if (remainingAxes.empty()) {
+        rewriter.replaceOp(op, op.getData());
+        return success();
+      }
+      Value newAxes = create.constantInt64(remainingAxes);
+      rewriter.modifyOpInPlace(
+          op, [&] { op.getAxesMutable().assign(newAxes); });
       return success();
     }
 
-    // Otherwise update the axes operand in place; all other operands and
-    // attributes are unchanged.
-    OnnxBuilder create(rewriter, op.getLoc());
-    Value newAxes = create.constantInt64(remainingAxes);
-    rewriter.modifyOpInPlace(op, [&] { op.getAxesMutable().assign(newAxes); });
+    // With keepdims=0, the result does not contain the dropped unit axes, so a
+    // Reshape removes them from the reduced value.
+    Type resultType = op.getResult().getType();
+    if (!hasStaticShape(resultType))
+      return rewriter.notifyMatchFailure(op, "result must have static shape");
+
+    Value reduced = op.getData();
+    if (!remainingAxes.empty()) {
+      // The axes constant must be created before the clone so that it
+      // dominates the clone.
+      Value newAxes = create.constantInt64(remainingAxes);
+      auto newOp = mlir::cast<OP_TYPE>(rewriter.clone(*op.getOperation()));
+      newOp->removeAttr("ResultNames");
+      newOp.getAxesMutable().assign(newAxes);
+      newOp.getResult().setType(
+          UnrankedTensorType::get(getElementTypeOrSelf(resultType)));
+      inferShapes(newOp);
+      reduced = newOp.getResult();
+    }
+
+    // A zero in the target shape denotes an empty dimension.
+    IntegerAttr allowZero;
+    if (llvm::is_contained(getShape(resultType), 0))
+      allowZero = rewriter.getIntegerAttr(
+          rewriter.getIntegerType(64, /*isSigned=*/true), 1);
+    Value targetShape = create.constant(
+        createDenseElementsAttrFromShape(rewriter, op.getResult()));
+    rewriter.replaceOp(
+        op, create.reshape(resultType, reduced, targetShape, allowZero));
     return success();
   }
 };
