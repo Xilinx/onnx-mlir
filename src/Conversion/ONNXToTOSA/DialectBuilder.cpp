@@ -382,7 +382,6 @@ Value TosaBuilder::roundEven(mlir::Value input) {
 
   Value y = this->unaryOp<mlir::tosa::FloorOp>(input);
   Value r = this->binaryOp<mlir::tosa::SubOp>(input, y);
-
   Value yPlusOne = this->binaryOp<mlir::tosa::AddOp>(y, one);
   Value roundUp = this->greater(r, half);
   Value nearest = this->select(roundUp, yPlusOne, y);

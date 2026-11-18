@@ -232,8 +232,8 @@ static LogicalResult legalizeFloatingPointPrelu(Operation *op,
       0.0, outputType.getElementType(), outputType.getRank());
 
   tosa::equalizeRanks(create.onnx, input, alphaOrSlope);
-  auto mul = create.tosa.mul(input, alphaOrSlope);
-  auto greaterEqual = create.tosa.greaterEqual(input, constZero);
+  auto mul = create.onnx.mul(input, alphaOrSlope);
+  Value greaterEqual = create.onnx.greaterEqual(input, constZero);
   auto select = create.tosa.select(greaterEqual, input, mul);
   copySingleResultType(op, select);
   rewriter.replaceOp(op, {select});
@@ -369,7 +369,7 @@ public:
     };
 
     // Use ClampOp if min and max are splat constants.
-    // Otherwise, MaximumOp and MinimumOp to clamp min and max, respectively.
+    // Otherwise, generate ONNX Max and Min, which lower separately.
     auto [isSplatConstMin, minInt, minFloat] = matchIntOrFloat(min);
     auto [isSplatConstMax, maxInt, maxFloat] = matchIntOrFloat(max);
     if (isSplatConstMin && isSplatConstMax) {
@@ -382,14 +382,12 @@ public:
       if (!isNoneValue(min)) {
         if (equalizeRanks(res, min).failed())
           return failure();
-        res = tosa::CreateOpAndInfer<mlir::tosa::MaximumOp>(
-            rewriter, op->getLoc(), op.getType(), res, min);
+        res = onnxBuilder.max({res, min});
       }
       if (!isNoneValue(max)) {
         if (equalizeRanks(res, max).failed())
           return failure();
-        res = tosa::CreateOpAndInfer<mlir::tosa::MinimumOp>(
-            rewriter, op->getLoc(), op.getType(), res, max);
+        res = onnxBuilder.min({res, max});
       }
       rewriter.replaceOp(op, res);
     }
@@ -403,7 +401,8 @@ public:
   LogicalResult matchAndRewrite(ONNXCastOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
 
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
 
     auto resultTy = dyn_cast_if_present<ShapedType>(
         getTypeConverter()->convertType(op.getType()));
@@ -427,13 +426,13 @@ public:
       // ceil for negative ones. Conversion to boolean works the same between
       // onnx.Cast and tosa.cast.
       if (resultTy.getElementType().getIntOrFloatBitWidth() != 1) {
-        auto zero = tosaBuilder.getSplattedConst(
+        auto zero = create.tosa.getSplattedConst(
             0.0f, inputTy.getElementType(), resultTy.getRank());
-        auto positive = tosaBuilder.greaterEqual(input, zero);
+        Value positive = create.onnx.greaterEqual(input, zero);
 
-        auto floor = tosaBuilder.unaryOp<mlir::tosa::FloorOp>(input);
-        auto ceil = tosaBuilder.unaryOp<mlir::tosa::CeilOp>(input);
-        input = tosaBuilder.select(positive, floor, ceil);
+        auto floor = create.tosa.unaryOp<mlir::tosa::FloorOp>(input);
+        auto ceil = create.tosa.unaryOp<mlir::tosa::CeilOp>(input);
+        input = create.tosa.select(positive, floor, ceil);
       }
     }
 
@@ -465,10 +464,10 @@ public:
       return success();
     }
     // For floating point types, decompose ONNXDivOp into
-    // tosa::ReciprocalOp and tosa::MulOp.
+    // tosa::ReciprocalOp and ONNXMulOp, which lowers separately.
     Value reciprocalOp = create.tosa.unaryOp<mlir::tosa::ReciprocalOp>(rhs);
     tosa::equalizeRanks(create.onnx, lhs, reciprocalOp);
-    Value mulOp = create.tosa.mul(lhs, reciprocalOp);
+    Value mulOp = create.onnx.mul(lhs, reciprocalOp);
     copySingleResultType(op, mulOp);
     rewriter.replaceOp(op, {mulOp});
     return success();
@@ -487,9 +486,14 @@ public:
       return failure();
     }
 
-    Value input = op.getX();
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
-    Value sqrtOp = tosaBuilder.sqrt(input);
+    Value input = adaptor.getX();
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
+    auto inputType = cast<ShapedType>(input.getType());
+    auto oneHalf = create.tosa.getSplattedConst(
+        0.5, inputType.getElementType(), inputType.getRank());
+    Value sqrtOp =
+        create.onnx.createOpAndInferShapes<ONNXPowOp>(input, oneHalf);
     rewriter.replaceOp(op, {sqrtOp});
     return success();
   }
@@ -509,25 +513,26 @@ public:
       return failure();
     }
 
-    Value input = op.getX();
+    Value input = adaptor.getX();
 
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
 
-    Value one = tosaBuilder.getSplattedConst(
+    Value one = create.tosa.getSplattedConst(
         1.0, resultTensorType.getElementType(), resultTensorType.getRank());
     Value alpha =
-        tosaBuilder.getSplattedConst(adaptor.getAlpha().convertToDouble(),
+        create.tosa.getSplattedConst(adaptor.getAlpha().convertToDouble(),
             resultTensorType.getElementType(), resultTensorType.getRank());
-    Value constZero = tosaBuilder.getSplattedConst(
+    Value constZero = create.tosa.getSplattedConst(
         0.0, resultTensorType.getElementType(), resultTensorType.getRank());
 
-    Value exp = tosaBuilder.unaryOp<mlir::tosa::ExpOp>(input);
+    Value exp = create.tosa.unaryOp<mlir::tosa::ExpOp>(input);
     copySingleResultType(op, exp);
-    Value expMinusOne = tosaBuilder.binaryOp<mlir::tosa::SubOp>(exp, one);
-    Value alphaTimesExpMinusOne = tosaBuilder.mul(expMinusOne, alpha);
-    Value greaterEqual = tosaBuilder.greaterEqual(input, constZero);
+    Value expMinusOne = create.onnx.sub(exp, one);
+    Value alphaTimesExpMinusOne = create.onnx.mul(expMinusOne, alpha);
+    Value greaterEqual = create.onnx.greaterEqual(input, constZero);
     auto select =
-        tosaBuilder.select(greaterEqual, input, alphaTimesExpMinusOne);
+        create.tosa.select(greaterEqual, input, alphaTimesExpMinusOne);
     copySingleResultType(op, select);
     rewriter.replaceOp(op, {select});
     return success();
@@ -541,15 +546,16 @@ public:
   LogicalResult matchAndRewrite(ONNXHardSigmoidOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
     // ONNXHardSigmoid -> TOSA:
-    // - tosa.add(input, beta/alpha)
+    // - onnx.Add(input, beta/alpha)
     // - tosa.clamp(add) with min = 0, and max = 1/alpha
-    // - tosa.mul(clamp, alpha)
+    // - onnx.Mul(clamp, alpha)
     Value input = adaptor.getX();
 
     auto resultType = cast<TensorType>(op.getResult().getType());
     auto resultElementType = resultType.getElementType();
 
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
 
     auto alpha = adaptor.getAlpha();
 
@@ -565,19 +571,18 @@ public:
     }
 
     Value constBetaOverAlpha =
-        tosaBuilder.getSplattedConst(betaOverAlpha.convertToDouble(),
+        create.tosa.getSplattedConst(betaOverAlpha.convertToDouble(),
             resultElementType, resultType.getRank());
-    Value constAlpha = tosaBuilder.getSplattedConst(
+    Value constAlpha = create.tosa.getSplattedConst(
         alpha.convertToDouble(), resultElementType, resultType.getRank());
 
-    auto addOp =
-        tosaBuilder.binaryOp<mlir::tosa::AddOp>(input, constBetaOverAlpha);
+    auto addOp = create.onnx.add(input, constBetaOverAlpha);
     Value clampOp = tosa::CreateOpAndInfer<mlir::tosa::ClampOp>(rewriter,
         op->getLoc(), resultType, addOp, rewriter.getI64IntegerAttr(0),
         rewriter.getI64IntegerAttr(oneOverAlpha.convertToDouble()),
         rewriter.getF32FloatAttr(0),
         rewriter.getF32FloatAttr(oneOverAlpha.convertToDouble()));
-    auto mulOp = tosaBuilder.mul(clampOp, constAlpha);
+    auto mulOp = create.onnx.mul(clampOp, constAlpha);
     copySingleResultType(op, mulOp);
     rewriter.replaceOp(op, {mulOp});
     return success();
@@ -626,14 +631,15 @@ public:
 
     Value input = adaptor.getX();
 
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
-    auto one = tosaBuilder.getSplattedConst(
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
+    auto one = create.tosa.getSplattedConst(
         1.0, outputType.getElementType(), outputType.getRank());
 
-    auto expOp = tosaBuilder.unaryOp<mlir::tosa::ExpOp>(input);
+    auto expOp = create.tosa.unaryOp<mlir::tosa::ExpOp>(input);
     copySingleResultType(op, expOp);
-    auto expPlusOne = tosaBuilder.binaryOp<mlir::tosa::AddOp>(expOp, one);
-    auto logOp = tosaBuilder.unaryOp<mlir::tosa::LogOp>(expPlusOne);
+    auto expPlusOne = create.onnx.add(expOp, one);
+    auto logOp = create.tosa.unaryOp<mlir::tosa::LogOp>(expPlusOne);
     rewriter.replaceOp(op, {logOp});
     return success();
   }
@@ -652,29 +658,30 @@ public:
 
     Value input = adaptor.getX();
 
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
     if (!outputType.hasRank()) {
       return rewriter.notifyMatchFailure(
           op, "ONNXSeluOp: Rank required to create splatted const");
     }
 
     Value alpha =
-        tosaBuilder.getSplattedConst(adaptor.getAlpha().convertToDouble(),
+        create.tosa.getSplattedConst(adaptor.getAlpha().convertToDouble(),
             outputType.getElementType(), outputType.getRank());
     Value gamma =
-        tosaBuilder.getSplattedConst(adaptor.getGamma().convertToDouble(),
+        create.tosa.getSplattedConst(adaptor.getGamma().convertToDouble(),
             outputType.getElementType(), outputType.getRank());
-    Value constZero = tosaBuilder.getSplattedConst(
+    Value constZero = create.tosa.getSplattedConst(
         0.0, outputType.getElementType(), outputType.getRank());
 
-    Value exp = tosaBuilder.unaryOp<mlir::tosa::ExpOp>(input);
-    Value expTimesAlpha = tosaBuilder.mul(exp, alpha);
-    Value expTimesAlphaMinusAlpha =
-        tosaBuilder.binaryOp<mlir::tosa::SubOp>(expTimesAlpha, alpha);
+    Value exp = create.tosa.unaryOp<mlir::tosa::ExpOp>(input);
+    Value expTimesAlpha = create.onnx.mul(exp, alpha);
+    Value expTimesAlphaMinusAlpha = create.onnx.sub(expTimesAlpha, alpha);
 
-    Value greater = tosaBuilder.greater(input, constZero);
-    auto select = tosaBuilder.select(greater, input, expTimesAlphaMinusAlpha);
-    Value valTimesGamma = tosaBuilder.mul(select, gamma);
+    Value greater =
+        create.onnx.createOpAndInferShapes<ONNXGreaterOp>(input, constZero);
+    auto select = create.tosa.select(greater, input, expTimesAlphaMinusAlpha);
+    Value valTimesGamma = create.onnx.mul(select, gamma);
 
     rewriter.replaceOp(op, {valTimesGamma});
     return success();
@@ -700,15 +707,17 @@ public:
 
     Value input = adaptor.getX();
 
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
     auto alpha =
-        tosaBuilder.getSplattedConst(adaptor.getAlpha().convertToDouble(),
+        create.tosa.getSplattedConst(adaptor.getAlpha().convertToDouble(),
             outputType.getElementType(), outputType.getRank());
-    auto zero = tosaBuilder.getSplattedConst(
+    auto zero = create.tosa.getSplattedConst(
         0.0, outputType.getElementType(), outputType.getRank());
 
-    auto greater = tosaBuilder.greater(input, alpha);
-    auto select = tosaBuilder.select(greater, input, zero);
+    Value greater =
+        create.onnx.createOpAndInferShapes<ONNXGreaterOp>(input, alpha);
+    auto select = create.tosa.select(greater, input, zero);
 
     rewriter.replaceOp(op, {select});
     return success();

@@ -71,15 +71,12 @@ public:
         outTensorType.getElementType(), newShape.size());
 
     // output = (input - mean) * scale * rsqrt(var + eps) + bias
-    auto op1SubInputMean =
-        create.tosa.binaryOp<mlir::tosa::SubOp>(input, reshapedMean);
-    auto op2AddVarEps =
-        create.tosa.binaryOp<mlir::tosa::AddOp>(reshapedVar, eps);
+    auto op1SubInputMean = create.onnx.sub(input, reshapedMean);
+    auto op2AddVarEps = create.onnx.add(reshapedVar, eps);
     auto op3RsqrtOp2 = create.tosa.unaryOp<mlir::tosa::RsqrtOp>(op2AddVarEps);
-    auto op4MulOp1Op3 = create.tosa.mul(op1SubInputMean, op3RsqrtOp2, 0);
-    auto op5MulOp4Scale = create.tosa.mul(op4MulOp1Op3, reshapedScale, 0);
-    auto newOutput =
-        create.tosa.binaryOp<mlir::tosa::AddOp>(op5MulOp4Scale, reshapedBias);
+    auto op4MulOp1Op3 = create.onnx.mul(op1SubInputMean, op3RsqrtOp2);
+    auto op5MulOp4Scale = create.onnx.mul(op4MulOp1Op3, reshapedScale);
+    auto newOutput = create.onnx.add(op5MulOp4Scale, reshapedBias);
 
     rewriter.replaceOp(op, {newOutput});
     return success();

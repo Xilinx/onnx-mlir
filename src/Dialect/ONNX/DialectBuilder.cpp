@@ -52,6 +52,10 @@ Value OnnxBuilder::add(Value A, Value B) const {
   return createOpAndInferShapes<ONNXAddOp>(toTensor(A), toTensor(B));
 }
 
+Value OnnxBuilder::greaterEqual(Value A, Value B) const {
+  return createOpAndInferShapes<ONNXGreaterOrEqualOp>(toTensor(A), toTensor(B));
+}
+
 Value OnnxBuilder::cast(Type outputType, Value input, IntegerAttr saturate,
     TypeAttr to, bool inferShape) const {
   if (inferShape)
