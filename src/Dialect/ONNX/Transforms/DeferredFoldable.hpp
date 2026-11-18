@@ -18,14 +18,17 @@ namespace onnx_mlir {
 // Add a low-benefit fallback that forms deferred expressions bottom-up and
 // flattens captured expression bodies. Ordinary optimization patterns run
 // first. Set requireDeferredSource=false to also retain compiler-owned constant
-// expressions. Existing bodies remain opaque until explicitly evaluated.
+// expressions. Run these patterns with applyPatternsOutsideDeferredFoldable
+// to keep expression bodies opaque, including newly constructed bodies.
 void populateFormDeferredFoldableExpressionPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit,
     bool requireDeferredSource = true);
 
 // Form or extend a deferred expression for one newly created operation. On
 // success, the insertion point is immediately after the replacement producer.
-// Failure means that the operation is not eligible.
+// Failure means that the operation is not eligible. Body construction notifies
+// the rewriter; greedy callers must exclude bodies using outer-only seeds and
+// ExistingOps strictness, as applyPatternsOutsideDeferredFoldable does.
 mlir::FailureOr<mlir::Value> formDeferredFoldableExpression(
     mlir::Operation *op, mlir::RewriterBase &rewriter);
 
