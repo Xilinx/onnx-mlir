@@ -4,7 +4,11 @@
  * affiliates
  */
 
-// Build flattened deferred constant expressions without evaluating tensors.
+// Form flat deferred expressions bottom-up after ordinary constant rewrites.
+// Each round rewrites only operations outside existing expression bodies.
+// New operations become eligible on the next round; body operations never do.
+// Captured expressions are flattened, and unshared bodies can be extended
+// in place to avoid repeatedly cloning a growing chain.
 
 #include "src/Dialect/ONNX/Transforms/DeferredFoldable.hpp"
 
@@ -58,6 +62,23 @@ bool canFormDeferredFoldableExpression(Operation *op) {
   return llvm::all_of(op->getOperands(), [](Value operand) {
     return isDeferredConstant(operand) || isConstLikeValue(operand);
   });
+}
+
+// Import a deferred body into the current block with remapped captures.
+// The source may have other users, so clone rather than move its operations.
+SmallVector<Value> cloneDeferredBodyInto(
+    ONNXDeferredFoldableOp source, ValueRange captures, OpBuilder &builder) {
+  IRMapping mapping;
+  for (auto [argument, capture] :
+      llvm::zip_equal(source.getBody().getArguments(), captures))
+    mapping.map(argument, capture);
+  for (Operation &operation : source.getBody().front().without_terminator())
+    builder.clone(operation, mapping);
+  auto yield = cast<ONNXYieldOp>(source.getBody().front().getTerminator());
+  SmallVector<Value> results;
+  for (Value value : yield.getOperands())
+    results.push_back(mapping.lookup(value));
+  return results;
 }
 
 // Construction mechanics for one operation whose direct operands satisfy the
@@ -126,7 +147,8 @@ private:
     IRMapping mapping;
     mapping.map(extensible.getResult(0), prefix);
 
-    OpBuilder bodyBuilder(rewriter.getContext());
+    OpBuilder::InsertionGuard guard(rewriter);
+    OpBuilder &bodyBuilder = rewriter;
     bodyBuilder.setInsertionPoint(oldYield);
 
     DenseMap<Value, BlockArgument> captureArguments;
@@ -196,24 +218,6 @@ private:
     return captures;
   }
 
-  // Inline a nested body using the new wrapper's capture arguments and return
-  // the mapped value that the nested body yielded.
-  static SmallVector<Value> cloneNestedDeferredFoldable(
-      ONNXDeferredFoldableOp nested, ArrayRef<BlockArgument> arguments,
-      const DenseMap<Value, unsigned> &captureIndices, OpBuilder &builder) {
-    IRMapping mapping;
-    for (auto [capture, argument] :
-        llvm::zip_equal(nested.getCaptures(), nested.getBody().getArguments()))
-      mapping.map(argument, arguments[captureIndices.lookup(capture)]);
-    for (Operation &operation : nested.getBody().front().without_terminator())
-      builder.clone(operation, mapping);
-    auto yield = cast<ONNXYieldOp>(nested.getBody().front().getTerminator());
-    SmallVector<Value> values;
-    for (Value value : yield.getOperands())
-      values.push_back(mapping.lookup(value));
-    return values;
-  }
-
   // Build an isolated body for one result, inlining nested deferred operands
   // and cloning non-tensor metadata constants needed by body verifiers.
   static ONNXDeferredFoldableOp buildDeferredFoldableForResults(
@@ -236,7 +240,8 @@ private:
     for (Value capture : captures)
       arguments.push_back(block->addArgument(capture.getType(), op->getLoc()));
 
-    OpBuilder bodyBuilder(rewriter.getContext());
+    OpBuilder::InsertionGuard guard(rewriter);
+    OpBuilder &bodyBuilder = rewriter;
     bodyBuilder.setInsertionPointToStart(block);
     IRMapping expressionMapping;
     for (Value operand : op->getOperands()) {
@@ -249,8 +254,11 @@ private:
       }
       if (auto nested = dyn_cast_or_null<ONNXDeferredFoldableOp>(
               operand.getDefiningOp())) {
-        SmallVector<Value> values = cloneNestedDeferredFoldable(
-            nested, arguments, captureIndices, bodyBuilder);
+        SmallVector<Value> nestedCaptures;
+        for (Value capture : nested.getCaptures())
+          nestedCaptures.push_back(arguments[captureIndices.lookup(capture)]);
+        SmallVector<Value> values =
+            cloneDeferredBodyInto(nested, nestedCaptures, bodyBuilder);
         for (auto [result, value] :
             llvm::zip_equal(nested.getResults(), values))
           expressionMapping.map(result, value);
@@ -361,24 +369,20 @@ public:
     SmallVector<BlockArgument> oldArguments;
     for (unsigned captureIndex : captureIndices)
       oldArguments.push_back(body.getArgument(captureIndex));
-    IRMapping mapping;
-    for (auto [nestedCapture, nestedArgument] :
-        llvm::zip_equal(nested.getCaptures(), nested.getBody().getArguments()))
-      mapping.map(nestedArgument, getOrAddCaptureArgument(nestedCapture));
+    SmallVector<Value> nestedCaptures;
+    for (Value capture : nested.getCaptures())
+      nestedCaptures.push_back(getOrAddCaptureArgument(capture));
 
-    OpBuilder bodyBuilder(rewriter.getContext());
-    bodyBuilder.setInsertionPointToStart(&body);
-    for (Operation &nestedOp : nested.getBody().front().without_terminator())
-      bodyBuilder.clone(nestedOp, mapping);
-    auto nestedYield =
-        cast<ONNXYieldOp>(nested.getBody().front().getTerminator());
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(&body);
+    SmallVector<Value> nestedResults =
+        cloneDeferredBodyInto(nested, nestedCaptures, rewriter);
     for (auto [captureIndex, oldArgument] :
         llvm::zip_equal(captureIndices, oldArguments)) {
       unsigned resultIndex =
           cast<OpResult>(deferred.getCaptures()[captureIndex])
               .getResultNumber();
-      oldArgument.replaceAllUsesWith(
-          mapping.lookup(nestedYield.getOperand(resultIndex)));
+      rewriter.replaceAllUsesWith(oldArgument, nestedResults[resultIndex]);
     }
     rewriter.modifyOpInPlace(deferred, [&]() {
       for (unsigned captureIndex : llvm::reverse(captureIndices)) {
@@ -423,16 +427,18 @@ struct FormDeferredFoldableExpressionsPass
 
 } // namespace
 
-// Keep existing and newly formed bodies outside the greedy worklist. Body
-// construction uses an unobserved OpBuilder, so only outer operations are
-// enqueued. Repeat the walk because formation can make a transitive user match
-// even when that user was not directly modified.
+// Seed only outer operations and restrict each round to those seeds. This
+// keeps deferred bodies opaque even when created through the active rewriter.
+// New outer operations become eligible on the next scan. Rescanning also
+// revisits transitive users: forming p in Add(Add(runtime, p), offset) changes
+// the inner Add's operand, but need not rewrite it or notify the outer Add.
+// The selected-op greedy driver drains notifications without a region rescan.
 LogicalResult onnx_mlir::applyPatternsOutsideDeferredFoldable(
     func::FuncOp function, RewritePatternSet &&patterns,
     RewriterBase::Listener *listener, bool enableFolding) {
   FrozenRewritePatternSet frozenPatterns(std::move(patterns));
   GreedyRewriteConfig config;
-  config.setStrictness(GreedyRewriteStrictness::ExistingAndNewOps)
+  config.setStrictness(GreedyRewriteStrictness::ExistingOps)
       .setScope(&function.getBody())
       .setListener(listener);
   config.enableFolding(enableFolding);

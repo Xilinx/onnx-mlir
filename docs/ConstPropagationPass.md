@@ -9,28 +9,21 @@ constant propagation for operations in the ONNX dialect.
 [source
 code](https://github.com/onnx/onnx-mlir/blob/main/src/Transform/ONNX/ConstProp.td).
 
-## Deferred expressions and quantization boundaries
+## Deferred constant expressions
 
-A deferred constant expression can participate in algebraic rewrites without
-reading initializer contents. The expression remains constant-foldable when
-its data is supplied at materialization time.
+When deferred-expression formation is enabled, constant propagation captures
+operations with constant or deferred-constant operands in `DeferredFoldable`.
+The captured computation must be foldable once deferred operands, such as
+`InitializerSource`, are materialized.
 
-Existing deferred bodies remain opaque to ordinary constant propagation,
-including bodies whose captures are compiler-owned dense or disposable
-constants. Availability of the captures does not request evaluation. Downstream
-pipelines can use `populateFormDeferredFoldableExpressionPatterns` with
-`requireDeferredSource=false` to retain those expressions too.
+Constant propagation does not enter `DeferredFoldable` bodies. Materialization
+evaluates them explicitly.
 
-The Add/Mul constant-to-right rules currently fail to recognize
-`DQ(constant)` as a constant. `isCommutationConstant` reproduces this bug for
-`DeferredFoldable { DQ(constant) }` by checking the terminal operation's
-`QuantizationBoundaryOpInterface`. The interface identifies quantization and
-dequantization operations; it does not change their constant-foldability.
-
-Canonicalizing these constants to the right is desirable. Fixing the existing
-behavior may require users to retune. Until then, both representations retain
-the existing ordering. For example, `Add(DQ(constant), runtime)` remains unchanged,
-while `Add(literal, DQ(constant))` moves the literal to the right.
+To keep deferral a behavioral refactor, the constant-to-right patterns
+`AddConstCommutative1` and `MulConstCommutative1` preserve their existing
+exclusion of `DQ(constant)`, including when it is inside `DeferredFoldable`.
+Introducing deferral therefore does not enable these previously unmatched rewrites.
+This preserved behavior is an optimization bug to address in a follow-up.
 
 ## Example
 Given the following code:

@@ -3103,7 +3103,7 @@ struct GroupConsecutiveConstantConcatOperandsPattern
   LogicalResult matchAndRewrite(
       ONNXConcatOp concatOp, PatternRewriter &rewriter) const final {
     ValueRange inputs = concatOp.getOperands();
-    if (llvm::all_of(inputs, [](Value v) { return isConstantFoldable(v); }))
+    if (llvm::all_of(inputs, isConstantFoldable))
       return failure();
 
     SmallVector<Value> newInputs;

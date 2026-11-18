@@ -182,3 +182,27 @@ func.func @do_not_reassociate_nondeterministic_expression(%arg0: tensor<4xf32>) 
 // CHECK: [[SUM:%.+]] = "onnx.Add"(%arg0, [[RANDOM]])
 // CHECK: [[RESULT:%.+]] = "onnx.Add"([[SUM]], [[OFFSET]])
 // CHECK: onnx.Return [[RESULT]]
+
+// -----
+
+// Each reassociation creates another outer operation for a later greedy round.
+func.func @reassociate_new_outer_operations(%runtime: tensor<2x2xf32>) -> tensor<2x2xf32> {
+  %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+  %offset = onnx.Constant dense<5.000000e-01> : tensor<f32>
+  %transposed = "onnx.Transpose"(%weight) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+  %a = "onnx.Add"(%runtime, %transposed) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+  %b = "onnx.Add"(%a, %offset) : (tensor<2x2xf32>, tensor<f32>) -> tensor<2x2xf32>
+  %c = "onnx.Add"(%b, %offset) : (tensor<2x2xf32>, tensor<f32>) -> tensor<2x2xf32>
+  %d = "onnx.Add"(%c, %offset) : (tensor<2x2xf32>, tensor<f32>) -> tensor<2x2xf32>
+  %e = "onnx.Add"(%d, %offset) : (tensor<2x2xf32>, tensor<f32>) -> tensor<2x2xf32>
+  onnx.Return %e : tensor<2x2xf32>
+}
+
+// CHECK-LABEL: func.func @reassociate_new_outer_operations
+// CHECK: [[CONSTANT:%.+]] = "onnx.DeferredFoldable"
+// CHECK: "onnx.Transpose"
+// CHECK: "onnx.Add"
+// CHECK: onnx.Yield
+// CHECK: })
+// CHECK: [[RESULT:%.+]] = "onnx.Add"(%arg0, [[CONSTANT]])
+// CHECK-NEXT: onnx.Return [[RESULT]]
