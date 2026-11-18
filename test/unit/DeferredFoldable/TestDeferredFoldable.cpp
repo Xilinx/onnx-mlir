@@ -495,24 +495,147 @@ int testInlineCompleteRecipe(MLIRContext &context) {
   return 0;
 }
 
+int testInlineSelectedMultiResultProvenance(MLIRContext &context) {
+  auto module = parseModule(context, R"mlir(
+    module {
+      func.func @test() -> tensor<2xf32> {
+        %data = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "data", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<4xf32>
+        %sizes = onnx.Constant dense<[1, 1, 2]> : tensor<3xi64>
+        %out = "onnx.DeferredFoldable"(%data, %sizes) ({
+        ^bb0(%arg0: tensor<4xf32>, %arg1: tensor<3xi64>):
+          %split:3 = "onnx.Split"(%arg0, %arg1) {ResultNames = ["first"], axis = 0 : si64} : (tensor<4xf32>, tensor<3xi64>) -> (tensor<1xf32>, tensor<1xf32>, tensor<2xf32>)
+          onnx.Yield %split#2 : tensor<2xf32>
+        }) {ResultNames = ["selected"], onnx_node_name = "wrapper"} : (tensor<4xf32>, tensor<3xi64>) -> tensor<2xf32>
+        return %out : tensor<2xf32>
+      }
+    }
+  )mlir");
+  if (!module)
+    return 1;
+
+  IRRewriter rewriter(&context);
+  auto inlined =
+      inlineDeferredFoldableExpression(findDeferred(*module), rewriter);
+  ONNXSplitOp split;
+  module->walk([&](ONNXSplitOp op) { split = op; });
+  auto ret = cast<func::ReturnOp>(
+      module->lookupSymbol<func::FuncOp>("test").front().getTerminator());
+  if (failed(inlined) || inlined->size() != 1 || (*inlined)[0] != split ||
+      ret.getOperand(0) != split->getResult(2) ||
+      split->getAttr("onnx_node_name") !=
+          StringAttr::get(&context, "wrapper") ||
+      split->getAttr("ResultNames") !=
+          Builder(&context).getStrArrayAttr({"first", "", "selected"}) ||
+      failed(verify(*module)))
+    return 1;
+  return 0;
+}
+
+struct ModificationListener : RewriterBase::Listener {
+  explicit ModificationListener(Operation *expected) : expected(expected) {}
+
+  void notifyOperationModified(Operation *op) override {
+    if (op == expected)
+      ++modifications;
+  }
+
+  Operation *expected;
+  unsigned modifications = 0;
+};
+
+int testInlineNotifiesProvenanceModification(MLIRContext &context) {
+  auto module = parseModule(context, R"mlir(
+    module {
+      func.func @test() -> tensor<2x2xf32> {
+        %data = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "data", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
+        %out = "onnx.DeferredFoldable"(%data) ({
+        ^bb0(%arg0: tensor<2x2xf32>):
+          %transposed = "onnx.Transpose"(%arg0) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+          %sum = "onnx.Add"(%transposed, %transposed) {ResultNames = ["sum"]} : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+          onnx.Yield %sum : tensor<2x2xf32>
+        }) {ResultNames = ["selected"], onnx_node_name = "wrapper"} : (tensor<2x2xf32>) -> tensor<2x2xf32>
+        return %out : tensor<2x2xf32>
+      }
+    }
+  )mlir");
+  if (!module)
+    return 1;
+
+  ONNXAddOp add;
+  module->walk([&](ONNXAddOp op) { add = op; });
+  ModificationListener listener(add);
+  IRRewriter rewriter(&context, &listener);
+  auto inlined =
+      inlineDeferredFoldableExpression(findDeferred(*module), rewriter);
+  if (failed(inlined) || inlined->size() != 2 || listener.modifications != 1 ||
+      add->getAttr("onnx_node_name") != StringAttr::get(&context, "wrapper") ||
+      add->getAttr("ResultNames") !=
+          Builder(&context).getStrArrayAttr({"selected"}) ||
+      failed(verify(*module)))
+    return 1;
+  return 0;
+}
+
+int testInlineForwardedCapturePreservesProducerProvenance(
+    MLIRContext &context) {
+  auto module = parseModule(context, R"mlir(
+    module {
+      func.func @test() -> (tensor<2xf32>, tensor<2xf32>) {
+        %source = "onnx.Constant"() {ResultNames = ["source"], onnx_node_name = "source_node", value = dense<[1.0, 2.0]> : tensor<2xf32>} : () -> tensor<2xf32>
+        %other = "onnx.Identity"(%source) : (tensor<2xf32>) -> tensor<2xf32>
+        %out = "onnx.DeferredFoldable"(%source) ({
+        ^bb0(%arg0: tensor<2xf32>):
+          onnx.Yield %arg0 : tensor<2xf32>
+        }) {ResultNames = ["wrapper"], onnx_node_name = "wrapper_node"} : (tensor<2xf32>) -> tensor<2xf32>
+        return %out, %other : tensor<2xf32>, tensor<2xf32>
+      }
+    }
+  )mlir");
+  if (!module)
+    return 1;
+
+  ONNXConstantOp source;
+  ONNXIdentityOp identity;
+  module->walk([&](ONNXConstantOp op) { source = op; });
+  module->walk([&](ONNXIdentityOp op) { identity = op; });
+  IRRewriter rewriter(&context);
+  auto inlined =
+      inlineDeferredFoldableExpression(findDeferred(*module), rewriter);
+  auto ret = cast<func::ReturnOp>(
+      module->lookupSymbol<func::FuncOp>("test").front().getTerminator());
+  if (failed(inlined) || !inlined->empty() || ret.getOperand(0) != source ||
+      identity.getInput() != source ||
+      source->getAttr("onnx_node_name") !=
+          StringAttr::get(&context, "source_node") ||
+      source->getAttr("ResultNames") !=
+          Builder(&context).getStrArrayAttr({"source"}) ||
+      failed(verify(*module)))
+    return 1;
+  return 0;
+}
+
 } // namespace
 
 int main() {
   MLIRContext context;
   context.loadDialect<func::FuncDialect, ONNXDialect, tensor::TensorDialect>();
-  int failures = testDirectFormation(context) +
-                 testConstantExpressionFormation(context, false) +
-                 testConstantExpressionFormation(context, true) +
-                 testNormalizeDuplicateCaptureUses(context) +
-                 testCrossDialectFormation(context) +
-                 testBottomUpFormationWithSharedOperand(context) +
-                 testBottomUpFormationWithDenseSibling(context) +
-                 testRejectNondeterministicFormation(context) +
-                 testPeelOneInternalOperand(context) +
-                 testPeelMultipleInternalOperands(context) +
-                 testPeelSelectedResultAndDeduplicateOperands(context) +
-                 testPeelDQWithInternalParameters(context) +
-                 testInlineCompleteRecipe(context);
+  int failures =
+      testDirectFormation(context) +
+      testConstantExpressionFormation(context, false) +
+      testConstantExpressionFormation(context, true) +
+      testNormalizeDuplicateCaptureUses(context) +
+      testCrossDialectFormation(context) +
+      testBottomUpFormationWithSharedOperand(context) +
+      testBottomUpFormationWithDenseSibling(context) +
+      testRejectNondeterministicFormation(context) +
+      testPeelOneInternalOperand(context) +
+      testPeelMultipleInternalOperands(context) +
+      testPeelSelectedResultAndDeduplicateOperands(context) +
+      testPeelDQWithInternalParameters(context) +
+      testInlineCompleteRecipe(context) +
+      testInlineSelectedMultiResultProvenance(context) +
+      testInlineForwardedCapturePreservesProducerProvenance(context) +
+      testInlineNotifiesProvenanceModification(context);
   if (failures)
     llvm::errs() << failures << " DeferredFoldable test(s) failed\n";
   return failures;
