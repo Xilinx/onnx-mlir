@@ -59,8 +59,8 @@ LogicalResult checkStaticRankBroadcast(
   return success();
 }
 
-SmallVector<Value, 4> equalizeRanks(
-    const OnnxBuilder &builder, ValueRange values) {
+SmallVector<Value, 4> equalizeRanks(ValueRange values,
+    llvm::function_ref<Value(Value, ArrayRef<int64_t>)> reshape) {
   SmallVector<Value, 4> result(values.begin(), values.end());
   if (llvm::any_of(values, [](Value value) {
         return !cast<ShapedType>(value.getType()).hasRank();
@@ -77,9 +77,16 @@ SmallVector<Value, 4> equalizeRanks(
       continue;
     SmallVector<int64_t> shape(maxRank - type.getRank(), 1);
     llvm::append_range(shape, type.getShape());
-    value = builder.reshape(value, shape);
+    value = reshape(value, shape);
   }
   return result;
+}
+
+SmallVector<Value, 4> equalizeRanks(
+    const OnnxBuilder &builder, ValueRange values) {
+  return equalizeRanks(values, [&](Value value, ArrayRef<int64_t> shape) {
+    return builder.reshape(value, shape);
+  });
 }
 
 void equalizeRanks(const OnnxBuilder &builder, Value &lhs, Value &rhs) {

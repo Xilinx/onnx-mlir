@@ -15,6 +15,7 @@
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Shape/IR/Shape.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -103,7 +104,7 @@ struct FrontendToTosaLoweringPass
       : PassWrapper<FrontendToTosaLoweringPass, OperationPass<ModuleOp>>() {}
 
   void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<mlir::tosa::TosaDialect>();
+    registry.insert<mlir::tosa::TosaDialect, mlir::shape::ShapeDialect>();
   }
   void runOnOperation() final;
 

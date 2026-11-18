@@ -21,6 +21,7 @@
 #include "ONNXToTOSALegalizeUtils.hpp"
 #include "mlir/Dialect/Quant/IR/QuantTypes.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Pass/Pass.h"
@@ -47,6 +48,10 @@ mlir::LogicalResult checkStaticTensorShapes(
 /// Require static shapes for the operands that rank broadcasting reshapes.
 mlir::LogicalResult checkStaticRankBroadcast(
     mlir::Operation *op, mlir::PatternRewriter &rewriter);
+
+llvm::SmallVector<mlir::Value, 4> equalizeRanks(mlir::ValueRange values,
+    llvm::function_ref<mlir::Value(mlir::Value, llvm::ArrayRef<int64_t>)>
+        reshape);
 
 /// Prepend unit dimensions with ONNX Reshape before constructing TOSA ops.
 /// Leave the shaped values unchanged if any is unranked.
