@@ -2303,6 +2303,7 @@ public:
 // Rewrite GatherElements(data, Tile(indices, repeats)) to
 // Gather(data, Reshape(indices)) when Tile broadcasts a one-dimensional index
 // vector across all non-axis dimensions of data.
+// Each consumer can be rewritten independently; other users retain the Tile.
 class FuseGatherElementsTilePattern
     : public OpRewritePattern<ONNXGatherElementsOp> {
 public:
@@ -2311,7 +2312,7 @@ public:
   LogicalResult matchAndRewrite(ONNXGatherElementsOp gatherElementsOp,
       PatternRewriter &rewriter) const override {
     auto tileOp = gatherElementsOp.getIndices().getDefiningOp<ONNXTileOp>();
-    if (!tileOp || !tileOp->hasOneUse())
+    if (!tileOp)
       return failure();
 
     auto dataType =
