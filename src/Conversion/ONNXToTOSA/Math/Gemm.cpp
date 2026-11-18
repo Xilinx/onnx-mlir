@@ -99,9 +99,8 @@ public:
       Value splattedConstBeta = create.tosa.getSplattedConst(
           static_cast<float>(beta.getValueAsDouble()), AType.getElementType(),
           newShapeA.size());
-      Value shift = tosa::createMulShiftConst(rewriter, loc, 0);
       tosa::equalizeRanks(create.onnx, splattedConstBeta, C);
-      betaMulResult = create.tosa.mul(splattedConstBeta, C, shift);
+      betaMulResult = create.tosa.mul(splattedConstBeta, C);
     }
 
     // A * B

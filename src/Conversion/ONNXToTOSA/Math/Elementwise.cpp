@@ -193,9 +193,8 @@ public:
 
     MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
         rewriter, op->getLoc());
-    Value shift = tosa::createMulShiftConst(rewriter, op->getLoc(), 0);
     tosa::equalizeRanks(create.onnx, lhs, rhs);
-    Value mulOp = create.tosa.mul(lhs, rhs, shift);
+    Value mulOp = create.tosa.mul(lhs, rhs);
     copySingleResultType(op, mulOp);
     rewriter.replaceOp(op, {mulOp});
 
@@ -232,9 +231,8 @@ static LogicalResult legalizeFloatingPointPrelu(Operation *op,
   Value constZero = create.tosa.getSplattedConst(
       0.0, outputType.getElementType(), outputType.getRank());
 
-  Value shift = tosa::createMulShiftConst(rewriter, loc, 0);
   tosa::equalizeRanks(create.onnx, input, alphaOrSlope);
-  auto mul = create.tosa.mul(input, alphaOrSlope, shift);
+  auto mul = create.tosa.mul(input, alphaOrSlope);
   auto greaterEqual = create.tosa.greaterEqual(input, constZero);
   auto select = create.tosa.select(greaterEqual, input, mul);
   copySingleResultType(op, select);
@@ -469,9 +467,8 @@ public:
     // For floating point types, decompose ONNXDivOp into
     // tosa::ReciprocalOp and tosa::MulOp.
     Value reciprocalOp = create.tosa.unaryOp<mlir::tosa::ReciprocalOp>(rhs);
-    Value shift = tosa::createMulShiftConst(rewriter, op->getLoc(), 0);
     tosa::equalizeRanks(create.onnx, lhs, reciprocalOp);
-    Value mulOp = create.tosa.mul(lhs, reciprocalOp, shift);
+    Value mulOp = create.tosa.mul(lhs, reciprocalOp);
     copySingleResultType(op, mulOp);
     rewriter.replaceOp(op, {mulOp});
     return success();
