@@ -10,6 +10,9 @@
 //
 // This file provides definition of ONNX dialect Range operation.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
@@ -90,9 +93,7 @@ LogicalResult ONNXRangeOp::verify() {
   if (deltaTensorTy.getShape().size() == 1 && deltaTensorTy.getShape()[0] > 1)
     return emitError("delta tensor of rank one must have size one");
 
-  // Only int or float input types are supported:
-  // tensor(float), tensor(double), tensor(int16), tensor(int32),
-  // tensor(int64)
+  // Only integer or floating-point input types are supported.
   if (!startTensorTy.getElementType().isIntOrFloat())
     return emitError("start tensor type is not int or float");
   if (!limitTensorTy.getElementType().isIntOrFloat())
