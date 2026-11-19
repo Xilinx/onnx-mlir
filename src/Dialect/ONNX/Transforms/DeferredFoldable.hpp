@@ -32,10 +32,12 @@ void populateFormDeferredFoldableExpressionPatterns(
 mlir::FailureOr<mlir::Value> formDeferredFoldableExpression(
     mlir::Operation *op, mlir::RewriterBase &rewriter);
 
-// Apply patterns to a fixed point without entering DeferredFoldable bodies.
-// Folding can be enabled for ordinary constant propagation or disabled when
-// only forming deferred expressions. Newly created expression bodies are also
-// excluded from the rewrite worklist.
+// Rewrite operations nested in `function` to a fixed point, treating each
+// DeferredFoldable operation as a leaf: patterns may rewrite the operation
+// itself, but neither patterns nor folding visit its body.
+// Use instead of mlir::applyPatternsGreedily when a pass must retain deferred
+// computations. `enableFolding` controls folding of the visited operations.
+// Returns failure if rewriting does not converge.
 mlir::LogicalResult applyPatternsOutsideDeferredFoldable(
     mlir::func::FuncOp function, mlir::RewritePatternSet &&patterns,
     mlir::RewriterBase::Listener *listener, bool enableFolding);
