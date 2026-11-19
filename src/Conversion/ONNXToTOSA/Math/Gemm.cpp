@@ -42,9 +42,9 @@ public:
       ConversionPatternRewriter &rewriter,
       MultiDialectBuilder<TosaBuilder, OnnxBuilder> &create) const {
     Location loc = op->getLoc();
-    Value A = op.getA();
-    Value B = op.getB();
-    Value C = op.getC();
+    Value A = adaptor.getA();
+    Value B = adaptor.getB();
+    Value C = adaptor.getC();
     int64_t transA = adaptor.getTransA();
     int64_t transB = adaptor.getTransB();
     FloatAttr alpha = adaptor.getAlphaAttr();
@@ -90,7 +90,7 @@ public:
       Value splattedConstAlpha = create.tosa.getSplattedConst(
           static_cast<float>(alpha.getValueAsDouble()), AType.getElementType(),
           newShapeA.size());
-      alphaMulResult = create.tosa.mul(splattedConstAlpha, A, 0);
+      alphaMulResult = create.onnx.mul(splattedConstAlpha, A);
     }
 
     // If C and Beta are set, and beta is different from 1, we also need to add
@@ -100,7 +100,7 @@ public:
           static_cast<float>(beta.getValueAsDouble()), AType.getElementType(),
           newShapeA.size());
       tosa::equalizeRanks(create.onnx, splattedConstBeta, C);
-      betaMulResult = create.tosa.mul(splattedConstBeta, C);
+      betaMulResult = create.onnx.mul(splattedConstBeta, C);
     }
 
     // A * B
@@ -116,8 +116,7 @@ public:
     //(A*B) + Beta * C or (A*B) + C
     if (isCPresent) {
       tosa::equalizeRanks(create.onnx, matmulRes, betaMulResult);
-      addRes =
-          create.tosa.binaryOp<mlir::tosa::AddOp>(matmulRes, betaMulResult);
+      addRes = create.onnx.add(matmulRes, betaMulResult);
     } else {
       addRes = matmulRes;
     }

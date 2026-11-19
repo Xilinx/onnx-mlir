@@ -28,6 +28,31 @@ namespace onnx_mlir {
 
 namespace {
 
+// Keep binary operations in ONNX so their lowerings can be excluded.
+Value roundEvenWithOnnxOps(
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> &create, Value input) {
+  auto inputType = cast<ShapedType>(input.getType());
+  Type elementType = inputType.getElementType();
+  int64_t rank = inputType.getRank();
+  Value one = create.tosa.getSplattedConst(1.0, elementType, rank);
+  Value two = create.tosa.getSplattedConst(2.0, elementType, rank);
+  Value half = create.tosa.getSplattedConst(0.5, elementType, rank);
+
+  Value y = create.tosa.unaryOp<mlir::tosa::FloorOp>(input);
+  Value r = create.onnx.sub(input, y);
+  Value yPlusOne = create.onnx.add(y, one);
+  Value roundUp = create.onnx.createOpAndInferShapes<ONNXGreaterOp>(r, half);
+  Value nearest = create.tosa.select(roundUp, yPlusOne, y);
+
+  Value halfX = create.onnx.mul(input, half);
+  Value shifted = create.onnx.add(halfX, half);
+  Value floored = create.tosa.unaryOp<mlir::tosa::FloorOp>(shifted);
+  Value evenNeighbour = create.onnx.mul(floored, two);
+
+  Value isTie = create.onnx.createOpAndInferShapes<ONNXEqualOp>(r, half);
+  return create.tosa.select(isTie, evenNeighbour, nearest);
+}
+
 class ONNXQuantizeLinearOpLoweringToTOSA
     : public OpConversionPattern<ONNXQuantizeLinearOp> {
 public:
@@ -89,7 +114,6 @@ public:
       axis += resultType.getRank();
 
     Value x = adaptor.getX();
-    Type xType = x.getType();
 
     // Quantization formula is saturate((x / y_scale) + y_zero_point)
     // tosa.mul doesn't allow different ranks
@@ -99,10 +123,7 @@ public:
     Value recOp = tosa::CreateOpAndInfer<mlir::tosa::ReciprocalOp>(rewriter,
         loc, expandedScaleFactorConst.getType(), expandedScaleFactorConst)
                       .getResult();
-    Value shiftConst = tosa::createMulShiftConst(rewriter, loc, 0);
-    Value scaledResult = tosa::CreateOpAndInfer<mlir::tosa::MulOp>(
-        rewriter, loc, xType, x, recOp, shiftConst)
-                             .getResult();
+    Value scaledResult = create.onnx.mul(x, recOp);
 
     // Quantization to i4/i8/16/ is particular since the intermediate result of
     // (x / y_scale) must round to the nearest even. This is particularly
@@ -119,7 +140,7 @@ public:
       if (castIsExcluded) {
         // onnx.Cast truncates towards zero, so the round-to-nearest-even
         // required above has to be expressed on its own before narrowing.
-        Value rounded = create.tosa.roundEven(scaledResult);
+        Value rounded = roundEvenWithOnnxOps(create, scaledResult);
         scaledResult =
             create.onnx.castToNewTensorElementType(rounded, arithType);
       } else {
@@ -156,9 +177,7 @@ public:
           expandedZpConst, castedZpType.getElementType());
     }
 
-    Value addOp = tosa::CreateOpAndInfer<mlir::tosa::AddOp>(
-        rewriter, loc, scaledResult.getType(), scaledResult, castedZp)
-                      .getResult();
+    Value addOp = create.onnx.add(scaledResult, castedZp);
 
     Value clampedRes = addOp;
     if (quantizingToInt) {

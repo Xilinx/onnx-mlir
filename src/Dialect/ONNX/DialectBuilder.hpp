@@ -104,6 +104,9 @@ struct OnnxBuilder : DialectBuilder {
   // ONNXGeluOp
   mlir::Value gelu(mlir::Value input, mlir::StringAttr approximateAttr) const;
 
+  // ONNXGreaterOrEqualOp
+  mlir::Value greaterEqual(mlir::Value A, mlir::Value B) const;
+
   // ONNXLayerNormalizationOp, version with one output only (Y).
   mlir::Value layerNorm(mlir::Type outputType, mlir::Value input,
       mlir::Value scale, mlir::Value bias, int64_t axis,

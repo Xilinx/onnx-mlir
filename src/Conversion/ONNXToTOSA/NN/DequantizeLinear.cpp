@@ -91,18 +91,13 @@ public:
           rewriter, loc, zeroPoint, axis, resultType.getRank());
       Value zpConstCast =
           create.onnx.castToNewTensorElementType(zpConst, arithType);
-      casted = tosa::CreateOpAndInfer<mlir::tosa::SubOp>(
-          rewriter, loc, casted.getType(), casted, zpConstCast)
-                   .getResult();
+      casted = create.onnx.sub(casted, zpConstCast);
     }
     auto scaleFactorConst = tosa::expandShape(
         rewriter, loc, adaptor.getXScale(), axis, resultType.getRank());
     Value scaleFactorCast =
         create.onnx.castToNewTensorElementType(scaleFactorConst, arithType);
-    Value shiftConst = tosa::createMulShiftConst(rewriter, loc, 0);
-    Value mulOp = tosa::CreateOpAndInfer<mlir::tosa::MulOp>(
-        rewriter, loc, casted.getType(), casted, scaleFactorCast, shiftConst)
-                      .getResult();
+    Value mulOp = create.onnx.mul(casted, scaleFactorCast);
     Value castOp = create.onnx.castToNewTensorElementType(
         mulOp, resultType.getElementType());
 
