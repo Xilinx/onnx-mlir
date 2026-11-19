@@ -772,6 +772,10 @@ def MulConstAssociative4 : NamedPat<"MulConstAssociative4",
 
 // mul(add(x, b), a) -> add(mul(x, a), mul(a, b)).
 // mul(a, b) is folded to a single constant by MulConstProp.
+// Not applied when x is a Conv/MatMul/Gemm: the Add is then a bias that
+// downstream fusion folds into x, and distributing the Mul over it would
+// separate the bias from x (cf. the OpIsUnlikelyToBeFusedWithBias guards on the
+// Add associativity rules above).
 def MulAddConstDistributive : NamedPat<"MulAddConstDistributive",
   // From mul(add(x, b), a) where a, b are constants.
   (ONNXMulOp
@@ -782,8 +786,8 @@ def MulAddConstDistributive : NamedPat<"MulAddConstDistributive",
     (ONNXMulOp $x, $a),
     (ONNXMulOp $a, $b)),
   [(IsFromDenseConstLike:$a), (IsFromDenseConstLike:$b),
-   (IsNotAConstant:$x), (HasOneUse:$addOp), (IsIntOrFloatType:$a),
-  (IsIntOrFloatType:$b), (IsIntOrFloatType:$x)]>;
+   (IsNotAConstant:$x), (OpIsUnlikelyToBeFusedWithBias:$x), (HasOneUse:$addOp),
+   (IsIntOrFloatType:$a), (IsIntOrFloatType:$b), (IsIntOrFloatType:$x)]>;
 
 // Distribute multiplication into clip: mul(clip(x, l, u), a) -> clip(mul(x, a), mul(a, l), mul(a, u)).
 // mul(a, l) and mul(a, u) are folded to single constants by MulConstProp in a later iteration.
