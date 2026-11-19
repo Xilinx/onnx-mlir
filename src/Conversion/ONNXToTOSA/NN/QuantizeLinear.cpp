@@ -38,6 +38,9 @@ public:
 
   LogicalResult matchAndRewrite(ONNXQuantizeLinearOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
+
     Location loc = op->getLoc();
     MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(rewriter, loc);
     auto resultType = dyn_cast_if_present<ShapedType>(

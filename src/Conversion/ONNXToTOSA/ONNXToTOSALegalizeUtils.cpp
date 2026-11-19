@@ -5,7 +5,7 @@
 //==== ONNXToTosaLegalizeUtils.cpp - ONNX dialects to TOSA lowering Utils-===//
 //
 // Copyright 2020 The TensorFlow Authors. All Rights Reserved.
-// Copyright (c) 2022-2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -134,19 +134,15 @@ mlir::Value buildOnnxToTosaPaddingConstOp(mlir::PatternRewriter &rewriter,
 mlir::Value expandShape(mlir::PatternRewriter &rewriter, mlir::Location loc,
     mlir::Value tensor, size_t axis, size_t rank) {
   auto inTy = cast<ShapedType>(tensor.getType());
+  OnnxBuilder onnxBuilder(rewriter, loc);
   if (rank == 0) {
     // target rank is a scalar
     llvm::SmallVector<int64_t> newShape;
-    return rewriter.createOrFold<mlir::tosa::ReshapeOp>(loc,
-        RankedTensorType::get(newShape, inTy.getElementType()), tensor,
-        newShape);
+    return onnxBuilder.reshape(tensor, newShape);
   }
   llvm::SmallVector<int64_t> newShape(rank, 1);
   newShape[axis] = inTy.getNumElements();
-  auto resultTy = RankedTensorType::get(newShape, inTy.getElementType());
-
-  return rewriter.createOrFold<mlir::tosa::ReshapeOp>(
-      loc, resultTy, tensor, newShape);
+  return onnxBuilder.reshape(tensor, newShape);
 }
 
 mlir::Value createMulShiftConst(

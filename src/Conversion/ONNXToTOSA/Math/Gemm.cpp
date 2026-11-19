@@ -30,6 +30,9 @@ public:
 
   LogicalResult matchAndRewrite(ONNXGemmOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
+
     MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
         rewriter, op->getLoc());
     return rewriteToTosaMatMul(op, adaptor, rewriter, create);
@@ -68,16 +71,8 @@ public:
     llvm::SmallVector<int64_t> newShapeA{1, shapeA[0], shapeA[1]};
     llvm::SmallVector<int64_t> newShapeB{1, shapeB[0], shapeB[1]};
 
-    llvm::SmallVector<int64_t> dynamicTensorShape = {
-        ShapedType::kDynamic, ShapedType::kDynamic, ShapedType::kDynamic};
-    A = tosa::CreateOpAndInfer<mlir::tosa::ReshapeOp>(rewriter, op->getLoc(),
-        RankedTensorType::get(dynamicTensorShape, AType.getElementType()), A,
-        rewriter.getDenseI64ArrayAttr(newShapeA))
-            .getResult();
-    B = tosa::CreateOpAndInfer<mlir::tosa::ReshapeOp>(rewriter, op->getLoc(),
-        RankedTensorType::get(dynamicTensorShape, BType.getElementType()), B,
-        rewriter.getDenseI64ArrayAttr(newShapeB))
-            .getResult();
+    A = create.onnx.reshape(A, newShapeA);
+    B = create.onnx.reshape(B, newShapeB);
 
     // If transA or transB are present, create Transpose operators.
     if (transA) {
@@ -104,10 +99,13 @@ public:
       Value splattedConstBeta = create.tosa.getSplattedConst(
           static_cast<float>(beta.getValueAsDouble()), AType.getElementType(),
           newShapeA.size());
-      betaMulResult = create.tosa.mul(splattedConstBeta, C, 0);
+      tosa::equalizeRanks(create.onnx, splattedConstBeta, C);
+      betaMulResult = create.tosa.mul(splattedConstBeta, C);
     }
 
     // A * B
+    llvm::SmallVector<int64_t> dynamicTensorShape = {
+        ShapedType::kDynamic, ShapedType::kDynamic, ShapedType::kDynamic};
     Value matmulRes = tosa::CreateOpAndInfer<mlir::tosa::MatMulOp>(rewriter,
         loc,
         RankedTensorType::get(dynamicTensorShape, resultType.getElementType()),
@@ -117,6 +115,7 @@ public:
     Value addRes = NULL;
     //(A*B) + Beta * C or (A*B) + C
     if (isCPresent) {
+      tosa::equalizeRanks(create.onnx, matmulRes, betaMulResult);
       addRes =
           create.tosa.binaryOp<mlir::tosa::AddOp>(matmulRes, betaMulResult);
     } else {
@@ -124,7 +123,7 @@ public:
     }
 
     // Add reshape to go back to the original shape
-    Value reshape = create.tosa.reshape(addRes, resultType.getShape());
+    Value reshape = create.onnx.reshape(addRes, resultType.getShape());
     rewriter.replaceOp(op, {reshape});
     return success();
   }

@@ -4,7 +4,7 @@
 
 //===---------------- Elementwise.cpp - Elementwise Op --------------------===//
 //
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -152,6 +152,8 @@ public:
   using OpAdaptor = typename ONNXOpT::Adaptor;
   LogicalResult matchAndRewrite(ONNXOpT op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticRankBroadcast(op, rewriter)))
+      return failure();
 
     if (failed(checkBasicTosaRequirementsForBinaryOps<OpAdaptor, TypeChecker,
             TosaOpT>(rewriter, op, adaptor, op.getResult().getType())))
@@ -163,17 +165,8 @@ public:
 
     if (TosaOpT::template hasTrait<
             mlir::OpTrait::ResultsBroadcastableShape>()) {
-
-      IndexExprBuilderForTosa createTosaIE(rewriter, op->getLoc());
-      ONNXBroadcastOpShapeHelper shapeHelper(op, {}, &createTosaIE);
-      if (shapeHelper.computeShape().succeeded() &&
-          shapeHelper.hasRankBroadcast()) {
-        TosaBuilder tosaBuilder(rewriter, loc);
-        llvm::SmallVector<Value, 4> newValues =
-            tosaBuilder.equalizeRanks({lhs, rhs});
-        lhs = newValues[0];
-        rhs = newValues[1];
-      }
+      OnnxBuilder onnxBuilder(rewriter, loc);
+      tosa::equalizeRanks(onnxBuilder, lhs, rhs);
     }
 
     rewriter.replaceOpWithNewOp<TosaOpT>(op, op.getType(), lhs, rhs);
@@ -187,6 +180,9 @@ public:
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(ONNXMulOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticRankBroadcast(op, rewriter)))
+      return failure();
+
     if (failed(checkBasicTosaRequirementsForBinaryOps<OpAdaptor, IsIntOrFloat,
             mlir::tosa::MulOp>(
             rewriter, op, adaptor, op.getResult().getType())))
@@ -195,8 +191,10 @@ public:
     Value lhs = adaptor.getA();
     Value rhs = adaptor.getB();
 
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
-    Value mulOp = tosaBuilder.mul(lhs, rhs);
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
+    tosa::equalizeRanks(create.onnx, lhs, rhs);
+    Value mulOp = create.tosa.mul(lhs, rhs);
     copySingleResultType(op, mulOp);
     rewriter.replaceOp(op, {mulOp});
 
@@ -229,13 +227,14 @@ static LogicalResult legalizeFloatingPointPrelu(Operation *op,
     PatternRewriter &rewriter, Value input, Value alphaOrSlope,
     TensorType outputType) {
   auto loc = op->getLoc();
-  TosaBuilder tosaBuilder(rewriter, loc);
-  Value constZero = tosaBuilder.getSplattedConst(
+  MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(rewriter, loc);
+  Value constZero = create.tosa.getSplattedConst(
       0.0, outputType.getElementType(), outputType.getRank());
 
-  auto mul = tosaBuilder.mul(input, alphaOrSlope);
-  auto greaterEqual = tosaBuilder.greaterEqual(input, constZero);
-  auto select = tosaBuilder.select(greaterEqual, input, mul);
+  tosa::equalizeRanks(create.onnx, input, alphaOrSlope);
+  auto mul = create.tosa.mul(input, alphaOrSlope);
+  auto greaterEqual = create.tosa.greaterEqual(input, constZero);
+  auto select = create.tosa.select(greaterEqual, input, mul);
   copySingleResultType(op, select);
   rewriter.replaceOp(op, {select});
   return success();
@@ -248,11 +247,17 @@ public:
   using OpAdaptor = ONNXLeakyReluOp::Adaptor;
   LogicalResult matchAndRewrite(ONNXLeakyReluOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticRankBroadcast(op, rewriter)))
+      return failure();
 
     auto outputType = cast<TensorType>(op.getResult().getType());
     if (failed(IsIntOrFloat::checkType(
             rewriter, outputType.getElementType(), op))) {
       return failure();
+    }
+    if (!outputType.hasRank()) {
+      return rewriter.notifyMatchFailure(
+          op, "ONNXLeakyReluOp: Rank required to create splatted const");
     }
 
     // ONNX docs: alpha : float (default 0.01)
@@ -278,6 +283,8 @@ public:
   using OpAdaptor = typename OnnxCompOp::Adaptor;
   LogicalResult matchAndRewrite(OnnxCompOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticRankBroadcast(op, rewriter)))
+      return failure();
 
     Value input1 = adaptor.getA();
     auto input1ElemType = cast<TensorType>(input1.getType()).getElementType();
@@ -292,17 +299,19 @@ public:
     }
 
     Value res;
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
+    tosa::equalizeRanks(create.onnx, input1, input2);
     if constexpr (std::is_same_v<OnnxCompOp, ONNXEqualOp>) {
-      res = tosaBuilder.equal(input1, input2);
+      res = create.tosa.equal(input1, input2);
     } else if constexpr (std::is_same_v<OnnxCompOp, ONNXGreaterOrEqualOp>) {
-      res = tosaBuilder.greaterEqual(input1, input2);
+      res = create.tosa.greaterEqual(input1, input2);
     } else if constexpr (std::is_same_v<OnnxCompOp, ONNXGreaterOp>) {
-      res = tosaBuilder.greater(input1, input2);
+      res = create.tosa.greater(input1, input2);
     } else if constexpr (std::is_same_v<OnnxCompOp, ONNXLessOrEqualOp>) {
-      res = tosaBuilder.lessEqual(input1, input2);
+      res = create.tosa.lessEqual(input1, input2);
     } else if constexpr (std::is_same_v<OnnxCompOp, ONNXLessOp>) {
-      res = tosaBuilder.less(input1, input2);
+      res = create.tosa.less(input1, input2);
     }
     copySingleResultType(op, res);
     rewriter.replaceOp(op, {res});
@@ -316,10 +325,34 @@ public:
   using OpAdaptor = ONNXClipOp::Adaptor;
   LogicalResult matchAndRewrite(ONNXClipOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticRankBroadcast(op, rewriter)))
+      return failure();
 
     auto res = adaptor.getInput();
     auto min = adaptor.getMin();
     auto max = adaptor.getMax();
+    OnnxBuilder onnxBuilder(rewriter, op->getLoc());
+    auto equalizeRanks = [&](Value &lhs, Value &rhs) {
+      if (!isa<RankedTensorType>(lhs.getType()) ||
+          !isa<RankedTensorType>(rhs.getType()))
+        return failure();
+      auto lhsShape = cast<RankedTensorType>(lhs.getType()).getShape();
+      auto rhsShape = cast<RankedTensorType>(rhs.getType()).getShape();
+      if (lhsShape.size() == rhsShape.size())
+        return success();
+      if (lhsShape.size() < rhsShape.size())
+        std::swap(lhsShape, rhsShape);
+      // Preserve the broadcast checks of TOSA's EqualizeRanks helper.
+      for (size_t i = 0; i < rhsShape.size(); ++i) {
+        int64_t higherDim = lhsShape[lhsShape.size() - 1 - i];
+        int64_t lowerDim = rhsShape[rhsShape.size() - 1 - i];
+        if (higherDim != lowerDim && !(lowerDim == 1 && higherDim > 1) &&
+            !(lowerDim > 1 && higherDim == 1))
+          return failure();
+      }
+      tosa::equalizeRanks(onnxBuilder, lhs, rhs);
+      return success();
+    };
 
     auto matchIntOrFloat = [&](Value val) -> std::tuple<bool, int64_t, float> {
       APInt valueInt(64, 0);
@@ -347,15 +380,13 @@ public:
           rewriter.getF32FloatAttr(maxFloat));
     } else {
       if (!isNoneValue(min)) {
-        if (mlir::tosa::EqualizeRanks(rewriter, op->getLoc(), res, min)
-                .failed())
+        if (equalizeRanks(res, min).failed())
           return failure();
         res = tosa::CreateOpAndInfer<mlir::tosa::MaximumOp>(
             rewriter, op->getLoc(), op.getType(), res, min);
       }
       if (!isNoneValue(max)) {
-        if (mlir::tosa::EqualizeRanks(rewriter, op->getLoc(), res, max)
-                .failed())
+        if (equalizeRanks(res, max).failed())
           return failure();
         res = tosa::CreateOpAndInfer<mlir::tosa::MinimumOp>(
             rewriter, op->getLoc(), op.getType(), res, max);
@@ -416,23 +447,28 @@ public:
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(ONNXDivOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticRankBroadcast(op, rewriter)))
+      return failure();
+
     Value lhs = adaptor.getA();
     Value rhs = adaptor.getB();
     auto resultType = mlir::cast<TensorType>(op.getResult().getType());
     Type resultElementType = resultType.getElementType();
 
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
-
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
     if (isa<IntegerType>(resultElementType)) {
-      Value divOp = tosaBuilder.intdiv(lhs, rhs);
+      tosa::equalizeRanks(create.onnx, lhs, rhs);
+      Value divOp = create.tosa.intdiv(lhs, rhs);
       copySingleResultType(op, divOp);
       rewriter.replaceOp(op, {divOp});
       return success();
     }
     // For floating point types, decompose ONNXDivOp into
     // tosa::ReciprocalOp and tosa::MulOp.
-    Value reciprocalOp = tosaBuilder.unaryOp<mlir::tosa::ReciprocalOp>(rhs);
-    Value mulOp = tosaBuilder.mul(lhs, reciprocalOp);
+    Value reciprocalOp = create.tosa.unaryOp<mlir::tosa::ReciprocalOp>(rhs);
+    tosa::equalizeRanks(create.onnx, lhs, reciprocalOp);
+    Value mulOp = create.tosa.mul(lhs, reciprocalOp);
     copySingleResultType(op, mulOp);
     rewriter.replaceOp(op, {mulOp});
     return success();
@@ -554,11 +590,17 @@ public:
   using OpAdaptor = ONNXPReluOp::Adaptor;
   LogicalResult matchAndRewrite(ONNXPReluOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticRankBroadcast(op, rewriter)))
+      return failure();
 
     auto outputType = cast<TensorType>(op.getResult().getType());
     if (failed(IsIntOrFloat::checkType(
             rewriter, outputType.getElementType(), op))) {
       return failure();
+    }
+    if (!outputType.hasRank()) {
+      return rewriter.notifyMatchFailure(
+          op, "ONNXPReluOp: Rank required to create splatted const");
     }
 
     return legalizeFloatingPointPrelu(

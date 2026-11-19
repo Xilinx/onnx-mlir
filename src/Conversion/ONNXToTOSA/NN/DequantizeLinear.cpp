@@ -31,6 +31,9 @@ public:
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(ONNXDequantizeLinearOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
+
     Location loc = op->getLoc();
     MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(rewriter, loc);
     Value x = op.getX();

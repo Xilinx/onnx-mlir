@@ -4,7 +4,7 @@
 
 //===------------------------ Expand.cpp - Expand Op ---------------------===//
 //
-// Copyright (c) 2024 Advanced Micro Devices, Inc.
+// Copyright (c) 2024-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -46,6 +46,8 @@ public:
 
   LogicalResult matchAndRewrite(ONNXExpandOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     auto shape = adaptor.getShape();
     DenseIntElementsAttr denseAttr;
@@ -83,8 +85,9 @@ public:
         return rewriter.notifyMatchFailure(
             op, "Could not find a shape that satisfies the expand constraints");
       }
-      TosaBuilder tosaBuilder(rewriter, op->getLoc());
-      newInput = tosaBuilder.reshape(adaptor.getInput(), newShape);
+      MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+          rewriter, op->getLoc());
+      newInput = create.onnx.reshape(adaptor.getInput(), newShape);
     }
 
     const auto multiplies =

@@ -1,4 +1,7 @@
+// (c) Copyright 2026 Advanced Micro Devices, Inc. All Rights Reserved.
+
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="excluded-ops=Reshape" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDED --implicit-check-not=tosa.reshape
 
 func.func @test_static_flatten(%arg0: tensor<32x512x1x1xf32>) -> tensor<32x512xf32> {
   %0 = "onnx.Flatten"(%arg0) {axis = 1 : si64} : (tensor<32x512x1x1xf32>) -> tensor<32x512xf32>
@@ -40,3 +43,22 @@ func.func @test_flatten_dyn_shape(%arg0: tensor<?x?x?x?xf32>) -> tensor<?x1xf32>
   return %0 : tensor<?x1xf32>
   //CHECK:  onnx.Flatten
 }
+
+// EXCLUDED-LABEL: func.func @test_static_flatten(
+// EXCLUDED: "onnx.Reshape"{{.*}} -> tensor<32x512xf32>
+// EXCLUDED: return
+// EXCLUDED-LABEL: func.func @test_static_flatten_mult(
+// EXCLUDED: "onnx.Reshape"{{.*}} -> tensor<1632x15xf32>
+// EXCLUDED: return
+// EXCLUDED-LABEL: func.func @test_flatten_axes_0(
+// EXCLUDED: "onnx.Reshape"{{.*}} -> tensor<1x1632xf32>
+// EXCLUDED: return
+// EXCLUDED-LABEL: func.func @test_flatten_axes_last(
+// EXCLUDED: "onnx.Reshape"{{.*}} -> tensor<1632x3xf32>
+// EXCLUDED: return
+// EXCLUDED-LABEL: func.func @test_flatten_axes_equals_rank(
+// EXCLUDED: "onnx.Reshape"{{.*}} -> tensor<4896x1xf32>
+// EXCLUDED: return
+// EXCLUDED-LABEL: func.func @test_flatten_dyn_shape(
+// EXCLUDED: "onnx.Flatten"
+// EXCLUDED: return
