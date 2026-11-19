@@ -2747,6 +2747,73 @@ struct ConcatSingleOperandPattern : public OpRewritePattern<ONNXConcatOp> {
   }
 };
 
+// Concatenate the inputs of independent MatMuls along their batch axis.
+//
+//   Before                         After
+//
+//   A0   B0      A1   B1           A0   A1      B0   B1
+//    \   /        \   /             \   /        \   /
+//    MatMul       MatMul           Concat       Concat
+//       \          /               (axis 0)     (axis 0)
+//        \        /                    \          /
+//          Concat                       \        /
+//          (axis 0)                       MatMul
+//
+// Each output batch still multiplies the original pair of input batches.
+struct SinkMatMulThroughConcatPattern : public OpRewritePattern<ONNXConcatOp> {
+  using OpRewritePattern<ONNXConcatOp>::OpRewritePattern;
+
+  static RankedTensorType getStaticBatchType(Value value) {
+    auto type = mlir::dyn_cast<RankedTensorType>(value.getType());
+    if (!type || type.getRank() != 3 || !type.hasStaticShape() ||
+        type.getEncoding() || isa<quant::QuantizedType>(type.getElementType()))
+      return {};
+    return type;
+  }
+
+  LogicalResult matchAndRewrite(
+      ONNXConcatOp concatOp, PatternRewriter &rewriter) const final {
+    if (concatOp.getNumOperands() < 2 ||
+        (concatOp.getAxis() != 0 && concatOp.getAxis() != -3))
+      return failure();
+
+    auto resultType = getStaticBatchType(concatOp.getResult());
+    if (!resultType)
+      return failure();
+
+    SmallVector<Value> lhsInputs, rhsInputs;
+    for (Value input : concatOp.getOperands()) {
+      auto matmul = input.getDefiningOp<ONNXMatMulOp>();
+      if (!matmul || !input.hasOneUse())
+        return failure();
+      lhsInputs.push_back(matmul.getA());
+      rhsInputs.push_back(matmul.getB());
+    }
+
+    auto lhsType = getStaticBatchType(lhsInputs.front());
+    auto rhsType = getStaticBatchType(rhsInputs.front());
+    if (!lhsType || !rhsType || lhsType.getDimSize(0) != rhsType.getDimSize(0))
+      return failure();
+
+    if (!llvm::all_of(
+            lhsInputs, [&](Value v) { return v.getType() == lhsType; }) ||
+        !llvm::all_of(
+            rhsInputs, [&](Value v) { return v.getType() == rhsType; }))
+      return failure();
+
+    int64_t batch = resultType.getDimSize(0);
+    int64_t count = concatOp.getNumOperands();
+    if (batch % count != 0 || batch / count != lhsType.getDimSize(0))
+      return failure();
+
+    OnnxBuilder onnx(rewriter, concatOp.getLoc());
+    Value lhs = onnx.concat(lhsInputs, concatOp.getAxis());
+    Value rhs = onnx.concat(rhsInputs, concatOp.getAxis());
+    rewriter.replaceOpWithNewOp<ONNXMatMulOp>(concatOp, resultType, lhs, rhs);
+    return success();
+  }
+};
+
 [[nodiscard]] bool isPlainFloatType(Type t) {
   Type elem = getElementTypeOrSelf(t);
   return mlir::isa<FloatType>(elem);
@@ -5760,6 +5827,7 @@ void ONNXConcatOp::getCanonicalizationPatterns(
   results.insert<RecomposeConcatPattern>(context);
   results.insert<RemoveEmptyConcatOperandsPattern>(context);
   results.insert<ConcatSingleOperandPattern>(context);
+  results.insert<SinkMatMulThroughConcatPattern>(context);
   results.insert<EliminateCarveOutAroundRotaryEmbeddingPattern>(context);
   results.insert<GroupConsecutiveConstantConcatOperandsPattern>(context);
 }
