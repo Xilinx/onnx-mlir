@@ -2360,6 +2360,82 @@ public:
   }
 };
 
+/// Replaces the 0 and -1 entries of a constant Reshape shape with the static
+/// dimensions they stand for. A 0 is replaced only when allowzero is unset and
+/// the copied input dimension is static. A -1 is replaced only when the static
+/// input and the other shape entries prove its value.
+class ResolveReshapeShapePattern : public OpRewritePattern<ONNXReshapeOp> {
+  // Returns the number of elements when every dimension is static and
+  // positive. A zero dimension would leave a -1 entry undetermined.
+  static FailureOr<int64_t> getStaticElementCount(ArrayRef<int64_t> dims) {
+    int64_t elementCount = 1;
+    for (int64_t dim : dims) {
+      int64_t nextElementCount;
+      if (dim <= 0 || llvm::MulOverflow(elementCount, dim, nextElementCount))
+        return failure();
+      elementCount = nextElementCount;
+    }
+    return elementCount;
+  }
+
+public:
+  using OpRewritePattern<ONNXReshapeOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXReshapeOp op, PatternRewriter &rewriter) const override {
+    auto inputType = dyn_cast<RankedTensorType>(op.getData().getType());
+    auto resultType = dyn_cast<RankedTensorType>(op.getType());
+    if (!inputType || !resultType)
+      return rewriter.notifyMatchFailure(op, "input and result must be ranked");
+    ElementsAttr shapeAttr;
+    if (!matchPattern(op.getShape(), m_Constant(&shapeAttr)))
+      return rewriter.notifyMatchFailure(op, "shape must be a constant");
+    if (shapeAttr.getNumElements() != resultType.getRank())
+      return rewriter.notifyMatchFailure(
+          op, "shape length must match the result rank");
+
+    ArrayRef<int64_t> inputDims = inputType.getShape();
+    ArrayRef<int64_t> resultDims = resultType.getShape();
+    SmallVector<int64_t> dims(shapeAttr.getValues<int64_t>());
+    bool changed = false;
+
+    if (!op.getAllowzero()) {
+      for (size_t axis = 0, e = std::min(dims.size(), inputDims.size());
+          axis < e; ++axis) {
+        if (dims[axis] == 0 && resultDims[axis] > 0 &&
+            inputDims[axis] == resultDims[axis]) {
+          dims[axis] = resultDims[axis];
+          changed = true;
+        }
+      }
+    }
+
+    auto inferred = llvm::find(dims, -1);
+    if (inferred != dims.end()) {
+      size_t axis = std::distance(dims.begin(), inferred);
+      SmallVector<int64_t> resolvedDims(dims);
+      resolvedDims[axis] = resultDims[axis];
+      FailureOr<int64_t> inputCount = getStaticElementCount(inputDims);
+      FailureOr<int64_t> outputCount = getStaticElementCount(resolvedDims);
+      if (succeeded(inputCount) && succeeded(outputCount) &&
+          *inputCount == *outputCount) {
+        dims = std::move(resolvedDims);
+        changed = true;
+      }
+    }
+
+    if (!changed)
+      return rewriter.notifyMatchFailure(
+          op, "shape has no 0 or -1 entry that can be resolved");
+
+    OnnxBuilder builder(rewriter, op.getLoc());
+    Value newShape = builder.constantInt64(dims);
+    rewriter.modifyOpInPlace(
+        op, [&] { op.getShapeMutable().assign(newShape); });
+    return success();
+  }
+};
+
 /// The pattern is to replace two consecutive ReshapeOp with a single ReshapeOp.
 /// It's not successful for arbitrary ReshapeOp, so let's consider necessary
 /// condition for the replacement.
@@ -6134,6 +6210,7 @@ void ONNXReluOp::getCanonicalizationPatterns(
 /// on the ONNXReshapeOp.
 void ONNXReshapeOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<ResolveReshapeShapePattern>(context);
   result.insert<FuseTwoReshapesPattern>(context);
   result.insert<FuseTwoReshapesAllowZeroPattern>(context);
   result.insert<RemoveIdentityReshapePattern1>(context);

@@ -272,3 +272,136 @@ func.func @test_reshape_no_fusion_type_mismatch(
 // CHECK:           onnx.Return [[VAR_3_]] : tensor<6xf32>
 // CHECK:         }
 }
+
+// -----
+
+// The 0 copies the static input dimension and the -1 is proven by the element
+// count, so both are replaced.
+func.func @test_reshape_resolve_zero_and_minus_one(%arg0: tensor<2x3x4xf32>) -> tensor<2x12xf32> {
+  %0 = onnx.Constant dense<[0, -1]> : tensor<2xi64>
+  %1 = "onnx.Reshape"(%arg0, %0) : (tensor<2x3x4xf32>, tensor<2xi64>) -> tensor<2x12xf32>
+  onnx.Return %1 : tensor<2x12xf32>
+
+// CHECK-LABEL:  func.func @test_reshape_resolve_zero_and_minus_one
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x3x4xf32>) -> tensor<2x12xf32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[2, 12]> : tensor<2xi64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<2x3x4xf32>, tensor<2xi64>) -> tensor<2x12xf32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<2x12xf32>
+// CHECK:         }
+}
+
+// -----
+
+func.func @test_reshape_resolve_zero(%arg0: tensor<2x3x4xf32>) -> tensor<2x12xf32> {
+  %0 = onnx.Constant dense<[0, 12]> : tensor<2xi64>
+  %1 = "onnx.Reshape"(%arg0, %0) : (tensor<2x3x4xf32>, tensor<2xi64>) -> tensor<2x12xf32>
+  onnx.Return %1 : tensor<2x12xf32>
+
+// CHECK-LABEL:  func.func @test_reshape_resolve_zero
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x3x4xf32>) -> tensor<2x12xf32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[2, 12]> : tensor<2xi64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<2x3x4xf32>, tensor<2xi64>) -> tensor<2x12xf32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<2x12xf32>
+// CHECK:         }
+}
+
+// -----
+
+func.func @test_reshape_resolve_minus_one(%arg0: tensor<2x3x4xf32>) -> tensor<6x4xf32> {
+  %0 = onnx.Constant dense<[6, -1]> : tensor<2xi64>
+  %1 = "onnx.Reshape"(%arg0, %0) : (tensor<2x3x4xf32>, tensor<2xi64>) -> tensor<6x4xf32>
+  onnx.Return %1 : tensor<6x4xf32>
+
+// CHECK-LABEL:  func.func @test_reshape_resolve_minus_one
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x3x4xf32>) -> tensor<6x4xf32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[6, 4]> : tensor<2xi64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<2x3x4xf32>, tensor<2xi64>) -> tensor<6x4xf32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<6x4xf32>
+// CHECK:         }
+}
+
+// -----
+
+// The shape constant is shared: the reshape with a static input gets its own
+// resolved constant, the other one keeps using the original constant.
+func.func @test_reshape_resolve_shared_shape(%arg0: tensor<2x3x4xf32>, %arg1: tensor<?x3x4xf32>) -> (tensor<2x12xf32>, tensor<?x12xf32>) {
+  %0 = onnx.Constant dense<[-1, 12]> : tensor<2xi64>
+  %1 = "onnx.Reshape"(%arg0, %0) : (tensor<2x3x4xf32>, tensor<2xi64>) -> tensor<2x12xf32>
+  %2 = "onnx.Reshape"(%arg1, %0) : (tensor<?x3x4xf32>, tensor<2xi64>) -> tensor<?x12xf32>
+  onnx.Return %1, %2 : tensor<2x12xf32>, tensor<?x12xf32>
+
+// CHECK-LABEL:  func.func @test_reshape_resolve_shared_shape
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x3x4xf32>, [[PARAM_1_:%.+]]: tensor<?x3x4xf32>) -> (tensor<2x12xf32>, tensor<?x12xf32>) {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<[2, 12]> : tensor<2xi64>
+// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<[-1, 12]> : tensor<2xi64>
+// CHECK:           [[VAR_2_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<2x3x4xf32>, tensor<2xi64>) -> tensor<2x12xf32>
+// CHECK:           [[VAR_3_:%.+]] = "onnx.Reshape"([[PARAM_1_]], [[VAR_1_]]) {allowzero = 0 : si64} : (tensor<?x3x4xf32>, tensor<2xi64>) -> tensor<?x12xf32>
+// CHECK:           onnx.Return [[VAR_2_]], [[VAR_3_]] : tensor<2x12xf32>, tensor<?x12xf32>
+// CHECK:         }
+}
+
+// -----
+
+// With allowzero set, a 0 is a literal zero-sized dimension and stays.
+func.func @test_reshape_keep_zero_allowzero(%arg0: tensor<0x3x4xf32>) -> tensor<0x12xf32> {
+  %0 = onnx.Constant dense<[0, 12]> : tensor<2xi64>
+  %1 = "onnx.Reshape"(%arg0, %0) {allowzero = 1 : si64} : (tensor<0x3x4xf32>, tensor<2xi64>) -> tensor<0x12xf32>
+  onnx.Return %1 : tensor<0x12xf32>
+
+// CHECK-LABEL:  func.func @test_reshape_keep_zero_allowzero
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<0x3x4xf32>) -> tensor<0x12xf32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[0, 12]> : tensor<2xi64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_0_]]) {allowzero = 1 : si64} : (tensor<0x3x4xf32>, tensor<2xi64>) -> tensor<0x12xf32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<0x12xf32>
+// CHECK:         }
+}
+
+// -----
+
+// The copied input dimension is dynamic, so the 0 stays even though the result
+// type is static.
+func.func @test_reshape_keep_zero_dynamic_input(%arg0: tensor<?x3x4xf32>) -> tensor<2x12xf32> {
+  %0 = onnx.Constant dense<[0, 12]> : tensor<2xi64>
+  %1 = "onnx.Reshape"(%arg0, %0) : (tensor<?x3x4xf32>, tensor<2xi64>) -> tensor<2x12xf32>
+  onnx.Return %1 : tensor<2x12xf32>
+
+// CHECK-LABEL:  func.func @test_reshape_keep_zero_dynamic_input
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x3x4xf32>) -> tensor<2x12xf32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[0, 12]> : tensor<2xi64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<?x3x4xf32>, tensor<2xi64>) -> tensor<2x12xf32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<2x12xf32>
+// CHECK:         }
+}
+
+// -----
+
+// The input element count is unknown, so the -1 stays even though the result
+// type is static.
+func.func @test_reshape_keep_minus_one_dynamic_input(%arg0: tensor<?x3x4xf32>) -> tensor<2x12xf32> {
+  %0 = onnx.Constant dense<[-1, 12]> : tensor<2xi64>
+  %1 = "onnx.Reshape"(%arg0, %0) : (tensor<?x3x4xf32>, tensor<2xi64>) -> tensor<2x12xf32>
+  onnx.Return %1 : tensor<2x12xf32>
+
+// CHECK-LABEL:  func.func @test_reshape_keep_minus_one_dynamic_input
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x3x4xf32>) -> tensor<2x12xf32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[-1, 12]> : tensor<2xi64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<?x3x4xf32>, tensor<2xi64>) -> tensor<2x12xf32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<2x12xf32>
+// CHECK:         }
+}
+
+// -----
+
+// A zero-sized input leaves the -1 undetermined, so the shape stays.
+func.func @test_reshape_keep_shape_zero_extent(%arg0: tensor<0x3x4xf32>) -> tensor<0x12xf32> {
+  %0 = onnx.Constant dense<[0, -1]> : tensor<2xi64>
+  %1 = "onnx.Reshape"(%arg0, %0) : (tensor<0x3x4xf32>, tensor<2xi64>) -> tensor<0x12xf32>
+  onnx.Return %1 : tensor<0x12xf32>
+
+// CHECK-LABEL:  func.func @test_reshape_keep_shape_zero_extent
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<0x3x4xf32>) -> tensor<0x12xf32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[0, -1]> : tensor<2xi64>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<0x3x4xf32>, tensor<2xi64>) -> tensor<0x12xf32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<0x12xf32>
+// CHECK:         }
+}
