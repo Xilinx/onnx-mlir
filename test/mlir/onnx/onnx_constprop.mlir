@@ -361,6 +361,43 @@ func.func @test_mul_add_const_distributive_multiuse(%x: tensor<3xf32>) -> (tenso
 
 // -----
 
+// The Add is a bias that fusion folds into the MatMul: the Mul is not distributed over it.
+// CHECK-LABEL: @test_mul_add_const_distributive_matmul_bias
+func.func @test_mul_add_const_distributive_matmul_bias(%x: tensor<2x4xf32>) -> tensor<2x3xf32> {
+  %w = onnx.Constant dense<1.0> : tensor<4x3xf32>
+  %b = onnx.Constant dense<3.0> : tensor<3xf32>
+  %a = onnx.Constant dense<2.0> : tensor<3xf32>
+  %mm = "onnx.MatMul"(%x, %w) : (tensor<2x4xf32>, tensor<4x3xf32>) -> tensor<2x3xf32>
+  %add = "onnx.Add"(%mm, %b) : (tensor<2x3xf32>, tensor<3xf32>) -> tensor<2x3xf32>
+  %mul = "onnx.Mul"(%add, %a) : (tensor<2x3xf32>, tensor<3xf32>) -> tensor<2x3xf32>
+  onnx.Return %mul : tensor<2x3xf32>
+  // CHECK: [[MM:%.+]] = "onnx.MatMul"
+  // CHECK: [[ADD:%.+]] = "onnx.Add"([[MM]], %{{.*}})
+  // CHECK: [[MUL:%.+]] = "onnx.Mul"([[ADD]], %{{.*}})
+  // CHECK: onnx.Return [[MUL]]
+}
+
+// -----
+
+// Same for a Conv bias.
+// CHECK-LABEL: @test_mul_add_const_distributive_conv_bias
+func.func @test_mul_add_const_distributive_conv_bias(%x: tensor<1x2x4x4xf32>) -> tensor<1x3x4x4xf32> {
+  %w = onnx.Constant dense<1.0> : tensor<3x2x1x1xf32>
+  %b = onnx.Constant dense<3.0> : tensor<3x1x1xf32>
+  %a = onnx.Constant dense<2.0> : tensor<3x1x1xf32>
+  %none = "onnx.NoValue"() {value} : () -> none
+  %conv = "onnx.Conv"(%x, %w, %none) {kernel_shape = [1, 1]} : (tensor<1x2x4x4xf32>, tensor<3x2x1x1xf32>, none) -> tensor<1x3x4x4xf32>
+  %add = "onnx.Add"(%conv, %b) : (tensor<1x3x4x4xf32>, tensor<3x1x1xf32>) -> tensor<1x3x4x4xf32>
+  %mul = "onnx.Mul"(%add, %a) : (tensor<1x3x4x4xf32>, tensor<3x1x1xf32>) -> tensor<1x3x4x4xf32>
+  onnx.Return %mul : tensor<1x3x4x4xf32>
+  // CHECK: [[CONV:%.+]] = "onnx.Conv"
+  // CHECK: [[ADD:%.+]] = "onnx.Add"([[CONV]], %{{.*}})
+  // CHECK: [[MUL:%.+]] = "onnx.Mul"([[ADD]], %{{.*}})
+  // CHECK: onnx.Return [[MUL]]
+}
+
+// -----
+
 // CHECK-LABEL: @test_mul_clip_const_distributive
 func.func @test_mul_clip_const_distributive(%x: tensor<3xf32>) -> tensor<3xf32> {
   %a = onnx.Constant dense<2.0> : tensor<3xf32>
