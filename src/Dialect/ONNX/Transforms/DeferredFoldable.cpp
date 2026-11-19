@@ -427,17 +427,13 @@ struct FormDeferredFoldableExpressionsPass
 
 } // namespace
 
-// Seed only outer operations and restrict each round to those seeds. This
-// keeps deferred bodies opaque even when created through the active rewriter.
-// New outer operations become eligible on the next scan. Rescanning also
-// revisits transitive users: forming p in Add(Add(runtime, p), offset) changes
-// the inner Add's operand, but need not rewrite it or notify the outer Add.
-// The selected-op greedy driver drains notifications without a region rescan.
 LogicalResult onnx_mlir::applyPatternsOutsideDeferredFoldable(
     func::FuncOp function, RewritePatternSet &&patterns,
     RewriterBase::Listener *listener, bool enableFolding) {
   FrozenRewritePatternSet frozenPatterns(std::move(patterns));
   GreedyRewriteConfig config;
+  // Restrict the selected-op greedy driver to the collected operations so
+  // insertion notifications cannot add new DeferredFoldable body operations.
   config.setStrictness(GreedyRewriteStrictness::ExistingOps)
       .setScope(&function.getBody())
       .setListener(listener);
@@ -445,6 +441,8 @@ LogicalResult onnx_mlir::applyPatternsOutsideDeferredFoldable(
 
   for (int64_t iteration = 0; iteration < config.getMaxIterations();
       ++iteration) {
+    // Replace the region-based greedy driver's recursive worklist collection:
+    // include DeferredFoldable operations, but skip their bodies.
     SmallVector<Operation *> operations;
     function.walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
       if (op != function)
@@ -453,12 +451,17 @@ LogicalResult onnx_mlir::applyPatternsOutsideDeferredFoldable(
                                              : WalkResult::advance();
     });
 
+    // Delegate pattern application, folding and worklist processing to greedy.
     bool changed = false;
     if (failed(applyOpPatternsGreedily(
             operations, frozenPatterns, config, &changed)))
       return failure();
     if (!changed)
       return success();
+
+    // Reproduce the region-based greedy driver's fixed-point rescanning,
+    // collecting new outer operations and revisiting transitive users that
+    // the selected-op driver's notifications alone may not requeue.
   }
   return failure();
 }
