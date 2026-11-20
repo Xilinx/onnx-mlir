@@ -6,11 +6,6 @@
 //
 // This file contains template helper functions for building MLIR operations.
 //
-// Note on usage of template keyword. Since the GenericAffineBuilder is
-// templated, and we use templated functions (such as create<OP>), we must add
-// the "template" keyword before the "create" function to indicate what is being
-// templated.
-//
 //===----------------------------------------------------------------------===//
 
 #ifndef ONNX_MLIR_DIALECT_BUILDER_MLIR_H
@@ -40,11 +35,11 @@ mlir::Value load(const BUILDER &b, mlir::Value memref, mlir::ValueRange indices,
     auto type = mlir::cast<mlir::MemRefType>(memref.getType());
     if (type.getRank() == 1 && type.getShape()[0] == 1) {
       mlir::Value iZero = create.math.constantIndex(0);
-      return b.getBuilder().template create<LOAD_OP>(
+      return LOAD_OP::create(b.getBuilder(),
           b.getLoc(), memref, mlir::ValueRange({iZero}));
     }
   }
-  return b.getBuilder().template create<LOAD_OP>(
+  return LOAD_OP::create(b.getBuilder(),
       b.getLoc(), memref, computedIndices);
 }
 
@@ -67,12 +62,12 @@ void store(const BUILDER &b, mlir::Value val, mlir::Value memref,
     auto type = mlir::cast<mlir::MemRefType>(memref.getType());
     if (type.getRank() == 1 && type.getShape()[0] == 1) {
       mlir::Value iZero = create.math.constantIndex(0);
-      b.getBuilder().template create<STORE_OP>(
+      STORE_OP::create(b.getBuilder(),
           b.getLoc(), val, memref, mlir::ValueRange({iZero}));
       return;
     }
   }
-  b.getBuilder().template create<STORE_OP>(
+  STORE_OP::create(b.getBuilder(),
       b.getLoc(), val, memref, computedIndices);
 }
 
@@ -645,7 +640,7 @@ inline mlir::Operation *GenericAffineBuilder<LOAD_OP, STORE_OP>::prefetch(
     mlir::Value memref, mlir::AffineMap map, mlir::ValueRange indices,
     bool isWrite, unsigned localityHint, bool isDataCache) {
   llvm::SmallVector<mlir::Value> indexArray(indices);
-  return b().template create<mlir::affine::AffinePrefetchOp>(
+  return mlir::affine::AffinePrefetchOp::create(b(),
       loc(), memref, map, indexArray, isWrite, localityHint, isDataCache);
 }
 
@@ -669,7 +664,7 @@ inline void GenericAffineBuilder<LOAD_OP, STORE_OP>::forLoopIE(IndexExpr lb,
     lbs.emplace_back(lbMap);
     ubs.emplace_back(ubMap);
     steps.emplace_back(step);
-    auto parallelLoop = b().template create<mlir::affine::AffineParallelOp>(
+    auto parallelLoop = mlir::affine::AffineParallelOp::create(b(),
         loc(), types, reds, lbs, lbOperands, ubs, ubOperands, steps);
     mlir::Block *bodyBlock = parallelLoop.getBody();
     // From extractInductionVars in AffineOps.cpp.
@@ -683,7 +678,7 @@ inline void GenericAffineBuilder<LOAD_OP, STORE_OP>::forLoopIE(IndexExpr lb,
     createAffine.yield();
   } else {
     // Create affine for.
-    b().template create<mlir::affine::AffineForOp>(loc(), lbOperands, lbMap,
+    mlir::affine::AffineForOp::create(b(), loc(), lbOperands, lbMap,
         ubOperands, ubMap, step, mlir::ValueRange{},
         [&](mlir::OpBuilder &b, mlir::Location loc, mlir::Value index,
             mlir::ValueRange args) {
@@ -779,7 +774,7 @@ inline void GenericAffineBuilder<LOAD_OP, STORE_OP>::ifThenElseIE(
       scope.getNumDims(), scope.getNumSymbols(), affineCond, isEq);
   llvm::SmallVector<mlir::Value, 8> dimAndSymbolList;
   scope.getDimAndSymbolList(dimAndSymbolList);
-  auto ifOp = b().template create<mlir::affine::AffineIfOp>(
+  auto ifOp = mlir::affine::AffineIfOp::create(b(),
       loc(), inset, dimAndSymbolList, true);
   mlir::Block *thenBlock = ifOp.getThenBlock();
   mlir::Block *elseBlock = ifOp.getElseBlock();
@@ -800,12 +795,12 @@ inline void GenericAffineBuilder<LOAD_OP, STORE_OP>::ifThenElseIE(
 template <class LOAD_OP, class STORE_OP>
 mlir::Value GenericAffineBuilder<LOAD_OP, STORE_OP>::apply(
     mlir::AffineMap map, mlir::ValueRange operands) const {
-  return b().template create<mlir::affine::AffineApplyOp>(loc(), map, operands);
+  return mlir::affine::AffineApplyOp::create(b(), loc(), map, operands);
 }
 
 template <class LOAD_OP, class STORE_OP>
 inline void GenericAffineBuilder<LOAD_OP, STORE_OP>::yield() const {
-  b().template create<mlir::affine::AffineYieldOp>(loc());
+  mlir::affine::AffineYieldOp::create(b(), loc());
 }
 
 // Support for adding blocks.

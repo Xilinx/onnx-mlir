@@ -44,7 +44,7 @@ Value reorderParameterData(PatternRewriter &rewriter, Location loc,
       DenseElementsAttr::get(newAttrType, llvm::ArrayRef(reorderedData));
 
   // Create constant with the original type (which may include quant info)
-  auto newConstOp = rewriter.create<ONNXConstantOp>(loc, paramType,
+  auto newConstOp = ONNXConstantOp::create(rewriter, loc, paramType,
       /*sparse_value=*/Attribute(),
       /*value=*/newAttr, /*value_float=*/FloatAttr(),
       /*value_floats=*/ArrayAttr(), /*value_int=*/IntegerAttr(),
@@ -279,7 +279,7 @@ struct MergeSliceConcatInstanceNormConv : public OpRewritePattern<ONNXConvOp> {
           convOp, "failed to reorder InstanceNormalization parameters");
 
     // Create new InstanceNorm with original input
-    auto newInstanceNorm = rewriter.create<ONNXInstanceNormalizationOp>(
+    auto newInstanceNorm = ONNXInstanceNormalizationOp::create(rewriter,
         instanceNormOp.getLoc(), instanceNormOp.getType(), commonInput,
         newScale, newBias, instanceNormOp.getEpsilonAttr());
 
@@ -344,7 +344,7 @@ struct MergeSliceConcatInstanceNormConv : public OpRewritePattern<ONNXConvOp> {
           newWeightsAttrType, llvm::ArrayRef(reorderedData));
 
       // Create constant with the original type (which may include quant info)
-      auto newWeightsOp = rewriter.create<ONNXConstantOp>(weightsOp.getLoc(),
+      auto newWeightsOp = ONNXConstantOp::create(rewriter, weightsOp.getLoc(),
           weightsType, /*sparse_value=*/Attribute(),
           /*value=*/newWeightsAttr, /*value_float=*/FloatAttr(),
           /*value_floats=*/ArrayAttr(), /*value_int=*/IntegerAttr(),
@@ -352,7 +352,7 @@ struct MergeSliceConcatInstanceNormConv : public OpRewritePattern<ONNXConvOp> {
           /*value_strings=*/ArrayAttr());
 
       auto newConv =
-          rewriter.create<ONNXConvOp>(convOp.getLoc(), convOp.getType(),
+          ONNXConvOp::create(rewriter, convOp.getLoc(), convOp.getType(),
               newInstanceNorm.getResult(), newWeightsOp.getResult(),
               convOp.getB(), convOp.getAutoPadAttr(), convOp.getDilationsAttr(),
               convOp.getGroupAttr(), convOp.getKernelShapeAttr(),

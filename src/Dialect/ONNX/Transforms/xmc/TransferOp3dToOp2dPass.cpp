@@ -195,15 +195,15 @@ struct Conv3dToConv2dPattern : public OpRewritePattern<ONNXConvOp> {
     auto newInputType =
         RankedTensorType::get(newInputShape, inputType.getElementType());
     auto inputShapeConst = createShapeConstant(rewriter, loc, newInputShape);
-    auto reshapedInput = rewriter.create<ONNXReshapeOp>(
-        loc, newInputType, input, inputShapeConst);
+    auto reshapedInput = ONNXReshapeOp::create(
+        rewriter, loc, newInputType, input, inputShapeConst);
 
     // Reshape weight
     auto newWeightType =
         RankedTensorType::get(newWeightShape, newWeightElemType);
     auto weightShapeConst = createShapeConstant(rewriter, loc, newWeightShape);
-    auto reshapedWeight = rewriter.create<ONNXReshapeOp>(
-        loc, newWeightType, weight, weightShapeConst);
+    auto reshapedWeight = ONNXReshapeOp::create(
+        rewriter, loc, newWeightType, weight, weightShapeConst);
 
     // Extract 2D attributes from 3D (drop depth dimension)
     auto kernel = convOp.getKernelShape();
@@ -232,8 +232,8 @@ struct Conv3dToConv2dPattern : public OpRewritePattern<ONNXConvOp> {
           expandPerAxisQuantType(biasType.getElementType(), inShape.D);
       auto newBiasType = RankedTensorType::get(newBiasShape, newBiasElemType);
       auto biasShapeConst = createShapeConstant(rewriter, loc, newBiasShape);
-      reshapedBias = rewriter.create<ONNXReshapeOp>(
-          loc, newBiasType, bias, biasShapeConst);
+      reshapedBias = ONNXReshapeOp::create(
+          rewriter, loc, newBiasType, bias, biasShapeConst);
     } else {
       onnx_mlir::OnnxBuilder onnxBuilder(rewriter, loc);
       reshapedBias = onnxBuilder.none();
@@ -247,7 +247,7 @@ struct Conv3dToConv2dPattern : public OpRewritePattern<ONNXConvOp> {
         RankedTensorType::get(conv2dOutputShape, inputType.getElementType());
 
     // Create Conv2d
-    auto conv2dOp = rewriter.create<ONNXConvOp>(loc, conv2dOutputType,
+    auto conv2dOp = ONNXConvOp::create(rewriter, loc, conv2dOutputType,
         reshapedInput, reshapedWeight, reshapedBias,
         /*auto_pad=*/convOp.getAutoPadAttr(),
         /*dilations=*/rewriter.getI64ArrayAttr(dilations2d),
@@ -260,8 +260,8 @@ struct Conv3dToConv2dPattern : public OpRewritePattern<ONNXConvOp> {
     // Apply Relu if needed
     Value finalOutput = conv2dOp.getResult();
     if (reluOp) {
-      auto reluOutput = rewriter.create<ONNXReluOp>(
-          loc, conv2dOp.getResult().getType(), finalOutput);
+      auto reluOutput = ONNXReluOp::create(
+          rewriter, loc, conv2dOp.getResult().getType(), finalOutput);
       finalOutput = reluOutput.getResult();
     }
 
@@ -274,8 +274,8 @@ struct Conv3dToConv2dPattern : public OpRewritePattern<ONNXConvOp> {
 
     auto outputShapeConst =
         createShapeConstant(rewriter, loc, finalOutputShape);
-    auto finalReshape = rewriter.create<ONNXReshapeOp>(
-        loc, outputType, finalOutput, outputShapeConst);
+    auto finalReshape = ONNXReshapeOp::create(
+        rewriter, loc, outputType, finalOutput, outputShapeConst);
 
     if (reluOp) {
       rewriter.replaceOp(reluOp, finalReshape.getResult());
@@ -369,9 +369,9 @@ static Value broadcastOperandTo5D(Value v, llvm::ArrayRef<int64_t> targetShape,
       auto tiledResultType =
           RankedTensorType::get(targetShape, vType.getElementType());
       auto valueNamedAttr = rewriter.getNamedAttr("value", tiledStorage);
-      return rewriter
-          .create<ONNXConstantOp>(loc, tiledResultType, mlir::ValueRange{},
-              mlir::ArrayRef<mlir::NamedAttribute>{valueNamedAttr})
+      return ONNXConstantOp::create(rewriter, loc, tiledResultType,
+          mlir::ValueRange{},
+          mlir::ArrayRef<mlir::NamedAttribute>{valueNamedAttr})
           .getResult();
     }
   }
@@ -379,7 +379,7 @@ static Value broadcastOperandTo5D(Value v, llvm::ArrayRef<int64_t> targetShape,
   // Non-constant broadcast operand: insert an Expand to the target shape.
   auto targetType = RankedTensorType::get(targetShape, vType.getElementType());
   auto shapeConst = createShapeConstant(rewriter, loc, targetShape);
-  return rewriter.create<ONNXExpandOp>(loc, targetType, v, shapeConst);
+  return ONNXExpandOp::create(rewriter, loc, targetType, v, shapeConst);
 }
 
 /// Helper to transform 5D eltwise Add to 4D
@@ -402,9 +402,11 @@ Value transformAdd5Dto4D(
   Value a = broadcastOperandTo5D(addOp.getA(), resShape, rewriter, loc);
   Value b = broadcastOperandTo5D(addOp.getB(), resShape, rewriter, loc);
 
-  auto reshape1 = rewriter.create<ONNXReshapeOp>(loc, new4dType, a, shapeConst);
-  auto reshape2 = rewriter.create<ONNXReshapeOp>(loc, new4dType, b, shapeConst);
-  return rewriter.create<ONNXAddOp>(loc, new4dType, reshape1, reshape2);
+  auto reshape1 =
+      ONNXReshapeOp::create(rewriter, loc, new4dType, a, shapeConst);
+  auto reshape2 =
+      ONNXReshapeOp::create(rewriter, loc, new4dType, b, shapeConst);
+  return ONNXAddOp::create(rewriter, loc, new4dType, reshape1, reshape2);
 }
 
 /// Check if Add is fed by Conv3d
@@ -439,8 +441,8 @@ struct Eltwise3dToEltwise2dPattern : public OpRewritePattern<ONNXAddOp> {
     Shape5D shape(outputType.getShape());
     auto outputShapeConst =
         createShapeConstant(rewriter, loc, shape.toVector());
-    auto finalReshape = rewriter.create<ONNXReshapeOp>(
-        loc, outputType, add4d, outputShapeConst);
+    auto finalReshape = ONNXReshapeOp::create(
+        rewriter, loc, outputType, add4d, outputShapeConst);
 
     rewriter.replaceOp(addOp, finalReshape.getResult());
     return success();
@@ -469,14 +471,14 @@ struct Eltwise3dReluToEltwise2dPattern : public OpRewritePattern<ONNXReluOp> {
     auto add4d = transformAdd5Dto4D(addOp, rewriter, loc);
 
     // Create ReLU on 4D
-    auto relu4d = rewriter.create<ONNXReluOp>(loc, add4d.getType(), add4d);
+    auto relu4d = ONNXReluOp::create(rewriter, loc, add4d.getType(), add4d);
 
     // Reshape back to 5D
     Shape5D shape(addOutputType.getShape());
     auto outputShapeConst =
         createShapeConstant(rewriter, loc, shape.toVector());
-    auto finalReshape = rewriter.create<ONNXReshapeOp>(
-        loc, reluOp.getResult().getType(), relu4d, outputShapeConst);
+    auto finalReshape = ONNXReshapeOp::create(
+        rewriter, loc, reluOp.getResult().getType(), relu4d, outputShapeConst);
 
     rewriter.replaceOp(reluOp, finalReshape.getResult());
     return success();

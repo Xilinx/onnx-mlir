@@ -369,7 +369,7 @@ Value emitArgSort(ConversionPatternRewriter &rewriter, Location loc,
     Value valAscending =
         create.math.constant(intType, static_cast<int64_t>(ascending));
     SmallVector<Value, 4> operands = {order, input, valAxis, valAscending};
-    rewriter.create<KrnlCallOp>(loc, "omTensorSort", 1, operands);
+    KrnlCallOp::create(rewriter, loc, "omTensorSort", 1, operands);
     return order;
   }
   // Do sorting in the descending order of input and return their indices.
@@ -553,7 +553,7 @@ KrnlTypeConverter::KrnlTypeConverter() {
     if (inputs.size() != 1)
       return Value();
 
-    return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
+    return UnrealizedConversionCastOp::create(builder, loc, resultType, inputs)
         .getResult(0);
   });
 
@@ -562,7 +562,7 @@ KrnlTypeConverter::KrnlTypeConverter() {
     if (inputs.size() != 1)
       return Value();
 
-    return builder.create<UnrealizedConversionCastOp>(loc, resultType, inputs)
+    return UnrealizedConversionCastOp::create(builder, loc, resultType, inputs)
         .getResult(0);
   });
 }
@@ -930,8 +930,8 @@ void genSafeCodeForGatherAlike(mlir::ConversionPatternRewriter &rewriter,
         // correction.
         Value errorCondition =
             ((index < (-1) * axisDim) | (index >= axisDim)).getValue();
-        rewriter.create<scf::IfOp>(
-            loc, errorCondition,
+        scf::IfOp::create(
+            rewriter, loc, errorCondition,
             /*thenBuilder=*/
             [&](OpBuilder &thenBuilder, Location thenLoc) {
               MultiDialectBuilder<KrnlBuilder, MathBuilder> create(
@@ -949,7 +949,7 @@ void genSafeCodeForGatherAlike(mlir::ConversionPatternRewriter &rewriter,
               create.krnl.printf(msg, indexVal, true);
               msg = "The out-of-bound index is replaced with zero.\n";
               create.krnl.printf(msg);
-              thenBuilder.create<scf::YieldOp>(thenLoc);
+              scf::YieldOp::create(thenBuilder, thenLoc);
             },
             /*elseBuilder=*/nullptr);
       });

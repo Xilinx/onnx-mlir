@@ -74,7 +74,7 @@ Value createShapeConstant(
     PatternRewriter &rewriter, Location loc, ArrayRef<int64_t> shape) {
   auto *ctx = rewriter.getContext();
   auto shapeAttr = getShapeAttr(ctx, shape);
-  return rewriter.create<ONNXConstantOp>(loc, shapeAttr.getType(), Attribute(),
+  return ONNXConstantOp::create(rewriter, loc, shapeAttr.getType(), Attribute(),
       shapeAttr, FloatAttr(), ArrayAttr(), IntegerAttr(), ArrayAttr(),
       StringAttr(), ArrayAttr());
 }
@@ -128,13 +128,13 @@ Value createEltwiseOp(PatternRewriter &rewriter, Location loc,
     EltwiseOpKind kind, Type resultType, Value lhs, Value rhs) {
   switch (kind) {
   case EltwiseOpKind::Add:
-    return rewriter.create<ONNXAddOp>(loc, resultType, lhs, rhs).getResult();
+    return ONNXAddOp::create(rewriter, loc, resultType, lhs, rhs).getResult();
   case EltwiseOpKind::Sub:
-    return rewriter.create<ONNXSubOp>(loc, resultType, lhs, rhs).getResult();
+    return ONNXSubOp::create(rewriter, loc, resultType, lhs, rhs).getResult();
   case EltwiseOpKind::Mul:
-    return rewriter.create<ONNXMulOp>(loc, resultType, lhs, rhs).getResult();
+    return ONNXMulOp::create(rewriter, loc, resultType, lhs, rhs).getResult();
   case EltwiseOpKind::Div:
-    return rewriter.create<ONNXDivOp>(loc, resultType, lhs, rhs).getResult();
+    return ONNXDivOp::create(rewriter, loc, resultType, lhs, rhs).getResult();
   default:
     llvm_unreachable("Unknown elementwise op kind");
   }
@@ -243,10 +243,10 @@ public:
     auto shape0Const4D = createShapeConstant(rewriter, loc, shape0_4D);
     auto shape1Const4D = createShapeConstant(rewriter, loc, shape1_4D);
 
-    auto newReshape0 = rewriter.create<ONNXReshapeOp>(
-        loc, reshape0Type4D, reshape0.getData(), shape0Const4D);
-    auto newReshape1 = rewriter.create<ONNXReshapeOp>(
-        loc, reshape1Type4D, reshape1.getData(), shape1Const4D);
+    auto newReshape0 = ONNXReshapeOp::create(
+        rewriter, loc, reshape0Type4D, reshape0.getData(), shape0Const4D);
+    auto newReshape1 = ONNXReshapeOp::create(
+        rewriter, loc, reshape1Type4D, reshape1.getData(), shape1Const4D);
 
     // Create new 4D eltwise ops
     auto eltwise0Type4D = RankedTensorType::get(shape0_4D, eltwise0ElemTy);
@@ -260,23 +260,23 @@ public:
     SmallVector<int64_t, 4> concatShape4D = {
         shape0_4D[0], shape0_4D[1], shape0_4D[2], shape0_4D[3] + shape1_4D[3]};
     auto concatType4D = RankedTensorType::get(concatShape4D, concatElemTy);
-    auto newConcat = rewriter.create<ONNXConcatOp>(
-        loc, concatType4D, ValueRange{newEltwise0, newEltwise1}, /*axis=*/3);
+    auto newConcat = ONNXConcatOp::create(rewriter, loc, concatType4D,
+        ValueRange{newEltwise0, newEltwise1}, /*axis=*/3);
 
     // Create new 4D transpose with perm {0, 2, 3, 1}
     SmallVector<int64_t, 4> transposeShape4D = {
         concatShape4D[0], concatShape4D[2], concatShape4D[3], concatShape4D[1]};
     auto transposeType4D =
         RankedTensorType::get(transposeShape4D, transposeElemTy);
-    auto newTranspose = rewriter.create<ONNXTransposeOp>(loc, transposeType4D,
+    auto newTranspose = ONNXTransposeOp::create(rewriter, loc, transposeType4D,
         newConcat.getResult(), getI64ArrayAttr(ctx, {0, 2, 3, 1}));
 
     // Create final reshape back to original output shape
     auto outputType = cast<RankedTensorType>(reshapeOut.getResult().getType());
     auto outputShape = outputType.getShape();
     auto outputShapeConst = createShapeConstant(rewriter, loc, outputShape);
-    auto finalReshape = rewriter.create<ONNXReshapeOp>(
-        loc, outputType, newTranspose.getResult(), outputShapeConst);
+    auto finalReshape = ONNXReshapeOp::create(
+        rewriter, loc, outputType, newTranspose.getResult(), outputShapeConst);
 
     rewriter.replaceOp(reshapeOut, finalReshape.getResult());
     return success();
@@ -372,10 +372,10 @@ public:
     auto shape0Const4D = createShapeConstant(rewriter, loc, shape0_4D);
     auto shape1Const4D = createShapeConstant(rewriter, loc, shape1_4D);
 
-    auto newReshape0 = rewriter.create<ONNXReshapeOp>(
-        loc, reshape0Type4D, reshape0.getData(), shape0Const4D);
-    auto newReshape1 = rewriter.create<ONNXReshapeOp>(
-        loc, reshape1Type4D, reshape1.getData(), shape1Const4D);
+    auto newReshape0 = ONNXReshapeOp::create(
+        rewriter, loc, reshape0Type4D, reshape0.getData(), shape0Const4D);
+    auto newReshape1 = ONNXReshapeOp::create(
+        rewriter, loc, reshape1Type4D, reshape1.getData(), shape1Const4D);
 
     // Create new 4D eltwise ops
     auto eltwise0Type4D = RankedTensorType::get(shape0_4D, eltwise0ElemTy);
@@ -389,15 +389,15 @@ public:
     SmallVector<int64_t, 4> concatShape4D = {
         shape0_4D[0], shape0_4D[1], shape0_4D[2] + shape1_4D[2], shape0_4D[3]};
     auto concatType4D = RankedTensorType::get(concatShape4D, concatElemTy);
-    auto newConcat = rewriter.create<ONNXConcatOp>(
-        loc, concatType4D, ValueRange{newEltwise0, newEltwise1}, /*axis=*/2);
+    auto newConcat = ONNXConcatOp::create(rewriter, loc, concatType4D,
+        ValueRange{newEltwise0, newEltwise1}, /*axis=*/2);
 
     // Create final reshape back to original output shape
     auto outputType = cast<RankedTensorType>(reshapeOut.getResult().getType());
     auto outputShape = outputType.getShape();
     auto outputShapeConst = createShapeConstant(rewriter, loc, outputShape);
-    auto finalReshape = rewriter.create<ONNXReshapeOp>(
-        loc, outputType, newConcat.getResult(), outputShapeConst);
+    auto finalReshape = ONNXReshapeOp::create(
+        rewriter, loc, outputType, newConcat.getResult(), outputShapeConst);
 
     rewriter.replaceOp(reshapeOut, finalReshape.getResult());
     return success();
@@ -503,17 +503,17 @@ public:
     auto shape0Const4D = createShapeConstant(rewriter, loc, shape0_4D);
     auto shape1Const4D = createShapeConstant(rewriter, loc, shape1_4D);
 
-    auto newReshape0 = rewriter.create<ONNXReshapeOp>(
-        loc, reshape0Type4D, reshape0.getData(), shape0Const4D);
-    auto newReshape1 = rewriter.create<ONNXReshapeOp>(
-        loc, reshape1Type4D, reshape1.getData(), shape1Const4D);
+    auto newReshape0 = ONNXReshapeOp::create(
+        rewriter, loc, reshape0Type4D, reshape0.getData(), shape0Const4D);
+    auto newReshape1 = ONNXReshapeOp::create(
+        rewriter, loc, reshape1Type4D, reshape1.getData(), shape1Const4D);
 
     // Create new 4D transpose with perm {0, 2, 3, 1}
     SmallVector<int64_t, 4> transposeShape4D = {
         shape0_4D[0], shape0_4D[2], shape0_4D[3], shape0_4D[1]};
     auto transposeType4D =
         RankedTensorType::get(transposeShape4D, transposeElemTy);
-    auto newTranspose = rewriter.create<ONNXTransposeOp>(loc, transposeType4D,
+    auto newTranspose = ONNXTransposeOp::create(rewriter, loc, transposeType4D,
         newReshape0.getResult(), getI64ArrayAttr(ctx, {0, 2, 3, 1}));
 
     // Create new 4D eltwise with computed broadcasted shape
@@ -537,8 +537,8 @@ public:
     auto outputType = cast<RankedTensorType>(reshapeOut.getResult().getType());
     auto outputShape = outputType.getShape();
     auto outputShapeConst = createShapeConstant(rewriter, loc, outputShape);
-    auto finalReshape = rewriter.create<ONNXReshapeOp>(
-        loc, outputType, newEltwise, outputShapeConst);
+    auto finalReshape = ONNXReshapeOp::create(
+        rewriter, loc, outputType, newEltwise, outputShapeConst);
 
     rewriter.replaceOp(reshapeOut, finalReshape.getResult());
     return success();

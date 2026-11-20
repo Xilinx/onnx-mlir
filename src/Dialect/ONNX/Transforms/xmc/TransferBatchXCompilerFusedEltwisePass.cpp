@@ -120,7 +120,7 @@ struct TransferBatchXCompilerFusedEltwisePattern
       auto reshapedElemTy = inTy.getElementType();
       auto reshapedTy = RankedTensorType::get(newShape, reshapedElemTy);
       Value shapeConst = onnxBuilder.constantInt64(newShape);
-      return rewriter.create<ONNXReshapeOp>(loc, reshapedTy, v, shapeConst)
+      return ONNXReshapeOp::create(rewriter, loc, reshapedTy, v, shapeConst)
           .getResult();
     };
 
@@ -129,7 +129,7 @@ struct TransferBatchXCompilerFusedEltwisePattern
     if (hasB)
       newB = reshapeVal(bVal, innerBShape, bTy);
     else
-      newB = rewriter.create<ONNXNoneOp>(loc).getResult();
+      newB = ONNXNoneOp::create(rewriter, loc).getResult();
 
     Type innerResultElemTy = outTy.getElementType();
     auto innerResultTy =
@@ -148,9 +148,8 @@ struct TransferBatchXCompilerFusedEltwisePattern
     SmallVector<int64_t, 4> postShape(
         outTy.getShape().begin(), outTy.getShape().end());
     Value postShapeConst = onnxBuilder.constantInt64(postShape);
-    Value postReshape = rewriter
-                            .create<ONNXReshapeOp>(loc, outTy,
-                                innerFused.getResult(), postShapeConst)
+    Value postReshape = ONNXReshapeOp::create(
+        rewriter, loc, outTy, innerFused.getResult(), postShapeConst)
                             .getResult();
 
     rewriter.replaceOp(fusedOp, postReshape);

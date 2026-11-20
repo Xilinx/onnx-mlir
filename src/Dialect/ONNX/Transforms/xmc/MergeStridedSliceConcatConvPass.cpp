@@ -393,7 +393,7 @@ struct MergeStridedSliceConcatConvNHWC : public OpRewritePattern<ONNXConvOp> {
     // Build the operation manually to specify quantized result type
     auto newWeightsResultType =
         RankedTensorType::get(newWeightsShape, weightsElementType);
-    auto newWeightsOp = rewriter.create<ONNXConstantOp>(weightsOp.getLoc(),
+    auto newWeightsOp = ONNXConstantOp::create(rewriter, weightsOp.getLoc(),
         newWeightsResultType, /*sparse_value=*/Attribute(),
         /*value=*/newWeightsAttr,
         /*value_float=*/FloatAttr(), /*value_floats=*/ArrayAttr(),
@@ -432,7 +432,7 @@ struct MergeStridedSliceConcatConvNHWC : public OpRewritePattern<ONNXConvOp> {
     auto originalOutputType = convOp.getType();
 
     // Create new Conv with modified parameters
-    auto newConv = rewriter.create<ONNXConvOp>(convOp.getLoc(),
+    auto newConv = ONNXConvOp::create(rewriter, convOp.getLoc(),
         originalOutputType, // Preserve original output type
         commonInput,        // Use original input (before slices)
         newWeightsOp.getResult(), convOp.getB(), convOp.getAutoPadAttr(),
@@ -718,7 +718,7 @@ struct MergeStridedSliceConcatTransposeConv
     // Build the operation manually to specify quantized result type
     auto newWeightsResultType =
         RankedTensorType::get(newWeightsShape, weightsElementType);
-    auto newWeightsOp = rewriter.create<ONNXConstantOp>(weightsOp.getLoc(),
+    auto newWeightsOp = ONNXConstantOp::create(rewriter, weightsOp.getLoc(),
         newWeightsResultType, /*sparse_value=*/Attribute(),
         /*value=*/newWeightsAttr,
         /*value_float=*/FloatAttr(), /*value_floats=*/ArrayAttr(),
@@ -726,7 +726,7 @@ struct MergeStridedSliceConcatTransposeConv
         /*value_string=*/StringAttr(), /*value_strings=*/ArrayAttr());
 
     // Create new Transpose (keeping it, but moving it before conv)
-    auto newTranspose = rewriter.create<ONNXTransposeOp>(transposeOp.getLoc(),
+    auto newTranspose = ONNXTransposeOp::create(rewriter, transposeOp.getLoc(),
         transposeOp.getType(), commonInput, transposeOp.getPermAttr());
 
     // Adjust conv parameters
@@ -760,7 +760,7 @@ struct MergeStridedSliceConcatTransposeConv
     auto originalOutputType = convOp.getType();
 
     // Create new Conv with modified parameters
-    auto newConv = rewriter.create<ONNXConvOp>(convOp.getLoc(),
+    auto newConv = ONNXConvOp::create(rewriter, convOp.getLoc(),
         originalOutputType, newTranspose.getResult(), newWeightsOp.getResult(),
         convOp.getB(), convOp.getAutoPadAttr(),
         rewriter.getI64ArrayAttr(newDilations), convOp.getGroupAttr(),
@@ -1031,7 +1031,7 @@ struct MergeStridedSliceConcatConvPureNCHW
     // Build the operation manually to specify quantized result type
     auto newWeightsResultType =
         RankedTensorType::get(newWeightsShape, weightsElementType);
-    auto newWeightsOp = rewriter.create<ONNXConstantOp>(weightsOp.getLoc(),
+    auto newWeightsOp = ONNXConstantOp::create(rewriter, weightsOp.getLoc(),
         newWeightsResultType, /*sparse_value=*/Attribute(),
         /*value=*/newWeightsAttr,
         /*value_float=*/FloatAttr(), /*value_floats=*/ArrayAttr(),
@@ -1070,7 +1070,7 @@ struct MergeStridedSliceConcatConvPureNCHW
     auto originalOutputType = convOp.getType();
 
     // Create new Conv with modified parameters
-    auto newConv = rewriter.create<ONNXConvOp>(convOp.getLoc(),
+    auto newConv = ONNXConvOp::create(rewriter, convOp.getLoc(),
         originalOutputType, commonInput, // Use original input (before slices)
         newWeightsOp.getResult(), convOp.getB(), convOp.getAutoPadAttr(),
         rewriter.getI64ArrayAttr(newDilations), convOp.getGroupAttr(),

@@ -177,7 +177,7 @@ private:
     }
 
     Operation *terminal = bodyBuilder.clone(*op, mapping);
-    bodyBuilder.create<ONNXYieldOp>(op->getLoc(), terminal->getResult(0));
+    ONNXYieldOp::create(bodyBuilder, op->getLoc(), terminal->getResult(0));
     rewriter.eraseOp(oldYield);
     rewriter.modifyOpInPlace(extensible, [&]() {
       extensible.getResult(0).setType(op->getResult(0).getType());
@@ -225,8 +225,8 @@ private:
     DenseMap<Value, unsigned> captureIndices;
     for (auto [index, capture] : llvm::enumerate(captures))
       captureIndices.try_emplace(capture, index);
-    auto deferred = rewriter.create<ONNXDeferredFoldableOp>(
-        op->getLoc(), op->getResultTypes(), captures);
+    auto deferred = ONNXDeferredFoldableOp::create(
+        rewriter, op->getLoc(), op->getResultTypes(), captures);
     if (Attribute nodeName = op->getAttr("onnx_node_name"))
       deferred->setAttr("onnx_node_name", nodeName);
 
@@ -268,7 +268,7 @@ private:
     }
 
     Operation *terminal = bodyBuilder.clone(*op, expressionMapping);
-    bodyBuilder.create<ONNXYieldOp>(op->getLoc(), terminal->getResults());
+    ONNXYieldOp::create(bodyBuilder, op->getLoc(), terminal->getResults());
     for (Operation &operation :
         llvm::make_early_inc_range(llvm::reverse(block->without_terminator())))
       if (operation.use_empty())

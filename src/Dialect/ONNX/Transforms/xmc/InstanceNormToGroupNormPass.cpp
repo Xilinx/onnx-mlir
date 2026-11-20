@@ -92,7 +92,7 @@ ONNXConstantOp createExpandedConstant(PatternRewriter &rewriter, Location loc,
   }
 
   // Create new constant op with expanded data
-  return rewriter.create<ONNXConstantOp>(loc, resultType,
+  return ONNXConstantOp::create(rewriter, loc, resultType,
       /*sparse_value=*/Attribute(),
       /*value=*/newAttr,
       /*value_float=*/FloatAttr(),
@@ -211,7 +211,7 @@ struct MergeReshapeInstanceNormPattern
         rewriter.getIntegerType(64, /*isSigned=*/true), numGroups);
 
     // Create GroupNorm op
-    auto groupNormOp = rewriter.create<ONNXGroupNormalizationOp>(
+    auto groupNormOp = ONNXGroupNormalizationOp::create(rewriter,
         bottomReshape.getLoc(), resultType, originalInput, newScale, newBias,
         epsilonAttr, numGroupsAttr);
 

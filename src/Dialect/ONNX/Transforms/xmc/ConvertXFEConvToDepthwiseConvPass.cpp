@@ -249,7 +249,7 @@ struct ConvertXFEConvToDepthwiseConvPattern
 
     // Create new constant with transposed data
     auto newWConst =
-        rewriter.create<ONNXConstantOp>(loc, Attribute(), transposedDense);
+        ONNXConstantOp::create(rewriter, loc, Attribute(), transposedDense);
 
     // Remap per-axis quantization dimension through the transpose perm,
     // then set the new IHWO shape with the (possibly remapped) element type.
@@ -266,7 +266,7 @@ struct ConvertXFEConvToDepthwiseConvPattern
     // Create the DepthwiseConv operation with IHWO weights (attr order per
     // XCOMPILEROps.td: activation, auto_pad, dilations, kernel_shape,
     // leakyrelu_alpha, pads, prelu_in, prelu_shift, strides)
-    auto depthwiseConv = rewriter.create<XCOMPILERDepthwiseConvOp>(loc,
+    auto depthwiseConv = XCOMPILERDepthwiseConvOp::create(rewriter, loc,
         convOp.getResult().getType(), // Output type
         X,                            // Input
         newWConst,                    // Weights (IHWO, data transposed)

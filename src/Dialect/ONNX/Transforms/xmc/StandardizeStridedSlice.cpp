@@ -75,7 +75,7 @@ Value createConstantTensor(PatternRewriter &rewriter, Location loc,
   auto tensorType =
       RankedTensorType::get({static_cast<int64_t>(values.size())}, elementType);
   auto denseAttr = DenseElementsAttr::get(tensorType, values);
-  return rewriter.create<mlir::ONNXConstantOp>(loc, tensorType,
+  return mlir::ONNXConstantOp::create(rewriter, loc, tensorType,
       mlir::ValueRange{},
       mlir::ArrayRef<mlir::NamedAttribute>{
           rewriter.getNamedAttr("value", denseAttr)});
@@ -194,7 +194,7 @@ struct StandardizeSlicePattern : public OpRewritePattern<mlir::ONNXSliceOp> {
     Value newAxes = createConstantTensor(rewriter, loc, allAxes, int64Type);
 
     // Create standardized Slice operation
-    auto newSliceOp = rewriter.create<ONNXSliceOp>(loc, sliceOp.getType(),
+    auto newSliceOp = ONNXSliceOp::create(rewriter, loc, sliceOp.getType(),
         sliceOp.getData(), newStarts, newEnds, newAxes, newSteps);
 
     rewriter.replaceOp(sliceOp, newSliceOp.getOutput());
@@ -282,8 +282,8 @@ struct ConvertGatherToSlicePattern
         RankedTensorType::get(sliceShape, inputType.getElementType());
 
     // Create Slice operation with the correct rank-preserving output type.
-    auto sliceOp = rewriter.create<ONNXSliceOp>(
-        loc, sliceOutputType, gatherOp.getData(), starts, ends, axes, steps);
+    auto sliceOp = ONNXSliceOp::create(rewriter, loc, sliceOutputType,
+        gatherOp.getData(), starts, ends, axes, steps);
 
     // If gather squeezed dimensions (scalar index), add a reshape to match
     // the original gather output shape.
@@ -295,12 +295,12 @@ struct ConvertGatherToSlicePattern
           rewriter.getI64Type());
       auto shapeAttr =
           DenseElementsAttr::get(shapeType, gatherOutputType.getShape());
-      auto shapeConst = rewriter.create<mlir::ONNXConstantOp>(loc, shapeType,
+      auto shapeConst = mlir::ONNXConstantOp::create(rewriter, loc, shapeType,
           mlir::ValueRange{},
           mlir::ArrayRef<mlir::NamedAttribute>{
               rewriter.getNamedAttr("value", shapeAttr)});
 
-      auto reshapeOp = rewriter.create<ONNXReshapeOp>(loc, gatherOutputType,
+      auto reshapeOp = ONNXReshapeOp::create(rewriter, loc, gatherOutputType,
           sliceOp.getResult(), shapeConst,
           /*allowzero=*/0);
       rewriter.replaceOp(gatherOp, reshapeOp.getResult());

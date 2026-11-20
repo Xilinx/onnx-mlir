@@ -193,8 +193,8 @@ struct FuseQuantizedClipCastPattern : public OpRewritePattern<ONNXCastOp> {
       return rewriter.notifyMatchFailure(
           castOp, "no constant clip bounds to materialize");
 
-    Value noneB = rewriter.create<ONNXNoneOp>(castOp.getLoc()).getResult();
-    auto fusedOp = rewriter.create<XCOMPILERFusedEltwiseOp>(castOp.getLoc(),
+    Value noneB = ONNXNoneOp::create(rewriter, castOp.getLoc()).getResult();
+    auto fusedOp = XCOMPILERFusedEltwiseOp::create(rewriter, castOp.getLoc(),
         fusedResultTy, clipOp.getInput(), noneB,
         /*approximate=*/StringAttr(),
         /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),

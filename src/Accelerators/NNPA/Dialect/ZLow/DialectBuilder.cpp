@@ -28,13 +28,13 @@ namespace onnx_mlir {
 
 void ZLowBuilder::stick(
     Value x, Value out, StringAttr layout, IntegerAttr noSaturation) const {
-  b().create<zlow::ZLowStickOp>(loc(), x, out, layout, noSaturation);
+  zlow::ZLowStickOp::create(b(), loc(), x, out, layout, noSaturation);
 }
 
 void ZLowBuilder::quantizedStick(Value x, Value recScale, Value offset,
     Value out, StringAttr layout, StringAttr qType) const {
-  b().create<zlow::ZLowQuantizedStickOp>(
-      loc(), x, recScale, offset, out, layout, qType);
+  zlow::ZLowQuantizedStickOp::create(
+      b(), loc(), x, recScale, offset, out, layout, qType);
 }
 
 void ZLowBuilder::quantizedMatMul(Value x, Value xRecScale, Value xOffset,
@@ -44,7 +44,7 @@ void ZLowBuilder::quantizedMatMul(Value x, Value xRecScale, Value xOffset,
     StringAttr outQType, IntegerAttr isBcast, IntegerAttr isStacked,
     IntegerAttr preComputedBias, IntegerAttr disableClipping,
     IntegerAttr dequantizeOutput) const {
-  b().create<zlow::ZLowQuantizedMatMulOp>(loc(), x, xRecScale, xOffset, y,
+  zlow::ZLowQuantizedMatMulOp::create(b(), loc(), x, xRecScale, xOffset, y,
       yRecScale, yOffset, bias, biasRecScale, biasOffset, workArea, shape, out,
       outRecScale, outOffset, xQType, yQType, biasQType, outQType, isBcast,
       isStacked, preComputedBias, disableClipping, dequantizeOutput);

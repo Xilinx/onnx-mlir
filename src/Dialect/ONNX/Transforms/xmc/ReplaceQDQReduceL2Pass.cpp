@@ -136,7 +136,7 @@ struct ReplaceQDQReduceL2Pattern : public OpRewritePattern<ONNXSqrtOp> {
     LLVM_DEBUG(llvm::dbgs() << "replace-qdq-reduce-l2: matched L2-norm at "
                             << sqrtOp.getLoc() << "\n");
 
-    Value reduceL2 = rewriter.create<ONNXReduceL2Op>(sqrtOp.getLoc(),
+    Value reduceL2 = ONNXReduceL2Op::create(rewriter, sqrtOp.getLoc(),
         sqrtOp.getResult().getType(), *squareIn, reduceSumOp.getAxes(),
         reduceSumOp.getKeepdimsAttr(), reduceSumOp.getNoopWithEmptyAxesAttr());
 

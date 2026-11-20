@@ -150,8 +150,8 @@ struct InsertRequantizeBetweenQDQPattern
     Value dqResult = dqOp.getY();
     Type f32TensorType = dqResult.getType();
 
-    auto requantize = rewriter.create<XCOMPILERRequantizeOp>(
-        qOp.getLoc(), f32TensorType, dqResult, aScale, aZp, yScale, yZp);
+    auto requantize = XCOMPILERRequantizeOp::create(rewriter, qOp.getLoc(),
+        f32TensorType, dqResult, aScale, aZp, yScale, yZp);
 
     // ResultNames is not populated for RequantizeOp here.
     // In QuantTypes pass, it will get the ResultName of QuantizeLinear

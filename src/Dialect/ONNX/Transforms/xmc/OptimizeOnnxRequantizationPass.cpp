@@ -165,7 +165,7 @@ struct OnnxQDQRequantizationOptimizationPattern
     if (!dqOutputType)
       return rewriter.notifyMatchFailure(op, "DQ output not ranked tensor");
 
-    auto newDQOp = rewriter.create<::mlir::ONNXDequantizeLinearOp>(
+    auto newDQOp = ::mlir::ONNXDequantizeLinearOp::create(rewriter,
         dqOpTyped->getLoc(), ::mlir::SmallVector<::mlir::Type>{dqOutputType},
         ::mlir::SmallVector<::mlir::Value>{
             dqInput, qOutputScaleVal, qOutputZpVal},
@@ -174,7 +174,7 @@ struct OnnxQDQRequantizationOptimizationPattern
     // Recreate the data-movement op with new DQ output
     ::mlir::SmallVector<::mlir::Value> newOpOperands(op->getOperands());
     newOpOperands[0] = newDQOp.getResult();
-    auto newOp = rewriter.create<OpTy>(op->getLoc(),
+    auto newOp = OpTy::create(rewriter, op->getLoc(),
         ::mlir::SmallVector<::mlir::Type>{outputType}, newOpOperands,
         op->getAttrs());
 
@@ -186,7 +186,7 @@ struct OnnxQDQRequantizationOptimizationPattern
           op, "Q(output) result not ranked tensor");
 
     auto newQOutputOp =
-        rewriter.create<::mlir::ONNXQuantizeLinearOp>(qOutputOpTyped->getLoc(),
+        ::mlir::ONNXQuantizeLinearOp::create(rewriter, qOutputOpTyped->getLoc(),
             ::mlir::SmallVector<::mlir::Type>{qOutputResultType},
             ::mlir::SmallVector<::mlir::Value>{
                 newOp.getResult(), qOutputScaleVal, qOutputZpVal},
@@ -286,7 +286,7 @@ OnnxQDQRequantizationOptimizationPattern<::mlir::ONNXConcatOp>::matchAndRewrite(
     }
 
     // Recreate only DQ with Q(output)'s scale/zp; Q(parent) stays unchanged
-    auto newDQOp = rewriter.create<::mlir::ONNXDequantizeLinearOp>(
+    auto newDQOp = ::mlir::ONNXDequantizeLinearOp::create(rewriter,
         dqOpTyped->getLoc(), ::mlir::SmallVector<::mlir::Type>{dqOutputType},
         ::mlir::SmallVector<::mlir::Value>{
             dqInput, qOutputScaleVal, qOutputZpVal},
@@ -303,8 +303,8 @@ OnnxQDQRequantizationOptimizationPattern<::mlir::ONNXConcatOp>::matchAndRewrite(
   // Recreate Concat with updated inputs
   ::mlir::SmallVector<::mlir::Type> newResultTypes = {outputType};
 
-  auto newOp = rewriter.create<::mlir::ONNXConcatOp>(
-      op->getLoc(), newResultTypes, newInputs, op->getAttrs());
+  auto newOp = ::mlir::ONNXConcatOp::create(
+      rewriter, op->getLoc(), newResultTypes, newInputs, op->getAttrs());
 
   // Update Q(output) to use the new Concat result
   // Keep Q(output)'s original output type (regular tensor, not quantized)
@@ -324,7 +324,7 @@ OnnxQDQRequantizationOptimizationPattern<::mlir::ONNXConcatOp>::matchAndRewrite(
   ::mlir::SmallVector<::mlir::Value> newQOutputOperands = {
       newOp.getResult(), qOutputScaleVal, qOutputZpVal};
 
-  auto newQOutputOp = rewriter.create<::mlir::ONNXQuantizeLinearOp>(
+  auto newQOutputOp = ::mlir::ONNXQuantizeLinearOp::create(rewriter,
       qOutputOpTyped->getLoc(), newQOutputResultTypes, newQOutputOperands,
       qOutputOpTyped->getAttrs());
 

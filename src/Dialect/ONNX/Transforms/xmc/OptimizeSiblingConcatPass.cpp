@@ -25,7 +25,7 @@ static Value createI64ConstTensor(PatternRewriter &rewriter, Location loc,
   auto tensorType = RankedTensorType::get(
       {static_cast<int64_t>(values.size())}, rewriter.getI64Type());
   auto denseAttr = DenseElementsAttr::get(tensorType, values);
-  return rewriter.create<ONNXConstantOp>(loc, tensorType,
+  return ONNXConstantOp::create(rewriter, loc, tensorType,
       /*sparse_value=*/Attribute(),
       /*value=*/denseAttr, /*value_float=*/FloatAttr(),
       /*value_floats=*/ArrayAttr(), /*value_int=*/IntegerAttr(),
@@ -176,7 +176,7 @@ struct OptimizeSiblingConcatPattern : public OpRewritePattern<ONNXConcatOp> {
         IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed);
     auto axisAttr = IntegerAttr::get(si64Type, axis);
 
-    auto swappedConcat = rewriter.create<ONNXConcatOp>(loc, targetOutTy,
+    auto swappedConcat = ONNXConcatOp::create(rewriter, loc, targetOutTy,
         ValueRange{targetInputs[1], targetInputs[0]}, axisAttr);
 
     SmallVector<int64_t> axesVec{0, 1, 2, 3};
@@ -199,12 +199,12 @@ struct OptimizeSiblingConcatPattern : public OpRewritePattern<ONNXConcatOp> {
     Value starts2 = createI64ConstTensor(rewriter, loc, begin2);
     Value ends2 = createI64ConstTensor(rewriter, loc, end2);
 
-    auto slice1 = rewriter.create<ONNXSliceOp>(
-        loc, in0Ty, swappedConcat.getResult(), starts1, ends1, axes, steps);
-    auto slice2 = rewriter.create<ONNXSliceOp>(
-        loc, in1Ty, swappedConcat.getResult(), starts2, ends2, axes, steps);
+    auto slice1 = ONNXSliceOp::create(rewriter, loc, in0Ty,
+        swappedConcat.getResult(), starts1, ends1, axes, steps);
+    auto slice2 = ONNXSliceOp::create(rewriter, loc, in1Ty,
+        swappedConcat.getResult(), starts2, ends2, axes, steps);
 
-    auto reconcat = rewriter.create<ONNXConcatOp>(loc, targetOutTy,
+    auto reconcat = ONNXConcatOp::create(rewriter, loc, targetOutTy,
         ValueRange{slice1.getOutput(), slice2.getOutput()}, axisAttr);
 
     rewriter.replaceOp(targetConcat, reconcat.getResult());

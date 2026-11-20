@@ -75,12 +75,12 @@ struct InputDictatesRequantizePattern : public OpRewritePattern<OpType> {
     auto resultTy = cast<RankedTensorType>(result.getType());
     auto retypedTy = RankedTensorType::get(resultTy.getShape(), inQ);
 
-    auto newDataFlow = rewriter.create<OpType>(
-        op.getLoc(), TypeRange{retypedTy}, op->getOperands(), op->getAttrs());
+    auto newDataFlow = OpType::create(rewriter, op.getLoc(),
+        TypeRange{retypedTy}, op->getOperands(), op->getAttrs());
     newDataFlow->removeAttr("ResultNames");
 
-    auto requant = rewriter.create<XCOMPILERRequantizeOp>(op.getLoc(), resultTy,
-        newDataFlow->getResult(0), buildScaleAttr(rewriter, inQ),
+    auto requant = XCOMPILERRequantizeOp::create(rewriter, op.getLoc(),
+        resultTy, newDataFlow->getResult(0), buildScaleAttr(rewriter, inQ),
         buildZeroPointAttr(rewriter, inQ), buildScaleAttr(rewriter, outQ),
         buildZeroPointAttr(rewriter, outQ));
 
@@ -115,7 +115,7 @@ struct ConcatRequantizePattern : public OpRewritePattern<ONNXConcatOp> {
 
       auto opType = cast<RankedTensorType>(operand.getType());
       auto newOperandTy = RankedTensorType::get(opType.getShape(), outQ);
-      auto requant = rewriter.create<XCOMPILERRequantizeOp>(op.getLoc(),
+      auto requant = XCOMPILERRequantizeOp::create(rewriter, op.getLoc(),
           newOperandTy, operand, buildScaleAttr(rewriter, inQ),
           buildZeroPointAttr(rewriter, inQ), buildScaleAttr(rewriter, outQ),
           buildZeroPointAttr(rewriter, outQ));

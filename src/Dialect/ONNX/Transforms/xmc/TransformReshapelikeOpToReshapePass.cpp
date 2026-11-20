@@ -134,12 +134,12 @@ static void replaceWithReshape(Operation *op, Value input, Type outputType,
   auto shapeType = RankedTensorType::get(
       {static_cast<int64_t>(outputShape.size())}, rewriter.getI64Type());
 
-  auto shapeConstantOp = rewriter.create<ONNXConstantOp>(loc, shapeType,
+  auto shapeConstantOp = ONNXConstantOp::create(rewriter, loc, shapeType,
       Attribute(), shapeAttr, FloatAttr(), ArrayAttr(), IntegerAttr(),
       ArrayAttr(), StringAttr(), ArrayAttr());
 
-  auto reshapeOp = rewriter.create<ONNXReshapeOp>(
-      loc, outputType, input, shapeConstantOp.getResult());
+  auto reshapeOp = ONNXReshapeOp::create(
+      rewriter, loc, outputType, input, shapeConstantOp.getResult());
 
   rewriter.replaceOp(op, reshapeOp.getResult());
 }

@@ -114,9 +114,9 @@ public:
           create.tosa.getConst(pads, {static_cast<int64_t>(pads.size())});
       auto constTosaTensor =
           create.tosa.getSplattedConst(0.0, inTy.getElementType(), 0);
-      val = rewriter.create<ONNXPadOp>(loc,
+      val = ONNXPadOp::create(rewriter, loc,
           mlir::RankedTensorType::get(paddedOutShape, inTy.getElementType()),
-          val, constPads, constTosaTensor, rewriter.create<ONNXNoneOp>(loc),
+          val, constPads, constTosaTensor, ONNXNoneOp::create(rewriter, loc),
           rewriter.getStringAttr("constant"));
     }
 

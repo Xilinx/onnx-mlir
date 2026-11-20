@@ -903,8 +903,8 @@ struct RecomposeHardSigmoidFromMulClipPattern
     auto alphaAttr = rewriter.getF32FloatAttr(alpha);
     auto betaAttr = rewriter.getF32FloatAttr(beta);
     auto loc = mlir::FusedLoc::get(rewriter.getContext(), fusedLocs);
-    Value hardSigmoidOp = rewriter.create<ONNXHardSigmoidOp>(
-        loc, clipOp.getType(), x, alphaAttr, betaAttr);
+    Value hardSigmoidOp = ONNXHardSigmoidOp::create(
+        rewriter, loc, clipOp.getType(), x, alphaAttr, betaAttr);
     rewriter.replaceOp(clipOp, hardSigmoidOp);
     return success();
   }
@@ -1080,7 +1080,7 @@ struct RecomposeHardSigmoidFromReluPattern
 
     Location loc = mlir::FusedLoc::get(
         rewriter.getContext(), {mulOp.getLoc(), reluOp.getLoc()});
-    auto hsigOp = rewriter.create<ONNXHardSigmoidOp>(loc,
+    auto hsigOp = ONNXHardSigmoidOp::create(rewriter, loc,
         mulOp.getResult().getType(), xVal, rewriter.getF32FloatAttr(alpha),
         rewriter.getF32FloatAttr(beta));
 
@@ -1308,7 +1308,7 @@ struct RecomposeHardSigmoidFromClipMulPattern
     double beta = betaPrime * alphaPrime;
     Location loc = mlir::FusedLoc::get(
         rewriter.getContext(), {mulOp.getLoc(), clipOp.getLoc()});
-    auto hsigOp = rewriter.create<ONNXHardSigmoidOp>(loc,
+    auto hsigOp = ONNXHardSigmoidOp::create(rewriter, loc,
         mulOp.getResult().getType(), xVal, rewriter.getF32FloatAttr(alpha),
         rewriter.getF32FloatAttr(beta));
 
@@ -1360,7 +1360,7 @@ struct RecomposeHardSwishFromMulPattern : public OpRewritePattern<ONNXMulOp> {
     auto loc = mlir::FusedLoc::get(
         rewriter.getContext(), {mulOp.getLoc(), hardSigmoidOp.getLoc()});
     Value hardSwishOp =
-        rewriter.create<ONNXHardSwishOp>(loc, mulOp.getType(), x);
+        ONNXHardSwishOp::create(rewriter, loc, mulOp.getType(), x);
     rewriter.replaceOp(mulOp, hardSwishOp);
     return success();
   }
@@ -1934,7 +1934,7 @@ LogicalResult replaceWithReduceL2(
   locations.append(match->innerLocs);
   const auto loc = mlir::FusedLoc::get(rewriter.getContext(), locations);
   const Value reduceL2 =
-      rewriter.create<ONNXReduceL2Op>(loc, rootOp->getResult(0).getType(),
+      ONNXReduceL2Op::create(rewriter, loc, rootOp->getResult(0).getType(),
           match->input, match->axes, match->keepdims, match->noopWithEmptyAxes);
   rewriter.replaceOp(rootOp, reduceL2);
   return success();
@@ -2162,7 +2162,7 @@ struct CombineParallelConv2DPattern : public OpRewritePattern<ONNXConvOp> {
     auto newOutputType = RankedTensorType::get(newOutputShape, elementType);
 
     auto newConv =
-        rewriter.create<ONNXConvOp>(loc, newOutputType, input, newWeight,
+        ONNXConvOp::create(rewriter, loc, newOutputType, input, newWeight,
             newBias, convOp1.getAutoPadAttr(), convOp1.getDilationsAttr(),
             convOp1.getGroupAttr(), convOp1.getKernelShapeAttr(),
             convOp1.getPadsAttr(), convOp1.getStridesAttr());
@@ -2593,7 +2593,7 @@ struct RecomposeRotaryEmbeddingPattern
     Value sinVal = create.onnx.constant(sinHalf);
     Value none = create.onnx.none();
 
-    auto ropeOp = rewriter.create<ONNXRotaryEmbeddingOp>(loc,
+    auto ropeOp = ONNXRotaryEmbeddingOp::create(rewriter, loc,
         TypeRange{ropeResultType}, ValueRange{ropeInput, cosVal, sinVal, none});
     auto si64 = rewriter.getIntegerType(64, /*isSigned=*/true);
     ropeOp.setInterleavedAttr(IntegerAttr::get(si64, 0));

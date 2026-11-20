@@ -67,7 +67,7 @@ XFECastOp createXFECastFromONNXCast(OpBuilder &builder, ONNXCastOp castOp,
       floatType && floatType.getWidth() == 8)
     saturationMode = castOp.getSaturate() != 0 ? "finite" : "none";
 
-  return builder.create<XFECastOp>(castOp.getLoc(), castOp.getType(), input,
+  return XFECastOp::create(builder, castOp.getLoc(), castOp.getType(), input,
       "propagate", roundMode, saturationMode, outputElementType);
 }
 

@@ -594,8 +594,8 @@ static ONNXDeferredFoldableOp createDeferredPrefixOp(
   SmallVector<Type> types;
   for (Value value : plan.prefixYieldValues)
     types.push_back(value.getType());
-  auto prefix = rewriter.create<ONNXDeferredFoldableOp>(
-      deferred.getLoc(), types, deferred.getCaptures());
+  auto prefix = ONNXDeferredFoldableOp::create(
+      rewriter, deferred.getLoc(), types, deferred.getCaptures());
   // Names refer to the original results and must be remapped separately.
   for (NamedAttribute attr : deferred->getAttrs())
     if (attr.getName() != "onnx_node_name" && attr.getName() != "ResultNames")
@@ -653,7 +653,7 @@ static void cloneDeferredPrefixBody(const DeferredPeelPlan &plan,
   SmallVector<Value> results;
   for (Value value : plan.prefixYieldValues)
     results.push_back(mapping.lookup(value));
-  builder.create<ONNXYieldOp>(deferred.getLoc(), results);
+  ONNXYieldOp::create(builder, deferred.getLoc(), results);
 }
 
 static ONNXDeferredFoldableOp buildDeferredPrefix(
@@ -1154,7 +1154,7 @@ SmallVector<int64_t> offsetToIndex(
 
 ONNXConstantOp createConstantOp(
     PatternRewriter &rewriter, Location loc, ArrayAttr values) {
-  return rewriter.create<ONNXConstantOp>(loc, Attribute(),
+  return ONNXConstantOp::create(rewriter, loc, Attribute(),
       DenseElementsAttr::get(
           RankedTensorType::get(
               {static_cast<long>(values.size())}, rewriter.getI64Type()),
@@ -1336,7 +1336,7 @@ DenseElementsAttr createDenseArrayAttr(
 
 ONNXCastOp castTo(
     PatternRewriter &rewriter, Value val, Type newElementTy, int64_t saturate) {
-  return rewriter.create<ONNXCastOp>(val.getLoc(),
+  return ONNXCastOp::create(rewriter, val.getLoc(),
       mlir::cast<RankedTensorType>(val.getType()).clone(newElementTy), val,
       rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), saturate),
       TypeAttr::get(newElementTy));

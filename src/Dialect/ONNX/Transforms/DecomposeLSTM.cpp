@@ -236,24 +236,24 @@ private:
       Value b =
           scalarFloat(onnx, rewriter, type.getElementType(), activation.beta);
       Value scaled = onnx.mul(type, input, b);
-      Value tanh = rewriter.create<ONNXTanhOp>(loc, type, scaled);
+      Value tanh = ONNXTanhOp::create(rewriter, loc, type, scaled);
       return onnx.mul(type, tanh, a);
     }
     if (activation.name == "Relu")
-      return rewriter.create<ONNXReluOp>(loc, type, input);
+      return ONNXReluOp::create(rewriter, loc, type, input);
     if (activation.name == "Tanh")
-      return rewriter.create<ONNXTanhOp>(loc, type, input);
+      return ONNXTanhOp::create(rewriter, loc, type, input);
     if (activation.name == "Sigmoid")
-      return rewriter.create<ONNXSigmoidOp>(loc, type, input);
+      return ONNXSigmoidOp::create(rewriter, loc, type, input);
     if (activation.name == "LeakyRelu") {
       SmallVector<NamedAttribute> attrs{rewriter.getNamedAttr(
           "alpha", rewriter.getF32FloatAttr(activation.alpha))};
-      return rewriter.create<ONNXLeakyReluOp>(loc, type, input, attrs);
+      return ONNXLeakyReluOp::create(rewriter, loc, type, input, attrs);
     }
     if (activation.name == "ThresholdedRelu") {
       SmallVector<NamedAttribute> attrs{rewriter.getNamedAttr(
           "alpha", rewriter.getF32FloatAttr(activation.alpha))};
-      return rewriter.create<ONNXThresholdedReluOp>(loc, type, input, attrs);
+      return ONNXThresholdedReluOp::create(rewriter, loc, type, input, attrs);
     }
     if (activation.name == "HardSigmoid") {
       SmallVector<NamedAttribute> attrs{
@@ -261,12 +261,12 @@ private:
               "alpha", rewriter.getF32FloatAttr(activation.alpha)),
           rewriter.getNamedAttr(
               "beta", rewriter.getF32FloatAttr(activation.beta))};
-      return rewriter.create<ONNXHardSigmoidOp>(loc, type, input, attrs);
+      return ONNXHardSigmoidOp::create(rewriter, loc, type, input, attrs);
     }
     if (activation.name == "Elu") {
       SmallVector<NamedAttribute> attrs{rewriter.getNamedAttr(
           "alpha", rewriter.getF32FloatAttr(activation.alpha))};
-      return rewriter.create<ONNXEluOp>(loc, type, input, attrs);
+      return ONNXEluOp::create(rewriter, loc, type, input, attrs);
     }
     if (activation.name == "Selu") {
       SmallVector<NamedAttribute> attrs{
@@ -274,12 +274,12 @@ private:
               "alpha", rewriter.getF32FloatAttr(activation.alpha)),
           rewriter.getNamedAttr(
               "gamma", rewriter.getF32FloatAttr(activation.beta))};
-      return rewriter.create<ONNXSeluOp>(loc, type, input, attrs);
+      return ONNXSeluOp::create(rewriter, loc, type, input, attrs);
     }
     if (activation.name == "Softsign")
-      return rewriter.create<ONNXSoftsignOp>(loc, type, input);
+      return ONNXSoftsignOp::create(rewriter, loc, type, input);
     if (activation.name == "Softplus")
-      return rewriter.create<ONNXSoftplusOp>(loc, type, input);
+      return ONNXSoftplusOp::create(rewriter, loc, type, input);
     return input;
   }
 
@@ -324,7 +324,7 @@ private:
     const auto timestepType =
         RankedTensorType::get({batch, 4 * hiddenSize}, elementType);
     auto gather = [&](Value data, Value index) -> Value {
-      return rewriter.create<ONNXGatherOp>(loc, timestepType, data, index,
+      return ONNXGatherOp::create(rewriter, loc, timestepType, data, index,
           rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), 0));
     };
     if (!reverse)
@@ -354,7 +354,7 @@ private:
         onnx.constantInt64(expandedIndexType.getShape()));
     const auto selectedType =
         RankedTensorType::get({batch, 1, 4 * hiddenSize}, elementType);
-    Value selected = rewriter.create<ONNXGatherElementsOp>(loc, selectedType,
+    Value selected = ONNXGatherElementsOp::create(rewriter, loc, selectedType,
         projectedBatchMajor, expandedIndex,
         rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), 1));
     return onnx.squeeze(timestepType, selected, onnx.constantInt64({1}));
@@ -427,7 +427,7 @@ private:
     if (hasSequenceLens) {
       const auto activeMaskType =
           RankedTensorType::get({config.batch}, rewriter.getI1Type());
-      Value activeMask = rewriter.create<ONNXLessOp>(loc, activeMaskType,
+      Value activeMask = ONNXLessOp::create(rewriter, loc, activeMaskType,
           scalarI32(onnx, rewriter, 0), config.sequenceLens);
       const auto activeMask2DType =
           RankedTensorType::get({config.batch, 1}, rewriter.getI1Type());
@@ -495,8 +495,8 @@ private:
 
       const auto maskType =
           RankedTensorType::get({config.batch}, rewriter.getI1Type());
-      Value mask = rewriter.create<ONNXLessOp>(
-          loc, maskType, castToI32(onnx, rewriter, iter), config.sequenceLens);
+      Value mask = ONNXLessOp::create(rewriter, loc, maskType,
+          castToI32(onnx, rewriter, iter), config.sequenceLens);
       const auto mask2DType =
           RankedTensorType::get({config.batch, 1}, rewriter.getI1Type());
       Value mask2D = onnx.unsqueeze(mask2DType, mask, onnx.constantInt64({1}));
@@ -543,7 +543,7 @@ private:
         {config.sequence, config.batch, config.hiddenSize}, config.elementType);
     Value loopH, loopC, loopScan;
     {
-      auto loop = rewriter.create<ONNXLoopOp>(loc,
+      auto loop = ONNXLoopOp::create(rewriter, loc,
           TypeRange{stateType, stateType, scanType},
           scalarI64(onnx, rewriter, config.sequence), onnx.none(),
           ValueRange{h0, c0});
@@ -560,8 +560,8 @@ private:
       const auto boolType = RankedTensorType::get({}, rewriter.getI1Type());
       Value trueValue = onnx.constant(
           DenseElementsAttr::get(boolType, rewriter.getBoolAttr(true)));
-      rewriter.create<ONNXYieldOp>(
-          loc, ValueRange{trueValue, state.h, state.c, state.y});
+      ONNXYieldOp::create(
+          rewriter, loc, ValueRange{trueValue, state.h, state.c, state.y});
       loopH = loop.getResult(0);
       loopC = loop.getResult(1);
       loopScan = loop.getResult(2);

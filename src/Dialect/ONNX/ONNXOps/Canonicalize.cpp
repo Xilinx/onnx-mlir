@@ -94,8 +94,8 @@ namespace onnx_mlir {
 // If 'A' is NoneType, return -B. Otherwise return A-B.
 Value subtractOrNeg(PatternRewriter &rewriter, Location loc, Value A, Value B) {
   if (mlir::isa<NoneType>(A.getType()))
-    return rewriter.create<ONNXNegOp>(loc, B);
-  return rewriter.create<ONNXSubOp>(loc, A, B);
+    return ONNXNegOp::create(rewriter, loc, B);
+  return ONNXSubOp::create(rewriter, loc, A, B);
 }
 
 // Create an ArrayAttr of IntegerAttr(s) of values in [N, M].
@@ -162,7 +162,7 @@ Value createReshapedConstantForWeightFusion(
     auto splatValue = denseAttr.getSplatValue<Attribute>();
     auto scalarAttr = DenseElementsAttr::get(scalarType, splatValue);
 
-    return rewriter.create<ONNXConstantOp>(constOpLoc, nullptr, scalarAttr);
+    return ONNXConstantOp::create(rewriter, constOpLoc, nullptr, scalarAttr);
   }
 
   // Case 3: Per-ouput-channel (C_out elements) - reshape to [C_out, 1, 1, ...]
@@ -175,16 +175,16 @@ Value createReshapedConstantForWeightFusion(
     targetShape.push_back(1);
 
   // Create shape constant
-  Value shapeConst = rewriter.create<ONNXConstantOp>(
-      constOpLoc, nullptr, rewriter.getI64TensorAttr(targetShape));
+  Value shapeConst = ONNXConstantOp::create(
+      rewriter, constOpLoc, nullptr, rewriter.getI64TensorAttr(targetShape));
 
   // Create result type for reshape
   auto elementType = constantType.getElementType();
   auto resultType = RankedTensorType::get(targetShape, elementType);
 
   // Create and return the reshape op
-  return rewriter.create<ONNXReshapeOp>(
-      constOpLoc, resultType, constant, shapeConst);
+  return ONNXReshapeOp::create(
+      rewriter, constOpLoc, resultType, constant, shapeConst);
 }
 
 // Whether `bias` is either NoneType or "effectively zero" for the purpose of
@@ -244,15 +244,15 @@ Value buildBroadcastBiasViaReshapeExpand(
   int64_t cOut = weightType.getShape()[0];
   auto shapeConstTy = RankedTensorType::get({1}, rewriter.getI64Type());
 
-  Value reshaped = rewriter.create<ONNXReshapeOp>(loc,
+  Value reshaped = ONNXReshapeOp::create(rewriter, loc,
       RankedTensorType::get({1}, fpType), addendDQ,
-      rewriter.create<ONNXConstantOp>(loc, nullptr,
+      ONNXConstantOp::create(rewriter, loc, nullptr,
           DenseElementsAttr::get(shapeConstTy, llvm::ArrayRef<int64_t>{1})),
       IntegerAttr());
 
-  return rewriter.create<ONNXExpandOp>(loc,
+  return ONNXExpandOp::create(rewriter, loc,
       RankedTensorType::get({cOut}, fpType), reshaped,
-      rewriter.create<ONNXConstantOp>(loc, nullptr,
+      ONNXConstantOp::create(rewriter, loc, nullptr,
           DenseElementsAttr::get(shapeConstTy, llvm::ArrayRef<int64_t>{cOut})));
 }
 
@@ -355,8 +355,8 @@ SmallVector<Value, 4> castVariadicInput(PatternRewriter &rewriter, Location loc,
   SmallVector<Value, 4> castInputs;
   for (Value inp : inputs) {
     ShapedType inpType = mlir::cast<ShapedType>(inp.getType());
-    ONNXCastOp castOp = rewriter.create<ONNXCastOp>(
-        loc, inpType.clone(to.getValue()), inp, saturate, to);
+    ONNXCastOp castOp = ONNXCastOp::create(
+        rewriter, loc, inpType.clone(to.getValue()), inp, saturate, to);
     castInputs.emplace_back(castOp.getResult());
   }
   return castInputs;
@@ -370,11 +370,11 @@ Value composeClipBound(PatternRewriter &rewriter, Location loc, Value inner,
     return lower ? outerMin : outerMax;
   Value bound = inner;
   if (!isNoneValue(outerMin))
-    bound = rewriter.create<ONNXMaxOp>(
-        loc, inner.getType(), ValueRange{bound, outerMin});
+    bound = ONNXMaxOp::create(
+        rewriter, loc, inner.getType(), ValueRange{bound, outerMin});
   if (!isNoneValue(outerMax))
-    bound = rewriter.create<ONNXMinOp>(
-        loc, inner.getType(), ValueRange{bound, outerMax});
+    bound = ONNXMinOp::create(
+        rewriter, loc, inner.getType(), ValueRange{bound, outerMax});
   return bound;
 }
 
@@ -889,7 +889,7 @@ public:
     reshapeInput = reshapeOp.getData();
     reshapeShape = reshapeOp.getShape();
     reshapeAZ = reshapeOp.getAllowzeroAttr();
-    Value x = rewriter.create<OP_TYPE>(loc, reshapeInput, rhs);
+    Value x = OP_TYPE::create(rewriter, loc, reshapeInput, rhs);
     Value res = create.onnx.reshape(outputType, x, reshapeShape, reshapeAZ);
 
     rewriter.replaceOp(op, res);
@@ -1036,10 +1036,10 @@ struct PropagateConstantScalingInAttentionLayerPattern
       // Update in place B and C of Gemm.
       rewriter.modifyOpInPlace(onnxGemmOp, [&] {
         rewriter.setInsertionPoint(onnxGemmOp);
-        onnxGemmOp.getBMutable().assign(rewriter.create<ONNXOp>(
-            onnxGemmOp.getLoc(), onnxGemmOp.getB().getType(), A, K));
+        onnxGemmOp.getBMutable().assign(ONNXOp::create(
+            rewriter, onnxGemmOp.getLoc(), onnxGemmOp.getB().getType(), A, K));
         if (!isNoneValue(onnxGemmOp.getC()))
-          onnxGemmOp.getCMutable().assign(rewriter.create<ONNXOp>(
+          onnxGemmOp.getCMutable().assign(ONNXOp::create(rewriter,
               onnxGemmOp.getLoc(), onnxGemmOp.getC().getType(), B, K));
       });
     } else {
@@ -1048,14 +1048,14 @@ struct PropagateConstantScalingInAttentionLayerPattern
       // Update in place MatMul and Add.
       rewriter.modifyOpInPlace(onnxSubMatOp, [&] {
         rewriter.setInsertionPoint(onnxSubMatOp);
-        onnxSubMatOp.getBMutable().assign(rewriter.create<ONNXOp>(
+        onnxSubMatOp.getBMutable().assign(ONNXOp::create(rewriter,
             onnxSubMatOp.getLoc(), onnxSubMatOp.getB().getType(), A, K));
       });
       rewriter.modifyOpInPlace(onnxAddOp, [&] {
         OnnxBuilder createONNX(rewriter, onnxAddOp.getLoc());
         rewriter.setInsertionPoint(onnxAddOp);
-        onnxAddOp.getBMutable().assign(rewriter.create<ONNXOp>(
-            onnxAddOp.getLoc(), onnxAddOp.getB().getType(), B, K));
+        onnxAddOp.getBMutable().assign(ONNXOp::create(
+            rewriter, onnxAddOp.getLoc(), onnxAddOp.getB().getType(), B, K));
       });
     }
 
@@ -2260,7 +2260,7 @@ public:
 
     MultiDialectBuilder<OnnxBuilder> create(rewriter, expandOp.getLoc());
     Value repeatsValue = create.onnx.constantInt64(repeats);
-    Value tile = rewriter.create<ONNXTileOp>(expandOp.getLoc(),
+    Value tile = ONNXTileOp::create(rewriter, expandOp.getLoc(),
         expandOp.getOutput().getType(), expandOp.getInput(), repeatsValue);
     rewriter.replaceOp(expandOp, tile);
     return success();
@@ -2737,7 +2737,7 @@ struct RecomposeConcatPattern : public OpRewritePattern<ONNXConcatOp> {
     if (merged) {
       // Create a new ONNXConcat op with the flattened inputs.
       auto newConcat =
-          rewriter.create<ONNXConcatOp>(rewriter.getFusedLoc(concatLocations),
+          ONNXConcatOp::create(rewriter, rewriter.getFusedLoc(concatLocations),
               concatOp.getResult().getType(), newInputs, axis);
       rewriter.replaceOp(concatOp, newConcat.getResult());
       return success();
@@ -2834,7 +2834,7 @@ Value walkBackThroughTransposes(
 Value buildSplatConstant(OpBuilder &b, Location loc, ArrayRef<int64_t> shape,
     FloatType elemType, APFloat value) {
   auto tensorTy = RankedTensorType::get(shape, elemType);
-  return b.create<ONNXConstantOp>(loc, /*sparse_value=*/Attribute(),
+  return ONNXConstantOp::create(b, loc, /*sparse_value=*/Attribute(),
       /*value=*/DenseElementsAttr::get(tensorTy, value));
 }
 
@@ -3169,8 +3169,8 @@ struct GroupConsecutiveConstantConcatOperandsPattern
         auto elementType =
             mlir::cast<ShapedType>(run.front().getType()).getElementType();
         auto runTy = UnrankedTensorType::get(elementType);
-        auto inner = rewriter.create<ONNXConcatOp>(
-            concatOp.getLoc(), runTy, run, concatOp.getAxis());
+        auto inner = ONNXConcatOp::create(
+            rewriter, concatOp.getLoc(), runTy, run, concatOp.getAxis());
         inferShapes(inner);
         newInputs.push_back(inner.getResult());
         grouped = true;
@@ -3628,8 +3628,8 @@ public:
 
     auto valueAttr =
         DenseElementsAttr::get(resultType, rewriter.getBoolAttr(false));
-    auto constantOp = rewriter.create<ONNXConstantOp>(
-        equalOp.getLoc(), Attribute(), valueAttr);
+    auto constantOp = ONNXConstantOp::create(
+        rewriter, equalOp.getLoc(), Attribute(), valueAttr);
     rewriter.replaceOp(equalOp, constantOp.getResult());
     return success();
   }
@@ -3824,8 +3824,8 @@ struct ReshapeFamilyToReshapePattern : public OpRewritePattern<OpT> {
           op, "output must be a static ranked tensor");
     SmallVector<int64_t> shape(
         resultType.getShape().begin(), resultType.getShape().end());
-    Value shapeConst = rewriter.create<ONNXConstantOp>(
-        op.getLoc(), nullptr, rewriter.getI64TensorAttr(shape));
+    Value shapeConst = ONNXConstantOp::create(
+        rewriter, op.getLoc(), nullptr, rewriter.getI64TensorAttr(shape));
     rewriter.replaceOpWithNewOp<ONNXReshapeOp>(
         op, resultType, op->getOperand(0), shapeConst);
     return success();
@@ -3851,7 +3851,7 @@ struct RemoveBatchNormV9Pattern
       return rewriter.notifyMatchFailure(batchNormOpV9.getLoc(),
           "saved_mean and saved_variance must have no use.");
     }
-    auto batchNormOp = rewriter.create<ONNXBatchNormalizationOp>(
+    auto batchNormOp = ONNXBatchNormalizationOp::create(rewriter,
         batchNormOpV9.getLoc(),
         TypeRange{
             batchNormOpV9.getY().getType(),
@@ -3864,8 +3864,8 @@ struct RemoveBatchNormV9Pattern
     rewriter.replaceOp(batchNormOpV9,
         {batchNormOp.getY(), batchNormOp.getRunningMean(),
             batchNormOp.getRunningVar(),
-            rewriter.create<ONNXNoneOp>(batchNormOpV9.getLoc()),
-            rewriter.create<ONNXNoneOp>(batchNormOpV9.getLoc())});
+            ONNXNoneOp::create(rewriter, batchNormOpV9.getLoc()),
+            ONNXNoneOp::create(rewriter, batchNormOpV9.getLoc())});
     return success();
   }
 };
@@ -3885,13 +3885,13 @@ struct RemoveBatchNormPattern
     }
 
     rewriter.replaceOp(batchNormOp,
-        {rewriter.create<ONNXBatchNormalizationInferenceModeOp>(
+        {ONNXBatchNormalizationInferenceModeOp::create(rewriter,
              batchNormOp.getLoc(), batchNormOp.getY().getType(),
              batchNormOp.getX(), batchNormOp.getScale(), batchNormOp.getB(),
              batchNormOp.getInputMean(), batchNormOp.getInputVar(),
              batchNormOp.getEpsilon(), batchNormOp.getMomentum()),
-            rewriter.create<ONNXNoneOp>(batchNormOp.getLoc()),
-            rewriter.create<ONNXNoneOp>(batchNormOp.getLoc())});
+            ONNXNoneOp::create(rewriter, batchNormOp.getLoc()),
+            ONNXNoneOp::create(rewriter, batchNormOp.getLoc())});
     return success();
   }
 };
@@ -4017,8 +4017,8 @@ struct SoftmaxSizeOneAxisPattern : public OpRewritePattern<ONNXSoftmaxOp> {
         RankedTensorType::get(inputType.getShape(), elementType);
     const auto valueAttr = DenseElementsAttr::get(
         resultType, rewriter.getFloatAttr(elementType, 1.0));
-    const Value constantOp = rewriter.create<ONNXConstantOp>(
-        softmaxOp.getLoc(), Attribute(), valueAttr);
+    const Value constantOp = ONNXConstantOp::create(
+        rewriter, softmaxOp.getLoc(), Attribute(), valueAttr);
     rewriter.replaceOp(softmaxOp, constantOp);
     return success();
   }
@@ -4663,7 +4663,7 @@ Value createIntegerConstantLike(PatternRewriter &rewriter, Location loc,
   for (const int64_t value : values)
     apValues.emplace_back(intType.getWidth(), value, /*isSigned=*/true);
   const auto newAttr = DenseElementsAttr::get(tensorType, apValues);
-  return rewriter.create<ONNXConstantOp>(loc, /*sparse_value=*/Attribute(),
+  return ONNXConstantOp::create(rewriter, loc, /*sparse_value=*/Attribute(),
       /*value=*/newAttr);
 }
 
@@ -4836,14 +4836,15 @@ public:
       return rewriter.notifyMatchFailure(op, "op result is not shaped");
 
     const Location newLoc = rewriter.getFusedLoc(fusedLoc);
-    auto newOp = rewriter.create<T>(newLoc,
+    auto newOp = T::create(rewriter, newLoc,
         TypeRange{
             opShapedType.clone(getElementType(commonDQOp.getX().getType()))},
         ValueRange{newInputs}, op->getAttrs());
 
-    auto newDQOp = rewriter.create<ONNXDequantizeLinearOp>(newLoc, op.getType(),
-        newOp.getResult(), commonDQOp.getXScale(), commonDQOp.getXZeroPoint(),
-        commonDQOp.getAxisAttr(), commonDQOp.getBlockSizeAttr());
+    auto newDQOp = ONNXDequantizeLinearOp::create(rewriter, newLoc,
+        op.getType(), newOp.getResult(), commonDQOp.getXScale(),
+        commonDQOp.getXZeroPoint(), commonDQOp.getAxisAttr(),
+        commonDQOp.getBlockSizeAttr());
 
     rewriter.replaceOp(op, newDQOp.getResult());
     return success();
@@ -4891,7 +4892,7 @@ public:
         return rewriter.notifyMatchFailure(
             quantOp, "data movement input is not shaped");
 
-      auto newQOp = rewriter.create<ONNXQuantizeLinearOp>(newLoc,
+      auto newQOp = ONNXQuantizeLinearOp::create(rewriter, newLoc,
           dataInputShapedType.clone(quantizedElementType), dataInput,
           quantOp.getYScale(), quantOp.getYZeroPoint(), quantOp.getAxisAttr(),
           quantOp.getBlockSizeAttr(), quantOp.getOutputDtypeAttr(),
@@ -4903,7 +4904,7 @@ public:
     for (Value operand : dataMovementOp->getOperands())
       newInputs.push_back(mapping.lookupOrDefault(operand));
 
-    auto newOp = rewriter.create<T>(newLoc, TypeRange{quantOp.getType()},
+    auto newOp = T::create(rewriter, newLoc, TypeRange{quantOp.getType()},
         ValueRange{newInputs}, dataMovementOp->getAttrs());
 
     rewriter.replaceOp(quantOp, newOp.getResult());
@@ -4997,7 +4998,7 @@ struct FuseCastBetweenReshapesPattern : public OpRewritePattern<ONNXReshapeOp> {
           outerReshape, "outer result shape != inner input shape");
     Location fusedLoc = rewriter.getFusedLoc(
         {innerReshape.getLoc(), castOp.getLoc(), outerReshape.getLoc()});
-    Value newCast = rewriter.create<ONNXCastOp>(fusedLoc, outerTy,
+    Value newCast = ONNXCastOp::create(rewriter, fusedLoc, outerTy,
         innerReshape.getData(), castOp.getSaturateAttr(), castOp.getToAttr());
     rewriter.replaceOp(outerReshape, newCast);
     return success();
@@ -5475,7 +5476,7 @@ struct MoveNegToMulConstantPattern : public OpRewritePattern<ONNXMulOp> {
 
     // Preserve each operand's full type and the original Mul result type:
     // this retains broadcasting, including when c expands x's shape.
-    Value negC = rewriter.create<ONNXNegOp>(op.getLoc(), c.getType(), c);
+    Value negC = ONNXNegOp::create(rewriter, op.getLoc(), c.getType(), c);
     rewriter.modifyOpInPlace(op, [&]() {
       op.getAMutable().assign(x);
       op.getBMutable().assign(negC);
@@ -5619,9 +5620,9 @@ struct MinMaxToClipPattern : public OpRewritePattern<ONNXMinOp> {
     if (!lower || !upper)
       return failure();
     auto lowerOp =
-        rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, lower);
+        ONNXConstantOp::create(rewriter, op.getLoc(), Attribute{}, lower);
     auto upperOp =
-        rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, upper);
+        ONNXConstantOp::create(rewriter, op.getLoc(), Attribute{}, upper);
     rewriter.replaceOpWithNewOp<ONNXClipOp>(op, op.getResult().getType(), input,
         lowerOp.getResult(), upperOp.getResult());
     return success();
@@ -5668,7 +5669,7 @@ struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
         isa<ONNXGreaterOrEqualOp>(comparison) == inputOnLeft;
     const bool lower = inputAtLeastBound == inputOnTrueBranch;
     auto boundOp =
-        rewriter.create<ONNXConstantOp>(op.getLoc(), Attribute{}, bound);
+        ONNXConstantOp::create(rewriter, op.getLoc(), Attribute{}, bound);
     SmallVector<Value, 2> operands{input, boundOp.getResult()};
     if (lower)
       rewriter.replaceOpWithNewOp<ONNXMaxOp>(

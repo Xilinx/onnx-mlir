@@ -78,7 +78,7 @@ static XCOMPILERFusedEltwiseOp createQLinearSigmoidOp(PatternRewriter &rewriter,
   FloatAttr mulYAttr =
       mulY ? rewriter.getFloatAttr(rewriter.getF32Type(), *mulY) : FloatAttr();
   BoolAttr enableLutAttr = rewriter.getBoolAttr(enableLutSigmoid);
-  return rewriter.create<XCOMPILERFusedEltwiseOp>(loc, outputType, inputA,
+  return XCOMPILERFusedEltwiseOp::create(rewriter, loc, outputType, inputA,
       inputB,
       /*approximate=*/StringAttr(), enableLutAttr,
       /*leakyrelu_alpha=*/FloatAttr(),
@@ -127,7 +127,7 @@ struct ReplaceQuantizedSigmoidMulPattern : public OpRewritePattern<ONNXMulOp> {
 
     Location loc = mulOp.getLoc();
     auto noneOp =
-        rewriter.create<ONNXNoneOp>(loc, rewriter.getNoneType(), true);
+        ONNXNoneOp::create(rewriter, loc, rewriter.getNoneType(), true);
 
     auto fusedEltwiseOp = createQLinearSigmoidOp(rewriter, loc, outputType,
         sigmoidInput, noneOp.getResult(), mulY, enableLutSigmoid);

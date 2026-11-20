@@ -96,7 +96,7 @@ Value reshapeInputTo4D(
   auto newType = RankedTensorType::get(newShape, inputType.getElementType());
   auto shapeConst = createShapeConstant(rewriter, loc, newShape);
 
-  return rewriter.create<ONNXReshapeOp>(loc, newType, input, shapeConst)
+  return ONNXReshapeOp::create(rewriter, loc, newType, input, shapeConst)
       .getReshaped();
 }
 
@@ -107,7 +107,7 @@ Value reshapeOutputTo3D(PatternRewriter &rewriter, Location loc, Value input,
   auto newType = RankedTensorType::get(outputShape3D, elementType);
   auto shapeConst = createShapeConstant(rewriter, loc, outputShape3D);
 
-  return rewriter.create<ONNXReshapeOp>(loc, newType, input, shapeConst)
+  return ONNXReshapeOp::create(rewriter, loc, newType, input, shapeConst)
       .getReshaped();
 }
 
@@ -125,7 +125,7 @@ Value reshapeWeightTo4D(PatternRewriter &rewriter, Location loc, Value weight) {
   auto newType = RankedTensorType::get(newShape, weightType.getElementType());
   auto shapeConst = createShapeConstant(rewriter, loc, newShape);
 
-  return rewriter.create<ONNXReshapeOp>(loc, newType, weight, shapeConst)
+  return ONNXReshapeOp::create(rewriter, loc, newType, weight, shapeConst)
       .getReshaped();
 }
 
@@ -167,23 +167,21 @@ Value createActivation4D(PatternRewriter &rewriter, Location loc,
   auto outputType = input4D.getType();
 
   if (auto reluOp = dyn_cast<ONNXReluOp>(originalActivation)) {
-    return rewriter.create<ONNXReluOp>(loc, outputType, input4D).getResult();
+    return ONNXReluOp::create(rewriter, loc, outputType, input4D).getResult();
   }
   if (auto leakyReluOp = dyn_cast<ONNXLeakyReluOp>(originalActivation)) {
-    return rewriter
-        .create<ONNXLeakyReluOp>(
-            loc, outputType, input4D, leakyReluOp.getAlphaAttr())
+    return ONNXLeakyReluOp::create(
+        rewriter, loc, outputType, input4D, leakyReluOp.getAlphaAttr())
         .getResult();
   }
   if (auto preluOp = dyn_cast<ONNXPReluOp>(originalActivation)) {
     Value slope = preluOp.getSlope();
-    return rewriter.create<ONNXPReluOp>(loc, outputType, input4D, slope)
+    return ONNXPReluOp::create(rewriter, loc, outputType, input4D, slope)
         .getResult();
   }
   if (auto clipOp = dyn_cast<ONNXClipOp>(originalActivation)) {
-    return rewriter
-        .create<ONNXClipOp>(
-            loc, outputType, input4D, clipOp.getMin(), clipOp.getMax())
+    return ONNXClipOp::create(
+        rewriter, loc, outputType, input4D, clipOp.getMin(), clipOp.getMax())
         .getResult();
   }
 
@@ -287,7 +285,7 @@ struct Conv1dToConv2dPattern : public OpRewritePattern<ConvOpType> {
     Value result;
     if constexpr (std::is_same_v<ConvOpType, ONNXConvOp>) {
       // Create Conv2D
-      auto conv2dOp = rewriter.create<ONNXConvOp>(loc, conv2dOutputType,
+      auto conv2dOp = ONNXConvOp::create(rewriter, loc, conv2dOutputType,
           reshapedInput, reshapedWeight, conv2dBias,
           /*auto_pad=*/convOp.getAutoPadAttr(),
           /*dilations=*/rewriter.getI64ArrayAttr(dilation2d),
@@ -301,7 +299,7 @@ struct Conv1dToConv2dPattern : public OpRewritePattern<ConvOpType> {
       result = conv2dOp.getResult();
     } else if constexpr (std::is_same_v<ConvOpType, ONNXConvTransposeOp>) {
       // Create ConvTranspose2D
-      auto convTranspose2dOp = rewriter.create<ONNXConvTransposeOp>(loc,
+      auto convTranspose2dOp = ONNXConvTransposeOp::create(rewriter, loc,
           conv2dOutputType, reshapedInput, reshapedWeight, conv2dBias,
           /*auto_pad=*/convOp.getAutoPadAttr(),
           /*dilations=*/rewriter.getI64ArrayAttr(dilation2d),
@@ -373,9 +371,9 @@ struct Pool1dToPool2dPattern : public OpRewritePattern<PoolOp> {
     auto input4DType =
         RankedTensorType::get(input4DShape, inputType.getElementType());
     auto inputShapeConst = createShapeConstant(rewriter, loc, input4DShape);
-    Value reshapedInput =
-        rewriter.create<ONNXReshapeOp>(loc, input4DType, input, inputShapeConst)
-            .getReshaped();
+    Value reshapedInput = ONNXReshapeOp::create(
+        rewriter, loc, input4DType, input, inputShapeConst)
+                              .getReshaped();
 
     // Get and extend common attributes
     auto kernel1d = getArrayAttrValues(poolOp.getKernelShape());
@@ -408,7 +406,7 @@ struct Pool1dToPool2dPattern : public OpRewritePattern<PoolOp> {
       auto si64Type =
           IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed);
 
-      auto maxPool2dOp = rewriter.create<ONNXMaxPoolSingleOutOp>(loc,
+      auto maxPool2dOp = ONNXMaxPoolSingleOutOp::create(rewriter, loc,
           pool2dOutputType, reshapedInput,
           /*auto_pad=*/poolOp.getAutoPadAttr(),
           /*ceil_mode=*/poolOp.getCeilModeAttr(),
@@ -424,7 +422,7 @@ struct Pool1dToPool2dPattern : public OpRewritePattern<PoolOp> {
       pool2dResult = maxPool2dOp.getResult();
     } else if constexpr (std::is_same_v<PoolOp, ONNXAveragePoolOp>) {
       // AveragePool: has count_include_pad and dilations, NO storage_order
-      auto avgPool2dOp = rewriter.create<ONNXAveragePoolOp>(loc,
+      auto avgPool2dOp = ONNXAveragePoolOp::create(rewriter, loc,
           pool2dOutputType, reshapedInput,
           /*auto_pad=*/poolOp.getAutoPadAttr(),
           /*ceil_mode=*/poolOp.getCeilModeAttr(),
@@ -483,14 +481,14 @@ struct GlobalPool1dToGlobalPool2dPattern
     auto input4DType =
         RankedTensorType::get(input4DShape, inputType.getElementType());
     auto inputShapeConst = createShapeConstant(rewriter, loc, input4DShape);
-    Value reshapedInput =
-        rewriter.create<ONNXReshapeOp>(loc, input4DType, input, inputShapeConst)
-            .getReshaped();
+    Value reshapedInput = ONNXReshapeOp::create(
+        rewriter, loc, input4DType, input, inputShapeConst)
+                              .getReshaped();
 
     // Create GlobalPool2D - no attributes to extend
     auto pool2dOutputType = UnrankedTensorType::get(inputType.getElementType());
     auto globalPool2dOp =
-        rewriter.create<GlobalPoolOp>(loc, pool2dOutputType, reshapedInput);
+        GlobalPoolOp::create(rewriter, loc, pool2dOutputType, reshapedInput);
 
     // Infer the output shape
     if (failed(globalPool2dOp.inferShapes([](Region &) {})))

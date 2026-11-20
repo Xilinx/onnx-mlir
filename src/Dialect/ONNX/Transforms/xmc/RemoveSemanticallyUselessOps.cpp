@@ -78,7 +78,7 @@ Value createZeroConstant(
     return nullptr;
   }
 
-  return rewriter.create<mlir::ONNXConstantOp>(loc, type, mlir::ValueRange{},
+  return mlir::ONNXConstantOp::create(rewriter, loc, type, mlir::ValueRange{},
       mlir::ArrayRef<mlir::NamedAttribute>{
           rewriter.getNamedAttr("value", zeroAttr)});
 }

@@ -631,7 +631,7 @@ FailureOr<ONNXInitializerSourceOp> createInitializerSource(OpBuilder &builder,
   SmallVector<StringRef> scopeRefs;
   llvm::transform(scope, std::back_inserter(scopeRefs),
       [](const std::string &component) { return StringRef(component); });
-  return builder.create<ONNXInitializerSourceOp>(loc, type, source->kind,
+  return ONNXInitializerSourceOp::create(builder, loc, type, source->kind,
       source->path, tensor.name(), builder.getStrArrayAttr(scopeRefs),
       source->offset ? builder.getI64IntegerAttr(*source->offset)
                      : IntegerAttr{},
