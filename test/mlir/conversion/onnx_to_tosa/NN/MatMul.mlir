@@ -1,5 +1,5 @@
-// RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa -cse %s -split-input-file | FileCheck %s
-// RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="excluded-ops=Cast" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDE-CAST
+// RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa -cse %s -split-input-file | FileCheck %s --implicit-check-not=tosa.cast --implicit-check-not=onnx.Cast
+// RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="excluded-ops=Cast" -cse %s -split-input-file | FileCheck %s --implicit-check-not=tosa.cast --implicit-check-not=onnx.Cast
 
 func.func @test_onnx_to_matmul2d(%arg0 : tensor<4x8xf32>, %arg1 : tensor<8x16xf32>) -> tensor<*xf32> {
   %0 = "onnx.MatMul"(%arg0, %arg1) : (tensor<4x8xf32>, tensor<8x16xf32>) -> tensor<*xf32>
@@ -164,13 +164,8 @@ func.func @test_onnx_to_matmul_8d_7d_broadcastable(%arg0: tensor<4x3x2x1x5x4x7x6
 func.func @test_onnx_to_matmul3d_fp16(%arg0 : tensor<100x4x8xf16>, %arg1 : tensor<100x8x16xf16>) -> tensor<*xf16> {
   %0 = "onnx.MatMul"(%arg0, %arg1) : (tensor<100x4x8xf16>, tensor<100x8x16xf16>) -> tensor<*xf16>
   "func.return"(%0) : (tensor<*xf16>) -> ()
-  // CHECK:  %0 = tosa.matmul %arg0, %arg1 : (tensor<100x4x8xf16>, tensor<100x8x16xf16>) -> tensor<100x4x16xf32>
-  // CHECK:  %1 = tosa.cast %0 : (tensor<100x4x16xf32>) -> tensor<100x4x16xf16>
-  // CHECK:  return %1 : tensor<100x4x16xf16>
-  // EXCLUDE-CAST-LABEL: @test_onnx_to_matmul3d_fp16
-  // EXCLUDE-CAST: onnx.Cast
-  // EXCLUDE-CAST-NOT: tosa.cast
-  // EXCLUDE-CAST: return
+  // CHECK:  %0 = tosa.matmul %arg0, %arg1 : (tensor<100x4x8xf16>, tensor<100x8x16xf16>) -> tensor<100x4x16xf16>
+  // CHECK:  return %0 : tensor<100x4x16xf16>
 }
 
 // -----
@@ -178,9 +173,8 @@ func.func @test_onnx_to_matmul3d_fp16(%arg0 : tensor<100x4x8xf16>, %arg1 : tenso
 func.func @test_onnx_to_matmul3d_bf16(%arg0 : tensor<100x4x8xbf16>, %arg1 : tensor<100x8x16xbf16>) -> tensor<*xbf16> {
   %0 = "onnx.MatMul"(%arg0, %arg1) : (tensor<100x4x8xbf16>, tensor<100x8x16xbf16>) -> tensor<*xbf16>
   "func.return"(%0) : (tensor<*xbf16>) -> ()
-  // CHECK:   %0 = tosa.matmul %arg0, %arg1 : (tensor<100x4x8xbf16>, tensor<100x8x16xbf16>) -> tensor<100x4x16xf32>
-  // CHECK:   %1 = tosa.cast %0 : (tensor<100x4x16xf32>) -> tensor<100x4x16xbf16>
-  // CHECK:   return %1 : tensor<100x4x16xbf16>
+  // CHECK:   %0 = tosa.matmul %arg0, %arg1 : (tensor<100x4x8xbf16>, tensor<100x8x16xbf16>) -> tensor<100x4x16xbf16>
+  // CHECK:   return %0 : tensor<100x4x16xbf16>
 }
 
 // -----
@@ -206,4 +200,17 @@ func.func @test_onnx_to_matmul3d_dyn(%arg0 : tensor<?x?x?xf32>, %arg1 : tensor<?
   %0 = "onnx.MatMul"(%arg0, %arg1) : (tensor<?x?x?xf32>, tensor<?x?x?xf32>) -> tensor<*xf32>
   "func.return"(%0) : (tensor<*xf32>) -> ()
   // CHECK-NOT: tosa.matmul
+}
+
+// -----
+
+func.func @test_onnx_to_matmul2d_bf16(%arg0 : tensor<4x8xbf16>, %arg1 : tensor<8x16xbf16>) -> tensor<*xbf16> {
+  %0 = "onnx.MatMul"(%arg0, %arg1) : (tensor<4x8xbf16>, tensor<8x16xbf16>) -> tensor<*xbf16>
+  "func.return"(%0) : (tensor<*xbf16>) -> ()
+  // CHECK: func.func @test_onnx_to_matmul2d_bf16(%arg0: tensor<4x8xbf16>, %arg1: tensor<8x16xbf16>) -> tensor<4x16xbf16>
+  // CHECK:  %0 = tosa.reshape %arg0 {new_shape = array<i64: 1, 4, 8>} : (tensor<4x8xbf16>) -> tensor<1x4x8xbf16>
+  // CHECK:  %1 = tosa.reshape %arg1 {new_shape = array<i64: 1, 8, 16>} : (tensor<8x16xbf16>) -> tensor<1x8x16xbf16>
+  // CHECK:  %2 = tosa.matmul %0, %1 : (tensor<1x4x8xbf16>, tensor<1x8x16xbf16>) -> tensor<1x4x16xbf16>
+  // CHECK:  %3 = tosa.reshape %2 {new_shape = array<i64: 4, 16>} : (tensor<1x4x16xbf16>) -> tensor<4x16xbf16>
+  // CHECK:  return %3 : tensor<4x16xbf16>
 }

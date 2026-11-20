@@ -81,23 +81,6 @@ void getRankBroadcastedShape(Value tensor, const int64_t maxInputRank,
   }
 }
 
-Type getMatMulOutputType(Type inputElemTy, PatternRewriter &rewriter) {
-  Type outputElemTy;
-  if (auto floatTy = dyn_cast<FloatType>(inputElemTy)) {
-    if (floatTy.isBF16() || floatTy.isF16() || floatTy.isF32()) {
-      // Always accumulate on f32
-      outputElemTy = rewriter.getF32Type();
-    }
-  } else if (auto integerTy = dyn_cast<IntegerType>(inputElemTy)) {
-    if (integerTy.isInteger(/*width=*/8)) {
-      outputElemTy = rewriter.getIntegerType(/*width=*/32);
-    } else if (integerTy.isInteger(/*width=*/16)) {
-      outputElemTy = rewriter.getIntegerType(/*width=*/48);
-    }
-  }
-  return outputElemTy;
-}
-
 // Lowering based on the lowering of torch-mlir
 class ONNXMatMulOpLoweringToTOSA : public OpConversionPattern<ONNXMatMulOp> {
 public:
@@ -138,8 +121,8 @@ public:
           op, "expected both inputs to have same element type");
     }
 
-    auto outputElemType = getMatMulOutputType(lhsElemTy, rewriter);
-    if (!outputElemType) {
+    if (!lhsElemTy.isBF16() && !lhsElemTy.isF16() && !lhsElemTy.isF32() &&
+        !lhsElemTy.isInteger(8) && !lhsElemTy.isInteger(16)) {
       return rewriter.notifyMatchFailure(op,
           "Only i8 and i16 integer and bf16, f16 and "
           "f32 float types are valid");
@@ -373,18 +356,18 @@ public:
     SmallVector<int64_t> matmulOutputShape(
         {matmulLhsShape[0], matmulLhsShape[1], matmulRhsShape[2]});
 
-    auto mmOutputTy = RankedTensorType::get(matmulOutputShape, outputElemType);
+    // AMD extension: preserve the ONNX result element type instead of using
+    // TOSA's wider accumulation result type followed by a cast.
+    auto mmOutputTy = RankedTensorType::get(matmulOutputShape, lhsElemTy);
     auto mmOpResult = tosa::CreateOpAndInfer<mlir::tosa::MatMulOp>(
         rewriter, op->getLoc(), mmOutputTy, matmulLhs, matmulRhs)
                           ->getResult(0);
-    auto castToOrigOp =
-        create.onnx.castToNewTensorElementType(mmOpResult, lhsElemTy);
 
     // Perform the reshape to output shape. This is always required unless max
     // input rank=3 and there was no broadcasting, in which case the tosa.matmul
     // output itself is correctly shaped.
     bool performOpReshape = !(maxInputRank == 3 && !performBatchDimBroadcast);
-    Value output = castToOrigOp;
+    Value output = mmOpResult;
     if (performOpReshape) {
       // Since the output shape may be unknown, we construct it
       // independently and reshape. Otherwise reshape may be expressed for
@@ -469,7 +452,7 @@ public:
       computeOpShape(reshapedOpShape, transposedOpDims, transposedOpShape);
 
       // Perform reshape
-      auto reshapeOp = create.onnx.reshape(castToOrigOp, reshapedOpShape);
+      auto reshapeOp = create.onnx.reshape(mmOpResult, reshapedOpShape);
 
       SmallVector<int32_t> transposedOpDimsI32;
       llvm::copy(transposedOpDims, std::back_inserter(transposedOpDimsI32));
