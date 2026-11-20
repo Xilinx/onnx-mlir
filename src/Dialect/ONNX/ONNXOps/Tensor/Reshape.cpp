@@ -27,11 +27,18 @@ using namespace onnx_mlir;
 
 namespace onnx_mlir {
 
-template <>
 LogicalResult ONNXReshapeOpShapeHelper::computeShape() {
+  DimsExpr outputDims;
+  if (failed(computeOutputDims(outputDims)))
+    return failure();
+  setOutputDims(outputDims);
+  return success();
+}
+
+LogicalResult ONNXReshapeOpShapeHelper::computeOutputDims(
+    DimsExpr &outputDims) {
   ONNXReshapeOpAdaptor operandAdaptor(operands);
   const bool allowZero = cast<ONNXReshapeOp>(op).getAllowzero();
-  DimsExpr outputDims;
 
   // Get info about input data operand.
   Value data = operandAdaptor.getData();
@@ -195,9 +202,6 @@ LogicalResult ONNXReshapeOpShapeHelper::computeShape() {
     }
   }
 
-  // Save the final result.
-  setOutputDims(outputDims);
-
   return success();
 }
 
@@ -276,11 +280,3 @@ LogicalResult ONNXReshapeOp::inferShapes(
   ONNXReshapeOpShapeHelper shapeHelper(getOperation(), {});
   return shapeHelper.computeShapeAndUpdateType(elementType);
 }
-
-//===----------------------------------------------------------------------===//
-// Template instantiation
-//===----------------------------------------------------------------------===//
-
-namespace onnx_mlir {
-template struct ONNXNonSpecificOpShapeHelper<ONNXReshapeOp>;
-} // namespace onnx_mlir
