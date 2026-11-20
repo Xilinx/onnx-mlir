@@ -2362,6 +2362,53 @@ public:
   }
 };
 
+/// Replaces the 0 and -1 entries of a constant Reshape shape with the static
+/// dimensions they stand for. A 0 is replaced only when allowzero is unset and
+/// the copied input dimension is static. A -1 is replaced only when the static
+/// input and the other shape entries prove its value.
+struct ResolveReshapeShapePattern : public OpRewritePattern<ONNXReshapeOp> {
+  using OpRewritePattern<ONNXReshapeOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXReshapeOp op, PatternRewriter &rewriter) const override {
+    ElementsAttr shapeAttr;
+    if (!matchPattern(op.getShape(), m_Constant(&shapeAttr)))
+      return rewriter.notifyMatchFailure(op, "shape must be a constant");
+    SmallVector<int64_t> dims(shapeAttr.getValues<int64_t>());
+    if (llvm::none_of(dims, [](int64_t dim) { return dim == 0 || dim == -1; }))
+      return rewriter.notifyMatchFailure(op, "shape has no 0 or -1 entry");
+
+    // computeShape would refine the dims with the result type, which does not
+    // prove that a 0 or -1 entry has that value.
+    ONNXReshapeOpShapeHelper shapeHelper(op.getOperation(), {});
+    DimsExpr outputDims;
+    if (failed(shapeHelper.computeOutputDims(outputDims)))
+      return rewriter.notifyMatchFailure(op, "could not compute the shape");
+
+    // A resolved value of 0 is skipped: with allowzero unset it would copy an
+    // input dimension instead of being a literal zero-sized dimension.
+    bool changed = false;
+    for (auto [dim, outputDim] : llvm::zip_equal(dims, outputDims)) {
+      if ((dim == 0 && op.getAllowzero()) || (dim != 0 && dim != -1))
+        continue;
+      if (!outputDim.isLiteral() || outputDim.getLiteral() <= 0)
+        continue;
+      dim = outputDim.getLiteral();
+      changed = true;
+    }
+
+    if (!changed)
+      return rewriter.notifyMatchFailure(
+          op, "shape has no 0 or -1 entry that can be resolved");
+
+    OnnxBuilder builder(rewriter, op.getLoc());
+    Value newShape = builder.constantInt64(dims);
+    rewriter.modifyOpInPlace(
+        op, [&] { op.getShapeMutable().assign(newShape); });
+    return success();
+  }
+};
+
 /// The pattern is to replace two consecutive ReshapeOp with a single ReshapeOp.
 /// It's not successful for arbitrary ReshapeOp, so let's consider necessary
 /// condition for the replacement.
@@ -6169,6 +6216,7 @@ void ONNXReluOp::getCanonicalizationPatterns(
 /// on the ONNXReshapeOp.
 void ONNXReshapeOp::getCanonicalizationPatterns(
     RewritePatternSet &result, MLIRContext *context) {
+  result.insert<ResolveReshapeShapePattern>(context);
   result.insert<FuseTwoReshapesPattern>(context);
   result.insert<FuseTwoReshapesAllowZeroPattern>(context);
   result.insert<RemoveIdentityReshapePattern1>(context);

@@ -777,7 +777,7 @@ func.func @test_reshape_fusion_2(%arg0: tensor<3x4x2x2xf32>) -> tensor<3x2x8xf32
 
 // CHECK-LABEL:  func.func @test_reshape_fusion_2
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3x4x2x2xf32>) -> tensor<3x2x8xf32> {
-// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[3, 2, -1]> : tensor<3xi64>
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[3, 2, 8]> : tensor<3xi64>
 // CHECK:           [[VAR_1_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<3x4x2x2xf32>, tensor<3xi64>) -> tensor<3x2x8xf32>
 // CHECK:           onnx.Return [[VAR_1_]] : tensor<3x2x8xf32>
 // CHECK:         }
