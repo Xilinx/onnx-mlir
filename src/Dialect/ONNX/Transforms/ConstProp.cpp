@@ -1755,6 +1755,32 @@ bool isCommutationConstant(Value value) {
   return !terminal || !isa<QuantizationBoundaryOpInterface>(terminal);
 }
 
+// Normalize a constant to the right without replacing the operation. Its
+// attributes, properties, result identity and location remain unchanged.
+template <typename BinaryOp>
+class CommuteConstantToRhs : public OpRewritePattern<BinaryOp> {
+public:
+  CommuteConstantToRhs(MLIRContext *context, StringRef patternName)
+      : OpRewritePattern<BinaryOp>(context), patternName(patternName) {
+    this->setDebugName(patternName);
+  }
+
+  LogicalResult matchAndRewrite(
+      BinaryOp op, PatternRewriter &rewriter) const override {
+    if (!isNotDisabled(patternName))
+      return failure();
+    Value lhs = op->getOperand(0);
+    Value rhs = op->getOperand(1);
+    if (!isCommutationConstant(lhs) || isCommutationConstant(rhs))
+      return failure();
+    rewriter.modifyOpInPlace(op, [&]() { op->setOperands({rhs, lhs}); });
+    return success();
+  }
+
+private:
+  StringRef patternName;
+};
+
 #include "src/Dialect/ONNX/Transforms/ONNXConstProp.inc"
 
 //===----------------------------------------------------------------------===//
@@ -2745,6 +2771,10 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
   if (isConstantPropagationDisabled())
     return;
   populateWithGenerated(patterns);
+  patterns.add<CommuteConstantToRhs<ONNXAddOp>>(
+      patterns.getContext(), "AddConstCommutative1");
+  patterns.add<CommuteConstantToRhs<ONNXMulOp>>(
+      patterns.getContext(), "MulConstCommutative1");
   if (isNotDisabled("SplitOfConst"))
     patterns.insert<SplitOfConst>(patterns.getContext());
   patterns.insert<IfOfConst>(patterns.getContext());

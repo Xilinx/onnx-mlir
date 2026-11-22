@@ -77,11 +77,6 @@ def IsNotDenseOrDeferredConstant:
       "!isDeferredConstant($_self)">,
   "Value is neither a dense nor deferred constant">;
 
-def IsCommutationConstant:
-    Constraint<CPred<"isCommutationConstant($_self)">>;
-def IsNotCommutationConstant:
-    Constraint<CPred<"!isCommutationConstant($_self)">>;
-
 def IsFromDenseConstLikeOrNone:
   Constraint<
     CPred<"static_cast<bool>(getDenseOrDisposableConstLikeElements($_self)) || mlir::isa<NoneType>($_self.getType())">,
@@ -384,16 +379,6 @@ def CreateScatterNDOfConst :
 //===----------------------------------------------------------------------===//
 // Patterns to enable opportunities with elementwise ADD operations.
 //===----------------------------------------------------------------------===//
-
-// Use commutativity to normalize constants in the second position of Add.
-def AddConstCommutative1 : NamedPat<"AddConstCommutative1",
-  // From add(c, x).
-  (ONNXAddOp:$addOp $c, $x),
-  // To add(x, c).
-  (ONNXAddOp $x, $c, (location $addOp)),
-  // Require exactly one operand to qualify, preventing repeated swapping.
-  [(IsCommutationConstant:$c),
-   (IsNotCommutationConstant:$x)]>;
 
 // Use associativity to add constants together.
 def AddConstAssociative1 : NamedPat<"AddConstAssociative1",
@@ -751,15 +736,6 @@ def SumConstProp : NamedPat<"SumConstProp",
 // Patterns to enable opportunities with elementwise MUL operations.
 // Exactly the same pattern as for the elementwise ADD operations.
 //===----------------------------------------------------------------------===//
-
-// Use commutativity to normalize constants in the second position of Mul.
-def MulConstCommutative1 : NamedPat<"MulConstCommutative1",
-  // From mul(c, x).
-  (ONNXMulOp:$mulOp $c, $x),
-  // To mul(x, c).
-  (ONNXMulOp $x, $c, (location $mulOp)),
-  [(IsCommutationConstant:$c),
-   (IsNotCommutationConstant:$x)]>;
 
 // Use associativity to mul constants together.
 def MulConstAssociative1 : NamedPat<"MulConstAssociative1",
