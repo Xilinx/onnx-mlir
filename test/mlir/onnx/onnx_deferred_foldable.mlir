@@ -206,3 +206,78 @@ func.func @retain_compiler_owned_recipe(%runtime: tensor<2x2xf32>) -> tensor<2x2
 // RETAIN: %[[TRANSPOSE:.+]] = "onnx.Transpose"
 // RETAIN: onnx.Yield %[[TRANSPOSE]]
 // RETAIN: "onnx.Add"(%{{.+}}, %[[RECIPE]])
+
+// Standalone formation preserves unrelated dead operations both in an eager
+// function and alongside a deferred chain that exceeds ten operations.
+func.func @no_formation_roots() -> tensor<2xi64> {
+  %live = onnx.Constant dense<[4, 8]> : tensor<2xi64>
+  %dead = onnx.Constant dense<[4, 8]> : tensor<2xi64>
+  %dead_add = "onnx.Add"(%live, %live) : (tensor<2xi64>, tensor<2xi64>) -> tensor<2xi64>
+  %sum = "onnx.Add"(%live, %live) : (tensor<2xi64>, tensor<2xi64>) -> tensor<2xi64>
+  %unused = "onnx.Neg"(%sum) : (tensor<2xi64>) -> tensor<2xi64>
+  onnx.Return %live : tensor<2xi64>
+}
+// CHECK-LABEL: func.func @no_formation_roots
+// CHECK-NEXT: %[[LIVE:.+]] = onnx.Constant dense<[4, 8]> : tensor<2xi64>
+// CHECK-NEXT: %{{.+}} = onnx.Constant dense<[4, 8]> : tensor<2xi64>
+// CHECK-NEXT: %{{.+}} = "onnx.Add"(%[[LIVE]], %[[LIVE]])
+// CHECK-NEXT: %[[SUM:.+]] = "onnx.Add"(%[[LIVE]], %[[LIVE]])
+// CHECK-NEXT: %{{.+}} = "onnx.Neg"(%[[SUM]])
+// CHECK-NEXT: onnx.Return %[[LIVE]]
+
+func.func @mixed_deep_chain(%arg: tensor<2xf32>) -> tensor<2xf32> {
+  %dead = onnx.Constant dense<19.0> : tensor<2xf32>
+  %unrelated = "onnx.Neg"(%arg) : (tensor<2xf32>) -> tensor<2xf32>
+  %source = "onnx.InitializerSource"() {kind = "onnx_model", name = "weight", path = "unread.onnx", scope = []} : () -> tensor<2xf32>
+  %mixed = "onnx.Add"(%source, %arg) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  %v1 = "onnx.Neg"(%source) : (tensor<2xf32>) -> tensor<2xf32>
+  %v2 = "onnx.Neg"(%v1) : (tensor<2xf32>) -> tensor<2xf32>
+  %v3 = "onnx.Neg"(%v2) : (tensor<2xf32>) -> tensor<2xf32>
+  %v4 = "onnx.Neg"(%v3) : (tensor<2xf32>) -> tensor<2xf32>
+  %v5 = "onnx.Neg"(%v4) : (tensor<2xf32>) -> tensor<2xf32>
+  %v6 = "onnx.Neg"(%v5) : (tensor<2xf32>) -> tensor<2xf32>
+  %v7 = "onnx.Neg"(%v6) : (tensor<2xf32>) -> tensor<2xf32>
+  %v8 = "onnx.Neg"(%v7) : (tensor<2xf32>) -> tensor<2xf32>
+  %v9 = "onnx.Neg"(%v8) : (tensor<2xf32>) -> tensor<2xf32>
+  %v10 = "onnx.Neg"(%v9) : (tensor<2xf32>) -> tensor<2xf32>
+  %v11 = "onnx.Neg"(%v10) : (tensor<2xf32>) -> tensor<2xf32>
+  %v12 = "onnx.Neg"(%v11) : (tensor<2xf32>) -> tensor<2xf32>
+  %discard = "onnx.Neg"(%v12) : (tensor<2xf32>) -> tensor<2xf32>
+  onnx.Return %v12 : tensor<2xf32>
+}
+// CHECK-LABEL: func.func @mixed_deep_chain
+// CHECK-SAME: (%[[ARG:.+]]: tensor<2xf32>)
+// CHECK-NEXT: %{{.+}} = onnx.Constant dense<1.900000e+01> : tensor<2xf32>
+// CHECK-NEXT: %{{.+}} = "onnx.Neg"(%[[ARG]])
+// CHECK-NEXT: %[[SOURCE:.+]] = "onnx.InitializerSource"
+// CHECK-NEXT: %{{.+}} = "onnx.Add"(%[[SOURCE]], %[[ARG]])
+// CHECK-NEXT: %[[RECIPE:.+]] = "onnx.DeferredFoldable"(%[[SOURCE]])
+// CHECK: ^bb0(
+// CHECK-COUNT-12: = "onnx.Neg"
+// CHECK-NEXT: onnx.Yield
+// CHECK-NEXT: })
+// CHECK-NEXT: onnx.Return %[[RECIPE]]
+
+// An ordinary region owner cannot form a deferred expression, but operations nested in
+// its blocks can. A source defined outside the branch remains a valid capture.
+func.func @nested_formation(%condition: tensor<i1>) -> tensor<2xf32> {
+  %source = "onnx.InitializerSource"() {kind = "onnx_model", name = "nested", path = "unread.onnx", scope = []} : () -> tensor<2xf32>
+  %result = "onnx.If"(%condition) ({
+    %neg = "onnx.Neg"(%source) : (tensor<2xf32>) -> tensor<2xf32>
+    onnx.Yield %neg : tensor<2xf32>
+  }, {
+    onnx.Yield %source : tensor<2xf32>
+  }) : (tensor<i1>) -> tensor<2xf32>
+  onnx.Return %result : tensor<2xf32>
+}
+// CHECK-LABEL: func.func @nested_formation
+// CHECK: %[[S:.+]] = "onnx.InitializerSource"
+// CHECK: %[[IF:.+]] = "onnx.If"
+// CHECK-NEXT: %[[R:.+]] = "onnx.DeferredFoldable"(%[[S]])
+// CHECK-NEXT: ^bb0(%[[A:.+]]: tensor<2xf32>):
+// CHECK-NEXT: %[[N:.+]] = "onnx.Neg"(%[[A]])
+// CHECK-NEXT: onnx.Yield %[[N]]
+// CHECK-NEXT: })
+// CHECK-NEXT: onnx.Yield %[[R]]
+// CHECK: onnx.Yield %[[S]]
+// CHECK: onnx.Return %[[IF]]
