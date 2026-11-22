@@ -8,16 +8,16 @@
 
 func.func @source_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, tensor<2xf32>) {
   %source = "onnx.InitializerSource"() {kind = "onnx_model", name = "weight", path = "/not/read.onnx", scope = []} : () -> tensor<2xf32>
-  %add = "onnx.Add"(%source, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
-  %mul = "onnx.Mul"(%source, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  %add = "onnx.Add"(%source, %runtime) {onnx_node_name = "source_Add"} : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  %mul = "onnx.Mul"(%source, %runtime) {onnx_node_name = "source_Mul"} : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
   return %add, %mul : tensor<2xf32>, tensor<2xf32>
 }
 
 // CHECK-LABEL: func.func @source_operand_order(
 // CHECK-SAME: %[[RUNTIME:[^: ]+]]:
 // CHECK: %[[SOURCE:.*]] = "onnx.InitializerSource"
-// CHECK: %[[ADD:.*]] = "onnx.Add"(%[[RUNTIME]], %[[SOURCE]])
-// CHECK: %[[MUL:.*]] = "onnx.Mul"(%[[RUNTIME]], %[[SOURCE]])
+// CHECK: %[[ADD:.*]] = "onnx.Add"(%[[RUNTIME]], %[[SOURCE]]) {onnx_node_name = "source_Add"}
+// CHECK: %[[MUL:.*]] = "onnx.Mul"(%[[RUNTIME]], %[[SOURCE]]) {onnx_node_name = "source_Mul"}
 // CHECK: return %[[ADD]], %[[MUL]]
 
 func.func @deferred_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, tensor<2xf32>) {
@@ -41,16 +41,16 @@ func.func @deferred_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, te
 
 func.func @literal_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, tensor<2xf32>) {
   %literal = onnx.Constant dense<2.0> : tensor<2xf32>
-  %add = "onnx.Add"(%literal, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
-  %mul = "onnx.Mul"(%literal, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  %add = "onnx.Add"(%literal, %runtime) {onnx_node_name = "literal_Add"} : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  %mul = "onnx.Mul"(%literal, %runtime) {onnx_node_name = "literal_Mul"} : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
   return %add, %mul : tensor<2xf32>, tensor<2xf32>
 }
 
 // CHECK-LABEL: func.func @literal_operand_order(
 // CHECK-SAME: %[[RUNTIME:[^: ]+]]:
 // CHECK: %[[LITERAL:.*]] = onnx.Constant dense<2.000000e+00> : tensor<2xf32>
-// CHECK: %[[ADD:.*]] = "onnx.Add"(%[[RUNTIME]], %[[LITERAL]])
-// CHECK: %[[MUL:.*]] = "onnx.Mul"(%[[RUNTIME]], %[[LITERAL]])
+// CHECK: %[[ADD:.*]] = "onnx.Add"(%[[RUNTIME]], %[[LITERAL]]) {onnx_node_name = "literal_Add"}
+// CHECK: %[[MUL:.*]] = "onnx.Mul"(%[[RUNTIME]], %[[LITERAL]]) {onnx_node_name = "literal_Mul"}
 // CHECK: return %[[ADD]], %[[MUL]]
 
 func.func @dequantized_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, tensor<2xf32>) {
