@@ -71,6 +71,11 @@ def IsDenseOrDeferredConstant:
       "isDeferredConstant($_self)">,
   "Value is a dense or deferred constant">;
 
+// Algebraic operand rewrites must retain terminal quantization boundaries.
+def IsNotDeferredQuantizationBoundary:
+    Constraint<CPred<"!isDeferredQuantizationBoundary($_self)">,
+  "Value is not a deferred quantization boundary">;
+
 def IsNotDenseOrDeferredConstant:
     Constraint<CPred<
       "!getDenseOrDisposableConstLikeElements($_self) && "
@@ -660,7 +665,8 @@ def SubConstToNeg : NamedPat<"SubConstToNeg",
     // To x + (-c).
     (ONNXAddOp $x, (CreateNegOfConstantExpression $input, $input)),
     [(IsNotDenseOrDeferredConstant:$x),
-     (IsDenseOrDeferredConstant:$input), (IsIntOrFloatType:$input),
+     (IsDenseOrDeferredConstant:$input),
+     (IsNotDeferredQuantizationBoundary:$input), (IsIntOrFloatType:$input),
      (IsNotUnsignedIntType:$input)]>;
 
 // Constant Propagation for Sqrt

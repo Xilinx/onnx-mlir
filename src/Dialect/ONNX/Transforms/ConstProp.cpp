@@ -1740,19 +1740,23 @@ Value ConstPropResize(
 // Pattern definition.
 //===----------------------------------------------------------------------===//
 
+bool isDeferredQuantizationBoundary(Value value) {
+  auto deferred = value.getDefiningOp<ONNXDeferredFoldableOp>();
+  Operation *terminal = deferred ? deferred.getTerminalOperation(
+                                       cast<OpResult>(value).getResultNumber())
+                                 : nullptr;
+  return terminal && isa<QuantizationBoundaryOpInterface>(terminal);
+}
+
 bool isCommutationConstant(Value value) {
   if (getDenseOrDisposableConstLikeElements(value))
     return true;
   if (!isDeferredConstant(value))
     return false;
-  auto deferred = value.getDefiningOp<ONNXDeferredFoldableOp>();
-  Operation *terminal = deferred ? deferred.getTerminalOperation(
-                                       cast<OpResult>(value).getResultNumber())
-                                 : nullptr;
   // FIXME: DQ(constant) should count as a constant here. For now, reproduce
   // the existing bug for DeferredFoldable { DQ(constant) }. Canonicalizing
   // these constants to the right is desirable, but users may need to retune.
-  return !terminal || !isa<QuantizationBoundaryOpInterface>(terminal);
+  return !isDeferredQuantizationBoundary(value);
 }
 
 // Normalize a constant to the right without replacing the operation. Its
