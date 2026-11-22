@@ -270,7 +270,7 @@ private:
     Operation *terminal = bodyBuilder.clone(*op, expressionMapping);
     ONNXYieldOp::create(bodyBuilder, op->getLoc(), terminal->getResults());
     for (Operation &operation :
-        llvm::make_early_inc_range(llvm::reverse(block->without_terminator())))
+        llvm::make_early_inc_range(llvm::drop_begin(llvm::reverse(*block))))
       if (operation.use_empty())
         rewriter.eraseOp(&operation);
     return deferred;
@@ -391,7 +391,7 @@ public:
       }
     });
     for (Operation &operation :
-        llvm::make_early_inc_range(llvm::reverse(body.without_terminator())))
+        llvm::make_early_inc_range(llvm::drop_begin(llvm::reverse(body))))
       if (operation.use_empty())
         rewriter.eraseOp(&operation);
     if (nested->use_empty())
