@@ -5,6 +5,8 @@
 // RUN: onnx-mlir-opt --constprop-onnx="form-deferred-foldable-expressions=false" %s | FileCheck %s
 // RUN: onnx-mlir-opt --constprop-onnx="form-deferred-foldable-expressions=true" %s | FileCheck %s
 // RUN: onnx-mlir-opt --constprop-onnx="form-deferred-foldable-expressions=false" %s | FileCheck %s --check-prefix=RHS
+// RUN: onnx-mlir-opt --constprop-onnx --onnx-const-prop-disable-pattern=AddConstCommutative1 %s | FileCheck %s --check-prefixes=DISABLE,NO-ADD
+// RUN: onnx-mlir-opt --constprop-onnx --onnx-const-prop-disable-pattern=MulConstCommutative1 %s | FileCheck %s --check-prefixes=DISABLE,NO-MUL
 
 func.func @source_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, tensor<2xf32>) {
   %source = "onnx.InitializerSource"() {kind = "onnx_model", name = "weight", path = "/not/read.onnx", scope = []} : () -> tensor<2xf32>
@@ -19,6 +21,14 @@ func.func @source_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, tens
 // CHECK: %[[ADD:.*]] = "onnx.Add"(%[[RUNTIME]], %[[SOURCE]]) {onnx_node_name = "source_Add"}
 // CHECK: %[[MUL:.*]] = "onnx.Mul"(%[[RUNTIME]], %[[SOURCE]]) {onnx_node_name = "source_Mul"}
 // CHECK: return %[[ADD]], %[[MUL]]
+
+// DISABLE-LABEL: func.func @source_operand_order(
+// DISABLE-SAME: %[[RUNTIME:[^: ]+]]:
+// DISABLE: %[[SOURCE:.*]] = "onnx.InitializerSource"
+// NO-ADD: "onnx.Add"(%[[SOURCE]], %[[RUNTIME]])
+// NO-ADD: "onnx.Mul"(%[[RUNTIME]], %[[SOURCE]])
+// NO-MUL: "onnx.Add"(%[[RUNTIME]], %[[SOURCE]])
+// NO-MUL: "onnx.Mul"(%[[SOURCE]], %[[RUNTIME]])
 
 func.func @deferred_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, tensor<2xf32>) {
   %source = "onnx.InitializerSource"() {kind = "onnx_model", name = "weight", path = "/not/read.onnx", scope = []} : () -> tensor<2xf32>

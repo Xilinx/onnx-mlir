@@ -1764,15 +1764,10 @@ bool isCommutationConstant(Value value) {
 template <typename BinaryOp>
 class CommuteConstantToRhs : public OpRewritePattern<BinaryOp> {
 public:
-  CommuteConstantToRhs(MLIRContext *context, StringRef patternName)
-      : OpRewritePattern<BinaryOp>(context), patternName(patternName) {
-    this->setDebugName(patternName);
-  }
+  using OpRewritePattern<BinaryOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
       BinaryOp op, PatternRewriter &rewriter) const override {
-    if (!isNotDisabled(patternName))
-      return failure();
     Value lhs = op->getOperand(0);
     Value rhs = op->getOperand(1);
     if (!isCommutationConstant(lhs) || isCommutationConstant(rhs))
@@ -1780,9 +1775,6 @@ public:
     rewriter.modifyOpInPlace(op, [&]() { op->setOperands({rhs, lhs}); });
     return success();
   }
-
-private:
-  StringRef patternName;
 };
 
 #include "src/Dialect/ONNX/Transforms/ONNXConstProp.inc"
@@ -2775,10 +2767,10 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
   if (isConstantPropagationDisabled())
     return;
   populateWithGenerated(patterns);
-  patterns.add<CommuteConstantToRhs<ONNXAddOp>>(
-      patterns.getContext(), "AddConstCommutative1");
-  patterns.add<CommuteConstantToRhs<ONNXMulOp>>(
-      patterns.getContext(), "MulConstCommutative1");
+  if (isNotDisabled("AddConstCommutative1"))
+    patterns.insert<CommuteConstantToRhs<ONNXAddOp>>(patterns.getContext());
+  if (isNotDisabled("MulConstCommutative1"))
+    patterns.insert<CommuteConstantToRhs<ONNXMulOp>>(patterns.getContext());
   if (isNotDisabled("SplitOfConst"))
     patterns.insert<SplitOfConst>(patterns.getContext());
   patterns.insert<IfOfConst>(patterns.getContext());
