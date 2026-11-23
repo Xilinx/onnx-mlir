@@ -60,6 +60,10 @@ def FormDeferredFoldableExpressionsPass
     output = MatMul(runtime_input, reshaped)
     ```
   }];
+  let options = [
+    Option<"enableQDQ", "enable-qdq", "bool", "false",
+           "Apply the per-tensor DQ movement rules in formed bodies.">
+  ];
 }
 
 // Options common to both decompose-onnx and recompose-onnx: same C++ member,

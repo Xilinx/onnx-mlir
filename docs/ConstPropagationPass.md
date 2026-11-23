@@ -16,8 +16,12 @@ operations with constant or deferred-constant operands in `DeferredFoldable`.
 The captured computation must be foldable once deferred operands, such as
 `InitializerSource`, are materialized.
 
-Constant propagation does not enter `DeferredFoldable` bodies. Materialization
-evaluates them explicitly.
+With `enable-qdq`, constant propagation can move a per-tensor
+`DequantizeLinear` past Slice, Transpose, Reshape, Squeeze or Unsqueeze inside
+a deferred body. The standalone formation pass applies these rewrites before
+returning. During constant propagation, existing bodies are normalized on
+entry and extensions before their consumers can inspect the yielded result.
+These rewrites use types and SSA operands. Materialization evaluates the body.
 
 Choose the predicate according to what the caller needs:
 
