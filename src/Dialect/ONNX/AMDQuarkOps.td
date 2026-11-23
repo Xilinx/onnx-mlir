@@ -17,7 +17,7 @@ include "src/IR/AttrBase.td"
 //===----------------------------------------------------------------------===//
 // BFPQuantizeDequantizeOp
 def AMDQuarkBFPQuantizeDequantizeOp: ONNX_Op<"AMDQuarkBFPQuantizeDequantizeOp",
-    [Pure, OpVersionTrait<1>, QuantizationBoundaryOpInterface,
+    [Pure, OpVersionTrait<1>, DequantizationOpInterface,
     DeclareOpInterfaceMethods<ShapeInferenceOpInterface>,
     DeclareOpInterfaceMethods<ShapeHelperOpInterface>, SameOperandsAndResultElementType]> {
   let summary = "BFPQuantizeDequantize";
@@ -69,7 +69,7 @@ def AMDQuarkBFPQuantizeDequantizeOp: ONNX_Op<"AMDQuarkBFPQuantizeDequantizeOp",
 // AMDQuarkExtendedQuantizeLinearOp
 def AMDQuarkExtendedQuantizeLinearOp
     : ONNX_Op<"AMDQuarkExtendedQuantizeLinearOp",
-          [Pure, OpVersionTrait<1>, QuantizationBoundaryOpInterface,
+          [Pure, OpVersionTrait<1>,
               DeclareOpInterfaceMethods<ShapeInferenceOpInterface>,
               DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
   let summary = "ExtendedQuantizeLinear";
@@ -121,7 +121,7 @@ def AMDQuarkExtendedQuantizeLinearOp
 // AMDQuarkExtendedDequantizeLinearOp
 def AMDQuarkExtendedDequantizeLinearOp
     : ONNX_Op<"AMDQuarkExtendedDequantizeLinearOp",
-          [Pure, OpVersionTrait<1>, QuantizationBoundaryOpInterface,
+          [Pure, OpVersionTrait<1>, DequantizationOpInterface,
               DeclareOpInterfaceMethods<ShapeInferenceOpInterface>,
               DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
   let summary = "ExtendedDequantizeLinear";

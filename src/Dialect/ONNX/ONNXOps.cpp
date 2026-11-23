@@ -209,8 +209,7 @@ LogicalResult ONNXDeferredFoldableOp::verify() {
       return emitOpError("has an invalid capture");
     if (dyn_cast_or_null<ONNXDeferredFoldableOp>(capture.getDefiningOp()))
       return emitOpError("must inline a captured onnx.DeferredFoldable body");
-    if (!onnx_mlir::isConstLikeOperation(capture.getDefiningOp()) &&
-        !isDeferredConstant(capture)) {
+    if (!onnx_mlir::isConstantOrDeferredValue(capture)) {
       InFlightDiagnostic diagnostic =
           emitOpError("capture must be constant or deferred constant");
       if (Operation *producer = capture.getDefiningOp()) {

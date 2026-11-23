@@ -544,10 +544,10 @@ bool matchShapeAddMatMul(Value v, Value &matA, Value &biasB,
   // Match Gemm
   auto onnxGemmOp = origV.getDefiningOp<ONNXGemmOp>();
   if (onnxGemmOp) {
-    if (!isConstantFoldable(onnxGemmOp.getB()))
+    if (!isConstantFoldableExceptDequant(onnxGemmOp.getB()))
       return false;
     if (!isNoneValue(onnxGemmOp.getC()) &&
-        !isConstantFoldable(onnxGemmOp.getC()))
+        !isConstantFoldableExceptDequant(onnxGemmOp.getC()))
       return false;
     matmulOrGemmOp = onnxGemmOp.getOperation();
     matA = onnxGemmOp.getB();
@@ -570,11 +570,11 @@ bool matchShapeAddMatMul(Value v, Value &matA, Value &biasB,
   if (!onnxMatMulOp)
     return false;
   Value rhsMatMul = onnxMatMulOp.getB();
-  if (!isConstantFoldable(rhsMatMul))
+  if (!isConstantFoldableExceptDequant(rhsMatMul))
     return false;
 
   // RHS of Add is constant-foldable.
-  if (!isConstantFoldable(rhsAdd))
+  if (!isConstantFoldableExceptDequant(rhsAdd))
     return false;
 
   // Passed all tests.
@@ -824,7 +824,7 @@ public:
           expandShape = expandOp.getShape();
         }
       }
-      if (isConstantFoldable(res) && isScalarTensor(res))
+      if (isConstantFoldableExceptDequant(res) && isScalarTensor(res))
         return res;
       return nullptr;
     };
@@ -921,7 +921,7 @@ public:
 
   LogicalResult matchAndRewrite(
       ONNXAddOp addOp, PatternRewriter &r) const override {
-    if (!isConstantFoldable(addOp.getB()))
+    if (!isConstantFoldableExceptDequant(addOp.getB()))
       return r.notifyMatchFailure(addOp, "not a constant rhs operand");
 
     auto transposeOp =
@@ -2697,8 +2697,7 @@ struct RecomposeConcatPattern : public OpRewritePattern<ONNXConcatOp> {
     // GroupConsecutiveConstantConcatOperandsPattern and will later be
     // constant-folded to a single constant operand after any deferred sources
     // are materialized.
-    if (llvm::all_of(concatOp.getOperands(),
-            [](Value v) { return isConstantFoldable(v); }))
+    if (llvm::all_of(concatOp.getOperands(), isConstantFoldableExceptDequant))
       return false;
     return true;
   }
@@ -3150,19 +3149,19 @@ struct GroupConsecutiveConstantConcatOperandsPattern
   LogicalResult matchAndRewrite(
       ONNXConcatOp concatOp, PatternRewriter &rewriter) const final {
     ValueRange inputs = concatOp.getOperands();
-    if (llvm::all_of(inputs, isConstantFoldable))
+    if (llvm::all_of(inputs, isConstantFoldableExceptDequant))
       return failure();
 
     SmallVector<Value> newInputs;
     bool grouped = false;
     for (size_t i = 0, e = inputs.size(); i < e;) {
-      if (!isConstantFoldable(inputs[i])) {
+      if (!isConstantFoldableExceptDequant(inputs[i])) {
         newInputs.push_back(inputs[i]);
         ++i;
         continue;
       }
       size_t j = i + 1;
-      while (j < e && isConstantFoldable(inputs[j]))
+      while (j < e && isConstantFoldableExceptDequant(inputs[j]))
         ++j;
       if (j - i >= 2) {
         ValueRange run = inputs.slice(i, j - i);
@@ -5231,10 +5230,10 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
           conv2, "quantized Conv fusion is not supported");
 
     // ---- Require constant-foldable weights --------------------------
-    if (!isConstantFoldable(W1))
+    if (!isConstantFoldableExceptDequant(W1))
       return rewriter.notifyMatchFailure(
           conv2, "conv1 weight is not constant-foldable");
-    if (!isConstantFoldable(W2))
+    if (!isConstantFoldableExceptDequant(W2))
       return rewriter.notifyMatchFailure(
           conv2, "conv2 weight is not constant-foldable");
 
@@ -5247,10 +5246,10 @@ struct FuseConv1x1IntoConvPattern : public OpRewritePattern<ONNXConvOp> {
           "conv2 has nonzero pads and conv1 has nonzero bias: "
           "bias fold would require a spatially-varying correction");
 
-    if (!isNoneValue(b1) && !isConstantFoldable(b1))
+    if (!isNoneValue(b1) && !isConstantFoldableExceptDequant(b1))
       return rewriter.notifyMatchFailure(
           conv1, "conv1 bias is not constant-foldable");
-    if (!isNoneValue(b2) && !isConstantFoldable(b2))
+    if (!isNoneValue(b2) && !isConstantFoldableExceptDequant(b2))
       return rewriter.notifyMatchFailure(
           conv2, "conv2 bias is not constant-foldable");
 

@@ -46,3 +46,26 @@ func.func @propagate_attention_scale_into_deferred_query(
 // CHECK: "onnx.MatMul"([[KEY]], [[KEY_WEIGHT]])
 // CHECK: "onnx.Add"({{.*}}, [[KEY_BIAS]])
 // CHECK-NOT: "onnx.Div"({{.*}}tensor<1x2x2x2xf32>
+
+// Grouping and flattening must agree about which Concat operands are constants.
+func.func @concat_dequantized(%x: tensor<4xf32>) -> (tensor<12xf32>, tensor<12xf32>) {
+  %w = "onnx.InitializerSource"() {kind = "onnx_model", name = "w", path = "/model.onnx", scope = []} : () -> tensor<4xi8>
+  %dq = "onnx.DeferredFoldable"(%w) ({
+  ^bb0(%data: tensor<4xi8>):
+    %s = onnx.Constant dense<0.25> : tensor<f32>
+    %z = onnx.Constant dense<0> : tensor<i8>
+    %value = "onnx.DequantizeLinear"(%data, %s, %z) : (tensor<4xi8>, tensor<f32>, tensor<i8>) -> tensor<4xf32>
+    onnx.Yield %value : tensor<4xf32>
+  }) : (tensor<4xi8>) -> tensor<4xf32>
+  %c = onnx.Constant dense<2.0> : tensor<4xf32>
+  %flat = "onnx.Concat"(%x, %dq, %c) {axis = 0 : si64} : (tensor<4xf32>, tensor<4xf32>, tensor<4xf32>) -> tensor<12xf32>
+  %inner = "onnx.Concat"(%dq, %c) {axis = 0 : si64} : (tensor<4xf32>, tensor<4xf32>) -> tensor<8xf32>
+  %nested = "onnx.Concat"(%x, %inner) {axis = 0 : si64} : (tensor<4xf32>, tensor<8xf32>) -> tensor<12xf32>
+  onnx.Return %flat, %nested : tensor<12xf32>, tensor<12xf32>
+}
+
+// CHECK-LABEL: func.func @concat_dequantized(
+// CHECK-SAME: [[X:%[^:]+]]:
+// CHECK: [[DQ:%.+]] = "onnx.DeferredFoldable"
+// CHECK: [[R:%.+]] = "onnx.Concat"([[X]], [[DQ]], {{%[^)]+}})
+// CHECK: onnx.Return [[R]], [[R]]

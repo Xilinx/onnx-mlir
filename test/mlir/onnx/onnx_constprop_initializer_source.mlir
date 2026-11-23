@@ -139,35 +139,34 @@ func.func @subtract_literal(%runtime: tensor<4xf32>) -> tensor<4xf32> {
 
 func.func @subtract_deferred_arithmetic(%runtime: tensor<4xf32>) -> tensor<4xf32> {
   %bias = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "bias", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<4xf32>
-  %recipe = "onnx.DeferredFoldable"(%bias) ({
+  %deferred = "onnx.DeferredFoldable"(%bias) ({
   ^bb0(%value: tensor<4xf32>):
     %absolute = "onnx.Abs"(%value) : (tensor<4xf32>) -> tensor<4xf32>
     onnx.Yield %absolute : tensor<4xf32>
   }) : (tensor<4xf32>) -> tensor<4xf32>
-  %result = "onnx.Sub"(%runtime, %recipe) : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  %result = "onnx.Sub"(%runtime, %deferred) : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
   onnx.Return %result : tensor<4xf32>
 }
 
 // CHECK-LABEL: func.func @subtract_deferred_arithmetic(
 // CHECK-SAME: %[[RUNTIME:[^: ]+]]:
 // CHECK: [[BIAS:%.+]] = "onnx.InitializerSource"() {{.*}}name = "bias"
-// CHECK: [[RECIPE:%.+]] = "onnx.DeferredFoldable"([[BIAS]]) ({
+// CHECK: [[DEFERRED:%.+]] = "onnx.DeferredFoldable"([[BIAS]]) ({
 // CHECK: ^bb0(%[[VALUE:[^: ]+]]: tensor<4xf32>):
 // CHECK: [[ABSOLUTE:%.+]] = "onnx.Abs"(%[[VALUE]]) : (tensor<4xf32>) -> tensor<4xf32>
 // CHECK: [[NEGATIVE:%.+]] = "onnx.Neg"([[ABSOLUTE]]) : (tensor<4xf32>) -> tensor<4xf32>
 // CHECK: onnx.Yield [[NEGATIVE]] : tensor<4xf32>
 // CHECK: }) : (tensor<4xf32>) -> tensor<4xf32>
-// CHECK: [[RESULT:%.+]] = "onnx.Add"(%[[RUNTIME]], [[RECIPE]])
+// CHECK: [[RESULT:%.+]] = "onnx.Add"(%[[RUNTIME]], [[DEFERRED]])
 // CHECK: onnx.Return [[RESULT]]
 
 // -----
 
-// Keep a selected DQ result visible to consumers that match quantization
-// boundaries. A different result of the same recipe is ordinary arithmetic.
-func.func @subtract_deferred_dequantized(%runtime: tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>) {
+// Only the second result is produced by DequantizeLinear.
+func.func @preserve_deferred_dequantized_operand(%runtime: tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>, tensor<4xf32>) {
   %data = "onnx.InitializerSource"() {kind = "external_data", length = 4 : i64, name = "data", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<4xi8>
   %bias = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "bias", offset = 4 : i64, path = "/not/read", scope = []} : () -> tensor<4xf32>
-  %recipe:2 = "onnx.DeferredFoldable"(%data, %bias) ({
+  %deferred:2 = "onnx.DeferredFoldable"(%data, %bias) ({
   ^bb0(%storage: tensor<4xi8>, %value: tensor<4xf32>):
     %absolute = "onnx.Abs"(%value) : (tensor<4xf32>) -> tensor<4xf32>
     %scale = onnx.Constant dense<0.015625> : tensor<f32>
@@ -175,15 +174,18 @@ func.func @subtract_deferred_dequantized(%runtime: tensor<4xf32>) -> (tensor<4xf
     %dq = "onnx.DequantizeLinear"(%storage, %scale, %zero) {axis = 0 : si64} : (tensor<4xi8>, tensor<f32>, tensor<i8>) -> tensor<4xf32>
     onnx.Yield %absolute, %dq : tensor<4xf32>, tensor<4xf32>
   }) : (tensor<4xi8>, tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>)
-  %result = "onnx.Sub"(%runtime, %recipe#1) : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
-  onnx.Return %recipe#0, %result : tensor<4xf32>, tensor<4xf32>
+  %result = "onnx.Sub"(%runtime, %deferred#1) : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  %factor = onnx.Constant dense<2.0> : tensor<f32>
+  %inner = "onnx.Mul"(%runtime, %deferred#1) : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+  %outer = "onnx.Mul"(%inner, %factor) : (tensor<4xf32>, tensor<f32>) -> tensor<4xf32>
+  onnx.Return %deferred#0, %result, %outer : tensor<4xf32>, tensor<4xf32>, tensor<4xf32>
 }
 
-// CHECK-LABEL: func.func @subtract_deferred_dequantized(
+// CHECK-LABEL: func.func @preserve_deferred_dequantized_operand(
 // CHECK-SAME: %[[RUNTIME:[^: ]+]]:
 // CHECK-DAG: [[DATA:%.+]] = "onnx.InitializerSource"() {{.*}}name = "data"
 // CHECK-DAG: [[BIAS:%.+]] = "onnx.InitializerSource"() {{.*}}name = "bias"
-// CHECK: [[RECIPE:%.+]]:2 = "onnx.DeferredFoldable"([[DATA]], [[BIAS]]) ({
+// CHECK: [[DEFERRED:%.+]]:2 = "onnx.DeferredFoldable"([[DATA]], [[BIAS]]) ({
 // CHECK: ^bb0(%[[STORAGE:[^: ]+]]: tensor<4xi8>, %[[VALUE:[^: ]+]]: tensor<4xf32>):
 // CHECK: [[ABSOLUTE:%.+]] = "onnx.Abs"(%[[VALUE]])
 // CHECK: [[SCALE:%.+]] = onnx.Constant dense<1.562500e-02> : tensor<f32>
@@ -192,8 +194,10 @@ func.func @subtract_deferred_dequantized(%runtime: tensor<4xf32>) -> (tensor<4xf
 // CHECK: onnx.Yield [[ABSOLUTE]], [[DQ]] : tensor<4xf32>, tensor<4xf32>
 // CHECK: }) : (tensor<4xi8>, tensor<4xf32>) -> (tensor<4xf32>, tensor<4xf32>)
 // CHECK-NOT: "onnx.Neg"
-// CHECK: [[RESULT:%.+]] = "onnx.Sub"(%[[RUNTIME]], [[RECIPE]]#1)
-// CHECK: onnx.Return [[RECIPE]]#0, [[RESULT]]
+// CHECK: [[RESULT:%.+]] = "onnx.Sub"(%[[RUNTIME]], [[DEFERRED]]#1)
+// CHECK: [[INNER:%.+]] = "onnx.Mul"(%[[RUNTIME]], [[DEFERRED]]#1)
+// CHECK: [[OUTER:%.+]] = "onnx.Mul"([[INNER]], {{%.+}})
+// CHECK: onnx.Return [[DEFERRED]]#0, [[RESULT]], [[OUTER]]
 
 // -----
 

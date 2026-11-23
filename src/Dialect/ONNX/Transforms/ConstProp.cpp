@@ -40,7 +40,6 @@
 #include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
 #include "src/Dialect/ONNX/Transforms/ConstProp.hpp"
 #include "src/Dialect/ONNX/Transforms/ResultNamesUpdater.hpp"
-#include "src/Interface/QuantizationBoundaryOpInterface.hpp"
 #include "src/Pass/Passes.hpp"
 #include "src/Support/TypeUtilities.hpp"
 
@@ -1740,23 +1739,10 @@ Value ConstPropResize(
 // Pattern definition.
 //===----------------------------------------------------------------------===//
 
-bool isDeferredQuantizationBoundary(Value value) {
-  auto deferred = value.getDefiningOp<ONNXDeferredFoldableOp>();
-  Operation *terminal = deferred ? deferred.getTerminalOperation(
-                                       cast<OpResult>(value).getResultNumber())
-                                 : nullptr;
-  return terminal && isa<QuantizationBoundaryOpInterface>(terminal);
-}
-
 bool isCommutationConstant(Value value) {
-  if (getDenseOrDisposableConstLikeElements(value))
-    return true;
-  if (!isDeferredConstant(value))
-    return false;
-  // FIXME: DQ(constant) should count as a constant here. For now, reproduce
-  // the existing bug for DeferredFoldable { DQ(constant) }. Canonicalizing
-  // these constants to the right is desirable, but users may need to retune.
-  return !isDeferredQuantizationBoundary(value);
+  if (isDeferredConstant(value))
+    return isConstantFoldableExceptDequant(value);
+  return bool(getDenseOrDisposableConstLikeElements(value));
 }
 
 // Normalize a constant to the right without replacing the operation. Its

@@ -60,7 +60,7 @@ bool isFormationCandidate(Operation *op) {
 bool canFormDeferredFoldableExpression(
     Operation *op, bool requireDeferredSource = false) {
   return isFormationCandidate(op) &&
-         llvm::all_of(op->getOperands(), isConstantFoldable) &&
+         llvm::all_of(op->getOperands(), isConstantOrDeferredValue) &&
          (!requireDeferredSource ||
              llvm::any_of(op->getOperands(), isDeferredConstant));
 }

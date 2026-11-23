@@ -210,7 +210,15 @@ mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 
 // Return true when `value`'s direct producer has the ConstantLike trait or its
 // DeferredConstantOpInterface reports this result as a deferred constant.
+[[nodiscard]] bool isConstantOrDeferredValue(mlir::Value value);
+
+// Also recognizes explicit dequantization when each operand is available.
 [[nodiscard]] bool isConstantFoldable(mlir::Value value);
+
+// FIXME: Algebraic rewrites historically skip DQ(constant). Preserve that
+// behavior for a selected deferred result ending in dequantization until the
+// eager and deferred rewrites can change together.
+[[nodiscard]] bool isConstantFoldableExceptDequant(mlir::Value value);
 
 // Inspect or peel the terminal operation for one selected deferred result.
 // Peeling retains other results and exposes computed body-local operands as

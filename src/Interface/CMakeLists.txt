@@ -5,7 +5,7 @@
 add_onnx_mlir_interface(ShapeInferenceOpInterface)
 add_onnx_mlir_interface(ShapeHelperOpInterface)
 add_onnx_mlir_interface(DeferredConstantOpInterface)
-add_onnx_mlir_interface(QuantizationBoundaryOpInterface)
+add_onnx_mlir_interface(DequantizationOpInterface)
 add_onnx_mlir_interface(StructuralOperandOpInterface)
 add_onnx_mlir_interface(ResultTypeInferenceOpInterface)
 add_onnx_mlir_interface(HasOnnxSubgraphOpInterface)
@@ -46,11 +46,11 @@ add_onnx_mlir_library(OMDeferredConstantOpInterface
   MLIRIR
   )
 
-add_onnx_mlir_library(OMQuantizationBoundaryOpInterface
-  QuantizationBoundaryOpInterface.cpp
+add_onnx_mlir_library(OMDequantizationOpInterface
+  DequantizationOpInterface.cpp
 
   DEPENDS
-  OMQuantizationBoundaryOpInterfaceIncGen
+  OMDequantizationOpInterfaceIncGen
 
   LINK_LIBS PUBLIC
   MLIRIR
