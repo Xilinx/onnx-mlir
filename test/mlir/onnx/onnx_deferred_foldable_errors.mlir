@@ -46,7 +46,7 @@ func.func @runtime_capture(%runtime: tensor<2x2xf32>) -> tensor<2x2xf32> {
 
 // -----
 
-func.func @dead_recipe_operation() -> tensor<2x2xf32> {
+func.func @dead_body_operation() -> tensor<2x2xf32> {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
   // expected-error@+1 {{'onnx.DeferredFoldable' op body operation must contribute to the yielded value: onnx.Identity}}
   %result = "onnx.DeferredFoldable"(%weight) ({

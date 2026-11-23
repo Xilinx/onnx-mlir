@@ -136,7 +136,7 @@ func.func @retain_multi_result_expression() -> (tensor<2x2xf32>, tensor<2x2xf32>
 // Generic cleanup is not the expression evaluation mechanism, but a
 // semantics-preserving canonicalization may eliminate an identity terminal.
 // Once the expression directly yields a capture, it is redundant and is removed.
-func.func @canonicalized_identity_recipe() -> tensor<2x2xf32> {
+func.func @canonicalized_identity_expression() -> tensor<2x2xf32> {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
   %result = "onnx.DeferredFoldable"(%weight) ({
   ^bb0(%captured: tensor<2x2xf32>):
@@ -146,7 +146,7 @@ func.func @canonicalized_identity_recipe() -> tensor<2x2xf32> {
   onnx.Return %result : tensor<2x2xf32>
 }
 
-// CANON-LABEL: func.func @canonicalized_identity_recipe
+// CANON-LABEL: func.func @canonicalized_identity_expression
 // CANON:         %[[SOURCE:.+]] = "onnx.InitializerSource"()
 // CANON-NOT:     "onnx.DeferredFoldable"
 // CANON-NOT:     "onnx.Identity"
@@ -154,7 +154,7 @@ func.func @canonicalized_identity_recipe() -> tensor<2x2xf32> {
 
 // Constprop treats a retained expression as opaque. Dense work inside the expression
 // is evaluated only when the expression is explicitly materialized.
-func.func @constprop_does_not_enter_recipe() -> tensor<2x2xf32> {
+func.func @constprop_does_not_enter_body() -> tensor<2x2xf32> {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
   %result = "onnx.DeferredFoldable"(%weight) ({
   ^bb0(%captured: tensor<2x2xf32>):
@@ -167,7 +167,7 @@ func.func @constprop_does_not_enter_recipe() -> tensor<2x2xf32> {
   onnx.Return %result : tensor<2x2xf32>
 }
 
-// NOFORM-LABEL: func.func @constprop_does_not_enter_recipe
+// NOFORM-LABEL: func.func @constprop_does_not_enter_body
 // NOFORM:         "onnx.DeferredFoldable"
 // NOFORM:           %[[ONE:.+]] = onnx.Constant dense<1.000000e+00>
 // NOFORM:           %[[TWO:.+]] = onnx.Constant dense<2.000000e+00>
@@ -177,7 +177,7 @@ func.func @constprop_does_not_enter_recipe() -> tensor<2x2xf32> {
 
 // A retained expression remains valid when later dialect conversion lowers an
 // operation in its body.
-func.func @lowered_recipe_operation() -> tensor<2x2xf32> {
+func.func @lowered_body_operation() -> tensor<2x2xf32> {
   %weight = "onnx.InitializerSource"() {kind = "external_data", length = 16 : i64, name = "weight", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<2x2xf32>
   %result = "onnx.DeferredFoldable"(%weight) ({
   ^bb0(%arg0: tensor<2x2xf32>):
@@ -189,26 +189,25 @@ func.func @lowered_recipe_operation() -> tensor<2x2xf32> {
 
 // Compiler-owned expressions created by downstream normalization remain opaque to
 // constant propagation; available captures do not request their evaluation.
-func.func @retain_compiler_owned_recipe(%runtime: tensor<2x2xf32>) -> tensor<2x2xf32> {
+func.func @retain_compiler_owned_expression(%runtime: tensor<2x2xf32>) -> tensor<2x2xf32> {
   %constant = onnx.Constant dense<[[1.0, 2.0], [3.0, 4.0]]> : tensor<2x2xf32>
-  %recipe = "onnx.DeferredFoldable"(%constant) ({
+  %deferred = "onnx.DeferredFoldable"(%constant) ({
   ^bb0(%captured: tensor<2x2xf32>):
     %transposed = "onnx.Transpose"(%captured) {perm = [1, 0]} : (tensor<2x2xf32>) -> tensor<2x2xf32>
     onnx.Yield %transposed : tensor<2x2xf32>
   }) : (tensor<2x2xf32>) -> tensor<2x2xf32>
-  %result = "onnx.Add"(%runtime, %recipe) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
+  %result = "onnx.Add"(%runtime, %deferred) : (tensor<2x2xf32>, tensor<2x2xf32>) -> tensor<2x2xf32>
   onnx.Return %result : tensor<2x2xf32>
 }
 
-// RETAIN-LABEL: func.func @retain_compiler_owned_recipe
+// RETAIN-LABEL: func.func @retain_compiler_owned_expression
 // RETAIN: %[[CONSTANT:.+]] = onnx.Constant
-// RETAIN: %[[RECIPE:.+]] = "onnx.DeferredFoldable"(%[[CONSTANT]])
+// RETAIN: %[[DEFERRED:.+]] = "onnx.DeferredFoldable"(%[[CONSTANT]])
 // RETAIN: %[[TRANSPOSE:.+]] = "onnx.Transpose"
 // RETAIN: onnx.Yield %[[TRANSPOSE]]
-// RETAIN: "onnx.Add"(%{{.+}}, %[[RECIPE]])
+// RETAIN: "onnx.Add"(%{{.+}}, %[[DEFERRED]])
 
-// Standalone formation preserves unrelated dead operations both in an eager
-// function and alongside a deferred chain that exceeds ten operations.
+// Greedy DCE also applies when there are no deferred operands.
 func.func @no_formation_roots() -> tensor<2xi64> {
   %live = onnx.Constant dense<[4, 8]> : tensor<2xi64>
   %dead = onnx.Constant dense<[4, 8]> : tensor<2xi64>
@@ -219,10 +218,6 @@ func.func @no_formation_roots() -> tensor<2xi64> {
 }
 // CHECK-LABEL: func.func @no_formation_roots
 // CHECK-NEXT: %[[LIVE:.+]] = onnx.Constant dense<[4, 8]> : tensor<2xi64>
-// CHECK-NEXT: %{{.+}} = onnx.Constant dense<[4, 8]> : tensor<2xi64>
-// CHECK-NEXT: %{{.+}} = "onnx.Add"(%[[LIVE]], %[[LIVE]])
-// CHECK-NEXT: %[[SUM:.+]] = "onnx.Add"(%[[LIVE]], %[[LIVE]])
-// CHECK-NEXT: %{{.+}} = "onnx.Neg"(%[[SUM]])
 // CHECK-NEXT: onnx.Return %[[LIVE]]
 
 func.func @mixed_deep_chain(%arg: tensor<2xf32>) -> tensor<2xf32> {
@@ -246,17 +241,13 @@ func.func @mixed_deep_chain(%arg: tensor<2xf32>) -> tensor<2xf32> {
   onnx.Return %v12 : tensor<2xf32>
 }
 // CHECK-LABEL: func.func @mixed_deep_chain
-// CHECK-SAME: (%[[ARG:.+]]: tensor<2xf32>)
-// CHECK-NEXT: %{{.+}} = onnx.Constant dense<1.900000e+01> : tensor<2xf32>
-// CHECK-NEXT: %{{.+}} = "onnx.Neg"(%[[ARG]])
 // CHECK-NEXT: %[[SOURCE:.+]] = "onnx.InitializerSource"
-// CHECK-NEXT: %{{.+}} = "onnx.Add"(%[[SOURCE]], %[[ARG]])
-// CHECK-NEXT: %[[RECIPE:.+]] = "onnx.DeferredFoldable"(%[[SOURCE]])
+// CHECK-NEXT: %[[DEFERRED:.+]] = "onnx.DeferredFoldable"(%[[SOURCE]])
 // CHECK: ^bb0(
 // CHECK-COUNT-12: = "onnx.Neg"
 // CHECK-NEXT: onnx.Yield
 // CHECK-NEXT: })
-// CHECK-NEXT: onnx.Return %[[RECIPE]]
+// CHECK-NEXT: onnx.Return %[[DEFERRED]]
 
 // An ordinary region owner cannot form a deferred expression, but operations nested in
 // its blocks can. A source defined outside the branch remains a valid capture.

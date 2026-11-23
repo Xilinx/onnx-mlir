@@ -399,23 +399,6 @@ public:
   }
 };
 
-LogicalResult applyOuterPatterns(func::FuncOp function,
-    RewritePatternSet &&patterns, RewriterBase::Listener *listener,
-    bool enableFolding, llvm::function_ref<bool(Operation *)> shouldSeed = {});
-
-// Select operations for the greedy driver during deferred expression formation.
-bool shouldSeedFormation(Operation *op) {
-  if (isa<ONNXDeferredFoldableOp>(op))
-    return true;
-  // Greedy DCE runs before matching. Skip unrelated unused operations so
-  // formation does not erase them.
-  if (op->use_empty())
-    return canFormDeferredFoldableExpression(
-        op, /*requireDeferredSource=*/true);
-  // A live candidate may become eligible after a producer is replaced.
-  return isFormationCandidate(op);
-}
-
 // Form expressions without evaluating them, preserving result-name updates.
 LogicalResult formDeferredFoldableExpressions(func::FuncOp function) {
   MLIRContext *context = function.getContext();
@@ -423,8 +406,11 @@ LogicalResult formDeferredFoldableExpressions(func::FuncOp function) {
   populateFormDeferredFoldableExpressionPatterns(
       patterns, PatternBenefit(1), /*requireDeferredSource=*/true);
   onnx_mlir::ResultNamesUpdater rnUpdater;
-  return applyOuterPatterns(function, std::move(patterns), &rnUpdater,
-      /*enableFolding=*/false, shouldSeedFormation);
+  if (failed(applyPatternsOutsideDeferredFoldable(function, std::move(patterns),
+          &rnUpdater,
+          /*enableFolding=*/false)))
+    return failure();
+  return success();
 }
 
 struct FormDeferredFoldableExpressionsPass
@@ -438,9 +424,11 @@ struct FormDeferredFoldableExpressionsPass
   }
 };
 
-LogicalResult applyOuterPatterns(func::FuncOp function,
-    RewritePatternSet &&patterns, RewriterBase::Listener *listener,
-    bool enableFolding, llvm::function_ref<bool(Operation *)> shouldSeed) {
+} // namespace
+
+LogicalResult onnx_mlir::applyPatternsOutsideDeferredFoldable(
+    func::FuncOp function, RewritePatternSet &&patterns,
+    RewriterBase::Listener *listener, bool enableFolding) {
   FrozenRewritePatternSet frozenPatterns(std::move(patterns));
   GreedyRewriteConfig config;
   // Restrict the selected-op greedy driver to the collected operations so
@@ -456,7 +444,7 @@ LogicalResult applyOuterPatterns(func::FuncOp function,
     // include DeferredFoldable operations, but skip their bodies.
     SmallVector<Operation *> operations;
     function.walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
-      if (op != function && (!shouldSeed || shouldSeed(op)))
+      if (op != function)
         operations.push_back(op);
       return isa<ONNXDeferredFoldableOp>(op) ? WalkResult::skip()
                                              : WalkResult::advance();
@@ -475,15 +463,6 @@ LogicalResult applyOuterPatterns(func::FuncOp function,
     // the selected-op driver's notifications alone may not requeue.
   }
   return failure();
-}
-
-} // namespace
-
-LogicalResult onnx_mlir::applyPatternsOutsideDeferredFoldable(
-    func::FuncOp function, RewritePatternSet &&patterns,
-    RewriterBase::Listener *listener, bool enableFolding) {
-  return applyOuterPatterns(
-      function, std::move(patterns), listener, enableFolding);
 }
 
 FailureOr<Value> onnx_mlir::formDeferredFoldableExpression(
