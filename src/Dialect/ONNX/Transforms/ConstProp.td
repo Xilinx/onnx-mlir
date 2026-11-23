@@ -61,26 +61,13 @@ def IsFromDenseConstLike:
   "Value is produced by any ConstantLike op that folds to a dense "
   "ElementsAttr (DenseElementsAttr or DisposableElementsAttr)">;
 
-// Use only for algebraic rewrites that do not inspect the payload. Preserve
-// the historical dense-only treatment of ConstantLike operations while also
-// accepting values represented by deferred constant operations. Actual
-// constant propagation must continue to require IsFromDenseConstLike.
-def IsDenseOrDeferredConstant:
-    Constraint<CPred<
-      "static_cast<bool>(getDenseOrDisposableConstLikeElements($_self)) || "
-      "isDeferredConstant($_self)">,
-  "Value is a dense or deferred constant">;
-
-// Algebraic operand rewrites must retain terminal quantization boundaries.
-def IsNotDeferredQuantizationBoundary:
-    Constraint<CPred<"!isDeferredQuantizationBoundary($_self)">,
-  "Value is not a deferred quantization boundary">;
-
-def IsNotDenseOrDeferredConstant:
-    Constraint<CPred<
-      "!getDenseOrDisposableConstLikeElements($_self) && "
-      "!isDeferredConstant($_self)">,
-  "Value is neither a dense nor deferred constant">;
+// Payload-independent algebraic rewrites use the policy documented in
+// docs/ConstPropagationPass.md. Folds that read elements use IsFromDenseConstLike.
+def IsDenseOrDeferredConstant : Constraint<
+    CPred<"isCommutationConstant($_self)">,
+    "Value is a constant operand for algebraic rewrites">;
+def IsNotDenseOrDeferredConstant : Constraint<Neg<IsDenseOrDeferredConstant.predicate>,
+    "Value is not a constant operand for algebraic rewrites">;
 
 def IsFromDenseConstLikeOrNone:
   Constraint<
@@ -666,7 +653,7 @@ def SubConstToNeg : NamedPat<"SubConstToNeg",
     (ONNXAddOp $x, (CreateNegOfConstantExpression $input, $input)),
     [(IsNotDenseOrDeferredConstant:$x),
      (IsDenseOrDeferredConstant:$input),
-     (IsNotDeferredQuantizationBoundary:$input), (IsIntOrFloatType:$input),
+     (IsIntOrFloatType:$input),
      (IsNotUnsignedIntType:$input)]>;
 
 // Constant Propagation for Sqrt

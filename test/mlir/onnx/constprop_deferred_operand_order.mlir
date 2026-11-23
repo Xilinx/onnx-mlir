@@ -32,21 +32,21 @@ func.func @source_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, tens
 
 func.func @deferred_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, tensor<2xf32>) {
   %source = "onnx.InitializerSource"() {kind = "onnx_model", name = "weight", path = "/not/read.onnx", scope = []} : () -> tensor<2xf32>
-  %recipe = "onnx.DeferredFoldable"(%source) ({
+  %deferred = "onnx.DeferredFoldable"(%source) ({
   ^bb0(%data: tensor<2xf32>):
     %negative = "onnx.Neg"(%data) : (tensor<2xf32>) -> tensor<2xf32>
     onnx.Yield %negative : tensor<2xf32>
   }) : (tensor<2xf32>) -> tensor<2xf32>
-  %add = "onnx.Add"(%recipe, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
-  %mul = "onnx.Mul"(%recipe, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  %add = "onnx.Add"(%deferred, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  %mul = "onnx.Mul"(%deferred, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
   return %add, %mul : tensor<2xf32>, tensor<2xf32>
 }
 
 // CHECK-LABEL: func.func @deferred_operand_order(
 // CHECK-SAME: %[[RUNTIME:[^: ]+]]:
-// CHECK: %[[RECIPE:.*]] = "onnx.DeferredFoldable"
-// CHECK: %[[ADD:.*]] = "onnx.Add"(%[[RUNTIME]], %[[RECIPE]])
-// CHECK: %[[MUL:.*]] = "onnx.Mul"(%[[RUNTIME]], %[[RECIPE]])
+// CHECK: %[[DEFERRED:.*]] = "onnx.DeferredFoldable"
+// CHECK: %[[ADD:.*]] = "onnx.Add"(%[[RUNTIME]], %[[DEFERRED]])
+// CHECK: %[[MUL:.*]] = "onnx.Mul"(%[[RUNTIME]], %[[DEFERRED]])
 // CHECK: return %[[ADD]], %[[MUL]]
 
 func.func @literal_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, tensor<2xf32>) {
@@ -65,45 +65,45 @@ func.func @literal_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, ten
 
 func.func @dequantized_operand_order(%runtime: tensor<2xf32>) -> (tensor<2xf32>, tensor<2xf32>) {
   %source = "onnx.InitializerSource"() {kind = "onnx_model", name = "weight", path = "/not/read.onnx", scope = []} : () -> tensor<2xi8>
-  %recipe = "onnx.DeferredFoldable"(%source) ({
+  %deferred = "onnx.DeferredFoldable"(%source) ({
   ^bb0(%data: tensor<2xi8>):
     %scale = onnx.Constant dense<0.125> : tensor<f32>
     %zero = onnx.Constant dense<0> : tensor<i8>
     %dq = "onnx.DequantizeLinear"(%data, %scale, %zero) {axis = 0 : si64} : (tensor<2xi8>, tensor<f32>, tensor<i8>) -> tensor<2xf32>
     onnx.Yield %dq : tensor<2xf32>
   }) : (tensor<2xi8>) -> tensor<2xf32>
-  %add = "onnx.Add"(%recipe, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
-  %mul = "onnx.Mul"(%recipe, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  %add = "onnx.Add"(%deferred, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  %mul = "onnx.Mul"(%deferred, %runtime) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
   return %add, %mul : tensor<2xf32>, tensor<2xf32>
 }
 
 // CHECK-LABEL: func.func @dequantized_operand_order(
 // CHECK-SAME: %[[RUNTIME:[^: ]+]]:
-// CHECK: %[[RECIPE:.*]] = "onnx.DeferredFoldable"
-// CHECK: %[[ADD:.*]] = "onnx.Add"(%[[RECIPE]], %[[RUNTIME]])
-// CHECK: %[[MUL:.*]] = "onnx.Mul"(%[[RECIPE]], %[[RUNTIME]])
+// CHECK: %[[DEFERRED:.*]] = "onnx.DeferredFoldable"
+// CHECK: %[[ADD:.*]] = "onnx.Add"(%[[DEFERRED]], %[[RUNTIME]])
+// CHECK: %[[MUL:.*]] = "onnx.Mul"(%[[DEFERRED]], %[[RUNTIME]])
 // CHECK: return %[[ADD]], %[[MUL]]
 
 func.func @literal_before_dequantized_operand() -> (tensor<2xf32>, tensor<2xf32>) {
   %source = "onnx.InitializerSource"() {kind = "onnx_model", name = "weight", path = "/not/read.onnx", scope = []} : () -> tensor<2xi8>
   %literal = onnx.Constant dense<2.0> : tensor<2xf32>
-  %recipe = "onnx.DeferredFoldable"(%source) ({
+  %deferred = "onnx.DeferredFoldable"(%source) ({
   ^bb0(%data: tensor<2xi8>):
     %scale = onnx.Constant dense<0.125> : tensor<f32>
     %zero = onnx.Constant dense<0> : tensor<i8>
     %dq = "onnx.DequantizeLinear"(%data, %scale, %zero) {axis = 0 : si64} : (tensor<2xi8>, tensor<f32>, tensor<i8>) -> tensor<2xf32>
     onnx.Yield %dq : tensor<2xf32>
   }) : (tensor<2xi8>) -> tensor<2xf32>
-  %add = "onnx.Add"(%literal, %recipe) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
-  %mul = "onnx.Mul"(%literal, %recipe) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  %add = "onnx.Add"(%literal, %deferred) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
+  %mul = "onnx.Mul"(%literal, %deferred) : (tensor<2xf32>, tensor<2xf32>) -> tensor<2xf32>
   return %add, %mul : tensor<2xf32>, tensor<2xf32>
 }
 
 // RHS-LABEL: func.func @literal_before_dequantized_operand
 // RHS: %[[LITERAL:.*]] = onnx.Constant dense<2.000000e+00> : tensor<2xf32>
-// RHS: %[[RECIPE:.*]] = "onnx.DeferredFoldable"
-// RHS: %[[ADD:.*]] = "onnx.Add"(%[[RECIPE]], %[[LITERAL]])
-// RHS: %[[MUL:.*]] = "onnx.Mul"(%[[RECIPE]], %[[LITERAL]])
+// RHS: %[[DEFERRED:.*]] = "onnx.DeferredFoldable"
+// RHS: %[[ADD:.*]] = "onnx.Add"(%[[DEFERRED]], %[[LITERAL]])
+// RHS: %[[MUL:.*]] = "onnx.Mul"(%[[DEFERRED]], %[[LITERAL]])
 // RHS: return %[[ADD]], %[[MUL]]
 
 // An explicit DQ of literal weights is not a literal constant for the

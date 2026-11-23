@@ -6,6 +6,9 @@
 //
 // Shape inference patterns and helper functions.
 //
+// Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its
+// affiliates
+//
 //===----------------------------------------------------------------------===//
 
 #include "ShapeInference.hpp"
@@ -126,8 +129,8 @@ struct YieldShapesPattern : public OpRewritePattern<ONNXYieldOp> {
   LogicalResult matchAndRewrite(
       ONNXYieldOp yieldOp, PatternRewriter &rewriter) const override {
     Operation *parent = yieldOp->getParentOp();
-    assert(parent->getName().hasInterface<HasOnnxSubgraphOpInterface>() &&
-           "onnx.Yield has parent with subgraph");
+    if (!isa<HasOnnxSubgraphOpInterface>(parent))
+      return failure();
     return inferShapes(cast<ShapeInferenceOpInterface>(parent), rewriter);
   }
 };

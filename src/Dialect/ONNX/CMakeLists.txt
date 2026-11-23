@@ -126,7 +126,7 @@ add_onnx_mlir_library(
   ONNXOps/Tensor/Upsample.cpp
   DEPENDS
   OMDeferredConstantOpInterfaceIncGen
-  OMQuantizationBoundaryOpInterfaceIncGen
+  OMDequantizationOpInterfaceIncGen
   OMHasOnnxSubgraphOpInterfaceIncGen
   OMONNXIncGen
   OMONNXCanonicalizeIncGen
@@ -140,7 +140,7 @@ add_onnx_mlir_library(
   LINK_LIBS
   PUBLIC
   OMDeferredConstantOpInterface
-  OMQuantizationBoundaryOpInterface
+  OMDequantizationOpInterface
   OMMlirDialects
   OMMlirUtilities
   OMShapeHelperOpInterface

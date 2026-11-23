@@ -9,7 +9,7 @@
 #include "src/Dialect/ONNX/OnnxElementsAttrBuilder.hpp"
 #include "src/Dialect/ONNX/TensorName.hpp"
 #include "src/Dialect/ONNX/Transforms/ConstProp.hpp"
-#include "src/Interface/QuantizationBoundaryOpInterface.hpp"
+#include "src/Interface/DequantizationOpInterface.hpp"
 
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -25,17 +25,17 @@ using namespace mlir;
 using namespace onnx_mlir;
 
 static_assert(
-    ONNXQuantizeLinearOp::hasTrait<QuantizationBoundaryOpInterface::Trait>());
+    !ONNXQuantizeLinearOp::hasTrait<DequantizationOpInterface::Trait>());
 static_assert(
-    ONNXDequantizeLinearOp::hasTrait<QuantizationBoundaryOpInterface::Trait>());
-static_assert(ONNXDynamicQuantizeLinearOp::hasTrait<
-    QuantizationBoundaryOpInterface::Trait>());
+    ONNXDequantizeLinearOp::hasTrait<DequantizationOpInterface::Trait>());
+static_assert(
+    !ONNXDynamicQuantizeLinearOp::hasTrait<DequantizationOpInterface::Trait>());
 static_assert(AMDQuarkBFPQuantizeDequantizeOp::hasTrait<
-    QuantizationBoundaryOpInterface::Trait>());
-static_assert(AMDQuarkExtendedQuantizeLinearOp::hasTrait<
-    QuantizationBoundaryOpInterface::Trait>());
+    DequantizationOpInterface::Trait>());
+static_assert(!AMDQuarkExtendedQuantizeLinearOp::hasTrait<
+    DequantizationOpInterface::Trait>());
 static_assert(AMDQuarkExtendedDequantizeLinearOp::hasTrait<
-    QuantizationBoundaryOpInterface::Trait>());
+    DequantizationOpInterface::Trait>());
 
 namespace {
 
@@ -93,6 +93,35 @@ int testDirectFormation(MLIRContext &context) {
   if (!roundTripped || !findDeferred(*roundTripped))
     return 1;
   return 0;
+}
+
+int testDequantFoldability(MLIRContext &context) {
+  auto module = parseModule(context, R"mlir(
+    func.func @test(%runtimeScale: tensor<f32>) -> (tensor<2xf32>, tensor<2xf32>, tensor<2xi8>, tensor<2xf32>) {
+      %w = onnx.Constant dense<[4, 8]> : tensor<2xi8>
+      %s = onnx.Constant dense<0.5> : tensor<f32>
+      %z = onnx.Constant dense<0> : tensor<i8>
+      %a = "onnx.DequantizeLinear"(%w, %s, %z) : (tensor<2xi8>, tensor<f32>, tensor<i8>) -> tensor<2xf32>
+      %b = "onnx.DequantizeLinear"(%w, %runtimeScale, %z) : (tensor<2xi8>, tensor<f32>, tensor<i8>) -> tensor<2xf32>
+      %q, %dq = "onnx.DeferredFoldable"(%w, %s, %z) ({
+      ^bb0(%data: tensor<2xi8>, %scale: tensor<f32>, %zero: tensor<i8>):
+        %d = "onnx.DequantizeLinear"(%data, %scale, %zero) : (tensor<2xi8>, tensor<f32>, tensor<i8>) -> tensor<2xf32>
+        %q = "onnx.QuantizeLinear"(%d, %scale, %zero) : (tensor<2xf32>, tensor<f32>, tensor<i8>) -> tensor<2xi8>
+        onnx.Yield %q, %d : tensor<2xi8>, tensor<2xf32>
+      }) : (tensor<2xi8>, tensor<f32>, tensor<i8>) -> (tensor<2xi8>, tensor<2xf32>)
+      return %a, %b, %q, %dq : tensor<2xf32>, tensor<2xf32>, tensor<2xi8>, tensor<2xf32>
+    }
+  )mlir");
+  if (!module)
+    return 1;
+  auto function = module->lookupSymbol<func::FuncOp>("test");
+  auto values = function.front().getTerminator()->getOperands();
+  return !isConstantFoldable(values[0]) || isConstantFoldable(values[1]) ||
+         !isConstantFoldable(values[2]) || !isConstantFoldable(values[3]) ||
+         isConstantFoldableExceptDequant(values[0]) ||
+         isConstantFoldableExceptDequant(values[1]) ||
+         !isConstantFoldableExceptDequant(values[2]) ||
+         isConstantFoldableExceptDequant(values[3]);
 }
 
 int testConstantExpressionFormation(MLIRContext &context, bool disposable) {
@@ -620,7 +649,7 @@ int main() {
   MLIRContext context;
   context.loadDialect<func::FuncDialect, ONNXDialect, tensor::TensorDialect>();
   int failures =
-      testDirectFormation(context) +
+      testDirectFormation(context) + testDequantFoldability(context) +
       testConstantExpressionFormation(context, false) +
       testConstantExpressionFormation(context, true) +
       testNormalizeDuplicateCaptureUses(context) +

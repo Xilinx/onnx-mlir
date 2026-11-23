@@ -2074,7 +2074,7 @@ def ONNXDepthToSpaceOp:ONNX_Op<"DepthToSpace",
 }
 
 def ONNXDequantizeLinearOp:ONNX_Op<"DequantizeLinear",
-  [Pure, OpVersionTrait<21>, QuantizationBoundaryOpInterface, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<21>, DequantizationOpInterface, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
   let hasCanonicalizer = 1;
   let summary = "ONNX DequantizeLinear operation";
   let description = [{
@@ -2252,7 +2252,7 @@ def ONNXDropoutOp:ONNX_Op<"Dropout",
 }
 
 def ONNXDynamicQuantizeLinearOp:ONNX_Op<"DynamicQuantizeLinear",
-  [Pure, OpVersionTrait<11>, QuantizationBoundaryOpInterface, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<11>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
   let summary = "ONNX DynamicQuantizeLinear operation";
   let description = [{
   A Function to fuse calculation for Scale, Zero Point and FP32->8Bit conversion of FP32 Input data.
@@ -6444,7 +6444,7 @@ def ONNXQLinearMatMulOp:ONNX_Op<"QLinearMatMul",
 }
 
 def ONNXQuantizeLinearOp:ONNX_Op<"QuantizeLinear",
-  [Pure, OpVersionTrait<21>, QuantizationBoundaryOpInterface, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
+  [Pure, OpVersionTrait<21>, DeclareOpInterfaceMethods<ShapeInferenceOpInterface>, DeclareOpInterfaceMethods<ShapeHelperOpInterface>]> {
   let summary = "ONNX QuantizeLinear operation";
   let description = [{
   The linear quantization operator consumes a high-precision tensor, a scale, and a zero point to compute the

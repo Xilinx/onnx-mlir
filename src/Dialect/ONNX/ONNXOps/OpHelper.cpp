@@ -499,9 +499,29 @@ bool isConstLikeOperation(mlir::Operation *op) {
   return op && op->hasTrait<OpTrait::ConstantLike>();
 }
 
+bool isConstantOrDeferredValue(Value value) {
+  return isConstLikeValue(value) || isDeferredConstant(value);
+}
+
 bool isConstantFoldable(Value value) {
+  if (isConstantOrDeferredValue(value))
+    return true;
+  // As DQ is kept unfolded but is conceptually foldable, include it explicitly.
   Operation *op = value.getDefiningOp();
-  return isConstLikeOperation(op) || isDeferredConstant(value);
+  return isa_and_nonnull<DequantizationOpInterface>(op) &&
+         llvm::all_of(op->getOperands(), [](Value operand) {
+           return isa<NoneType>(operand.getType()) ||
+                  isConstantOrDeferredValue(operand);
+         });
+}
+
+bool isConstantFoldableExceptDequant(Value value) {
+  if (!isConstantOrDeferredValue(value))
+    return false;
+  auto deferred = value.getDefiningOp<ONNXDeferredFoldableOp>();
+  return !deferred || !isa_and_nonnull<DequantizationOpInterface>(
+                          deferred.getTerminalOperation(
+                              cast<OpResult>(value).getResultNumber()));
 }
 
 namespace {

@@ -1018,15 +1018,6 @@ OpsWithFolder = [
 # Op with ConstantLike trait
 OpsWithConstantLike = ["Constant"]
 
-# Standard ONNX operations that establish a quantization or dequantization
-# boundary. Check the schema family name so every generated opset version
-# receives the marker.
-OpsWithQuantizationBoundary = [
-    "DequantizeLinear",
-    "DynamicQuantizeLinear",
-    "QuantizeLinear",
-]
-
 # Op with SameOperandsAndResultShape trait
 OpsWithSameOperandsAndResultShape = [
     "Abs",
@@ -2122,8 +2113,8 @@ def gen_op_def(schema, with_version=False):
     if mlir_op_name in OpsWithConstantLike:
         traits.append("ConstantLike")
 
-    if domain == "" and schema.name in OpsWithQuantizationBoundary:
-        traits.append("QuantizationBoundaryOpInterface")
+    if domain == "" and schema.name == "DequantizeLinear":
+        traits.append("DequantizationOpInterface")
 
     # OpsWithShapeInference:
     # Now the ShapeInference traits are added to all operation.

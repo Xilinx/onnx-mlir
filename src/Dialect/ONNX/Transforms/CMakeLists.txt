@@ -150,7 +150,7 @@ add_onnx_mlir_library(OMONNXRewrite
   OMONNXDecomposeConvTransposePhasedIncGen
   OMONNXDecomposeConvTranspose1dPhasedIncGen
   OMONNXConstPropIncGen
-  OMQuantizationBoundaryOpInterfaceIncGen
+  OMDequantizationOpInterfaceIncGen
   OMONNXConvOptIncGen
 
   LINK_LIBS PUBLIC
