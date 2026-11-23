@@ -215,9 +215,12 @@ mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 // Also recognizes explicit dequantization when each operand is available.
 [[nodiscard]] bool isConstantFoldable(mlir::Value value);
 
-// FIXME: Algebraic rewrites historically skip DQ(constant). Preserve that
-// behavior for a selected deferred result ending in dequantization until the
-// eager and deferred rewrites can change together.
+// Same as isConstantFoldable, except that it returns false when dequantization
+// produces `value` directly or produces the value yielded for that result of
+// a DeferredFoldable op.
+//
+// FIXME: Algebraic rewrites should treat DQ(constant) as foldable. This
+// exception preserves their existing behavior for backward compatibility.
 [[nodiscard]] bool isConstantFoldableExceptDequant(mlir::Value value);
 
 // Inspect or peel the terminal operation for one selected deferred result.
