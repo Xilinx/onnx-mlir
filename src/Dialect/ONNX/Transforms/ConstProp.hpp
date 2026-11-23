@@ -16,6 +16,11 @@
 
 namespace onnx_mlir {
 
+// Apply the per-tensor DQ movement rules inside existing deferred expressions
+// before a pass uses their yielded producers for matching.
+mlir::LogicalResult normalizeDequantizationInDeferredBodies(
+    mlir::func::FuncOp function, mlir::RewriterBase::Listener *listener);
+
 // Exports the ConstPropONNXToONNXPass patterns.
 void getConstPropONNXToONNXPatterns(mlir::RewritePatternSet &patterns,
     bool enableQDQ = false, bool enableQuantConstFold = false,

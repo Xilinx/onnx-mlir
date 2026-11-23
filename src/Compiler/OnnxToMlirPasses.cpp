@@ -199,7 +199,8 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
 
   // Make initializer-dependent constant expressions explicit before passes
   // that intentionally use bounded, direct-producer classification.
-  pm.addNestedPass<func::FuncOp>(createFormDeferredFoldableExpressionsPass());
+  pm.addNestedPass<func::FuncOp>(createFormDeferredFoldableExpressionsPass(
+      {.enableQDQ = opts.hybrid.qdqConstProp}));
 
   // Set onnx_node_name if it is missing. Keep this pass at the end of this
   // function and just before instrumentation.

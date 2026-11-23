@@ -8,6 +8,9 @@
 #define ONNX_MLIR_DEFERRED_FOLDABLE_H
 
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Rewrite/FrozenRewritePatternSet.h"
+
+#include <optional>
 
 namespace mlir::func {
 class FuncOp;
@@ -19,10 +22,12 @@ namespace onnx_mlir {
 // flattens captured expression bodies. Ordinary optimization patterns run
 // first. Set requireDeferredSource=false to also retain compiler-owned constant
 // expressions. Run these patterns with applyPatternsOutsideDeferredFoldable
-// to keep expression bodies opaque, including newly constructed bodies.
+// to keep expression bodies opaque. Optional body patterns run on newly added
+// operations before a caller can inspect the yielded producer.
 void populateFormDeferredFoldableExpressionPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit,
-    bool requireDeferredSource = true);
+    bool requireDeferredSource = true,
+    std::optional<mlir::FrozenRewritePatternSet> bodyPatterns = std::nullopt);
 
 // Form or extend a deferred expression for one newly created operation. On
 // success, the insertion point is immediately after the replacement producer.

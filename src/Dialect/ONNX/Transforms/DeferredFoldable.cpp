@@ -17,12 +17,14 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Rewrite/PatternApplicator.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 
 #include "src/Dialect/ONNX/ONNXOps.hpp"
 #include "src/Dialect/ONNX/ONNXOps/OpHelper.hpp"
+#include "src/Dialect/ONNX/Transforms/ConstProp.hpp"
 #include "src/Dialect/ONNX/Transforms/ResultNamesUpdater.hpp"
 #include "src/Interface/DeferredConstantOpInterface.hpp"
 #include "src/Pass/Passes.hpp"
@@ -302,6 +304,19 @@ private:
   }
 };
 
+// Apply a body pattern to the new operation before the outer worklist can
+// revisit a user. Existing body operations were normalized on entry or when
+// they were created. A captured body is cloned in that same form.
+void applyBodyPattern(Operation *op, const FrozenRewritePatternSet &patterns,
+    PatternRewriter &rewriter) {
+  if (!patterns.getOpSpecificNativePatterns().contains(op->getName()))
+    return;
+  OpBuilder::InsertionGuard guard(rewriter);
+  PatternApplicator applicator(patterns);
+  applicator.applyDefaultCostModel();
+  (void)applicator.matchAndRewrite(op, rewriter);
+}
+
 // Retain a pure, regionless operation with at least one operand and result when
 // every direct operand is ConstantLike or a DeferredConstant. The ordinary
 // fallback additionally requires a DeferredConstant operand. Greedy requeueing
@@ -310,21 +325,31 @@ private:
 // consume the original operation first.
 class FormDeferredFoldableExpression : public RewritePattern {
 public:
-  FormDeferredFoldableExpression(
-      MLIRContext *context, PatternBenefit benefit, bool requireDeferredSource)
+  FormDeferredFoldableExpression(MLIRContext *context, PatternBenefit benefit,
+      bool requireDeferredSource,
+      std::optional<FrozenRewritePatternSet> bodyPatterns)
       : RewritePattern(MatchAnyOpTypeTag(), benefit, context),
-        requireDeferredSource(requireDeferredSource) {}
+        requireDeferredSource(requireDeferredSource),
+        bodyPatterns(std::move(bodyPatterns)) {}
 
   LogicalResult matchAndRewrite(
       Operation *op, PatternRewriter &rewriter) const override {
     if (!canFormDeferredFoldableExpression(op, requireDeferredSource))
       return failure();
-    return success(
-        succeeded(DeferredFoldableExpressionBuilder::build(op, rewriter)));
+    auto results = DeferredFoldableExpressionBuilder::build(op, rewriter);
+    if (failed(results))
+      return failure();
+    if (bodyPatterns) {
+      auto deferred = results->front().getDefiningOp<ONNXDeferredFoldableOp>();
+      applyBodyPattern(
+          deferred.getTerminalOperation(0), *bodyPatterns, rewriter);
+    }
+    return success();
   }
 
 private:
   bool requireDeferredSource;
+  std::optional<FrozenRewritePatternSet> bodyPatterns;
 };
 
 // Keep an existing deferred expression flat when ordinary formation replaces
@@ -334,8 +359,10 @@ private:
 class FlattenDeferredFoldableCapture
     : public OpRewritePattern<ONNXDeferredFoldableOp> {
 public:
-  FlattenDeferredFoldableCapture(MLIRContext *context, PatternBenefit benefit)
-      : OpRewritePattern(context, benefit) {}
+  FlattenDeferredFoldableCapture(MLIRContext *context, PatternBenefit benefit,
+      std::optional<FrozenRewritePatternSet> bodyPatterns)
+      : OpRewritePattern(context, benefit),
+        bodyPatterns(std::move(bodyPatterns)) {}
 
   LogicalResult matchAndRewrite(ONNXDeferredFoldableOp deferred,
       PatternRewriter &rewriter) const override {
@@ -395,12 +422,21 @@ public:
         rewriter.eraseOp(&operation);
     if (nested->use_empty())
       rewriter.eraseOp(nested);
+    // Inlining exposes the producers of the old capture to their body users.
+    if (bodyPatterns)
+      for (Operation &op :
+          llvm::make_early_inc_range(body.without_terminator()))
+        applyBodyPattern(&op, *bodyPatterns, rewriter);
     return success();
   }
+
+private:
+  std::optional<FrozenRewritePatternSet> bodyPatterns;
 };
 
 // Form expressions without evaluating them, preserving result-name updates.
-LogicalResult formDeferredFoldableExpressions(func::FuncOp function) {
+LogicalResult formDeferredFoldableExpressions(
+    func::FuncOp function, bool enableQDQ) {
   MLIRContext *context = function.getContext();
   RewritePatternSet patterns(context);
   populateFormDeferredFoldableExpressionPatterns(
@@ -410,6 +446,10 @@ LogicalResult formDeferredFoldableExpressions(func::FuncOp function) {
           &rnUpdater,
           /*enableFolding=*/false)))
     return failure();
+  // This standalone pass only forms expressions. Batch body rewrites before
+  // returning to the pipeline, where consumers can inspect the yielded ops.
+  if (enableQDQ)
+    return normalizeDequantizationInDeferredBodies(function, &rnUpdater);
   return success();
 }
 
@@ -419,7 +459,7 @@ struct FormDeferredFoldableExpressionsPass
   using Base::Base;
 
   void runOnOperation() final {
-    if (failed(formDeferredFoldableExpressions(getOperation())))
+    if (failed(formDeferredFoldableExpressions(getOperation(), enableQDQ)))
       signalPassFailure();
   }
 };
@@ -479,11 +519,12 @@ FailureOr<Value> onnx_mlir::formDeferredFoldableExpression(
 
 void onnx_mlir::populateFormDeferredFoldableExpressionPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit,
-    bool requireDeferredSource) {
+    bool requireDeferredSource,
+    std::optional<FrozenRewritePatternSet> bodyPatterns) {
   patterns.insert<FormDeferredFoldableExpression>(
-      patterns.getContext(), benefit, requireDeferredSource);
-  patterns.insert<FlattenDeferredFoldableCapture>(
-      patterns.getContext(), PatternBenefit(benefit.getBenefit() + 1));
+      patterns.getContext(), benefit, requireDeferredSource, bodyPatterns);
+  patterns.insert<FlattenDeferredFoldableCapture>(patterns.getContext(),
+      PatternBenefit(benefit.getBenefit() + 1), bodyPatterns);
   ONNXDeferredFoldableOp::getCanonicalizationPatterns(
       patterns, patterns.getContext());
 }
