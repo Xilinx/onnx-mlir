@@ -105,6 +105,9 @@ void configureCastDataMovementPatterns(bool enableCastDataMovementPatterns);
 void configureGatherElementsTileCanonicalization(
     bool enableGatherElementsTileCanonicalization);
 
+void populateElementwiseOperandRankCanonicalizationPatterns(
+    mlir::RewritePatternSet &patterns);
+
 void populateQDQDataMovementCanonicalizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);
 

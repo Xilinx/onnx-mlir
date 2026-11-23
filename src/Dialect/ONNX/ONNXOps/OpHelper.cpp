@@ -1092,6 +1092,25 @@ FailureOr<bool> normalizeONNXAxisValues(ArrayRef<int64_t> axes, int64_t rank,
   return changed;
 }
 
+SmallVector<OpOperand *> getRankedElementwiseBroadcastOperands(Operation *op) {
+  if (op->getNumOperands() < 2 || !op->hasTrait<OpTrait::ONNXElementwise>() ||
+      isa<ONNXCastLikeOp>(op))
+    return {};
+
+  SmallVector<OpOperand *> operands;
+  for (OpOperand &operand : op->getOpOperands()) {
+    const Type type = operand.get().getType();
+    if (isa<NoneType>(type))
+      continue;
+    if (!isa<RankedTensorType>(type))
+      return {};
+    operands.push_back(&operand);
+  }
+  if (operands.size() < 2)
+    return {};
+  return operands;
+}
+
 bool hasNegativeONNXAxisValue(Operation *op) {
   const std::optional<ONNXAxisValueSpec> spec = getONNXAxisValueSpec(op);
   if (!spec)

@@ -285,6 +285,8 @@ void addPasses(mlir::OwningOpRef<ModuleOp> &module, mlir::PassManager &pm,
     opts.enablePositiveAxisCanonicalization =
         enablePositiveAxisCanonicalization;
     opts.enableExpandCanonicalization = enableExpandCanonicalization;
+    opts.enableElementwiseOperandRankCanonicalization =
+        enableElementwiseOperandRankCanonicalization;
     opts.enableKeepdimsCanonicalization = enableKeepdimsCanonicalization;
     opts.enableCastDataMovementPatterns = enableCastDataMovementPatterns;
     opts.enableGatherElementsTileCanonicalization =

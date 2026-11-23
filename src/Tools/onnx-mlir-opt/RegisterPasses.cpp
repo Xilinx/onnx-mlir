@@ -392,6 +392,9 @@ void registerOMPasses(int optLevel) {
     return createSetONNXNodeNamePass();
   });
 
+  mlir::registerPass(
+      []() { return createCanonicalizeElementwiseOperandRanksPass(); });
+
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createXFEONNXOpsetVerifierPass();
   });

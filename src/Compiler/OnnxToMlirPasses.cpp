@@ -201,12 +201,19 @@ void addONNXToMLIRPasses(mlir::PassManager &pm, bool targetCPU,
   // that intentionally use bounded, direct-producer classification.
   pm.addNestedPass<func::FuncOp>(createFormDeferredFoldableExpressionsPass());
 
+  const bool canonicalizeElementwiseRanks =
+      opts.enableElementwiseOperandRankCanonicalization;
+  if (canonicalizeElementwiseRanks)
+    pm.addNestedPass<func::FuncOp>(
+        createCanonicalizeElementwiseOperandRanksPass());
+
   // Set onnx_node_name if it is missing. Keep this pass at the end of this
   // function and just before instrumentation.
   pm.addPass(createSetONNXNodeNamePass());
 
   if (opts.enableXFEONNXOpsetVerifier)
-    pm.addNestedPass<func::FuncOp>(onnx_mlir::createXFEONNXOpsetVerifierPass());
+    pm.addNestedPass<func::FuncOp>(createXFEONNXOpsetVerifierPass(
+        {.verifyEqualElementwiseOperandRanks = canonicalizeElementwiseRanks}));
 
 #ifdef ONNX_MLIR_ENABLE_KRNL
   // Add instrumentation for Onnx Ops (requires Krnl dialect for
