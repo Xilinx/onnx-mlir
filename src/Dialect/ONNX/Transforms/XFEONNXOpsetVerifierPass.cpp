@@ -92,6 +92,31 @@ struct XFEONNXOpsetVerifierPass
       }
     }
 
+    if (verifyEqualElementwiseOperandRanks) {
+      func.walk([&](Operation *op) {
+        const auto operands = getRankedElementwiseBroadcastOperands(op);
+        if (operands.empty())
+          return;
+
+        OpOperand *const first = operands.front();
+        const int64_t firstRank =
+            cast<RankedTensorType>(first->get().getType()).getRank();
+        for (OpOperand *operand : llvm::drop_begin(operands)) {
+          const int64_t rank =
+              cast<RankedTensorType>(operand->get().getType()).getRank();
+          if (rank == firstRank)
+            continue;
+          op->emitOpError(
+              "expected equal ranks for elementwise broadcast operands")
+              << ", but operand #" << first->getOperandNumber() << " has rank "
+              << firstRank << " and operand #" << operand->getOperandNumber()
+              << " has rank " << rank;
+          anyFailed = true;
+          break;
+        }
+      });
+    }
+
     if (anyFailed)
       signalPassFailure();
   }

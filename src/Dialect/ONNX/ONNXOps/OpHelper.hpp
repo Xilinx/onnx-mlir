@@ -307,6 +307,12 @@ std::optional<ONNXAxisValueSpec> getONNXAxisValueSpec(mlir::Operation *op);
     llvm::ArrayRef<int64_t> axes, int64_t rank, bool includeRank,
     mlir::SmallVectorImpl<int64_t> &normalized);
 
+// Returns the ranked broadcast operands of a multi-input elementwise op.
+// An empty result indicates that the op has fewer than two such operands or
+// that their ranks are unknown.
+llvm::SmallVector<mlir::OpOperand *> getRankedElementwiseBroadcastOperands(
+    mlir::Operation *op);
+
 // Returns true if the op carries any known negative axis value.
 [[nodiscard]] bool hasNegativeONNXAxisValue(mlir::Operation *op);
 

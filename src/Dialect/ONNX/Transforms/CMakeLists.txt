@@ -49,6 +49,7 @@ add_onnx_mlir_library(OMInstrumentONNX
   )
 
 add_onnx_mlir_library(OMONNXRewrite
+  CanonicalizeElementwiseOperandRanks.cpp
   ConstProp.cpp
   DeferredFoldable.cpp
   QDQAroundOpOpt.cpp    

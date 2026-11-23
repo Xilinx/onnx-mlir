@@ -57,12 +57,13 @@ bool enableReshapeCanonicalization;                    // common for both
 bool enablePositiveAxisCanonicalization;               // common for both
 bool enableExpandCanonicalization;                     // common for both
 bool enableCastDataMovementPatterns;                   // common for both
-bool enableKeepdimsCanonicalization;                   // common for both
-bool enableGatherElementsTileCanonicalization;         // common for both
-bool enableXFEONNXOpsetVerifier;                       // common for both
-bool enableSafeCodeGen;                                // common for both
-bool disableMemRefPrefetch;                            // common for both
-uint64_t compilationNumThreads;                        // common for both
+bool enableElementwiseOperandRankCanonicalization;
+bool enableKeepdimsCanonicalization;           // common for both
+bool enableGatherElementsTileCanonicalization; // common for both
+bool enableXFEONNXOpsetVerifier;               // common for both
+bool enableSafeCodeGen;                        // common for both
+bool disableMemRefPrefetch;                    // common for both
+uint64_t compilationNumThreads;                // common for both
 // AMD: Decompose unconditionally
 // std::vector<std::string> decomposeOpsInONNX;           // common for both
 EmissionTargetType emissionTarget;         // onnx-mlir only
@@ -384,6 +385,14 @@ static llvm::cl::opt<bool, true> enableExpandCanonicalizationOpt(
         "disabled by default)."),
     llvm::cl::location(enableExpandCanonicalization), llvm::cl::init(false),
     llvm::cl::cat(OnnxMlirCommonOptions));
+
+static llvm::cl::opt<bool, true>
+    enableElementwiseOperandRankCanonicalizationOpt(
+        "enable-elementwise-operand-rank-canonicalization",
+        llvm::cl::desc("Reshape elementwise broadcast operands to equal ranks "
+                       "at the end of the ONNX pipeline."),
+        llvm::cl::location(enableElementwiseOperandRankCanonicalization),
+        llvm::cl::init(false), llvm::cl::cat(OnnxMlirCommonOptions));
 
 static llvm::cl::opt<bool, true> enableKeepdimsCanonicalizationOpt(
     "enable-keepdims-canonicalization",
