@@ -664,6 +664,10 @@ public:
       ONNXOp op, PatternRewriter &rewriter) const override {
     if (op.getNumOperands() != 1)
       return failure();
+    Type inputType = op.getOperand(0).getType();
+    if (inputType != op.getResult().getType() ||
+        isa<quant::QuantizedType>(getElementTypeOrSelf(inputType)))
+      return failure();
     rewriter.replaceOp(op, op.getOperand(0));
     return success();
   }
