@@ -1,4 +1,5 @@
-// RUN: onnx-mlir-opt --canonicalize="test-convergence=true" %s --split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --unsafe-math-optimizations=false --canonicalize="test-convergence=true" %s --split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --unsafe-math-optimizations=true --canonicalize="test-convergence=true" %s --split-input-file | FileCheck %s --check-prefix=UNSAFE
 
 func.func @greaterorequal_input_true(%x: tensor<2xi32>) -> tensor<2xi32> {
   %c = onnx.Constant dense<3> : tensor<1xi32>
@@ -142,6 +143,11 @@ func.func @float(%x: tensor<2xf32>) -> tensor<2xf32> {
 // CHECK: "onnx.GreaterOrEqual"
 // CHECK: [[R:%[^ ]+]] = "onnx.Where"
 // CHECK: return [[R]]
+// UNSAFE-LABEL: func.func @float(
+// UNSAFE-NOT: "onnx.GreaterOrEqual"
+// UNSAFE-NOT: "onnx.Where"
+// UNSAFE: [[R:%[^ ]+]] = "onnx.Max"(%arg0,
+// UNSAFE: return [[R]]
 
 // -----
 
