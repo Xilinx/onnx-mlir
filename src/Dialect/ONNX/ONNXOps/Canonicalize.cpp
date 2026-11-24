@@ -654,6 +654,25 @@ static bool haveSamePadFillValue(ONNXPadOp lhs, ONNXPadOp rhs) {
 // Rewrite pattern for elementwise binary ops (not handled in Rewrite.td).
 // =============================================================================
 
+// A Max/Min with a single operand is an identity.
+template <typename ONNXOp>
+class SingleOperandMinMaxPattern : public OpRewritePattern<ONNXOp> {
+public:
+  using OpRewritePattern<ONNXOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXOp op, PatternRewriter &rewriter) const override {
+    if (op.getNumOperands() != 1)
+      return failure();
+    Type inputType = op.getOperand(0).getType();
+    if (inputType != op.getResult().getType() ||
+        isa<quant::QuantizedType>(getElementTypeOrSelf(inputType)))
+      return failure();
+    rewriter.replaceOp(op, op.getOperand(0));
+    return success();
+  }
+};
+
 // Rewrites v1-v6 binary op with legacy axis and broadcast attributes set
 // by unsqueezing the rhs shape as needed and removing the axis and broadcast
 // attributes, provided that the operand shapes' ranks are known.
@@ -6025,6 +6044,7 @@ void ONNXLSTMOp::getCanonicalizationPatterns(
 /// on the ONNXMaxOp.
 void ONNXMaxOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
+  results.insert<SingleOperandMinMaxPattern<ONNXMaxOp>>(context);
   results.insert<NormalizeMinMaxPattern<ONNXMaxOp>>(context);
 }
 
@@ -6038,6 +6058,7 @@ void ONNXMaxPoolSingleOutOp::getCanonicalizationPatterns(
 /// on the ONNXMinOp.
 void ONNXMinOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
+  results.insert<SingleOperandMinMaxPattern<ONNXMinOp>>(context);
   results.insert<NormalizeMinMaxPattern<ONNXMinOp>>(context);
   results.insert<MinMaxToClipPattern>(context);
 }

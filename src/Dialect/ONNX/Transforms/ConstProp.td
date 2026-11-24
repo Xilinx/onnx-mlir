@@ -242,12 +242,6 @@ def CreateReciprocalOfConst :
 def CreateRoundOfConst :
    NativeCodeCall<"ConstPropElementwiseUnary<mlir::ONNXRoundOp>($_builder, $0, $1)">;
 
-def CreateMaxOfConst :
-   NativeCodeCall<"ConstPropVariadicElementwiseBinary<mlir::ONNXMaxOp>($_builder, $0, $1)">;
-
-def CreateMinOfConst :
-   NativeCodeCall<"ConstPropVariadicElementwiseBinary<mlir::ONNXMinOp>($_builder, $0, $1)">;
-
 def CreateSumOfConst :
    NativeCodeCall<"ConstPropVariadicElementwiseBinary<mlir::ONNXSumOp>($_builder, $0, $1)">;
 
@@ -691,28 +685,7 @@ def RoundofConst : NamedPat<"RoundofConst",
 //===----------------------------------------------------------------------===//
 // Const propagation patterns for variadic elementwise operations.
 //===----------------------------------------------------------------------===//
-
-// Constant Propagation for Max
-def MaxConstProp : NamedPat<"MaxConstProp",
-    // From max(c1, c2).
-    (ONNXMaxOp:$maxOp $operandList),
-    // To c = max(c1, c2)
-    (CreateMaxOfConst $maxOp, $operandList),
-    // Constraints
-    [(IsVariadicOperandDenseONNXConstantOp:$operandList),
-     (IsIntOrFloatType:$maxOp),
-     (SatisfiesExpansionBound:$maxOp), (HasStaticShape:$maxOp)]>;
-
-// Constant Propagation for Min
-def MinConstProp : NamedPat<"MinConstProp",
-    // From min(c1, c2).
-    (ONNXMinOp:$minOp $operandList),
-    // To c = min(c1, c2)
-    (CreateMinOfConst $minOp, $operandList),
-    // Constraints
-    [(IsVariadicOperandDenseONNXConstantOp:$operandList),
-     (IsIntOrFloatType:$minOp),
-     (SatisfiesExpansionBound:$minOp), (HasStaticShape:$minOp)]>;
+// Max and Min are folded by VariadicElementwiseConstProp in ConstProp.cpp.
 
 // Constant Propagation for Sum
 def SumConstProp : NamedPat<"SumConstProp",

@@ -5522,6 +5522,37 @@ struct SoftmaxCrossEntropyPattern
   }
 };
 
+// Split variadic Max/Min into binary operations, inferring the broadcast
+// shape of each intermediate result independently of the final result shape.
+template <typename ONNXOp>
+class VariadicMinMaxToBinaryPattern : public OpRewritePattern<ONNXOp> {
+public:
+  using OpRewritePattern<ONNXOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      ONNXOp op, PatternRewriter &rewriter) const override {
+    ValueRange inputs = op.getOperands();
+    if (inputs.size() <= 2)
+      return failure();
+
+    Type intermediateType = UnrankedTensorType::get(
+        cast<ShapedType>(op.getResult().getType()).getElementType());
+    onnx_mlir::OnnxBuilder builder(rewriter, op.getLoc());
+    Value result = inputs.front();
+    for (size_t i = 1; i < inputs.size(); ++i) {
+      bool isLast = i + 1 == inputs.size();
+      auto binaryOp =
+          isLast ? rewriter.create<ONNXOp>(op.getLoc(),
+                       op.getResult().getType(), ValueRange{result, inputs[i]})
+                 : builder.createTypedOpAndInferShapes<ONNXOp>(
+                       intermediateType, ValueRange{result, inputs[i]});
+      result = binaryOp.getResult();
+    }
+    rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
 /// Decompose `onnx.Sum` to a sequence of `onnx.Add`
 struct SumToAddPattern : public OpRewritePattern<ONNXSumOp> {
   using OpRewritePattern<ONNXSumOp>::OpRewritePattern;
@@ -6551,6 +6582,8 @@ void onnx_mlir::getDecomposeONNXToONNXPatterns(
     patterns.insert<CanonicalizeScatterNDWithMultiAxis>(context);
     patterns.insert<SoftmaxCrossEntropyPattern>(context);
     patterns.insert<SumToAddPattern>(context);
+    patterns.insert<VariadicMinMaxToBinaryPattern<ONNXMaxOp>,
+        VariadicMinMaxToBinaryPattern<ONNXMinOp>>(context);
     patterns.insert<DecomposeLpPoolPattern>(context);
   }
   if (enableSplitToSliceDecompose)

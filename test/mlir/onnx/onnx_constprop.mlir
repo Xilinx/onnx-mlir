@@ -2779,6 +2779,68 @@ func.func @test_max_3_inputs() -> tensor<2x2xi32> {
 
 // -----
 
+// Fold the two constant operands of a mixed Max into one, leave the
+// non-constant operand.
+func.func @test_max_mixed_two_constants(%arg0: tensor<2x2xi32>) -> tensor<2x2xi32> {
+  %0 = "onnx.Constant"() {value = dense<[[1, 2], [3, 4]]> : tensor<2x2xi32>} : () -> tensor<2x2xi32>
+  %1 = "onnx.Constant"() {value = dense<[[5, 0], [1, 6]]> : tensor<2x2xi32>} : () -> tensor<2x2xi32>
+  %2 = "onnx.Max"(%arg0, %0, %1) : (tensor<2x2xi32>, tensor<2x2xi32>, tensor<2x2xi32>) -> tensor<2x2xi32>
+  "onnx.Return"(%2) : (tensor<2x2xi32>) -> ()
+
+// CHECK-LABEL:  func.func @test_max_mixed_two_constants
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x2xi32>) -> tensor<2x2xi32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}[5, 2], [3, 6]{{.}}> : tensor<2x2xi32>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Max"([[PARAM_0_]], [[VAR_0_]]) : (tensor<2x2xi32>, tensor<2x2xi32>) -> tensor<2x2xi32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<2x2xi32>
+// CHECK:         }
+}
+
+// -----
+
+// Fold the constants to their own broadcast shape, not to the result shape.
+func.func @test_max_mixed_broadcast_constants(%arg0: tensor<2x2xi32>) -> tensor<2x2xi32> {
+  %0 = "onnx.Constant"() {value = dense<[1, 7]> : tensor<2xi32>} : () -> tensor<2xi32>
+  %1 = "onnx.Constant"() {value = dense<3> : tensor<i32>} : () -> tensor<i32>
+  %2 = "onnx.Max"(%0, %arg0, %1) : (tensor<2xi32>, tensor<2x2xi32>, tensor<i32>) -> tensor<2x2xi32>
+  "onnx.Return"(%2) : (tensor<2x2xi32>) -> ()
+
+// CHECK-LABEL:  func.func @test_max_mixed_broadcast_constants
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x2xi32>) -> tensor<2x2xi32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[3, 7]> : tensor<2xi32>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Max"([[PARAM_0_]], [[VAR_0_]]) : (tensor<2x2xi32>, tensor<2xi32>) -> tensor<2x2xi32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<2x2xi32>
+// CHECK:         }
+}
+
+// -----
+
+func.func @test_max_mixed_one_constant(%arg0: tensor<2x2xi32>) -> tensor<2x2xi32> {
+  %0 = "onnx.Constant"() {value = dense<[[1, 2], [3, 4]]> : tensor<2x2xi32>} : () -> tensor<2x2xi32>
+  %1 = "onnx.Max"(%arg0, %0) : (tensor<2x2xi32>, tensor<2x2xi32>) -> tensor<2x2xi32>
+  "onnx.Return"(%1) : (tensor<2x2xi32>) -> ()
+
+// CHECK-LABEL:  func.func @test_max_mixed_one_constant
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x2xi32>) -> tensor<2x2xi32> {
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}[1, 2], [3, 4]{{.}}> : tensor<2x2xi32>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Max"([[PARAM_0_]], [[VAR_0_]]) : (tensor<2x2xi32>, tensor<2x2xi32>) -> tensor<2x2xi32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<2x2xi32>
+// CHECK:         }
+}
+
+// -----
+
+func.func @test_max_1_non_constant_input(%arg0: tensor<2x2xi32>) -> tensor<2x2xi32> {
+  %0 = "onnx.Max"(%arg0) : (tensor<2x2xi32>) -> tensor<2x2xi32>
+  "onnx.Return"(%0) : (tensor<2x2xi32>) -> ()
+
+// CHECK-LABEL:  func.func @test_max_1_non_constant_input
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x2xi32>) -> tensor<2x2xi32> {
+// CHECK:           onnx.Return [[PARAM_0_]] : tensor<2x2xi32>
+// CHECK:         }
+}
+
+// -----
+
 func.func @test_min_1_input() -> tensor<2x2xi32> {
   %0 = "onnx.Constant"() {value = dense<[[1, 2], [3, 4]]> : tensor<2x2xi32>} : () -> tensor<2x2xi32>
   %2 = "onnx.Min"(%0) : (tensor<2x2xi32>) -> tensor<2x2xi32>
@@ -2819,6 +2881,24 @@ func.func @test_min_3_inputs() -> tensor<2x2xi32> {
 // CHECK-SAME:   () -> tensor<2x2xi32> {
 // CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<1> : tensor<2x2xi32>
 // CHECK:           onnx.Return [[VAR_0_]] : tensor<2x2xi32>
+// CHECK:         }
+}
+
+// -----
+
+// Fold the two constant operands of a mixed Min into one, leave the
+// non-constant operand.
+func.func @test_min_mixed_two_constants(%arg0: tensor<2x2xi32>) -> tensor<2x2xi32> {
+  %0 = "onnx.Constant"() {value = dense<[[1, 2], [3, 4]]> : tensor<2x2xi32>} : () -> tensor<2x2xi32>
+  %1 = "onnx.Constant"() {value = dense<[[5, 0], [1, 6]]> : tensor<2x2xi32>} : () -> tensor<2x2xi32>
+  %2 = "onnx.Min"(%arg0, %0, %1) : (tensor<2x2xi32>, tensor<2x2xi32>, tensor<2x2xi32>) -> tensor<2x2xi32>
+  "onnx.Return"(%2) : (tensor<2x2xi32>) -> ()
+
+// CHECK-LABEL:  func.func @test_min_mixed_two_constants
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x2xi32>) -> tensor<2x2xi32> {
+// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<{{.}}[1, 0], [1, 4]{{.}}> : tensor<2x2xi32>
+// CHECK:           [[VAR_1_:%.+]] = "onnx.Min"([[PARAM_0_]], [[VAR_0_]]) : (tensor<2x2xi32>, tensor<2x2xi32>) -> tensor<2x2xi32>
+// CHECK:           onnx.Return [[VAR_1_]] : tensor<2x2xi32>
 // CHECK:         }
 }
 
