@@ -5558,10 +5558,13 @@ struct MulZeroPattern : public OpRewritePattern<ONNXMulOp> {
 
 // Clip bounds are scalars. A splat tensor can supply a bound only when its
 // broadcasting preserves the input shape; retain its exact element value.
-static DenseElementsAttr getScalarClipBound(Value bound, Value input) {
+static DenseElementsAttr getScalarClipBound(
+    Value bound, Value input, bool allowFloat = false) {
   Type elementType = getElementType(input.getType());
   if (isa<quant::QuantizedType>(elementType) ||
-      !isa<IntegerType>(elementType) || elementType.isInteger(1) ||
+      !(isa<IntegerType>(elementType) ||
+          (allowFloat && isa<FloatType>(elementType))) ||
+      elementType.isInteger(1) ||
       getElementType(bound.getType()) != elementType ||
       !isShapePreservingBroadcast(bound, input))
     return {};
@@ -5629,7 +5632,7 @@ struct MinMaxToClipPattern : public OpRewritePattern<ONNXMinOp> {
   }
 };
 
-// Rewrite integer Where(x >= c, x, c) to Max(x, c), and
+// Rewrite Where(x >= c, x, c) to Max(x, c), and
 // Where(x <= c, x, c) to Min(x, c), for a constant bound c.
 struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
   using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
@@ -5648,7 +5651,8 @@ struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
       if (input.getType() != op.getResult().getType() ||
           (input != trueValue && input != falseValue))
         return DenseElementsAttr{};
-      return getScalarClipBound(bound, input);
+      // Float rewrites are not unconditionally safe due to NaN propagation.
+      return getScalarClipBound(bound, input, enableUnsafeMath);
     };
 
     auto bound = getBoundForSelectedInput(lhs, rhs);
@@ -5661,7 +5665,8 @@ struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
 
     const bool inputOnTrueBranch = trueValue == input;
     Value selectedValue = inputOnTrueBranch ? falseValue : trueValue;
-    auto selectedBound = getScalarClipBound(selectedValue, input);
+    auto selectedBound =
+        getScalarClipBound(selectedValue, input, enableUnsafeMath);
     if (!selectedBound || selectedBound != bound)
       return failure();
 
