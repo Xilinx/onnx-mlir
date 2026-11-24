@@ -26,7 +26,7 @@ func.func @test_alpha(%arg0: tensor<3x6xf32>, %arg1: tensor<6x4xf32>, %arg2: ten
 // CHECK-DAG:       [[VAR_0_:%.+]] = tosa.reshape [[PARAM_0_]] {new_shape = array<i64: 1, 3, 6>} : (tensor<3x6xf32>) -> tensor<1x3x6xf32>
 // CHECK-DAG:       [[VAR_1_:%.+]] = tosa.reshape [[PARAM_1_]] {new_shape = array<i64: 1, 6, 4>} : (tensor<6x4xf32>) -> tensor<1x6x4xf32>
 // CHECK-DAG:       [[VAR_2_:%.+]] = "tosa.const"() <{value = dense<1.618000e+00> : tensor<1x1x1xf32>}> : () -> tensor<1x1x1xf32>
-// CHECK:           [[VAR_3_:%.+]] = tosa.mul [[VAR_2_]], [[VAR_0_]], {{.*}}: (tensor<1x1x1xf32>, tensor<1x3x6xf32>, tensor<1xi8>) -> tensor<1x3x6xf32>
+// CHECK:           [[VAR_3_:%.+]] = tosa.mul [[VAR_0_]], [[VAR_2_]], {{.*}}: (tensor<1x3x6xf32>, tensor<1x1x1xf32>, tensor<1xi8>) -> tensor<1x3x6xf32>
 // CHECK-DAG:       [[VAR_4_:%.+]] = tosa.matmul [[VAR_3_]], [[VAR_1_]] : (tensor<1x3x6xf32>, tensor<1x6x4xf32>) -> tensor<1x3x4xf32>
 // CHECK-DAG:       [[VAR_5_:%.+]] = tosa.reshape [[PARAM_2_]] {new_shape = array<i64: 1, 3, 4>} : (tensor<3x4xf32>) -> tensor<1x3x4xf32>
 // CHECK:           [[VAR_6_:%.+]] = tosa.add [[VAR_4_]], [[VAR_5_]] : (tensor<1x3x4xf32>, tensor<1x3x4xf32>) -> tensor<1x3x4xf32>
@@ -47,7 +47,7 @@ func.func @test_beta(%arg0: tensor<3x6xf32>, %arg1: tensor<6x6xf32>, %arg2: tens
 // CHECK-DAG:       [[VAR_2_:%.+]] = "tosa.const"() <{value = dense<1.349000e+00> : tensor<1x1x1xf32>}> : () -> tensor<1x1x1xf32>
 // CHECK-DAG:       [[VAR_3_:%.+]] = tosa.reshape [[PARAM_2_]] {new_shape = array<i64: 1, 3, 6>} : (tensor<3x6xf32>) -> tensor<1x3x6xf32>
 // CHECK-NOT: separator of consecutive DAGs
-// CHECK-DAG:       [[VAR_4_:%.+]] = tosa.mul [[VAR_2_]], [[VAR_3_]], {{.*}}: (tensor<1x1x1xf32>, tensor<1x3x6xf32>, tensor<1xi8>) -> tensor<1x3x6xf32>
+// CHECK-DAG:       [[VAR_4_:%.+]] = tosa.mul [[VAR_3_]], [[VAR_2_]], {{.*}}: (tensor<1x3x6xf32>, tensor<1x1x1xf32>, tensor<1xi8>) -> tensor<1x3x6xf32>
 // CHECK-DAG:       [[VAR_5_:%.+]] = tosa.matmul [[VAR_0_]], [[VAR_1_]] : (tensor<1x3x6xf32>, tensor<1x6x6xf32>) -> tensor<1x3x6xf32>
 // CHECK:           [[VAR_6_:%.+]] = tosa.add [[VAR_5_]], [[VAR_4_]] : (tensor<1x3x6xf32>, tensor<1x3x6xf32>) -> tensor<1x3x6xf32>
 // CHECK:           [[VAR_7_:%.+]] = tosa.reshape [[VAR_6_]] {new_shape = array<i64: 3, 6>} : (tensor<1x3x6xf32>) -> tensor<3x6xf32>
@@ -87,7 +87,7 @@ func.func @test_transb(%arg0: tensor<3x6xf32>, %arg1: tensor<4x6xf32>, %arg2: te
 // CHECK-NOT: separator of consecutive DAGs
 // CHECK-DAG:       [[VAR_3_:%.+]] = tosa.transpose [[VAR_1_]], [[VAR_2_]] : (tensor<1x4x6xf32>, tensor<3xi32>) -> tensor<1x6x4xf32>
 // CHECK-DAG:       [[VAR_4_:%.+]] = "tosa.const"() <{value = dense<1.184000e+00> : tensor<1x1x1xf32>}> : () -> tensor<1x1x1xf32>
-// CHECK:           [[VAR_5_:%.+]] = tosa.mul [[VAR_4_]], [[VAR_0_]], {{.*}}: (tensor<1x1x1xf32>, tensor<1x3x6xf32>, tensor<1xi8>) -> tensor<1x3x6xf32>
+// CHECK:           [[VAR_5_:%.+]] = tosa.mul [[VAR_0_]], [[VAR_4_]], {{.*}}: (tensor<1x3x6xf32>, tensor<1x1x1xf32>, tensor<1xi8>) -> tensor<1x3x6xf32>
 // CHECK-DAG:       [[VAR_6_:%.+]] = tosa.matmul [[VAR_5_]], [[VAR_3_]] : (tensor<1x3x6xf32>, tensor<1x6x4xf32>) -> tensor<1x3x4xf32>
 // CHECK-DAG:       [[VAR_7_:%.+]] = tosa.reshape [[PARAM_2_]] {new_shape = array<i64: 1, 3, 4>} : (tensor<3x4xf32>) -> tensor<1x3x4xf32>
 // CHECK:           [[VAR_8_:%.+]] = tosa.add [[VAR_6_]], [[VAR_7_]] : (tensor<1x3x4xf32>, tensor<1x3x4xf32>) -> tensor<1x3x4xf32>
@@ -127,7 +127,7 @@ func.func @test_no_c_no_trans(%arg0: tensor<1x5xf32>, %arg1: tensor<5x6xf32>) ->
 // CHECK-DAG:       [[VAR_1_:%.+]] = tosa.reshape [[PARAM_0_]] {new_shape = array<i64: 1, 1, 5>} : (tensor<1x5xf32>) -> tensor<1x1x5xf32>
 // CHECK-DAG:       [[VAR_2_:%.+]] = tosa.reshape [[PARAM_1_]] {new_shape = array<i64: 1, 5, 6>} : (tensor<5x6xf32>) -> tensor<1x5x6xf32>
 // CHECK-DAG:       [[VAR_3_:%.+]] = "tosa.const"() <{value = dense<1.349000e+00> : tensor<1x1x1xf32>}> : () -> tensor<1x1x1xf32>
-// CHECK:           [[VAR_4_:%.+]] = tosa.mul [[VAR_3_]], [[VAR_1_]], {{.*}}: (tensor<1x1x1xf32>, tensor<1x1x5xf32>, tensor<1xi8>) -> tensor<1x1x5xf32>
+// CHECK:           [[VAR_4_:%.+]] = tosa.mul [[VAR_1_]], [[VAR_3_]], {{.*}}: (tensor<1x1x5xf32>, tensor<1x1x1xf32>, tensor<1xi8>) -> tensor<1x1x5xf32>
 // CHECK:           [[VAR_5_:%.+]] = tosa.matmul [[VAR_4_]], [[VAR_2_]] : (tensor<1x1x5xf32>, tensor<1x5x6xf32>) -> tensor<1x1x6xf32>
 // CHECK:           [[VAR_6_:%.+]] = tosa.reshape [[VAR_5_]] {new_shape = array<i64: 1, 6>} : (tensor<1x1x6xf32>) -> tensor<1x6xf32>
 // CHECK:           return [[VAR_6_]] : tensor<1x6xf32>
@@ -151,11 +151,11 @@ func.func @test_mixed(%arg0: tensor<11x5xf32>, %arg1: tensor<3x11xf32>, %arg2: t
 // CHECK-DAG:       [[VAR_5_:%.+]] = tosa.transpose [[VAR_1_]], [[VAR_4_]] : (tensor<1x3x11xf32>, tensor<3xi32>) -> tensor<1x11x3xf32>
 // CHECK-DAG:       [[VAR_6_:%.+]] = "tosa.const"() <{value = dense<1.402000e+00> : tensor<1x1x1xf32>}> : () -> tensor<1x1x1xf32>
 // CHECK-NOT: separator of consecutive DAGs
-// CHECK-DAG:       [[VAR_7_:%.+]] = tosa.mul [[VAR_6_]], [[VAR_3_]], {{.*}}: (tensor<1x1x1xf32>, tensor<1x5x11xf32>, tensor<1xi8>) -> tensor<1x5x11xf32>
+// CHECK-DAG:       [[VAR_7_:%.+]] = tosa.mul [[VAR_3_]], [[VAR_6_]], {{.*}}: (tensor<1x5x11xf32>, tensor<1x1x1xf32>, tensor<1xi8>) -> tensor<1x5x11xf32>
 // CHECK-DAG:       [[VAR_8_:%.+]] = "tosa.const"() <{value = dense<1.998000e+00> : tensor<1x1x1xf32>}> : () -> tensor<1x1x1xf32>
 // CHECK-DAG:       [[VAR_9_:%.+]] = tosa.reshape [[PARAM_2_]] {new_shape = array<i64: 1, 5, 3>} : (tensor<5x3xf32>) -> tensor<1x5x3xf32>
 // CHECK-NOT: separator of consecutive DAGs
-// CHECK-DAG:       [[VAR_10_:%.+]] = tosa.mul [[VAR_8_]], [[VAR_9_]], {{.*}}: (tensor<1x1x1xf32>, tensor<1x5x3xf32>, tensor<1xi8>) -> tensor<1x5x3xf32>
+// CHECK-DAG:       [[VAR_10_:%.+]] = tosa.mul [[VAR_9_]], [[VAR_8_]], {{.*}}: (tensor<1x5x3xf32>, tensor<1x1x1xf32>, tensor<1xi8>) -> tensor<1x5x3xf32>
 // CHECK-DAG:       [[VAR_11_:%.+]] = tosa.matmul [[VAR_7_]], [[VAR_5_]] : (tensor<1x5x11xf32>, tensor<1x11x3xf32>) -> tensor<1x5x3xf32>
 // CHECK:           [[VAR_12_:%.+]] = tosa.add [[VAR_11_]], [[VAR_10_]] : (tensor<1x5x3xf32>, tensor<1x5x3xf32>) -> tensor<1x5x3xf32>
 // CHECK:           [[VAR_13_:%.+]] = tosa.reshape [[VAR_12_]] {new_shape = array<i64: 5, 3>} : (tensor<1x5x3xf32>) -> tensor<5x3xf32>
@@ -168,11 +168,9 @@ func.func @test_mixed(%arg0: tensor<11x5xf32>, %arg1: tensor<3x11xf32>, %arg2: t
 func.func @test_gemm_to_matmul_dynamic_input_static_output(%arg0: tensor<?x5xf32>, %arg1: tensor<5x?xf32>, %arg2: tensor<?x4xf32>) -> tensor<1x4xf32> {
   %0 = "onnx.Gemm"(%arg0, %arg1, %arg2) {alpha = 1.0 : f32} : (tensor<?x5xf32>, tensor<5x?xf32>, tensor<?x4xf32>) -> tensor<1x4xf32>
   return %0 : tensor<1x4xf32>
-// CHECK-LABEL:  func.func @test_gemm_to_matmul_dynamic_input_static_output
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?x5xf32>, [[PARAM_1_:%.+]]: tensor<5x?xf32>, [[PARAM_2_:%.+]]: tensor<?x4xf32>) -> tensor<1x4xf32> {
-// CHECK:           [[VAR_2_:%.+]] = tosa.matmul [[VAR_0_:%.+]], [[VAR_1_:%.+]] : (tensor<1x?x5xf32>, tensor<1x5x?xf32>) -> tensor<1x?x?xf32>
-// CHECK:           [[VAR_4_:%.+]] = tosa.add [[VAR_2_]], [[VAR_3_:%.+]] : (tensor<1x?x?xf32>, tensor<1x?x4xf32>) -> tensor<?x?x?xf32>
-// CHECK:           [[VAR_5_:%.+]] = tosa.reshape [[VAR_4_]] {new_shape = array<i64: 1, 4>} : (tensor<?x?x?xf32>) -> tensor<1x4xf32>
-// CHECK:           return [[VAR_5_]] : tensor<1x4xf32>
-// CHECK:         }
 }
+
+// CHECK-LABEL: func.func @test_gemm_to_matmul_dynamic_input_static_output(
+// CHECK: %[[RESULT:.*]] = "onnx.Gemm"
+// CHECK-NOT: tosa.
+// CHECK: return %[[RESULT]]

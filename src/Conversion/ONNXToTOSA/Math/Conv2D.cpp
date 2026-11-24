@@ -77,13 +77,13 @@ Value createConvInGroups(PatternRewriter &rewriter, Operation *op,
     slicesWithAct.reserve(sliceValues.size());
     if (auto relu = dyn_cast<ONNXReluOp>(activation)) {
       for (Value nonGroupedConv : sliceValues) {
-        auto newRelu = rewriter.create<ONNXReluOp>(
-            activation->getLoc(), nonGroupedConv.getType(), nonGroupedConv);
+        auto newRelu = ONNXReluOp::create(rewriter, activation->getLoc(),
+            nonGroupedConv.getType(), nonGroupedConv);
         slicesWithAct.push_back(newRelu.getY());
       }
     } else if (auto lrelu = dyn_cast<ONNXLeakyReluOp>(activation)) {
       for (Value nonGroupedConv : sliceValues) {
-        auto newLRelu = rewriter.create<ONNXLeakyReluOp>(activation->getLoc(),
+        auto newLRelu = ONNXLeakyReluOp::create(rewriter, activation->getLoc(),
             nonGroupedConv.getType(), nonGroupedConv, lrelu.getAlphaAttr());
         slicesWithAct.push_back(newLRelu.getY());
       }
@@ -112,6 +112,9 @@ public:
   using OpAdaptor = typename ONNXConvOp::Adaptor;
   LogicalResult matchAndRewrite(Operation *op, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const final {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
+
     OpAdaptor adaptor(operands, op->getAttrDictionary());
     auto loc = op->getLoc();
     auto convOp = mlir::cast<ONNXConvOp>(op);
@@ -226,7 +229,7 @@ public:
             create.onnx.transposeInt64(weights, {2, 3, 0, 1});
         // A reshape op is needed to adhere to the TOSA standard
         // https://www.mlplatform.org/tosa/tosa_spec.html#_depthwise_conv2d
-        Value newWeight = create.tosa.reshape(
+        Value newWeight = create.onnx.reshape(
             transposedWeight, {weightShape[2], weightShape[3], inputChannels,
                                   outputChannels / inputChannels});
 

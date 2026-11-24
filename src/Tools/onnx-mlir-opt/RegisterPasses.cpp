@@ -53,6 +53,8 @@ namespace onnx_mlir {
 void registerOMPasses(int optLevel) {
   mlir::registerPass(
       []() { return createMaterializeInitializerSourcesPass(); });
+  mlir::registerPass(
+      []() { return createFormDeferredFoldableExpressionsPass(); });
 
   // All passes implemented within onnx-mlir should register within this
   // function to make themselves available as a command-line option.
@@ -389,6 +391,9 @@ void registerOMPasses(int optLevel) {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createSetONNXNodeNamePass();
   });
+
+  mlir::registerPass(
+      []() { return createCanonicalizeElementwiseOperandRanksPass(); });
 
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createXFEONNXOpsetVerifierPass();

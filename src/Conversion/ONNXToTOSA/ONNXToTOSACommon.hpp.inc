@@ -24,7 +24,7 @@ std::optional<mlir::Value> convertReduceOpCommon(mlir::PatternRewriter &rewriter
     double outputScale = 1.0, int64_t outputZp = 0) {
   auto inputType =
       mlir::dyn_cast<mlir::RankedTensorType>(inputValue.getType());
-  if (!inputType)
+  if (!inputType || !inputType.hasStaticShape() || !outputType.hasStaticShape())
     return std::nullopt;
 
   if (!axesElems)
@@ -73,10 +73,8 @@ std::optional<mlir::Value> convertReduceOpCommon(mlir::PatternRewriter &rewriter
 
     // Optionally squeeze out the reduced axes.
     if (!keepDims) {
-      auto reshapeOp =
-          CreateOpAndInfer<mlir::tosa::ReshapeOp>(rewriter, op->getLoc(),
-              outputType, val, rewriter.getDenseI64ArrayAttr(outputShape));
-      val = reshapeOp.getResult();
+      OnnxBuilder onnxBuilder(rewriter, op->getLoc());
+      val = onnxBuilder.reshape(val, outputShape);
     }
   }
 

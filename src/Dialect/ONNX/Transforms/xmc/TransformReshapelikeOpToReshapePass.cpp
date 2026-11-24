@@ -134,12 +134,12 @@ static void replaceWithReshape(Operation *op, Value input, Type outputType,
   auto shapeType = RankedTensorType::get(
       {static_cast<int64_t>(outputShape.size())}, rewriter.getI64Type());
 
-  auto shapeConstantOp = rewriter.create<ONNXConstantOp>(loc, shapeType,
+  auto shapeConstantOp = ONNXConstantOp::create(rewriter, loc, shapeType,
       Attribute(), shapeAttr, FloatAttr(), ArrayAttr(), IntegerAttr(),
       ArrayAttr(), StringAttr(), ArrayAttr());
 
-  auto reshapeOp = rewriter.create<ONNXReshapeOp>(
-      loc, outputType, input, shapeConstantOp.getResult());
+  auto reshapeOp = ONNXReshapeOp::create(
+      rewriter, loc, outputType, input, shapeConstantOp.getResult());
 
   rewriter.replaceOp(op, reshapeOp.getResult());
 }
@@ -161,7 +161,11 @@ struct TransformTrivialTransposeToReshape
     auto inputTensorType = dyn_cast<RankedTensorType>(inputType);
     auto outputTensorType = dyn_cast<RankedTensorType>(outputType);
 
-    if (!inputTensorType || !outputTensorType) {
+    // Dynamic dimensions are not known to be singleton dimensions, and they
+    // cannot be materialized as values of the Reshape shape operand.
+    if (!inputTensorType || !outputTensorType ||
+        !inputTensorType.hasStaticShape() ||
+        !outputTensorType.hasStaticShape()) {
       return failure();
     }
 
@@ -215,7 +219,11 @@ struct TransformReshapelikeToReshape : public OpRewritePattern<OpTy> {
     auto inputTensorType = dyn_cast<RankedTensorType>(inputType);
     auto outputTensorType = dyn_cast<RankedTensorType>(outputType);
 
-    if (!inputTensorType || !outputTensorType) {
+    // A type's dynamic dimension marker is not a valid ONNX shape value.
+    // Keep the original operation when its shape is only known at runtime.
+    if (!inputTensorType || !outputTensorType ||
+        !inputTensorType.hasStaticShape() ||
+        !outputTensorType.hasStaticShape()) {
       return failure();
     }
 

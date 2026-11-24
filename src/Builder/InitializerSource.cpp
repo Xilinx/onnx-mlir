@@ -566,10 +566,15 @@ std::shared_ptr<InitializerSourceCache> createInitializerSourceCache() {
   return std::make_shared<InitializerSourceCache>();
 }
 
+FailureOr<ElementsAttr> loadInitializerSource(
+    ONNXInitializerSourceOp op, InitializerSourceCache &cache) {
+  return resolveInitializerContents(op, cache.models);
+}
+
 FailureOr<ONNXConstantOp> materializeInitializerSource(
     ONNXInitializerSourceOp op, RewriterBase &rewriter,
     InitializerSourceCache &cache) {
-  auto value = resolveInitializerContents(op, cache.models);
+  auto value = loadInitializerSource(op, cache);
   if (failed(value))
     return failure();
   OpBuilder::InsertionGuard guard(rewriter);
@@ -626,7 +631,7 @@ FailureOr<ONNXInitializerSourceOp> createInitializerSource(OpBuilder &builder,
   SmallVector<StringRef> scopeRefs;
   llvm::transform(scope, std::back_inserter(scopeRefs),
       [](const std::string &component) { return StringRef(component); });
-  return builder.create<ONNXInitializerSourceOp>(loc, type, source->kind,
+  return ONNXInitializerSourceOp::create(builder, loc, type, source->kind,
       source->path, tensor.name(), builder.getStrArrayAttr(scopeRefs),
       source->offset ? builder.getI64IntegerAttr(*source->offset)
                      : IntegerAttr{},

@@ -53,7 +53,7 @@ Value createI64Constant(
   auto tensorType = RankedTensorType::get(
       {static_cast<int64_t>(values.size())}, rewriter.getI64Type());
   auto attr = DenseElementsAttr::get(tensorType, values);
-  return rewriter.create<ONNXConstantOp>(loc, tensorType,
+  return ONNXConstantOp::create(rewriter, loc, tensorType,
       /*sparse_value=*/Attribute(), /*value=*/attr,
       /*value_float=*/FloatAttr(), /*value_floats=*/ArrayAttr(),
       /*value_int=*/IntegerAttr(), /*value_ints=*/ArrayAttr(),
@@ -247,7 +247,7 @@ struct SplitGroupConvPattern : public OpRewritePattern<ONNXConvOp> {
         return failure();
       }
       // Replace the constant with dense version
-      auto newWeightConst = rewriter.create<ONNXConstantOp>(loc, weightType,
+      auto newWeightConst = ONNXConstantOp::create(rewriter, loc, weightType,
           /*sparse_value=*/Attribute(),
           /*value=*/weightDenseAttr, /*value_float=*/FloatAttr(),
           /*value_floats=*/ArrayAttr(), /*value_int=*/IntegerAttr(),
@@ -291,7 +291,7 @@ struct SplitGroupConvPattern : public OpRewritePattern<ONNXConvOp> {
                   resourceAttr.getType(), blob->getData());
               if (biasDenseAttr) {
                 // Replace the constant with dense version
-                auto newBiasConst = rewriter.create<ONNXConstantOp>(loc,
+                auto newBiasConst = ONNXConstantOp::create(rewriter, loc,
                     biasType, /*sparse_value=*/Attribute(),
                     /*value=*/biasDenseAttr, /*value_float=*/FloatAttr(),
                     /*value_floats=*/ArrayAttr(), /*value_int=*/IntegerAttr(),
@@ -340,8 +340,8 @@ struct SplitGroupConvPattern : public OpRewritePattern<ONNXConvOp> {
           RankedTensorType::get({batch, inputChannelsPerSplit, height, width},
               inputType.getElementType());
 
-      auto slicedInput = rewriter.create<ONNXSliceOp>(
-          loc, slicedInputType, input, starts, ends, axes, steps);
+      auto slicedInput = ONNXSliceOp::create(
+          rewriter, loc, slicedInputType, input, starts, ends, axes, steps);
 
       // Create new weight constant for this split
       // Extract the relevant portion of weights
@@ -394,7 +394,7 @@ struct SplitGroupConvPattern : public OpRewritePattern<ONNXConvOp> {
       auto newWeightType =
           RankedTensorType::get(newWeightShape, splitWeightElemType);
 
-      auto newWeightConst = rewriter.create<ONNXConstantOp>(loc, newWeightType,
+      auto newWeightConst = ONNXConstantOp::create(rewriter, loc, newWeightType,
           /*sparse_value=*/Attribute(),
           /*value=*/newWeightAttr, /*value_float=*/FloatAttr(),
           /*value_floats=*/ArrayAttr(), /*value_int=*/IntegerAttr(),
@@ -425,7 +425,7 @@ struct SplitGroupConvPattern : public OpRewritePattern<ONNXConvOp> {
         auto newBiasType =
             RankedTensorType::get({outputChannelsPerSplit}, splitBiasElemType);
 
-        newBias = rewriter.create<ONNXConstantOp>(loc, newBiasType,
+        newBias = ONNXConstantOp::create(rewriter, loc, newBiasType,
             /*sparse_value=*/Attribute(),
             /*value=*/newBiasAttr, /*value_float=*/FloatAttr(),
             /*value_floats=*/ArrayAttr(), /*value_int=*/IntegerAttr(),
@@ -443,7 +443,7 @@ struct SplitGroupConvPattern : public OpRewritePattern<ONNXConvOp> {
           IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed),
           newGroupSize);
 
-      auto newConvOp = rewriter.create<ONNXConvOp>(loc, newConvOutputType,
+      auto newConvOp = ONNXConvOp::create(rewriter, loc, newConvOutputType,
           slicedInput.getResult(), newWeightConst.getResult(), newBias,
           convOp.getAutoPadAttr(), convOp.getDilationsAttr(), groupAttr,
           convOp.getKernelShapeAttr(), convOp.getPadsAttr(),
@@ -456,7 +456,7 @@ struct SplitGroupConvPattern : public OpRewritePattern<ONNXConvOp> {
     auto axisAttr = IntegerAttr::get(
         IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed), 1);
     auto concatOp =
-        rewriter.create<ONNXConcatOp>(loc, outputType, convResults, axisAttr);
+        ONNXConcatOp::create(rewriter, loc, outputType, convResults, axisAttr);
 
     // 8. Replace original conv with concat result
     rewriter.replaceOp(convOp, concatOp.getResult());

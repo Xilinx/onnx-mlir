@@ -915,7 +915,6 @@ using ONNXOneHotEncoderOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXOn
 using ONNXTreeEnsembleOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXTreeEnsembleOp>;
 using ONNXQuantizeLinearOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXQuantizeLinearOp>;
 using ONNXRangeOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXRangeOp>;
-using ONNXReshapeOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXReshapeOp>;
 using ONNXReverseSequenceOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXReverseSequenceOp>;
 using ONNXRotaryEmbeddingOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXRotaryEmbeddingOp>;
 using ONNXShapeTransformOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXShapeTransformOp>;
@@ -927,6 +926,20 @@ using ONNXTopKOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXTopKOp>;
 using ONNXTransposeOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXTransposeOp>;
 using ONNXUpsampleOpShapeHelper = ONNXNonSpecificOpShapeHelper<mlir::ONNXUpsampleOp>;
 // clang-format on
+
+//===----------------------------------------------------------------------===//
+// Reshape Op
+//===----------------------------------------------------------------------===//
+
+struct ONNXReshapeOpShapeHelper : public ONNXOpShapeHelper {
+  ONNXReshapeOpShapeHelper(mlir::Operation *op, mlir::ValueRange operands,
+      IndexExprBuilder *ieBuilder = nullptr, IndexExprScope *scope = nullptr)
+      : ONNXOpShapeHelper(op, operands, ieBuilder, scope) {}
+  mlir::LogicalResult computeShape() final;
+  // Computes the output dims from the data and shape operands alone. Unlike
+  // computeShape, the dims are not refined with the existing result type.
+  mlir::LogicalResult computeOutputDims(DimsExpr &outputDims);
+};
 
 //===----------------------------------------------------------------------===//
 // RandomGenerator Shape Helper.
@@ -973,6 +986,11 @@ protected:
   // Shape inference pattern
   int pattern;
 };
+
+/// True for a com.microsoft MatMulNBits CustomOp without a shape_infer_pattern.
+/// Its result shape is known from the operation itself: the shape of A
+/// (operand 0) with the last dimension replaced by the attribute N.
+bool usesMatMulNBitsShapeRule(mlir::ONNXCustomOp customOp);
 
 //===----------------------------------------------------------------------===//
 // Setting a new constant or attribute value.

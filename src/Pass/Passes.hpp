@@ -50,7 +50,8 @@ std::unique_ptr<mlir::Pass> createScrubDisposablePass(bool closeAfter = true,
 std::unique_ptr<mlir::Pass> createONNXOpTransformPass();
 std::unique_ptr<mlir::Pass> createONNXOpTransformPass(int threshold,
     bool report, bool targetCPU, bool enableSimdDataLayoutOpt,
-    bool enableConvOptPass, bool enableRecomposeOptPass);
+    bool enableConvOptPass, bool enableRecomposeOptPass,
+    bool enableReluHardSigmoidRecomposition = true);
 
 std::unique_ptr<mlir::Pass> createConvOptONNXToONNXPass(
     bool enableSimdDataLayoutOpt = false);
@@ -103,6 +104,9 @@ void configureCastDataMovementPatterns(bool enableCastDataMovementPatterns);
 
 void configureGatherElementsTileCanonicalization(
     bool enableGatherElementsTileCanonicalization);
+
+void populateElementwiseOperandRankCanonicalizationPatterns(
+    mlir::RewritePatternSet &patterns);
 
 void populateQDQDataMovementCanonicalizationPatterns(
     mlir::RewritePatternSet &patterns, mlir::PatternBenefit benefit = 1);

@@ -89,7 +89,7 @@ Value reshapeInputTo4D(PatternRewriter &rewriter, Location loc, Value input) {
   auto newType = RankedTensorType::get(newShape, inputType.getElementType());
   auto shapeConst = createShapeConstant(rewriter, loc, newShape);
 
-  return rewriter.create<ONNXReshapeOp>(loc, newType, input, shapeConst)
+  return ONNXReshapeOp::create(rewriter, loc, newType, input, shapeConst)
       .getReshaped();
 }
 
@@ -99,7 +99,7 @@ Value reshapeOutputToOriginal(PatternRewriter &rewriter, Location loc,
   auto newType = RankedTensorType::get(outputShape, elementType);
   auto shapeConst = createShapeConstant(rewriter, loc, outputShape);
 
-  return rewriter.create<ONNXReshapeOp>(loc, newType, input, shapeConst)
+  return ONNXReshapeOp::create(rewriter, loc, newType, input, shapeConst)
       .getReshaped();
 }
 
@@ -114,7 +114,7 @@ Value reshapeWeightTo4D(PatternRewriter &rewriter, Location loc, Value weight) {
   auto newType = RankedTensorType::get(newShape, weightType.getElementType());
   auto shapeConst = createShapeConstant(rewriter, loc, newShape);
 
-  return rewriter.create<ONNXReshapeOp>(loc, newType, weight, shapeConst)
+  return ONNXReshapeOp::create(rewriter, loc, newType, weight, shapeConst)
       .getReshaped();
 }
 
@@ -135,23 +135,21 @@ Value createActivation4D(PatternRewriter &rewriter, Location loc,
   auto outputType = input4D.getType();
 
   if (auto reluOp = dyn_cast<ONNXReluOp>(originalActivation)) {
-    return rewriter.create<ONNXReluOp>(loc, outputType, input4D).getResult();
+    return ONNXReluOp::create(rewriter, loc, outputType, input4D).getResult();
   }
   if (auto leakyReluOp = dyn_cast<ONNXLeakyReluOp>(originalActivation)) {
-    return rewriter
-        .create<ONNXLeakyReluOp>(
-            loc, outputType, input4D, leakyReluOp.getAlphaAttr())
+    return ONNXLeakyReluOp::create(
+        rewriter, loc, outputType, input4D, leakyReluOp.getAlphaAttr())
         .getResult();
   }
   if (auto preluOp = dyn_cast<ONNXPReluOp>(originalActivation)) {
     Value slope = preluOp.getSlope();
-    return rewriter.create<ONNXPReluOp>(loc, outputType, input4D, slope)
+    return ONNXPReluOp::create(rewriter, loc, outputType, input4D, slope)
         .getResult();
   }
   if (auto clipOp = dyn_cast<ONNXClipOp>(originalActivation)) {
-    return rewriter
-        .create<ONNXClipOp>(
-            loc, outputType, input4D, clipOp.getMin(), clipOp.getMax())
+    return ONNXClipOp::create(
+        rewriter, loc, outputType, input4D, clipOp.getMin(), clipOp.getMax())
         .getResult();
   }
 
@@ -197,8 +195,18 @@ struct ScaleToDwConv2dPattern : public OpRewritePattern<ONNXMulOp> {
     // Get types
     auto inputType = dyn_cast<RankedTensorType>(input.getType());
     auto scaleType = dyn_cast<RankedTensorType>(scale.getType());
+    auto mulOutputType =
+        dyn_cast<RankedTensorType>(mulOp.getResult().getType());
 
-    if (!inputType || !scaleType)
+    if (!inputType || !scaleType || !mulOutputType)
+      return failure();
+
+    // The input, weight, and output reshapes below use constant shape tensors.
+    // Runtime dimensions cannot be copied into those constants: the MLIR
+    // dynamic-dimension sentinel is not a valid ONNX Reshape dimension.
+    // Defer this conversion until shape inference has resolved every extent.
+    if (!inputType.hasStaticShape() || !scaleType.hasStaticShape() ||
+        !mulOutputType.hasStaticShape())
       return failure();
 
     // Scale-fold to a depthwise XFEConv is only valid for float or quantized
@@ -235,9 +243,11 @@ struct ScaleToDwConv2dPattern : public OpRewritePattern<ONNXMulOp> {
     Operation *activationOp = getFollowingActivation(mulOp);
 
     // Get output shape
-    auto outputType = cast<RankedTensorType>(
+    auto outputType = dyn_cast<RankedTensorType>(
         activationOp ? activationOp->getResult(0).getType()
                      : mulOp.getResult().getType());
+    if (!outputType || !outputType.hasStaticShape())
+      return failure();
     auto outputShape = outputType.getShape();
 
     // Reshape input to 4D (prepend 1s if needed).
@@ -262,7 +272,7 @@ struct ScaleToDwConv2dPattern : public OpRewritePattern<ONNXMulOp> {
     auto padsAttr = rewriter.getI64ArrayAttr({0, 0, 0, 0});
     auto stridesAttr = rewriter.getI64ArrayAttr({1, 1});
 
-    auto dwConvOp = rewriter.create<XFEConvOp>(loc, convOutputType,
+    auto dwConvOp = XFEConvOp::create(rewriter, loc, convOutputType,
         reshapedInput, reshapedWeight, bias, rewriter.getStringAttr("NONE"),
         dilationsAttr, groupAttr,
         /*leakyrelu_alpha=*/FloatAttr(), padsAttr,

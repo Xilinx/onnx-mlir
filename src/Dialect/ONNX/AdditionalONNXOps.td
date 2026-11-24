@@ -68,8 +68,73 @@ def ONNX_CallerOwnedDataAttr : Attr<
 }
 
 //===----------------------------------------------------------------------===//
+// ONNX DeferredFoldableOp
+def ONNXDeferredFoldableOp : ONNX_Op<"DeferredFoldable",
+    [DeclareOpInterfaceMethods<RegionBranchOpInterface,
+         ["getEntrySuccessorOperands", "getRegionInvocationBounds"]>,
+     DeferredConstantOpInterface, IsolatedFromAbove,
+     RecursivelySpeculatable, RecursiveMemoryEffects, SingleBlock]> {
+  let summary = "Retain a constant expression for explicit later folding";
+  let description = [{
+    Represents a deterministic expression with constant semantics whose
+    evaluation is deferred. Captures may be compiler-owned constants or
+    deferred sources. The body retains the operations for an explicit
+    materialization API to evaluate after loading any deferred sources.
+
+    `captures` correspond positionally to the arguments of `body`. The body is
+    a flattened DAG of pure, regionless operations followed by
+    `onnx.Yield`; forming a larger expression inlines the bodies of its
+    deferred operands. Each result's producer can be inspected in constant
+    time through its yield operand. A result forwarded from a body argument
+    has no peelable terminal operation.
+
+    Formation captures pure, regionless operations with one or more results
+    whose inputs are constants or deferred constants. Multiple results share
+    computation within one body. Peeling a result clones its terminal operation
+    outside and yields the required body-local operands from the remaining
+    DeferredFoldable operation, preserving the other results.
+    Operations may come from any dialect, including ONNX/XFE and operations
+    introduced by later lowering. Ordinary passes treat the body as opaque.
+    A materializer evaluates it explicitly and diagnoses any operation for
+    which no fold is available.
+
+    For example, this body retains a transpose of `%weights`, produced by
+    `onnx.InitializerSource`, without loading its contents:
+
+    ```mlir
+    %transposed = "onnx.DeferredFoldable"(%weights) ({
+    ^bb0(%captured: tensor<4x8xf32>):
+      %result = "onnx.Transpose"(%captured) {perm = [1, 0]} :
+          (tensor<4x8xf32>) -> tensor<8x4xf32>
+      onnx.Yield %result : tensor<8x4xf32>
+    }) : (tensor<4x8xf32>) -> tensor<8x4xf32>
+    ```
+
+    This operation is not `ConstantLike` and has no fold hook: merely running
+    generic folding must not read initializer payloads.
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$captures);
+  let results = (outs Variadic<AnyType>:$results);
+  let regions = (region SizedRegion<1>:$body);
+  let hasCanonicalizer = 1;
+  let hasVerifier = 1;
+  let extraClassDeclaration = [{
+    /// Return the body operation producing the selected result, or null for
+    /// a forwarded capture. Single-result callers may omit the index.
+    Operation *getTerminalOperation(unsigned resultIndex = 0);
+
+    template <typename OpTy>
+    OpTy getTerminalOperation(unsigned resultIndex = 0) {
+      return dyn_cast_or_null<OpTy>(getTerminalOperation(resultIndex));
+    }
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // ONNX InitializerSourceOp
-def ONNXInitializerSourceOp : ONNX_Op<"InitializerSource", [Pure]> {
+def ONNXInitializerSourceOp : ONNX_Op<"InitializerSource",
+    [Pure, DeferredConstantOpInterface]> {
   let summary = "Reference an ONNX initializer without reading it";
   let description = [{
     Represents immutable ONNX initializer contents by either an external-data
@@ -402,7 +467,9 @@ def ONNXYieldOp : ONNX_Op<"Yield", [Pure, ReturnLike, Terminator]> {
     The operation takes variable number of operands and produces no results.
 
     This operation is not part of the standard and was added to assist onnx-mlir.
-    It terminates a ONNXLoop/Scan/IfOp region.
+    It terminates an ONNXLoop/Scan/IfOp region or the body of
+    `onnx.DeferredFoldable`. The parent operation defines how yielded operands
+    map to region arguments or operation results.
   }];
 
   let arguments = (ins Variadic<AnyType>:$operands);

@@ -67,18 +67,18 @@ struct TransferSoftmaxAxisToLastPattern
 
     Type permutedInputType =
         RankedTensorType::get(permutedShape, inputType.getElementType());
-    auto inputTransposeOp = rewriter.create<ONNXTransposeOp>(loc,
+    auto inputTransposeOp = ONNXTransposeOp::create(rewriter, loc,
         permutedInputType, op.getInput(), rewriter.getI64ArrayAttr(orderIn));
 
     Type permutedOutputType =
         RankedTensorType::get(permutedShape, outputType.getElementType());
-    auto newSoftmaxOp = rewriter.create<ONNXSoftmaxOp>(loc, permutedOutputType,
+    auto newSoftmaxOp = ONNXSoftmaxOp::create(rewriter, loc, permutedOutputType,
         inputTransposeOp.getResult(),
         rewriter.getIntegerAttr(
             rewriter.getIntegerType(64, /*isSigned=*/true), -1));
 
     auto outputTransposeOp =
-        rewriter.create<ONNXTransposeOp>(loc, op.getResult().getType(),
+        ONNXTransposeOp::create(rewriter, loc, op.getResult().getType(),
             newSoftmaxOp.getResult(), rewriter.getI64ArrayAttr(orderOut));
 
     rewriter.replaceOp(op, outputTransposeOp.getResult());

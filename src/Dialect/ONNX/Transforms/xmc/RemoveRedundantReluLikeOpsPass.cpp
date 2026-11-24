@@ -142,8 +142,8 @@ struct RemoveRedundantReluPattern : public OpRewritePattern<ONNXReluOp> {
         return failure();
       // Rebuild this Relu on the inner input and replace through the rewriter
       // so the ResultNamesUpdater listener transfers ResultNames onto new op.
-      auto newRelu = rewriter.create<ONNXReluOp>(
-          reluOp.getLoc(), reluOp.getType(), prevRelu.getX());
+      auto newRelu = ONNXReluOp::create(
+          rewriter, reluOp.getLoc(), reluOp.getType(), prevRelu.getX());
       rewriter.replaceOp(reluOp, newRelu.getResult());
       return success();
     }

@@ -4,7 +4,7 @@
 
 //===------------- ONNXQuantizeLinearOp.cpp - ONNXQuantizeLinearOp---------===//
 //
-// Copyright (c) 2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -27,6 +27,8 @@ public:
   using OpAdaptor = typename ONNXBatchNormalizationInferenceModeOp::Adaptor;
   LogicalResult matchAndRewrite(ONNXBatchNormalizationInferenceModeOp op,
       OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     auto outType = getTypeConverter()->convertType(op.getResult().getType());
     if (!cast<ShapedType>(outType).hasRank()) {
@@ -43,7 +45,8 @@ public:
     for (auto i = 2; i < outTensorType.getRank(); i++)
       newShape.push_back(1);
 
-    TosaBuilder tosaBuilder(rewriter, op->getLoc());
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
+        rewriter, op->getLoc());
     Value input = op.getX();
     Value mean = op.getMean();
     Value scale = op.getScale();
@@ -57,26 +60,23 @@ public:
     Value reshapedBias;
     Value reshapedVar;
 
-    reshapedMean = tosaBuilder.reshape(mean, ArrayRef<int64_t>(newShape));
-    reshapedScale = tosaBuilder.reshape(scale, ArrayRef<int64_t>(newShape));
-    reshapedBias = tosaBuilder.reshape(bias, ArrayRef<int64_t>(newShape));
-    reshapedVar = tosaBuilder.reshape(var, ArrayRef<int64_t>(newShape));
+    reshapedMean = create.onnx.reshape(mean, ArrayRef<int64_t>(newShape));
+    reshapedScale = create.onnx.reshape(scale, ArrayRef<int64_t>(newShape));
+    reshapedBias = create.onnx.reshape(bias, ArrayRef<int64_t>(newShape));
+    reshapedVar = create.onnx.reshape(var, ArrayRef<int64_t>(newShape));
 
     // epsilon's shape: constant -> {1, 1, 1, ...}
     newShape[1] = 1;
-    auto eps = tosaBuilder.getSplattedConst(op.getEpsilon().convertToFloat(),
+    auto eps = create.tosa.getSplattedConst(op.getEpsilon().convertToFloat(),
         outTensorType.getElementType(), newShape.size());
 
     // output = (input - mean) * scale * rsqrt(var + eps) + bias
-    auto op1SubInputMean =
-        tosaBuilder.binaryOp<mlir::tosa::SubOp>(input, reshapedMean);
-    auto op2AddVarEps =
-        tosaBuilder.binaryOp<mlir::tosa::AddOp>(reshapedVar, eps);
-    auto op3RsqrtOp2 = tosaBuilder.unaryOp<mlir::tosa::RsqrtOp>(op2AddVarEps);
-    auto op4MulOp1Op3 = tosaBuilder.mul(op1SubInputMean, op3RsqrtOp2, 0);
-    auto op5MulOp4Scale = tosaBuilder.mul(op4MulOp1Op3, reshapedScale, 0);
-    auto newOutput =
-        tosaBuilder.binaryOp<mlir::tosa::AddOp>(op5MulOp4Scale, reshapedBias);
+    auto op1SubInputMean = create.onnx.sub(input, reshapedMean);
+    auto op2AddVarEps = create.onnx.add(reshapedVar, eps);
+    auto op3RsqrtOp2 = create.tosa.unaryOp<mlir::tosa::RsqrtOp>(op2AddVarEps);
+    auto op4MulOp1Op3 = create.onnx.mul(op1SubInputMean, op3RsqrtOp2);
+    auto op5MulOp4Scale = create.onnx.mul(op4MulOp1Op3, reshapedScale);
+    auto newOutput = create.onnx.add(op5MulOp4Scale, reshapedBias);
 
     rewriter.replaceOp(op, {newOutput});
     return success();

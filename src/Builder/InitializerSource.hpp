@@ -12,8 +12,19 @@
 namespace onnx_mlir {
 struct InitializerSourceCache;
 
-// Reads one source and replaces all its uses with a compiler-owned constant.
-// Preserves discardable metadata. On failure, leaves the source unchanged.
+// Read `op`'s tensor contents without modifying `op` or its uses.
+// May add parsed source models to `cache`.
+// Returns an attribute that retains its backing storage.
+//
+// Note: callers that specialize compiled code using these contents must use
+// `materializeInitializerSource` instead, which replaces `op` with a constant.
+mlir::FailureOr<mlir::ElementsAttr> loadInitializerSource(
+    mlir::ONNXInitializerSourceOp op, InitializerSourceCache &cache);
+
+// Reads one source and replaces all its uses with a compiler-owned constant,
+// making the initializer part of the compiled-model semantics rather than a
+// replaceable source. Preserves discardable metadata. On failure, leaves the
+// source unchanged.
 mlir::FailureOr<mlir::ONNXConstantOp> materializeInitializerSource(
     mlir::ONNXInitializerSourceOp op, mlir::RewriterBase &rewriter,
     InitializerSourceCache &cache);

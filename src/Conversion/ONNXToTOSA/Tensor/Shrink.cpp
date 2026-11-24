@@ -37,6 +37,7 @@ public:
     auto input = adaptor.getInput();
 
     TosaBuilder tosaBuilder(rewriter, loc);
+    OnnxBuilder onnxBuilder(rewriter, loc);
 
     auto inputRankedTensorTy = dyn_cast<RankedTensorType>(input.getType());
     if (!inputRankedTensorTy) {
@@ -61,16 +62,14 @@ public:
     // { x > lambd,  then y = x - bias
     // { otherwise,  then y = 0
 
-    auto firstCmp = tosaBuilder.compareOp<mlir::tosa::GreaterOp>(
-        rewriter, loc, negatedLambdConstOp, input);
-    auto firstFormula =
-        tosaBuilder.binaryOp<mlir::tosa::AddOp>(input, biasConstOp);
+    Value firstCmp = onnxBuilder.createOpAndInferShapes<ONNXGreaterOp>(
+        negatedLambdConstOp, input);
+    auto firstFormula = onnxBuilder.add(input, biasConstOp);
     auto firstSelect = tosaBuilder.select(firstCmp, firstFormula, zeroConstOp);
 
-    auto secondCmp = tosaBuilder.compareOp<mlir::tosa::GreaterOp>(
-        rewriter, loc, input, lambdConstOp);
-    auto secondFormula =
-        tosaBuilder.binaryOp<mlir::tosa::SubOp>(input, biasConstOp);
+    Value secondCmp =
+        onnxBuilder.createOpAndInferShapes<ONNXGreaterOp>(input, lambdConstOp);
+    auto secondFormula = onnxBuilder.sub(input, biasConstOp);
     auto secondSelect =
         tosaBuilder.select(secondCmp, secondFormula, firstSelect);
 

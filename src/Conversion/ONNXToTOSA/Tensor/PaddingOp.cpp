@@ -5,7 +5,7 @@
 //===---------------- Padding.cpp - Padding Op --------------------===//
 //
 // Copyright 2019-2020 The IBM Research Authors.
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -35,6 +35,8 @@ public:
   using OpAdaptor = typename ONNXPadOp::Adaptor;
   LogicalResult matchAndRewrite(ONNXPadOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const final {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     Location loc = op.getLoc();
 
@@ -104,11 +106,11 @@ public:
 
       rewriter.replaceOpWithNewOp<mlir::tosa::PadOp>(op, resultType, data,
           padsList1,
-          rewriter.create<mlir::tosa::ConstOp>(
-              op->getLoc(), constType, constAttr));
+          mlir::tosa::ConstOp::create(
+              rewriter, op->getLoc(), constType, constAttr));
     } else {
-      TosaBuilder tosaBuilder(rewriter, loc);
-      Value reshapeToSplattedConst = tosaBuilder.reshape(constValue, {});
+      MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(rewriter, loc);
+      Value reshapeToSplattedConst = create.onnx.reshape(constValue, {});
       rewriter.replaceOpWithNewOp<mlir::tosa::PadOp>(
           op, resultType, data, padsList1, reshapeToSplattedConst);
     }

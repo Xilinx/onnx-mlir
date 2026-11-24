@@ -128,7 +128,7 @@ mlir::Value createConstantTensor(mlir::PatternRewriter &rewriter,
     denseAttr = mlir::DenseIntElementsAttr::get(storageTensorType, apIntData);
   }
 
-  return rewriter.create<mlir::ONNXConstantOp>(loc, resultType,
+  return mlir::ONNXConstantOp::create(rewriter, loc, resultType,
       mlir::ValueRange{},
       mlir::ArrayRef<mlir::NamedAttribute>{
           rewriter.getNamedAttr("value", denseAttr)});
@@ -146,12 +146,12 @@ mlir::Value createReshape(mlir::PatternRewriter &rewriter, mlir::Location loc,
       {static_cast<int64_t>(targetShape.size())}, rewriter.getI64Type());
   auto shapeAttr = mlir::DenseIntElementsAttr::get(shapeType, targetShape);
   auto shapeConst =
-      rewriter.create<mlir::ONNXConstantOp>(loc, shapeType, mlir::ValueRange{},
+      mlir::ONNXConstantOp::create(rewriter, loc, shapeType, mlir::ValueRange{},
           mlir::ArrayRef<mlir::NamedAttribute>{
               rewriter.getNamedAttr("value", shapeAttr)});
 
-  return rewriter.create<mlir::ONNXReshapeOp>(
-      loc, targetType, input, shapeConst, /*allowzero=*/0);
+  return mlir::ONNXReshapeOp::create(
+      rewriter, loc, targetType, input, shapeConst, /*allowzero=*/0);
 }
 
 /// Compute 4D shape for convolution input (NCHW layout)
@@ -277,20 +277,20 @@ mlir::Value convertReductionToConv(mlir::PatternRewriter &rewriter,
         /*zeroPoint=*/0, /*storageTypeMin=*/-32768, /*storageTypeMax=*/32767);
     bias = createConstantTensor(rewriter, loc, biasShape, 0.0f, biasQuantType);
   } else {
-    bias = rewriter.create<mlir::ONNXNoneOp>(loc).getResult();
+    bias = mlir::ONNXNoneOp::create(rewriter, loc).getResult();
   }
 
   auto si64Type = rewriter.getIntegerType(64, /*isSigned=*/true);
 
-  mlir::Value convResult =
-      rewriter.create<mlir::ONNXConvOp>(loc, convOutputType, convInput, weights,
-          /*B=*/bias,
-          /*auto_pad=*/rewriter.getStringAttr("NOTSET"),
-          /*dilations=*/rewriter.getI64ArrayAttr(dilations),
-          /*group=*/mlir::IntegerAttr::get(si64Type, 1),
-          /*kernel_shape=*/rewriter.getI64ArrayAttr(kernelShape),
-          /*pads=*/rewriter.getI64ArrayAttr(pads),
-          /*strides=*/rewriter.getI64ArrayAttr(strides));
+  mlir::Value convResult = mlir::ONNXConvOp::create(rewriter, loc,
+      convOutputType, convInput, weights,
+      /*B=*/bias,
+      /*auto_pad=*/rewriter.getStringAttr("NOTSET"),
+      /*dilations=*/rewriter.getI64ArrayAttr(dilations),
+      /*group=*/mlir::IntegerAttr::get(si64Type, 1),
+      /*kernel_shape=*/rewriter.getI64ArrayAttr(kernelShape),
+      /*pads=*/rewriter.getI64ArrayAttr(pads),
+      /*strides=*/rewriter.getI64ArrayAttr(strides));
 
   // Reshape to original output shape if needed (e.g. keepdims=false)
   auto convResultShape = getShape(convResult);
@@ -520,8 +520,8 @@ struct ReduceMeanSpatialAxisToConvPattern
     auto transposedInputType = mlir::RankedTensorType::get(
         transposedInputShape, inputType.getElementType());
 
-    mlir::Value transposedInput = rewriter.create<mlir::ONNXTransposeOp>(
-        loc, transposedInputType, workingInput, rewriter.getI64ArrayAttr(perm));
+    mlir::Value transposedInput = mlir::ONNXTransposeOp::create(rewriter, loc,
+        transposedInputType, workingInput, rewriter.getI64ArrayAttr(perm));
 
     // In transposed domain: reduction is now on axis 1 (channel)
     // Compute keepdims=true output shape in transposed domain
@@ -546,7 +546,7 @@ struct ReduceMeanSpatialAxisToConvPattern
     auto untransposedType =
         mlir::RankedTensorType::get(untransposedShape, outputElemType);
 
-    mlir::Value result = rewriter.create<mlir::ONNXTransposeOp>(loc,
+    mlir::Value result = mlir::ONNXTransposeOp::create(rewriter, loc,
         untransposedType, convResult, rewriter.getI64ArrayAttr(inversePerm));
 
     // Reshape to match expected output shape (e.g. keepdims=false removes dim)
@@ -717,8 +717,8 @@ struct ReduceSumSpatialAxisToConvPattern
     auto transposedInputType = mlir::RankedTensorType::get(
         transposedInputShape, inputType.getElementType());
 
-    mlir::Value transposedInput = rewriter.create<mlir::ONNXTransposeOp>(
-        loc, transposedInputType, workingInput, rewriter.getI64ArrayAttr(perm));
+    mlir::Value transposedInput = mlir::ONNXTransposeOp::create(rewriter, loc,
+        transposedInputType, workingInput, rewriter.getI64ArrayAttr(perm));
 
     // In transposed domain: reduction is now on axis 1 (channel)
     llvm::SmallVector<int64_t> transposedConvOutputShape;
@@ -742,7 +742,7 @@ struct ReduceSumSpatialAxisToConvPattern
     auto untransposedType =
         mlir::RankedTensorType::get(untransposedShape, outputElemType);
 
-    mlir::Value result = rewriter.create<mlir::ONNXTransposeOp>(loc,
+    mlir::Value result = mlir::ONNXTransposeOp::create(rewriter, loc,
         untransposedType, convResult, rewriter.getI64ArrayAttr(inversePerm));
 
     // Reshape to match expected output shape (e.g. keepdims=false removes dim)
@@ -900,7 +900,7 @@ struct ReduceMeanReluToConvPattern : public OpRewritePattern<ONNXReluOp> {
         mlir::cast<mlir::ShapedType>(convResult.getType()).getElementType());
 
     auto newRelu =
-        rewriter.create<mlir::ONNXReluOp>(loc, reluOutputType, convResult);
+        mlir::ONNXReluOp::create(rewriter, loc, reluOutputType, convResult);
 
     rewriter.replaceOp(reluOp, newRelu.getY());
     return success();

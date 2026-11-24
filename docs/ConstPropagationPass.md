@@ -1,3 +1,6 @@
+<!--- SPDX-License-Identifier: Apache-2.0 -->
+<!--- Modifications (c) Copyright 2026 Advanced Micro Devices, Inc. or its affiliates -->
+
 # Constant Propagation for ONNX operations
 
 This document describes `--constprop-onnx` pass which is used to do
@@ -5,6 +8,41 @@ constant propagation for operations in the ONNX dialect.
 
 [source
 code](https://github.com/onnx/onnx-mlir/blob/main/src/Transform/ONNX/ConstProp.td).
+
+## Deferred constant expressions
+
+When deferred-expression formation is enabled, constant propagation captures
+operations with constant or deferred-constant operands in `DeferredFoldable`.
+The captured computation must be foldable once deferred operands, such as
+`InitializerSource`, are materialized.
+
+With `enable-qdq`, constant propagation can move a per-tensor
+`DequantizeLinear` past Slice, Transpose, Reshape, Squeeze or Unsqueeze inside
+a deferred body. The standalone formation pass applies these rewrites before
+returning. During constant propagation, existing bodies are normalized on
+entry and extensions before their consumers can inspect the yielded result.
+These rewrites use types and SSA operands. Materialization evaluates the body.
+
+Choose the predicate according to what the caller needs:
+
+| Question | Predicate |
+| --- | --- |
+| Can formation capture this operand or inline its deferred body? | `isConstantOrDeferredValue` checks the direct producer for `ConstantLike` or a deferred constant result. |
+| Will this operand be available as a constant? | `isConstantFoldable` also recognizes explicit dequantization when all operands are available. |
+| Can canonicalization move or combine this operand as a constant? | `isConstantFoldableExceptDequant` preserves the eager treatment of an explicit DQ. It excludes a deferred result when its yielded value is produced by dequantization. |
+| Can a ConstProp algebraic pattern use this operand as a constant? | `IsDenseOrDeferredConstant` (`isCommutationConstant` in C++) applies the same deferred-result rule and accepts dense or disposable literals. |
+| Can the fold read tensor elements now? | `IsFromDenseConstLike` requires a dense or disposable value. |
+
+For example, a deferred body yielding `DequantizeLinear` can participate in a
+larger deferred expression. For Concat grouping, its result must match the
+explicit DQ: `Concat(x, DQ(w), c)` stays flat for a runtime input `x` and
+literal `c`. If the same body also yields an arithmetic result, that result
+remains eligible for grouping.
+
+Pure quantization has no dequantization exception. With QuantizeLinear folding
+disabled (the default for `--constprop-onnx`), an explicit `Q(constant)` can
+remain on the left of a commutative operation. A deferred result yielding Q
+is eligible to move to the right.
 
 ## Example
 Given the following code:

@@ -24,6 +24,48 @@ def MaterializeInitializerSourcesPass
   ];
 }
 
+def FormDeferredFoldableExpressionsPass
+    : Pass<"onnx-form-deferred-foldable-expressions", "::mlir::func::FuncOp"> {
+  let summary = "Retain deferred constant expressions behind an explicit IR boundary";
+  let description = [{
+    Groups pure, regionless operations where all operands are constants or
+    deferred constants into `onnx.DeferredFoldable` operations when at least
+    one operand is deferred. Formation proceeds through eligible users until
+    no further expressions can be formed, flattening captured deferred bodies
+    into their users' bodies.
+
+    Existing deferred expressions remain explicit even when all captures are
+    compiler-owned constants. Later passes can recognize foldable expressions
+    by inspecting their direct producer; evaluation requires an explicit
+    request.
+
+    For example, in pseudocode, the following expression:
+
+    ```text
+    weights = InitializerSource(...)
+    transposed = Transpose(weights)
+    reshaped = Reshape(transposed, constant_shape)
+    output = MatMul(runtime_input, reshaped)
+    ```
+
+    becomes:
+
+    ```text
+    weights = InitializerSource(...)
+    reshaped = DeferredFoldable(weights, constant_shape) {
+      transposed = Transpose(captured_weights)
+      result = Reshape(transposed, captured_shape)
+      yield result
+    }
+    output = MatMul(runtime_input, reshaped)
+    ```
+  }];
+  let options = [
+    Option<"enableQDQ", "enable-qdq", "bool", "false",
+           "Apply the per-tensor DQ movement rules in formed bodies.">
+  ];
+}
+
 // Options common to both decompose-onnx and recompose-onnx: same C++ member,
 // same meaning. Declared once and pulled into both passes (and the hybrid pass)
 // so the generated options struct never gets a duplicate member.
@@ -169,7 +211,11 @@ def ONNXRecomposePatternOptions {
            "enable-reducel2-recompositions",
            "bool", /*default=*/"false",
            "Recompose ReduceL2 from Sqrt/Pow(0.5) square-reduction "
-           "chains into ReduceL2. Off by default.">
+           "chains into ReduceL2. Off by default.">,
+    Option<"enableReluHardSigmoidRecomposition", "enable-relu-hardsigmoid-recomposition",
+           "bool", /*default=*/"true",
+           "Recompose Relu with a quantization-implied upper clamp into HardSigmoid. "
+           "Does not affect explicit Min or Clip patterns.">
   ];
 }
 
@@ -255,12 +301,17 @@ def ONNXHybridTransformPass
   let genOptionsParser = 1;
 }
 
+def CanonicalizeElementwiseOperandRanksPass
+    : Pass<"canonicalize-elementwise-operand-ranks", "::mlir::func::FuncOp"> {
+  let summary = "Reshape elementwise broadcast operands to equal ranks.";
+}
+
 def XFEONNXOpsetVerifierPass
     : Pass<"xfe-onnx-opset-verifier", "::mlir::func::FuncOp"> {
   let summary = "Verify XFE ONNX opset constraints.";
   let description = [{
     Verifies that the ops inside a function match the XFE ONNX opset
-    constraints. Currently implements a check for disallowed ops.
+    constraints.
   }];
   let options = [
     Option<"disallowedOps", "disallowed-ops", "std::string",
@@ -268,7 +319,10 @@ def XFEONNXOpsetVerifierPass
            "Comma-separated bare ONNX op names that must not appear. Skips ops with non-static shapes.">,
     Option<"verifyNonNegativeAxis", "verify-non-negative-axis", "bool",
            /*default=*/"true",
-           "Verify ranked ONNX ops do not carry negative constant axis/axes values.">
+           "Verify ranked ONNX ops do not carry negative constant axis/axes values.">,
+    Option<"verifyEqualElementwiseOperandRanks",
+           "verify-equal-elementwise-operand-ranks", "bool", /*default=*/"false",
+           "Verify that ranked elementwise broadcast operands have equal ranks.">
   ];
 }
 
@@ -290,7 +344,13 @@ def ConstPropONNXToONNXPass : Pass<"constprop-onnx", "::mlir::func::FuncOp"> {
            "Allow folding of quantized weights and biases, not just constant "
            "islands. Implies enable-dequant-const-fold.">,
     Option<"maxLoopUnrollCount", "max-loop-unroll-count", "int64_t", "64",
-           "Maximum constant onnx.Loop trip count to unroll.">
+           "Maximum constant onnx.Loop trip count to unroll.">,
+    Option<"formDeferredFoldableExpressions",
+           "form-deferred-foldable-expressions", "bool", "false",
+           "Retain otherwise-unfolded initializer-dependent expressions as "
+           "onnx.DeferredFoldable deferred expressions. Transformation pipelines should "
+           "leave this disabled and form deferred expressions explicitly at the boundary "
+           "where constant expressions become opaque.">
   ];
 }
 

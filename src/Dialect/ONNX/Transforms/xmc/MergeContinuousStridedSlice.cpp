@@ -295,13 +295,13 @@ struct MergeContinuousStridedSlicePattern
 
     // Create constant ops
     auto startsConst =
-        rewriter.create<mlir::ONNXConstantOp>(loc, Attribute(), startsAttr);
+        mlir::ONNXConstantOp::create(rewriter, loc, Attribute(), startsAttr);
     auto endsConst =
-        rewriter.create<mlir::ONNXConstantOp>(loc, Attribute(), endsAttr);
+        mlir::ONNXConstantOp::create(rewriter, loc, Attribute(), endsAttr);
     auto stepsConst =
-        rewriter.create<mlir::ONNXConstantOp>(loc, Attribute(), stepsAttr);
+        mlir::ONNXConstantOp::create(rewriter, loc, Attribute(), stepsAttr);
     auto axesConst =
-        rewriter.create<mlir::ONNXConstantOp>(loc, Attribute(), axesAttr);
+        mlir::ONNXConstantOp::create(rewriter, loc, Attribute(), axesAttr);
 
     // Step 7: Create new merged Slice op with quantized types
     // Use the head slice's input and tail slice's output type
@@ -309,7 +309,7 @@ struct MergeContinuousStridedSlicePattern
     Type tailSliceOutputType = sliceChain.back().getOutput().getType();
 
     // Create new merged Slice op
-    auto newSliceOp = rewriter.create<mlir::ONNXSliceOp>(loc,
+    auto newSliceOp = mlir::ONNXSliceOp::create(rewriter, loc,
         tailSliceOutputType, headSliceInput, startsConst.getOutput(),
         endsConst.getOutput(), axesConst.getOutput(), stepsConst.getOutput());
 

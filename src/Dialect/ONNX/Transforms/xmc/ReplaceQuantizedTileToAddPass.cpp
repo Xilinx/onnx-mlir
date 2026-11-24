@@ -138,22 +138,22 @@ struct MoveBroadcastTileForwardPattern : public OpRewritePattern<ONNXTileOp> {
     llvm::SmallVector<int64_t, 4> newReshapeShape(topkDataTy.getShape());
     newReshapeShape.push_back(1);
 
-    auto shapeConst = rewriter.create<ONNXConstantOp>(loc,
+    auto shapeConst = ONNXConstantOp::create(rewriter, loc,
         RankedTensorType::get({static_cast<int64_t>(newReshapeShape.size())},
             rewriter.getI64Type()),
         nullptr, rewriter.getI64TensorAttr(newReshapeShape), nullptr, nullptr,
         nullptr, nullptr, nullptr, nullptr);
     auto newReshapeTy =
         RankedTensorType::get(newReshapeShape, topkDataTy.getElementType());
-    auto newReshape = rewriter.create<ONNXReshapeOp>(
-        loc, newReshapeTy, topkDataIn, shapeConst.getResult());
+    auto newReshape = ONNXReshapeOp::create(
+        rewriter, loc, newReshapeTy, topkDataIn, shapeConst.getResult());
     llvm::SmallVector<int64_t, 4> newTileOutShape(topkDataTy.getShape());
     newTileOutShape.push_back(tileOutTy.getShape().back());
     // Tile on the TopK *data* path uses the data tensor element type (quant).
     auto newTileOutTy =
         RankedTensorType::get(newTileOutShape, topkDataTy.getElementType());
-    auto newTile = rewriter.create<ONNXTileOp>(
-        loc, newTileOutTy, newReshape.getResult(), tileOp.getRepeats());
+    auto newTile = ONNXTileOp::create(rewriter, loc, newTileOutTy,
+        newReshape.getResult(), tileOp.getRepeats());
 
     int64_t axis = getIntegerAttrSExt(cast<IntegerAttr>(topkOp.getAxisAttr()));
     if (axis < 0)
@@ -171,7 +171,7 @@ struct MoveBroadcastTileForwardPattern : public OpRewritePattern<ONNXTileOp> {
         RankedTensorType::get(topkOutShape, oldValuesTy.getElementType());
     auto newIndicesTy =
         RankedTensorType::get(topkOutShape, oldIndicesTy.getElementType());
-    auto newTopk = rewriter.create<ONNXTopKOp>(topkOp.getLoc(), newValuesTy,
+    auto newTopk = ONNXTopKOp::create(rewriter, topkOp.getLoc(), newValuesTy,
         newIndicesTy, newTile.getResult(), topkOp.getK(), topkOp.getAxisAttr(),
         topkOp.getLargestAttr(), topkOp.getSortedAttr());
     auto castOutTy = dyn_cast<RankedTensorType>(castOp.getType());
@@ -182,7 +182,7 @@ struct MoveBroadcastTileForwardPattern : public OpRewritePattern<ONNXTileOp> {
     auto newCastTy =
         RankedTensorType::get(topkOutShape, castOutTy.getElementType());
     int64_t saturate = getIntegerAttrSExt(castOp.getSaturateAttr());
-    Value newCast = rewriter.create<ONNXCastOp>(castOp.getLoc(), newCastTy,
+    Value newCast = ONNXCastOp::create(rewriter, castOp.getLoc(), newCastTy,
         newTopk.getIndices(), saturate, castOutTy.getElementType());
     rewriter.modifyOpInPlace(
         gatherOp, [&]() { gatherOp.getOperation()->setOperand(1, newCast); });
@@ -293,7 +293,7 @@ struct ReplaceQuantizedTileToAddPattern : public OpRewritePattern<ONNXTileOp> {
       auto zpSplatAttr = DenseElementsAttr::get(
           zpStorageType, rewriter.getIntegerAttr(storageTy, zeroPoint));
       auto valueNamedAttr = rewriter.getNamedAttr("value", zpSplatAttr);
-      zpTensorConst = rewriter.create<ONNXConstantOp>(loc, quantResultType,
+      zpTensorConst = ONNXConstantOp::create(rewriter, loc, quantResultType,
           ValueRange{}, ArrayRef<NamedAttribute>{valueNamedAttr});
     } else {
       // Non-quantized: identity add uses splat(0), same as
@@ -302,11 +302,11 @@ struct ReplaceQuantizedTileToAddPattern : public OpRewritePattern<ONNXTileOp> {
           DenseElementsAttr::get(RankedTensorType::get(outShape, inElem),
               rewriter.getZeroAttr(inElem));
       auto valueNamedAttr = rewriter.getNamedAttr("value", zeroAttr);
-      zpTensorConst = rewriter.create<ONNXConstantOp>(loc, tileOp.getType(),
+      zpTensorConst = ONNXConstantOp::create(rewriter, loc, tileOp.getType(),
           ValueRange{}, ArrayRef<NamedAttribute>{valueNamedAttr});
     }
-    auto addOp = rewriter.create<ONNXAddOp>(
-        loc, tileOp.getType(), input, zpTensorConst.getResult());
+    auto addOp = ONNXAddOp::create(
+        rewriter, loc, tileOp.getType(), input, zpTensorConst.getResult());
     rewriter.replaceOp(tileOp, addOp.getResult());
     return success();
   }
@@ -360,15 +360,15 @@ public:
 
     auto castOutputType =
         mlir::cast<ShapedType>(topK.getIndices().getType()).clone(storageType);
-    Value value = rewriter.create<ONNXCastOp>(
-        tileOp.getLoc(), castOutputType, topK.getIndices(), 1, storageType);
+    Value value = ONNXCastOp::create(rewriter, tileOp.getLoc(), castOutputType,
+        topK.getIndices(), 1, storageType);
     if (inputType.getShape() != castOutputType.getShape()) {
-      auto shape = rewriter.create<ONNXConstantOp>(tileOp.getLoc(),
+      auto shape = ONNXConstantOp::create(rewriter, tileOp.getLoc(),
           RankedTensorType::get(inputType.getRank(), rewriter.getI64Type()),
           nullptr, rewriter.getI64TensorAttr(inputType.getShape()), nullptr,
           nullptr, nullptr, nullptr, nullptr, nullptr);
-      value = rewriter.create<ONNXReshapeOp>(
-          tileOp.getLoc(), inputType.clone(storageType), value, shape);
+      value = ONNXReshapeOp::create(rewriter, tileOp.getLoc(),
+          inputType.clone(storageType), value, shape);
     }
 
     bool isSigned =
@@ -379,13 +379,13 @@ public:
             isSigned, storageType.getIntOrFloatBitWidth()),
         quant::UniformQuantizedType::getDefaultMaximumForInteger(
             isSigned, storageType.getIntOrFloatBitWidth()));
-    value = rewriter.create<quant::StorageCastOp>(
-        tileOp.getLoc(), inputType.clone(qType), value);
+    value = quant::StorageCastOp::create(
+        rewriter, tileOp.getLoc(), inputType.clone(qType), value);
 
-    value = rewriter.create<ONNXTileOp>(
-        tileOp.getLoc(), outputType.clone(qType), value, tileOp.getRepeats());
-    value = rewriter.create<quant::StorageCastOp>(
-        tileOp.getLoc(), outputType.clone(storageType), value);
+    value = ONNXTileOp::create(rewriter, tileOp.getLoc(),
+        outputType.clone(qType), value, tileOp.getRepeats());
+    value = quant::StorageCastOp::create(
+        rewriter, tileOp.getLoc(), outputType.clone(storageType), value);
     rewriter.replaceOp(tileOp, value);
 
     return success();

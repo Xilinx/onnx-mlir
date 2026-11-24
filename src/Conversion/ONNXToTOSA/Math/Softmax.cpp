@@ -4,7 +4,7 @@
 
 //===---------------- Softmax.cpp - Softmax Op ----------------------------===//
 //
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -62,9 +62,11 @@ public:
   using OpAdaptor = typename SoftmaxOp::Adaptor;
   LogicalResult matchAndRewrite(SoftmaxOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     Location loc = op->getLoc();
-    TosaBuilder tosaBuilder(rewriter, loc);
+    OnnxBuilder onnxBuilder(rewriter, loc);
 
     Value input = adaptor.getInput();
     // softmax = exp(logits) / reduce_sum(exp(logits), -1)
@@ -102,7 +104,7 @@ public:
     Value reduceMax = computeReduction<mlir::tosa::ReduceMaxOp>(
         rewriter, op, rsumType, input, axis);
 
-    Value xLessMax = tosaBuilder.binaryOp<mlir::tosa::SubOp>(input, reduceMax);
+    Value xLessMax = onnxBuilder.sub(input, reduceMax);
 
     Value op1ExpIn = tosa::CreateOpAndInfer<mlir::tosa::ExpOp>(
         rewriter, loc, outputType, xLessMax);
@@ -113,7 +115,7 @@ public:
     Value op3ReciprocalOp2 = tosa::CreateOpAndInfer<mlir::tosa::ReciprocalOp>(
         rewriter, loc, op2ReducesumOp1.getType(), op2ReducesumOp1);
 
-    Value mulOp = tosaBuilder.mul(op1ExpIn, op3ReciprocalOp2);
+    Value mulOp = onnxBuilder.mul(op1ExpIn, op3ReciprocalOp2);
     rewriter.replaceOp(op, {mulOp});
 
     return success();

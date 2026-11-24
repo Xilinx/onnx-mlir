@@ -92,11 +92,11 @@ struct ReplaceQDQResizeToAddPattern : public OpRewritePattern<XFEResizeOp> {
     auto zpSplatAttr = DenseElementsAttr::get(
         zpStorageType, rewriter.getIntegerAttr(storageTy, zeroPoint));
     auto valueNamedAttr = rewriter.getNamedAttr("value", zpSplatAttr);
-    auto zpTensorConst = rewriter.create<ONNXConstantOp>(
-        loc, outType, ValueRange{}, ArrayRef<NamedAttribute>{valueNamedAttr});
+    auto zpTensorConst = ONNXConstantOp::create(rewriter, loc, outType,
+        ValueRange{}, ArrayRef<NamedAttribute>{valueNamedAttr});
 
-    auto addOp = rewriter.create<ONNXAddOp>(
-        loc, outType, input, zpTensorConst.getResult());
+    auto addOp = ONNXAddOp::create(
+        rewriter, loc, outType, input, zpTensorConst.getResult());
 
     rewriter.replaceOp(resizeOp, addOp.getResult());
     return success();

@@ -55,7 +55,7 @@ Value createConstantI64Array(
   auto tensorType = RankedTensorType::get(
       {static_cast<int64_t>(values.size())}, IntegerType::get(ctx, 64));
   auto denseAttr = DenseIntElementsAttr::get(tensorType, values);
-  return rewriter.create<ONNXConstantOp>(loc, Attribute(), denseAttr);
+  return ONNXConstantOp::create(rewriter, loc, Attribute(), denseAttr);
 }
 
 //===----------------------------------------------------------------------===//
@@ -247,6 +247,17 @@ public:
 
     Location loc = transposeOp.getLoc();
     Value input = transposeOp.getData();
+    auto inputType = dyn_cast<RankedTensorType>(input.getType());
+    auto outputType =
+        dyn_cast<RankedTensorType>(transposeOp.getResult().getType());
+    // Both reshapes below encode their entire shape as a constant. Runtime
+    // dimensions must stay in the original Transpose, not become literal
+    // dynamic-dimension sentinels (or products of those sentinels).
+    if (!inputType || !outputType || !inputType.hasStaticShape() ||
+        !outputType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          transposeOp, "constant reshapes require static input/output shapes");
+
     auto inputShape = getShapeFromType(input.getType());
     auto outputShape = getShapeFromType(transposeOp.getResult().getType());
     Type elementType = getElementType(input.getType());
@@ -264,15 +275,15 @@ public:
         RankedTensorType::get(reshapedInputShape, elementType);
     Value inputReshapeShapeConst =
         createConstantI64Array(rewriter, loc, reshapedInputShape);
-    auto inputReshapeOp = rewriter.create<ONNXReshapeOp>(
-        loc, inputReshapeType, input, inputReshapeShapeConst);
+    auto inputReshapeOp = ONNXReshapeOp::create(
+        rewriter, loc, inputReshapeType, input, inputReshapeShapeConst);
 
     // Create new transpose with reduced order
     auto transposeOutputShape =
         computeTransposeOutputShape(reshapedInputShape, reshapedOrder);
     auto newTransposeType =
         RankedTensorType::get(transposeOutputShape, elementType);
-    auto newTransposeOp = rewriter.create<ONNXTransposeOp>(loc,
+    auto newTransposeOp = ONNXTransposeOp::create(rewriter, loc,
         newTransposeType, inputReshapeOp.getResult(),
         rewriter.getI64ArrayAttr(reshapedOrder));
 
@@ -280,7 +291,7 @@ public:
     auto outputReshapeType = RankedTensorType::get(outputShape, elementType);
     Value outputReshapeShapeConst =
         createConstantI64Array(rewriter, loc, outputShape);
-    auto outputReshapeOp = rewriter.create<ONNXReshapeOp>(loc,
+    auto outputReshapeOp = ONNXReshapeOp::create(rewriter, loc,
         outputReshapeType, newTransposeOp.getResult(), outputReshapeShapeConst);
 
     rewriter.replaceOp(transposeOp, outputReshapeOp.getResult());
@@ -309,6 +320,12 @@ public:
 
     auto outputType =
         dyn_cast<RankedTensorType>(transposeOp.getResult().getType());
+    // Even dimensions outside the merged pair are copied into constant
+    // reshape operands, so checking only the merged dimensions is insufficient.
+    if (!inputType.hasStaticShape() || !outputType ||
+        !outputType.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          transposeOp, "constant reshapes require static input/output shapes");
 
     // Get perm attribute
     auto permAttr = transposeOp.getPermAttr();
@@ -350,28 +367,28 @@ public:
     // Create first reshape: 5D -> 4D (merge dimensions)
     auto reshape0ShapeAttr = getShapeAttr(ctx, inputShape4D);
     auto reshape0ShapeOp =
-        rewriter.create<ONNXConstantOp>(loc, reshape0ShapeAttr.getType(),
+        ONNXConstantOp::create(rewriter, loc, reshape0ShapeAttr.getType(),
             Attribute(), reshape0ShapeAttr, FloatAttr(), ArrayAttr(),
             IntegerAttr(), ArrayAttr(), StringAttr(), ArrayAttr());
 
     auto reshape0Type = RankedTensorType::get(inputShape4D, elemTy);
-    auto reshape0 = rewriter.create<ONNXReshapeOp>(
-        loc, reshape0Type, transposeOp.getData(), reshape0ShapeOp.getResult());
+    auto reshape0 = ONNXReshapeOp::create(rewriter, loc, reshape0Type,
+        transposeOp.getData(), reshape0ShapeOp.getResult());
 
     // Create 4D transpose
     auto transpose4DType = RankedTensorType::get(outputShape4D, elemTy);
-    auto transpose4D = rewriter.create<ONNXTransposeOp>(loc, transpose4DType,
+    auto transpose4D = ONNXTransposeOp::create(rewriter, loc, transpose4DType,
         reshape0.getResult(), getI64ArrayAttr(ctx, perm4D));
 
     // Create second reshape: 4D -> 5D (split back)
     auto reshape1ShapeAttr = getShapeAttr(ctx, outputShape5D);
     auto reshape1ShapeOp =
-        rewriter.create<ONNXConstantOp>(loc, reshape1ShapeAttr.getType(),
+        ONNXConstantOp::create(rewriter, loc, reshape1ShapeAttr.getType(),
             Attribute(), reshape1ShapeAttr, FloatAttr(), ArrayAttr(),
             IntegerAttr(), ArrayAttr(), StringAttr(), ArrayAttr());
 
-    auto reshape1 = rewriter.create<ONNXReshapeOp>(
-        loc, outputType, transpose4D.getResult(), reshape1ShapeOp.getResult());
+    auto reshape1 = ONNXReshapeOp::create(rewriter, loc, outputType,
+        transpose4D.getResult(), reshape1ShapeOp.getResult());
 
     rewriter.replaceOp(transposeOp, reshape1.getResult());
 

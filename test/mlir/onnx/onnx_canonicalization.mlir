@@ -777,7 +777,7 @@ func.func @test_reshape_fusion_2(%arg0: tensor<3x4x2x2xf32>) -> tensor<3x2x8xf32
 
 // CHECK-LABEL:  func.func @test_reshape_fusion_2
 // CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<3x4x2x2xf32>) -> tensor<3x2x8xf32> {
-// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[3, 2, -1]> : tensor<3xi64>
+// CHECK:           [[VAR_0_:%.+]] = onnx.Constant dense<[3, 2, 8]> : tensor<3xi64>
 // CHECK:           [[VAR_1_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<3x4x2x2xf32>, tensor<3xi64>) -> tensor<3x2x8xf32>
 // CHECK:           onnx.Return [[VAR_1_]] : tensor<3x2x8xf32>
 // CHECK:         }
@@ -804,30 +804,6 @@ func.func @test_reshape_fusion3(%arg0: tensor<?x4x2x2xf32>) -> tensor<?x2x?xf32>
 // CHECK:           [[VAR_4_:%.+]] = "onnx.Concat"([[VAR_2_]], [[VAR_3_]]) {axis = 0 : si64} : (tensor<1xi64>, tensor<2xi64>) -> tensor<3xi64>
 // CHECK:           [[VAR_5_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_4_]]) {allowzero = 0 : si64} : (tensor<?x4x2x2xf32>, tensor<3xi64>) -> tensor<?x2x8xf32>
 // CHECK:           onnx.Return [[VAR_5_]] : tensor<?x2x8xf32>
-// CHECK:         }
-}
-
-// -----
-
-// No fusion should happen if multiple unknown dimensions (-1) are given.
-func.func @test_reshape_no_fusion(%arg0: tensor<1x3x1152x1x1344xf32>) -> (tensor<1x3x576x2x326x326x2xf32>) {
-  %0 = onnx.Constant dense<[0, 0, -1, 2, 0]> : tensor<5xi64> loc(unknown)
-  %1 = onnx.Constant dense<[0, 0, 0, 0, -1, 2]> : tensor<6xi64> loc(unknown)
-  %5 = onnx.Constant dense<[0, 0, -1, 0, -1, 326, 2]> : tensor<7xi64> loc(unknown)
-  %2 = "onnx.Reshape"(%arg0, %0) {allowzero = 0 : si64} : (tensor<1x3x1152x1x1344xf32>, tensor<5xi64>) -> tensor<1x3x576x2x1344xf32>
-  %3 = "onnx.Reshape"(%2, %1) {allowzero = 0 : si64} : (tensor<1x3x576x2x1344xf32>, tensor<6xi64>) -> tensor<1x3x576x2x672x2xf32>
-  %7 = "onnx.Reshape"(%3, %5) {allowzero = 0 : si64} : (tensor<1x3x576x2x672x2xf32>, tensor<7xi64>) -> tensor<1x3x576x2x326x326x2xf32>
-  onnx.Return %7 : tensor<1x3x576x2x326x326x2xf32>
-
-// CHECK-LABEL:  func.func @test_reshape_no_fusion
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x1152x1x1344xf32>) -> tensor<1x3x576x2x326x326x2xf32> {
-// CHECK-DAG:       [[VAR_0_:%.+]] = onnx.Constant dense<[0, 0, -1, 2, 0]> : tensor<5xi64>
-// CHECK-DAG:       [[VAR_1_:%.+]] = onnx.Constant dense<[0, 0, 0, 0, -1, 2]> : tensor<6xi64>
-// CHECK-DAG:       [[VAR_2_:%.+]] = onnx.Constant dense<[0, 0, -1, 0, -1, 326, 2]> : tensor<7xi64>
-// CHECK:           [[VAR_3_:%.+]] = "onnx.Reshape"([[PARAM_0_]], [[VAR_0_]]) {allowzero = 0 : si64} : (tensor<1x3x1152x1x1344xf32>, tensor<5xi64>) -> tensor<1x3x576x2x1344xf32>
-// CHECK:           [[VAR_4_:%.+]] = "onnx.Reshape"([[VAR_3_]], [[VAR_1_]]) {allowzero = 0 : si64} : (tensor<1x3x576x2x1344xf32>, tensor<6xi64>) -> tensor<1x3x576x2x672x2xf32>
-// CHECK:           [[VAR_5_:%.+]] = "onnx.Reshape"([[VAR_4_]], [[VAR_2_]]) {allowzero = 0 : si64} : (tensor<1x3x576x2x672x2xf32>, tensor<7xi64>) -> tensor<1x3x576x2x326x326x2xf32>
-// CHECK:           onnx.Return [[VAR_5_]] : tensor<1x3x576x2x326x326x2xf32>
 // CHECK:         }
 }
 
@@ -1009,10 +985,11 @@ func.func @consecutive_clips(%arg0: tensor<3x1024x1024xf32> {onnx.name = "input"
   // CHECK: %[[VAR_2:.*]] = onnx.Constant dense<{{.*}}> : tensor<f32>
   // CHECK: %[[VAR_3:.*]] = onnx.Constant dense<{{.*}}> : tensor<f32>
   // CHECK: %[[VAR_4:.*]] = onnx.Constant dense<{{.*}}> : tensor<f32>
-  // CHECK: %[[CONST_MAX:.*]] = "onnx.Max"(%[[VAR_1]], %[[VAR_3]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
-  // CHECK: %[[CONST_MIN:.*]] = "onnx.Min"(%[[VAR_2]], %[[VAR_4]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
-
-  // CHECK: %[[FUSED_CLIP:.*]] = "onnx.Clip"(%[[ARG0]], %[[CONST_MAX]], %[[CONST_MIN]]) : (tensor<3x1024x1024xf32>, tensor<f32>, tensor<f32>) -> tensor<3x1024x1024xf32>
+  // CHECK: %[[LOWER_MAX:.*]] = "onnx.Max"(%[[VAR_1]], %[[VAR_3]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
+  // CHECK: %[[FUSED_LOWER:.*]] = "onnx.Min"(%[[LOWER_MAX]], %[[VAR_4]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
+  // CHECK: %[[UPPER_MAX:.*]] = "onnx.Max"(%[[VAR_2]], %[[VAR_3]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
+  // CHECK: %[[FUSED_UPPER:.*]] = "onnx.Min"(%[[UPPER_MAX]], %[[VAR_4]]) : (tensor<f32>, tensor<f32>) -> tensor<f32>
+  // CHECK: %[[FUSED_CLIP:.*]] = "onnx.Clip"(%[[ARG0]], %[[FUSED_LOWER]], %[[FUSED_UPPER]]) : (tensor<3x1024x1024xf32>, tensor<f32>, tensor<f32>) -> tensor<3x1024x1024xf32>
 
   // CHECK: onnx.Return %[[FUSED_CLIP]] : tensor<3x1024x1024xf32>
 

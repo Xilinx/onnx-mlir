@@ -81,7 +81,7 @@ struct ONNXTopKOpLowering : public OpConversionPattern<ONNXTopKOp> {
           createKrnl.store(val, resMemRef, resLoopInd);
           // Store index.
           Value resIndI64 =
-              rewriter.create<arith::IndexCastOp>(loc, i64Type, resInd);
+              arith::IndexCastOp::create(rewriter, loc, i64Type, resInd);
           createKrnl.store(resIndI64, resIndexMemRef, resLoopInd);
         });
 

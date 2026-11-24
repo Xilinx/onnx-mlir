@@ -70,7 +70,7 @@ static Value tryFoldTransposeReshapeConst(PatternRewriter &rewriter,
       elemBuilder.toDenseElementsAttr(reshapedElements);
 
   auto newConstOp =
-      rewriter.create<ONNXConstantOp>(loc, Attribute(), denseFolded);
+      ONNXConstantOp::create(rewriter, loc, Attribute(), denseFolded);
   auto resultType = RankedTensorType::get(reshapedShape, outputElemType);
   newConstOp.getResult().setType(resultType);
   return newConstOp.getResult();
@@ -418,9 +418,9 @@ static Value requantizeBiasForConv(PatternRewriter &rewriter, Location loc,
     auto newAttr = denseAttr.reshape(newStorageType);
     auto newResultType = RankedTensorType::get({N}, biasElemType);
     auto valueNamedAttr = rewriter.getNamedAttr("value", newAttr);
-    return rewriter
-        .create<ONNXConstantOp>(loc, newResultType, mlir::ValueRange{},
-            mlir::ArrayRef<mlir::NamedAttribute>{valueNamedAttr})
+    return ONNXConstantOp::create(rewriter, loc, newResultType,
+        mlir::ValueRange{},
+        mlir::ArrayRef<mlir::NamedAttribute>{valueNamedAttr})
         .getResult();
   }
 
@@ -515,9 +515,8 @@ static Value requantizeBiasForConv(PatternRewriter &rewriter, Location loc,
   auto newResultType = RankedTensorType::get({N}, newBiasQType2);
 
   auto valueNamedAttr = rewriter.getNamedAttr("value", newDenseAttr);
-  return rewriter
-      .create<ONNXConstantOp>(loc, newResultType, mlir::ValueRange{},
-          mlir::ArrayRef<mlir::NamedAttribute>{valueNamedAttr})
+  return ONNXConstantOp::create(rewriter, loc, newResultType,
+      mlir::ValueRange{}, mlir::ArrayRef<mlir::NamedAttribute>{valueNamedAttr})
       .getResult();
 }
 
@@ -624,8 +623,8 @@ struct MatMulToXFEConvPattern : public OpRewritePattern<ONNXMatMulOp> {
           RankedTensorType::get(convShapes.inputShape, inputElementType);
       auto shapeConst1 =
           createShapeConstant(rewriter, loc, convShapes.inputShape);
-      reshape1Output = rewriter.create<ONNXReshapeOp>(
-          loc, reshape1OutputType, input, shapeConst1);
+      reshape1Output = ONNXReshapeOp::create(
+          rewriter, loc, reshape1OutputType, input, shapeConst1);
     }
 
     // Format weight: [K, N] -> transpose to [N, K] -> reshape to [N, 1, 1, K].
@@ -645,10 +644,10 @@ struct MatMulToXFEConvPattern : public OpRewritePattern<ONNXMatMulOp> {
       auto transposedWeightType = RankedTensorType::get(
           {weightShape[1], weightShape[0]}, convWeightElemType);
       auto permAttr = rewriter.getI64ArrayAttr({1, 0});
-      Value transposedWeight = rewriter.create<ONNXTransposeOp>(
-          loc, transposedWeightType, weight, permAttr);
-      convWeight = rewriter.create<ONNXReshapeOp>(
-          loc, convWeightType, transposedWeight, weightShapeConst);
+      Value transposedWeight = ONNXTransposeOp::create(
+          rewriter, loc, transposedWeightType, weight, permAttr);
+      convWeight = ONNXReshapeOp::create(
+          rewriter, loc, convWeightType, transposedWeight, weightShapeConst);
     }
 
     // Create XFEConv
@@ -680,7 +679,7 @@ struct MatMulToXFEConvPattern : public OpRewritePattern<ONNXMatMulOp> {
     }
 
     // Create XFEConv operation
-    auto convOp = rewriter.create<XFEConvOp>(loc, convOutputType,
+    auto convOp = XFEConvOp::create(rewriter, loc, convOutputType,
         reshape1Output, convWeight, bias, rewriter.getStringAttr("NONE"),
         dilationsAttr, groupAttr,
         /*leakyrelu_alpha=*/FloatAttr(), padsAttr,
@@ -700,8 +699,8 @@ struct MatMulToXFEConvPattern : public OpRewritePattern<ONNXMatMulOp> {
     auto reshape2OutputType =
         RankedTensorType::get(outputShape, finalOutputElemType);
     auto shapeConst2 = createShapeConstant(rewriter, loc, outputShape);
-    Value reshape2Output = rewriter.create<ONNXReshapeOp>(
-        loc, reshape2OutputType, convOp.getResult(), shapeConst2);
+    Value reshape2Output = ONNXReshapeOp::create(
+        rewriter, loc, reshape2OutputType, convOp.getResult(), shapeConst2);
 
     // Replace MatMul (or MatMul+Add) with the final Reshape output.
     // When fusing bias, replace the Add op; the MatMul becomes dead and
@@ -813,7 +812,7 @@ struct GemmToXFEConvPattern : public OpRewritePattern<ONNXGemmOp> {
       auto transposedAType =
           RankedTensorType::get({aShape[1], aShape[0]}, inputElementType);
       effectiveA =
-          rewriter.create<ONNXTransposeOp>(loc, transposedAType, A, permAttr);
+          ONNXTransposeOp::create(rewriter, loc, transposedAType, A, permAttr);
     }
 
     // Create first Reshape: [M, K] -> [M, H, W, C]. When the former NHWC layout
@@ -827,8 +826,8 @@ struct GemmToXFEConvPattern : public OpRewritePattern<ONNXGemmOp> {
           RankedTensorType::get(convShapes.inputShape, inputElementType);
       auto shapeConst1 =
           createShapeConstant(rewriter, loc, convShapes.inputShape);
-      reshape1Output = rewriter.create<ONNXReshapeOp>(
-          loc, reshape1OutputType, effectiveA, shapeConst1);
+      reshape1Output = ONNXReshapeOp::create(
+          rewriter, loc, reshape1OutputType, effectiveA, shapeConst1);
     }
 
     // Format weight: [K, N] -> transpose to [N, K] -> reshape to [N, H, W, C]
@@ -846,8 +845,8 @@ struct GemmToXFEConvPattern : public OpRewritePattern<ONNXGemmOp> {
       auto convWeightElemType = remapPerAxisQuantDim(bElementType, 0);
       convWeightType =
           RankedTensorType::get(convShapes.weightShape, convWeightElemType);
-      convWeight = rewriter.create<ONNXReshapeOp>(
-          loc, convWeightType, B, weightShapeConst);
+      convWeight = ONNXReshapeOp::create(
+          rewriter, loc, convWeightType, B, weightShapeConst);
     } else {
       // Transpose [K, N] -> [N, K] then reshape to [N, H, W, C].
       // Per-axis quant on axis 1 (N) moves to axis 0.
@@ -862,10 +861,10 @@ struct GemmToXFEConvPattern : public OpRewritePattern<ONNXGemmOp> {
         auto transposedBType =
             RankedTensorType::get({bShape[1], bShape[0]}, convWeightElemType);
         auto permAttr = rewriter.getI64ArrayAttr({1, 0});
-        Value transposedB =
-            rewriter.create<ONNXTransposeOp>(loc, transposedBType, B, permAttr);
-        convWeight = rewriter.create<ONNXReshapeOp>(
-            loc, convWeightType, transposedB, weightShapeConst);
+        Value transposedB = ONNXTransposeOp::create(
+            rewriter, loc, transposedBType, B, permAttr);
+        convWeight = ONNXReshapeOp::create(
+            rewriter, loc, convWeightType, transposedB, weightShapeConst);
       }
     }
 
@@ -903,7 +902,7 @@ struct GemmToXFEConvPattern : public OpRewritePattern<ONNXGemmOp> {
     }
 
     // Create XFEConv operation
-    auto convOp = rewriter.create<XFEConvOp>(loc, convOutputType,
+    auto convOp = XFEConvOp::create(rewriter, loc, convOutputType,
         reshape1Output, convWeight, bias, rewriter.getStringAttr("NONE"),
         dilationsAttr, groupAttr,
         /*leakyrelu_alpha=*/FloatAttr(), padsAttr,
@@ -917,8 +916,8 @@ struct GemmToXFEConvPattern : public OpRewritePattern<ONNXGemmOp> {
     auto reshape2OutputType =
         RankedTensorType::get(outputShape, outputElementType);
     auto shapeConst2 = createShapeConstant(rewriter, loc, outputShape);
-    Value reshape2Output = rewriter.create<ONNXReshapeOp>(
-        loc, reshape2OutputType, convOp.getResult(), shapeConst2);
+    Value reshape2Output = ONNXReshapeOp::create(
+        rewriter, loc, reshape2OutputType, convOp.getResult(), shapeConst2);
 
     // Replace GEMM with the final Reshape output
     rewriter.replaceOp(gemmOp, reshape2Output);

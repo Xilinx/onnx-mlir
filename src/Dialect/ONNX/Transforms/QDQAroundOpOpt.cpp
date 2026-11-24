@@ -168,7 +168,7 @@ public:
           [&](Value operand) { return irMapping.lookupOrDefault(operand); });
 
       auto newOp =
-          rewriter.create<T>(op.getLoc(), TypeRange{qOp.getResult().getType()},
+          T::create(rewriter, op.getLoc(), TypeRange{qOp.getResult().getType()},
               ValueRange{newInputs}, op->getAttrs());
       rewriter.replaceOp(qOp, newOp.getResult());
       return success();

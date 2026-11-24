@@ -903,8 +903,8 @@ struct RecomposeHardSigmoidFromMulClipPattern
     auto alphaAttr = rewriter.getF32FloatAttr(alpha);
     auto betaAttr = rewriter.getF32FloatAttr(beta);
     auto loc = mlir::FusedLoc::get(rewriter.getContext(), fusedLocs);
-    Value hardSigmoidOp = rewriter.create<ONNXHardSigmoidOp>(
-        loc, clipOp.getType(), x, alphaAttr, betaAttr);
+    Value hardSigmoidOp = ONNXHardSigmoidOp::create(
+        rewriter, loc, clipOp.getType(), x, alphaAttr, betaAttr);
     rewriter.replaceOp(clipOp, hardSigmoidOp);
     return success();
   }
@@ -1065,7 +1065,11 @@ static Value matchOptionalPrecedingAdd(
 //   provided representable_max = (typeMax - zeroPoint) * scale <= 1/a'.
 struct RecomposeHardSigmoidFromReluPattern
     : public OpRewritePattern<ONNXReluOp> {
-  using OpRewritePattern<ONNXReluOp>::OpRewritePattern;
+  RecomposeHardSigmoidFromReluPattern(
+      MLIRContext *context, bool enableReluHardSigmoidRecomposition)
+      : OpRewritePattern(context),
+        enableReluHardSigmoidRecomposition(enableReluHardSigmoidRecomposition) {
+  }
 
   static LogicalResult finish(PatternRewriter &rewriter, ONNXReluOp reluOp,
       Operation *explicitMinOp /* or nullptr */, ONNXMulOp mulOp, Value xVal,
@@ -1076,7 +1080,7 @@ struct RecomposeHardSigmoidFromReluPattern
 
     Location loc = mlir::FusedLoc::get(
         rewriter.getContext(), {mulOp.getLoc(), reluOp.getLoc()});
-    auto hsigOp = rewriter.create<ONNXHardSigmoidOp>(loc,
+    auto hsigOp = ONNXHardSigmoidOp::create(rewriter, loc,
         mulOp.getResult().getType(), xVal, rewriter.getF32FloatAttr(alpha),
         rewriter.getF32FloatAttr(beta));
 
@@ -1174,6 +1178,10 @@ struct RecomposeHardSigmoidFromReluPattern
     }
 
     // Path B: Relu -> Mul(., ~a') directly, no explicit upper clamp.
+    if (!enableReluHardSigmoidRecomposition)
+      return rewriter.notifyMatchFailure(
+          reluOp, "bare-Relu HardSigmoid recomposition is disabled");
+
     auto mulOp = dyn_cast<ONNXMulOp>(afterReluUser);
     if (!mulOp)
       return rewriter.notifyMatchFailure(
@@ -1216,6 +1224,9 @@ struct RecomposeHardSigmoidFromReluPattern
     return finish(rewriter, reluOp, /*explicitMinOp=*/nullptr, mulOp, xVal,
         betaPrime, alphaPrime, deadCandidates);
   }
+
+private:
+  bool enableReluHardSigmoidRecomposition;
 };
 
 // TF-style reordering of the canonical explicit-Clip HardSigmoid where the
@@ -1297,7 +1308,7 @@ struct RecomposeHardSigmoidFromClipMulPattern
     double beta = betaPrime * alphaPrime;
     Location loc = mlir::FusedLoc::get(
         rewriter.getContext(), {mulOp.getLoc(), clipOp.getLoc()});
-    auto hsigOp = rewriter.create<ONNXHardSigmoidOp>(loc,
+    auto hsigOp = ONNXHardSigmoidOp::create(rewriter, loc,
         mulOp.getResult().getType(), xVal, rewriter.getF32FloatAttr(alpha),
         rewriter.getF32FloatAttr(beta));
 
@@ -1349,7 +1360,7 @@ struct RecomposeHardSwishFromMulPattern : public OpRewritePattern<ONNXMulOp> {
     auto loc = mlir::FusedLoc::get(
         rewriter.getContext(), {mulOp.getLoc(), hardSigmoidOp.getLoc()});
     Value hardSwishOp =
-        rewriter.create<ONNXHardSwishOp>(loc, mulOp.getType(), x);
+        ONNXHardSwishOp::create(rewriter, loc, mulOp.getType(), x);
     rewriter.replaceOp(mulOp, hardSwishOp);
     return success();
   }
@@ -1923,7 +1934,7 @@ LogicalResult replaceWithReduceL2(
   locations.append(match->innerLocs);
   const auto loc = mlir::FusedLoc::get(rewriter.getContext(), locations);
   const Value reduceL2 =
-      rewriter.create<ONNXReduceL2Op>(loc, rootOp->getResult(0).getType(),
+      ONNXReduceL2Op::create(rewriter, loc, rootOp->getResult(0).getType(),
           match->input, match->axes, match->keepdims, match->noopWithEmptyAxes);
   rewriter.replaceOp(rootOp, reduceL2);
   return success();
@@ -2151,7 +2162,7 @@ struct CombineParallelConv2DPattern : public OpRewritePattern<ONNXConvOp> {
     auto newOutputType = RankedTensorType::get(newOutputShape, elementType);
 
     auto newConv =
-        rewriter.create<ONNXConvOp>(loc, newOutputType, input, newWeight,
+        ONNXConvOp::create(rewriter, loc, newOutputType, input, newWeight,
             newBias, convOp1.getAutoPadAttr(), convOp1.getDilationsAttr(),
             convOp1.getGroupAttr(), convOp1.getKernelShapeAttr(),
             convOp1.getPadsAttr(), convOp1.getStridesAttr());
@@ -2582,7 +2593,7 @@ struct RecomposeRotaryEmbeddingPattern
     Value sinVal = create.onnx.constant(sinHalf);
     Value none = create.onnx.none();
 
-    auto ropeOp = rewriter.create<ONNXRotaryEmbeddingOp>(loc,
+    auto ropeOp = ONNXRotaryEmbeddingOp::create(rewriter, loc,
         TypeRange{ropeResultType}, ValueRange{ropeInput, cosVal, sinVal, none});
     auto si64 = rewriter.getIntegerType(64, /*isSigned=*/true);
     ropeOp.setInterleavedAttr(IntegerAttr::get(si64, 0));
@@ -2698,7 +2709,7 @@ void RecomposeONNXToONNXPass::runOnOperation() {
   RewritePatternSet patterns(context);
   onnx_mlir::getRecomposeONNXToONNXPatterns(patterns,
       enableRotaryEmbeddingRecompose, enableReduceL2Recompositions,
-      enableDepthToSpaceDecompose);
+      enableDepthToSpaceDecompose, enableReluHardSigmoidRecomposition);
 
   onnx_mlir::ResultNamesUpdater rnUpdater;
   if (failed(applyPatternsGreedily(function, std::move(patterns),
@@ -2710,13 +2721,15 @@ void RecomposeONNXToONNXPass::runOnOperation() {
 
 void onnx_mlir::getRecomposeONNXToONNXPatterns(
     mlir::RewritePatternSet &patterns, bool enableRotaryEmbeddingRecompose,
-    bool enableReduceL2Recompositions, bool enableDepthToSpaceDecompose) {
+    bool enableReduceL2Recompositions, bool enableDepthToSpaceDecompose,
+    bool enableReluHardSigmoidRecomposition) {
   MLIRContext *context = patterns.getContext();
   patterns.insert<RecomposeTfHalfPixelForNnResize>(context);
   patterns.insert<RecomposeHardSwishFromMulPattern>(context);
   patterns.insert<RecomposeMishFromMulPattern>(context);
   patterns.insert<RecomposeHardSigmoidFromMulClipPattern>(context);
-  patterns.insert<RecomposeHardSigmoidFromReluPattern>(context);
+  patterns.insert<RecomposeHardSigmoidFromReluPattern>(
+      context, enableReluHardSigmoidRecomposition);
   patterns.insert<RecomposeHardSigmoidFromClipMulPattern>(context);
   patterns.insert<RecomposeGeluFromMulPattern>(context);
   patterns.insert<RecomposeLayerNormFromDivPattern<ONNXDivOp, false>>(context);

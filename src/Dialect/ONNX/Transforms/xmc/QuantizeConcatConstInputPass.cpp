@@ -126,7 +126,7 @@ public:
       auto quantResultType =
           RankedTensorType::get(inputType.getShape(), targetQType);
 
-      auto newConst = rewriter.create<ONNXConstantOp>(input.getLoc(),
+      auto newConst = ONNXConstantOp::create(rewriter, input.getLoc(),
           quantResultType, /*sparse_value=*/Attribute(), /*value=*/denseAttr,
           /*value_floats=*/nullptr, /*value_float=*/nullptr,
           /*value_ints=*/nullptr, /*value_int=*/nullptr,

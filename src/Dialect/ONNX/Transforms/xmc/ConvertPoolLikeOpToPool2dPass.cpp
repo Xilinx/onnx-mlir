@@ -227,12 +227,12 @@ Value createReshapeOp(PatternRewriter &rewriter, Location loc, Value input,
   auto shapeAttr =
       DenseElementsAttr::get(shapeType, llvm::ArrayRef<int64_t>(newShape));
 
-  auto shapeConst = rewriter.create<ONNXConstantOp>(loc, shapeType, Attribute(),
-      shapeAttr, FloatAttr(), ArrayAttr(), IntegerAttr(), ArrayAttr(),
-      StringAttr(), ArrayAttr());
+  auto shapeConst = ONNXConstantOp::create(rewriter, loc, shapeType,
+      Attribute(), shapeAttr, FloatAttr(), ArrayAttr(), IntegerAttr(),
+      ArrayAttr(), StringAttr(), ArrayAttr());
 
-  return rewriter
-      .create<ONNXReshapeOp>(loc, newType, input, shapeConst, IntegerAttr())
+  return ONNXReshapeOp::create(
+      rewriter, loc, newType, input, shapeConst, IntegerAttr())
       .getReshaped();
 }
 
@@ -312,8 +312,8 @@ struct LowerReduceMeanV13ToAvgPoolPattern
     // natural [H, W] kernel survives, matching the legacy xmodel flow.
     if (isGlobalAveragePoolEquivalent(
             axes, inputShape, outputType.getShape())) {
-      auto globalAvgPoolOp = rewriter.create<ONNXGlobalAveragePoolOp>(
-          loc, outputType, reduceOp.getData());
+      auto globalAvgPoolOp = ONNXGlobalAveragePoolOp::create(
+          rewriter, loc, outputType, reduceOp.getData());
       rewriter.replaceOp(reduceOp, globalAvgPoolOp.getResult());
       return success();
     }
@@ -343,7 +343,7 @@ struct LowerReduceMeanV13ToAvgPoolPattern
     auto si64Type =
         IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed);
     auto avgPoolOp =
-        rewriter.create<ONNXAveragePoolOp>(loc, poolOutputType, poolInput,
+        ONNXAveragePoolOp::create(rewriter, loc, poolOutputType, poolInput,
             /*auto_pad=*/rewriter.getStringAttr("NOTSET"),
             /*ceil_mode=*/IntegerAttr::get(si64Type, 1),
             /*count_include_pad=*/IntegerAttr::get(si64Type, 0),
@@ -411,8 +411,8 @@ struct LowerReduceMeanToAvgPoolPattern
     // natural [H, W] kernel survives, matching the legacy xmodel flow.
     if (isGlobalAveragePoolEquivalent(
             axes, inputShape, outputType.getShape())) {
-      auto globalAvgPoolOp = rewriter.create<ONNXGlobalAveragePoolOp>(
-          loc, outputType, reduceOp.getData());
+      auto globalAvgPoolOp = ONNXGlobalAveragePoolOp::create(
+          rewriter, loc, outputType, reduceOp.getData());
       rewriter.replaceOp(reduceOp, globalAvgPoolOp.getResult());
       return success();
     }
@@ -444,7 +444,7 @@ struct LowerReduceMeanToAvgPoolPattern
     auto si64Type =
         IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed);
     auto avgPoolOp =
-        rewriter.create<ONNXAveragePoolOp>(loc, poolOutputType, poolInput,
+        ONNXAveragePoolOp::create(rewriter, loc, poolOutputType, poolInput,
             /*auto_pad=*/rewriter.getStringAttr("NOTSET"),
             /*ceil_mode=*/IntegerAttr::get(si64Type, 1),
             /*count_include_pad=*/IntegerAttr::get(si64Type, 0),
@@ -541,7 +541,7 @@ struct LowerReduceMaxToMaxPoolSpatialPattern
 
     // Create MaxPool (single output version)
     auto maxPoolOp =
-        rewriter.create<ONNXMaxPoolSingleOutOp>(loc, poolOutputType, poolInput,
+        ONNXMaxPoolSingleOutOp::create(rewriter, loc, poolOutputType, poolInput,
             /*auto_pad=*/rewriter.getStringAttr("NOTSET"),
             /*ceil_mode=*/IntegerAttr::get(si64Type, 1),
             /*dilations=*/nullptr,
@@ -638,7 +638,7 @@ struct LowerReduceSumToAvgPoolPattern
     auto si64Type =
         IntegerType::get(rewriter.getContext(), 64, IntegerType::Signed);
     auto avgPoolOp =
-        rewriter.create<ONNXAveragePoolOp>(loc, poolOutputType, poolInput,
+        ONNXAveragePoolOp::create(rewriter, loc, poolOutputType, poolInput,
             /*auto_pad=*/rewriter.getStringAttr("NOTSET"),
             /*ceil_mode=*/IntegerAttr::get(si64Type, 1),
             /*count_include_pad=*/IntegerAttr::get(si64Type, 0),
@@ -685,12 +685,12 @@ struct LowerReduceSumToAvgPoolPattern
           storageConstType, ArrayRef<APInt>{APInt(bitWidth, maskedValue)});
     }
 
-    auto multiplierConst = rewriter.create<ONNXConstantOp>(loc, resultConstType,
-        Attribute(), multiplierAttr, FloatAttr(), ArrayAttr(), IntegerAttr(),
-        ArrayAttr(), StringAttr(), ArrayAttr());
+    auto multiplierConst = ONNXConstantOp::create(rewriter, loc,
+        resultConstType, Attribute(), multiplierAttr, FloatAttr(), ArrayAttr(),
+        IntegerAttr(), ArrayAttr(), StringAttr(), ArrayAttr());
 
-    auto mulOp = rewriter.create<ONNXMulOp>(
-        loc, poolOutputType, result, multiplierConst);
+    auto mulOp = ONNXMulOp::create(
+        rewriter, loc, poolOutputType, result, multiplierConst);
     result = mulOp.getResult();
 
     if (poolOutputShape != outputType.getShape()) {

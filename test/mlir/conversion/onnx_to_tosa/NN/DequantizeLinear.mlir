@@ -3,15 +3,17 @@
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="excluded-ops=Cast" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDE-CAST
 
 func.func @test_dequantizeLinear(%arg0 : tensor<32x3x224x224xi8>) -> tensor<32x3x224x224xf32> {
-  %0 = onnx.Constant dense<3.125000e-02> : tensor<f32>                       
-  %1 = onnx.Constant dense<0> : tensor<i8>                                   
+  %0 = onnx.Constant dense<3.125000e-02> : tensor<f32>
+  %1 = onnx.Constant dense<0> : tensor<i8>
   %2 = "onnx.DequantizeLinear"(%arg0, %0, %1) {axis = 1 : si64} : (tensor<32x3x224x224xi8>, tensor<f32>, tensor<i8>) -> tensor<32x3x224x224xf32>
   "func.return"(%2) : (tensor<32x3x224x224xf32>) -> ()
 }
 // CHECK-LABEL:  @test_dequantizeLinear
 // CHECK-SAME:    (%[[ARG_0:.*]]: tensor<32x3x224x224xi8>) -> tensor<32x3x224x224xf32>
-// CHECK-DAG:    %[[ZP:.*]] = "tosa.const"() <{value = dense<0> : tensor<1x1x1x1xi8>}> : () -> tensor<1x1x1x1xi8>
-// CHECK-DAG:    %[[SCALE:.*]] = "tosa.const"() <{value = dense<3.125000e-02> : tensor<1x1x1x1xf32>}> : () -> tensor<1x1x1x1xf32>
+// CHECK-DAG:    %[[ZP_CONST:.*]] = "tosa.const"() <{value = dense<0> : tensor<i8>}> : () -> tensor<i8>
+// CHECK-DAG:    %[[ZP:.*]] = tosa.reshape %[[ZP_CONST]] {new_shape = array<i64: 1, 1, 1, 1>} : (tensor<i8>) -> tensor<1x1x1x1xi8>
+// CHECK-DAG:    %[[SCALE_CONST:.*]] = "tosa.const"() <{value = dense<3.125000e-02> : tensor<f32>}> : () -> tensor<f32>
+// CHECK-DAG:    %[[SCALE:.*]] = tosa.reshape %[[SCALE_CONST]] {new_shape = array<i64: 1, 1, 1, 1>} : (tensor<f32>) -> tensor<1x1x1x1xf32>
 // CHECK-DAG:    %[[CAST_0:.*]] = tosa.cast %[[ARG_0]] : (tensor<32x3x224x224xi8>) -> tensor<32x3x224x224xf32>
 // CHECK-DAG:    %[[CASTZP:.*]] = tosa.cast %[[ZP]] : (tensor<1x1x1x1xi8>) -> tensor<1x1x1x1xf32>
 // CHECK-DAG:    %[[SUB:.*]] = tosa.sub %[[CAST_0]], %[[CASTZP]] : (tensor<32x3x224x224xf32>, tensor<1x1x1x1xf32>) -> tensor<32x3x224x224xf32>
@@ -25,16 +27,18 @@ func.func @test_dequantizeLinear(%arg0 : tensor<32x3x224x224xi8>) -> tensor<32x3
 // -----
 
 func.func @test_dequantizeLinear_f16(%arg0 : tensor<32x3x224x224xi8>) -> tensor<32x3x224x224xf16> {
-  %0 = onnx.Constant dense<3.125000e-02> : tensor<f16>                       
-  %1 = onnx.Constant dense<0> : tensor<i8>                                   
+  %0 = onnx.Constant dense<3.125000e-02> : tensor<f16>
+  %1 = onnx.Constant dense<0> : tensor<i8>
   %2 = "onnx.DequantizeLinear"(%arg0, %0, %1) {axis = 1 : si64} : (tensor<32x3x224x224xi8>, tensor<f16>, tensor<i8>) -> tensor<32x3x224x224xf16>
   "func.return"(%2) : (tensor<32x3x224x224xf16>) -> ()
 }
 
 // CHECK-LABEL:  @test_dequantizeLinear_f16
 // CHECK-SAME:    (%[[ARG_0:.*]]: tensor<32x3x224x224xi8>) -> tensor<32x3x224x224xf16>
-// CHECK-DAG:    %[[ZP:.*]] = "tosa.const"() <{value = dense<0> : tensor<1x1x1x1xi8>}> : () -> tensor<1x1x1x1xi8>
-// CHECK-DAG:    %[[SCALE:.*]] = "tosa.const"() <{value = dense<3.125000e-02> : tensor<1x1x1x1xf16>}> : () -> tensor<1x1x1x1xf16>
+// CHECK-DAG:    %[[ZP_CONST:.*]] = "tosa.const"() <{value = dense<0> : tensor<i8>}> : () -> tensor<i8>
+// CHECK-DAG:    %[[ZP:.*]] = tosa.reshape %[[ZP_CONST]] {new_shape = array<i64: 1, 1, 1, 1>} : (tensor<i8>) -> tensor<1x1x1x1xi8>
+// CHECK-DAG:    %[[SCALE_CONST:.*]] = "tosa.const"() <{value = dense<3.125000e-02> : tensor<f16>}> : () -> tensor<f16>
+// CHECK-DAG:    %[[SCALE:.*]] = tosa.reshape %[[SCALE_CONST]] {new_shape = array<i64: 1, 1, 1, 1>} : (tensor<f16>) -> tensor<1x1x1x1xf16>
 // CHECK-DAG:    %[[CAST_0:.*]] = tosa.cast %[[ARG_0]] : (tensor<32x3x224x224xi8>) -> tensor<32x3x224x224xf32>
 // CHECK-DAG:    %[[CASTZP:.*]] = tosa.cast %[[ZP]] : (tensor<1x1x1x1xi8>) -> tensor<1x1x1x1xf32>
 // CHECK-DAG:    %[[SUB:.*]] = tosa.sub %[[CAST_0]], %[[CASTZP]] : (tensor<32x3x224x224xf32>, tensor<1x1x1x1xf32>) -> tensor<32x3x224x224xf32>
@@ -121,17 +125,11 @@ func.func @dynamic(%arg0 : tensor<?xi8>, %arg1 : tensor<f32>, %arg2 : tensor<i8>
   return %0 : tensor<1xf32>
 }
 
-// CHECK-LABEL:  func.func @dynamic
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<?xi8>, [[PARAM_1_:%.+]]: tensor<f32>, [[PARAM_2_:%.+]]: tensor<i8>) -> tensor<1xf32> {
-// CHECK-DAG:       [[VAR_0_:%.+]] = tosa.cast [[PARAM_0_]] : (tensor<?xi8>) -> tensor<?xf32>
-// CHECK-DAG:       [[VAR_1_:%.+]] = tosa.reshape [[PARAM_2_]] {new_shape = array<i64: 1>} : (tensor<i8>) -> tensor<1xi8>
-// CHECK:           [[VAR_2_:%.+]] = tosa.cast [[VAR_1_]] : (tensor<1xi8>) -> tensor<1xf32>
-// CHECK-DAG:       [[VAR_3_:%.+]] = tosa.sub [[VAR_0_]], [[VAR_2_]] : (tensor<?xf32>, tensor<1xf32>) -> tensor<?xf32>
-// CHECK-DAG:       [[VAR_4_:%.+]] = tosa.reshape [[PARAM_1_]] {new_shape = array<i64: 1>} : (tensor<f32>) -> tensor<1xf32>
-// CHECK-DAG:       [[VAR_5_:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
-// CHECK:           [[VAR_6_:%.+]] = tosa.mul [[VAR_3_]], [[VAR_4_]], [[VAR_5_]] : (tensor<?xf32>, tensor<1xf32>, tensor<1xi8>) -> tensor<1xf32>
-// CHECK:           return [[VAR_6_]] : tensor<1xf32>
-// CHECK:         }
+// CHECK-LABEL: func.func @dynamic(
+// CHECK: %[[RESULT:.*]] = "onnx.DequantizeLinear"
+// CHECK-NOT: tosa.
+// CHECK: return %[[RESULT]]
+
 // -----
 
 func.func @dynamic2(%arg0 : tensor<*xi8>, %arg1 : tensor<f32>, %arg2 : tensor<i8>) -> tensor<1xf32> {
@@ -139,17 +137,11 @@ func.func @dynamic2(%arg0 : tensor<*xi8>, %arg1 : tensor<f32>, %arg2 : tensor<i8
   return %0 : tensor<1xf32>
 }
 
-// CHECK-LABEL:  func.func @dynamic2
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<*xi8>, [[PARAM_1_:%.+]]: tensor<f32>, [[PARAM_2_:%.+]]: tensor<i8>) -> tensor<1xf32> {
-// CHECK-DAG:       [[VAR_0_:%.+]] = tosa.cast [[PARAM_0_]] : (tensor<*xi8>) -> tensor<*xf32>
-// CHECK-DAG:       [[VAR_1_:%.+]] = tosa.reshape [[PARAM_2_]] {new_shape = array<i64: 1>} : (tensor<i8>) -> tensor<1xi8>
-// CHECK:           [[VAR_2_:%.+]] = tosa.cast [[VAR_1_]] : (tensor<1xi8>) -> tensor<1xf32>
-// CHECK-DAG:       [[VAR_3_:%.+]] = tosa.sub [[VAR_0_]], [[VAR_2_]] : (tensor<*xf32>, tensor<1xf32>) -> tensor<*xf32>
-// CHECK-DAG:       [[VAR_4_:%.+]] = tosa.reshape [[PARAM_1_]] {new_shape = array<i64: 1>} : (tensor<f32>) -> tensor<1xf32>
-// CHECK-DAG:       [[VAR_5_:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
-// CHECK:           [[VAR_6_:%.+]] = tosa.mul [[VAR_3_]], [[VAR_4_]], [[VAR_5_]] : (tensor<*xf32>, tensor<1xf32>, tensor<1xi8>) -> tensor<1xf32>
-// CHECK:           return [[VAR_6_]] : tensor<1xf32>
-// CHECK:         }
+// CHECK-LABEL: func.func @dynamic2(
+// CHECK: %[[RESULT:.*]] = "onnx.DequantizeLinear"
+// CHECK-NOT: tosa.
+// CHECK: return %[[RESULT]]
+
 // -----
 
 func.func @dynamic3(%arg0 : tensor<2x?xi8>, %arg1 : tensor<f32>, %arg2 : tensor<i8>) -> tensor<2x1xf32> {
@@ -157,17 +149,11 @@ func.func @dynamic3(%arg0 : tensor<2x?xi8>, %arg1 : tensor<f32>, %arg2 : tensor<
   return %0 : tensor<2x1xf32>
 }
 
-// CHECK-LABEL:  func.func @dynamic3
-// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<2x?xi8>, [[PARAM_1_:%.+]]: tensor<f32>, [[PARAM_2_:%.+]]: tensor<i8>) -> tensor<2x1xf32> {
-// CHECK-DAG:       [[VAR_0_:%.+]] = tosa.cast [[PARAM_0_]] : (tensor<2x?xi8>) -> tensor<2x?xf32>
-// CHECK-DAG:       [[VAR_1_:%.+]] = tosa.reshape [[PARAM_2_]] {new_shape = array<i64: 1, 1>} : (tensor<i8>) -> tensor<1x1xi8>
-// CHECK:           [[VAR_2_:%.+]] = tosa.cast [[VAR_1_]] : (tensor<1x1xi8>) -> tensor<1x1xf32>
-// CHECK-DAG:       [[VAR_3_:%.+]] = tosa.sub [[VAR_0_]], [[VAR_2_]] : (tensor<2x?xf32>, tensor<1x1xf32>) -> tensor<2x?xf32>
-// CHECK-DAG:       [[VAR_4_:%.+]] = tosa.reshape [[PARAM_1_]] {new_shape = array<i64: 1, 1>} : (tensor<f32>) -> tensor<1x1xf32>
-// CHECK-DAG:       [[VAR_5_:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
-// CHECK:           [[VAR_6_:%.+]] = tosa.mul [[VAR_3_]], [[VAR_4_]], [[VAR_5_]] : (tensor<2x?xf32>, tensor<1x1xf32>, tensor<1xi8>) -> tensor<2x1xf32>
-// CHECK:           return [[VAR_6_]] : tensor<2x1xf32>
-// CHECK:         }
+// CHECK-LABEL: func.func @dynamic3(
+// CHECK: %[[RESULT:.*]] = "onnx.DequantizeLinear"
+// CHECK-NOT: tosa.
+// CHECK: return %[[RESULT]]
+
 // -----
 
 func.func @dynamic4(%arg0 : tensor<?xi8>, %arg1 : tensor<f32>, %arg2 : tensor<i8>) -> tensor<?xf32> {

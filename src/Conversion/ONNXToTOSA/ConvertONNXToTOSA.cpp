@@ -195,12 +195,25 @@ void FrontendToTosaLoweringPass::runOnOperation() {
 
   // Define legal dialects and operations
   target.addLegalDialect<mlir::tosa::TosaDialect, func::FuncDialect,
-      mlir::arith::ArithDialect, mlir::shape::ShapeDialect,
-      mlir::affine::AffineDialect>();
+      mlir::arith::ArithDialect, mlir::affine::AffineDialect>();
   // Make ONNXNoneOp legal so that patterns can create ONNX ops with optional
   // operands (e.g. onnx.Pad axes) that are lowered recursively. Dangling
   // ONNXNoneOps are removed by later DCE/canonicalization.
   target.addLegalOp<ONNXNoneOp>();
+
+  // Keep literal-zero reshapes legal until their TOSA lowering is supported.
+  target.addDynamicallyLegalOp<ONNXReshapeOp>(
+      [](ONNXReshapeOp op) -> std::optional<bool> {
+        if (op.getAllowzero())
+          return true;
+        return std::nullopt;
+      });
+  // Deferred expressions are evaluated after their sources are materialized.
+  // Lowering operations inside a deferred body can change the value that will
+  // be produced, for example by replacing floating-point division with a
+  // rounded reciprocal and multiplication.
+  target.addLegalOp<ONNXDeferredFoldableOp>();
+  target.markOpRecursivelyLegal<ONNXDeferredFoldableOp>();
 
   for (const std::string &opName : excludedOps)
     target.addLegalOp(OperationName("onnx." + opName, context));

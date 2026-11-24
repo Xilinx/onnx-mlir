@@ -69,9 +69,8 @@ struct ReplaceNDimTransposePattern : public OpRewritePattern<ONNXTransposeOp> {
     for (auto idx : perm1)
       shape1.push_back(inTy.getShape()[idx]);
     auto outTy1 = RankedTensorType::get(shape1, inTy.getElementType());
-    Value t1 = rewriter
-                   .create<ONNXTransposeOp>(
-                       transposeOp.getLoc(), outTy1, transposeInput, perm1Attr)
+    Value t1 = ONNXTransposeOp::create(
+        rewriter, transposeOp.getLoc(), outTy1, transposeInput, perm1Attr)
                    .getResult();
 
     SmallVector<int64_t> perm2 = {0, 1, 3, 2};
@@ -80,9 +79,8 @@ struct ReplaceNDimTransposePattern : public OpRewritePattern<ONNXTransposeOp> {
     for (auto idx : perm2)
       shape2.push_back(shape1[idx]);
     auto outTy2 = RankedTensorType::get(shape2, inTy.getElementType());
-    Value t2 = rewriter
-                   .create<ONNXTransposeOp>(
-                       transposeOp.getLoc(), outTy2, t1, perm2Attr)
+    Value t2 = ONNXTransposeOp::create(
+        rewriter, transposeOp.getLoc(), outTy2, t1, perm2Attr)
                    .getResult();
 
     rewriter.replaceOp(transposeOp, t2);

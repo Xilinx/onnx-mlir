@@ -217,23 +217,18 @@ struct Transfer5dStridedSliceTo4dPattern
     // Transform: Reshape(5D->4D) -> Slice4D -> Reshape(4D->5D)
 
     // Step 1: Reshape
-    Value inputReshapeQuant4D =
-        rewriter
-            .create<ONNXReshapeOp>(
-                loc, quant4DInputType, sliceInput, shapeConst4DInput)
-            .getResult();
+    Value inputReshapeQuant4D = ONNXReshapeOp::create(
+        rewriter, loc, quant4DInputType, sliceInput, shapeConst4DInput)
+                                    .getResult();
 
     // Step 2: Slice in 4D
-    Value sliceQuant4D =
-        rewriter
-            .create<ONNXSliceOp>(loc, quant4DOutputType, inputReshapeQuant4D,
-                startsConst, endsConst, axesConst, stepsConst)
-            .getResult();
+    Value sliceQuant4D = ONNXSliceOp::create(rewriter, loc, quant4DOutputType,
+        inputReshapeQuant4D, startsConst, endsConst, axesConst, stepsConst)
+                             .getResult();
 
     // Step 3: Reshape back to 5D
-    Value outputReshapeQuant5D = rewriter
-                                     .create<ONNXReshapeOp>(loc, outputType,
-                                         sliceQuant4D, shapeConst5DOutput)
+    Value outputReshapeQuant5D = ONNXReshapeOp::create(
+        rewriter, loc, outputType, sliceQuant4D, shapeConst5DOutput)
                                      .getResult();
 
     rewriter.replaceOp(sliceOp, outputReshapeQuant5D);

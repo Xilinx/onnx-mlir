@@ -30,6 +30,7 @@ struct OnnxToMlirOptions {
   bool enableRemoveBinary = false;
   bool enableFusePadIntoAvgpool = false;
   bool enableXMCPasses = false;
+  bool enableReluHardSigmoidRecomposition = true;
   // Leave the DisposablePool open after scrubbing, so that later passes can
   // still build views of existing constants (reshape, transpose) without
   // copying them. Attributes created from then on are DisposableElementsAttr
@@ -57,6 +58,7 @@ struct OnnxToMlirOptions {
   bool enableCastDataMovementPatterns = true;
   bool enableKeepdimsCanonicalization = false;
   bool enableGatherElementsTileCanonicalization = true;
+  bool enableElementwiseOperandRankCanonicalization = false;
   bool enableXFEONNXOpsetVerifier = true;
   bool enableUnsafeMathOptimizations = true;
   bool enableQDQDataMovementCanonicalization = false;

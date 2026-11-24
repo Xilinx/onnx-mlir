@@ -83,11 +83,11 @@ struct ReplaceQuantizedHardSigmoidPattern
 
     // Create a None value for the second operand (B) since HardSigmoid is unary
     auto noneOp =
-        rewriter.create<ONNXNoneOp>(loc, rewriter.getNoneType(), true);
+        ONNXNoneOp::create(rewriter, loc, rewriter.getNoneType(), true);
 
     // Create XCOMPILERFusedEltwise op with type = "HSIGMOID"
     // Directly uses quantized tensor types - no scast needed
-    auto fusedEltwiseOp = rewriter.create<XCOMPILERFusedEltwiseOp>(loc,
+    auto fusedEltwiseOp = XCOMPILERFusedEltwiseOp::create(rewriter, loc,
         output.getType(),   // Output type (quant tensor)
         input,              // A - quantized tensor input
         noneOp.getResult(), // B - none for unary op
@@ -193,9 +193,9 @@ struct FuseHardSigmoidMulToFusedEltwisePattern
 
     Location loc = mulOp.getLoc();
     auto noneOp =
-        rewriter.create<ONNXNoneOp>(loc, rewriter.getNoneType(), true);
+        ONNXNoneOp::create(rewriter, loc, rewriter.getNoneType(), true);
 
-    auto fusedOp = rewriter.create<XCOMPILERFusedEltwiseOp>(loc, mulOutputType,
+    auto fusedOp = XCOMPILERFusedEltwiseOp::create(rewriter, loc, mulOutputType,
         hsigmoidInput, noneOp.getResult(),
         /*approximate=*/StringAttr(),
         /*enable_lut_sigmoid=*/rewriter.getBoolAttr(false),

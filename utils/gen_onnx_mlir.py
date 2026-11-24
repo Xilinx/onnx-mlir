@@ -579,6 +579,16 @@ def load_custom_ops_from_yaml(yaml_paths: List[str]) -> List[CustomOpSchema]:
     return custom_schemas
 
 
+# Shared smaller data widths for ops that already admit 64-bit integers.
+narrow_integer_data_types = [
+    "tensor(int8)",
+    "tensor(uint8)",
+    "tensor(int16)",
+    "tensor(uint16)",
+    "tensor(int32)",
+    "tensor(uint32)",
+]
+
 # Extra tensor types patched into ops' ONNX type constraints after parsing.
 # A base ONNX schema name applies to every generated version. If an incompatible
 # opset needs different metadata, use its generated class stem, for example
@@ -632,8 +642,47 @@ special_type_constraints = {
         # TopK indices to a smaller unsigned width (bounded by X.shape[axis]).
         "I": ["tensor(uint16)", "tensor(uint32)"],
     },
+    "ReduceMax": {
+        "T": ["tensor(int16)", "tensor(uint16)"],
+    },
+    "ReduceMin": {
+        "T": ["tensor(int16)", "tensor(uint16)"],
+    },
+    "CumSum": {
+        "T": narrow_integer_data_types,
+    },
+    "PRelu": {
+        "T": narrow_integer_data_types,
+    },
+    "Pow": {
+        "T": narrow_integer_data_types,
+    },
+    "Range": {
+        "T": narrow_integer_data_types,
+    },
+    "ReduceL1": {
+        "T": narrow_integer_data_types,
+    },
+    "ReduceL2": {
+        "T": narrow_integer_data_types,
+    },
+    "ReduceLogSum": {
+        "T": narrow_integer_data_types,
+    },
+    "ReduceLogSumExp": {
+        "T": narrow_integer_data_types,
+    },
+    "ReduceMean": {
+        "T": narrow_integer_data_types,
+    },
     "ReduceSum": {
-        "T": ["tensor(uint16)"],
+        "T": narrow_integer_data_types,
+    },
+    "ReduceSumSquare": {
+        "T": narrow_integer_data_types,
+    },
+    "Scaler": {
+        "T": narrow_integer_data_types,
     },
     "ReverseSequence": {
         "T": ["tensor(bfloat16)"],
@@ -2063,6 +2112,9 @@ def gen_op_def(schema, with_version=False):
     # Generate ConstantLike traits.
     if mlir_op_name in OpsWithConstantLike:
         traits.append("ConstantLike")
+
+    if domain == "" and schema.name == "DequantizeLinear":
+        traits.append("DequantizationOpInterface")
 
     # OpsWithShapeInference:
     # Now the ShapeInference traits are added to all operation.

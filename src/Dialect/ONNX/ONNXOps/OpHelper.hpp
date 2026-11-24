@@ -37,6 +37,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallBitVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -207,6 +208,43 @@ mlir::ElementsAttr getDenseOrDisposableConstLikeElements(mlir::Value value);
 
 [[nodiscard]] bool isConstLikeOperation(mlir::Operation *op);
 
+// Return true when `value`'s direct producer has the ConstantLike trait or its
+// DeferredConstantOpInterface reports this result as a deferred constant.
+[[nodiscard]] bool isConstantOrDeferredValue(mlir::Value value);
+
+// Also recognizes explicit dequantization when each operand is available.
+[[nodiscard]] bool isConstantFoldable(mlir::Value value);
+
+// Same as isConstantFoldable, except that it returns false when dequantization
+// produces `value` directly or produces the value yielded for that result of
+// a DeferredFoldable op.
+//
+// FIXME: Algebraic rewrites should treat DQ(constant) as foldable. This
+// exception preserves their existing behavior for backward compatibility.
+[[nodiscard]] bool isConstantFoldableExceptDequant(mlir::Value value);
+
+// Inspect or peel the terminal operation for one selected deferred result.
+// Peeling retains other results and exposes computed body-local operands as
+// results of the remaining deferred expression. ConstantLike operands are
+// cloned outside; captures are used directly.
+// Place the peeled operation before its earliest user in the parent block.
+[[nodiscard]] bool canPeelDeferredFoldableExpression(mlir::Value selected);
+mlir::FailureOr<mlir::Operation *> peelDeferredFoldableExpression(
+    mlir::Value selected, mlir::RewriterBase &rewriter);
+
+// Overloads for a DeferredFoldable operation with exactly one result.
+[[nodiscard]] bool canPeelDeferredFoldableExpression(
+    mlir::ONNXDeferredFoldableOp deferred);
+mlir::FailureOr<mlir::Operation *> peelDeferredFoldableExpression(
+    mlir::ONNXDeferredFoldableOp deferred, mlir::RewriterBase &rewriter);
+
+// Move a complete deferred expression back into its parent block, mapping its
+// body arguments to its captures. Return the inlined operations in program
+// order, or an empty list when the body only forwards captures.
+mlir::FailureOr<llvm::SmallVector<mlir::Operation *>>
+inlineDeferredFoldableExpression(
+    mlir::ONNXDeferredFoldableOp deferred, mlir::RewriterBase &rewriter);
+
 bool compareValueFromElementAttribute(
     mlir::ElementsAttr &attr1, mlir::ElementsAttr &attr2);
 
@@ -268,6 +306,12 @@ std::optional<ONNXAxisValueSpec> getONNXAxisValueSpec(mlir::Operation *op);
 [[nodiscard]] mlir::FailureOr<bool> normalizeONNXAxisValues(
     llvm::ArrayRef<int64_t> axes, int64_t rank, bool includeRank,
     mlir::SmallVectorImpl<int64_t> &normalized);
+
+// Returns the ranked broadcast operands of a multi-input elementwise op.
+// An empty result indicates that the op has fewer than two such operands or
+// that their ranks are unknown.
+llvm::SmallVector<mlir::OpOperand *> getRankedElementwiseBroadcastOperands(
+    mlir::Operation *op);
 
 // Returns true if the op carries any known negative axis value.
 [[nodiscard]] bool hasNegativeONNXAxisValue(mlir::Operation *op);

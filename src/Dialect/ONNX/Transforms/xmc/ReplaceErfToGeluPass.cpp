@@ -184,8 +184,8 @@ struct ReplaceErfGeluPattern : public OpRewritePattern<ONNXErfOp> {
     Location loc = erfOp.getLoc();
     Type resultType = mul1Op.getResult().getType();
 
-    auto geluOp = rewriter.create<ONNXGeluOp>(
-        loc, resultType, geluInput, rewriter.getStringAttr("none"));
+    auto geluOp = ONNXGeluOp::create(
+        rewriter, loc, resultType, geluInput, rewriter.getStringAttr("none"));
 
     rewriter.replaceOp(mul1Op, geluOp.getResult());
     return success();

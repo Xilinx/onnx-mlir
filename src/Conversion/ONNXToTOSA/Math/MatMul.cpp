@@ -21,6 +21,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "src/Conversion/ONNXToTOSA/DialectBuilder.hpp"
+#include "src/Conversion/ONNXToTOSA/ONNXToTOSACommon.hpp"
 #include "src/Conversion/ONNXToTOSA/ONNXToTOSALegalizeUtils.hpp"
 #include "src/Dialect/ONNX/DialectBuilder.hpp"
 #include "src/Dialect/ONNX/ONNXOps.hpp"
@@ -33,7 +34,7 @@ namespace {
 
 // TOSA matmul is performed on two 3D inputs and generates a 3D output.
 // Lower ranked tensors are dim-1 reshaped up to 3D
-Value reshapeUpTo3DTensor(Value tensor, TosaBuilder &builder) {
+Value reshapeUpTo3DTensor(Value tensor, OnnxBuilder &builder) {
   auto tensorTy = cast<TensorType>(tensor.getType());
   auto rank = tensorTy.getRank();
 
@@ -80,23 +81,6 @@ void getRankBroadcastedShape(Value tensor, const int64_t maxInputRank,
   }
 }
 
-Type getMatMulOutputType(Type inputElemTy, PatternRewriter &rewriter) {
-  Type outputElemTy;
-  if (auto floatTy = dyn_cast<FloatType>(inputElemTy)) {
-    if (floatTy.isBF16() || floatTy.isF16() || floatTy.isF32()) {
-      // Always accumulate on f32
-      outputElemTy = rewriter.getF32Type();
-    }
-  } else if (auto integerTy = dyn_cast<IntegerType>(inputElemTy)) {
-    if (integerTy.isInteger(/*width=*/8)) {
-      outputElemTy = rewriter.getIntegerType(/*width=*/32);
-    } else if (integerTy.isInteger(/*width=*/16)) {
-      outputElemTy = rewriter.getIntegerType(/*width=*/48);
-    }
-  }
-  return outputElemTy;
-}
-
 // Lowering based on the lowering of torch-mlir
 class ONNXMatMulOpLoweringToTOSA : public OpConversionPattern<ONNXMatMulOp> {
 public:
@@ -105,6 +89,8 @@ public:
 
   LogicalResult matchAndRewrite(ONNXMatMulOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(
         rewriter, op->getLoc());
@@ -135,8 +121,8 @@ public:
           op, "expected both inputs to have same element type");
     }
 
-    auto outputElemType = getMatMulOutputType(lhsElemTy, rewriter);
-    if (!outputElemType) {
+    if (!lhsElemTy.isBF16() && !lhsElemTy.isF16() && !lhsElemTy.isF32() &&
+        !lhsElemTy.isInteger(8) && !lhsElemTy.isInteger(16)) {
       return rewriter.notifyMatchFailure(op,
           "Only i8 and i16 integer and bf16, f16 and "
           "f32 float types are valid");
@@ -153,13 +139,13 @@ public:
     getRankBroadcastedShape(lhs, maxInputRank, false, lhsBroadcastedShape);
     getRankBroadcastedShape(rhs, maxInputRank, true, rhsBroadcastedShape);
 
-    auto rankBroadcastedLhs = lhsRank == maxInputRank
-                                  ? lhs
-                                  : builder.reshape(lhs, lhsBroadcastedShape);
+    auto rankBroadcastedLhs =
+        lhsRank == maxInputRank ? lhs
+                                : create.onnx.reshape(lhs, lhsBroadcastedShape);
 
-    auto rankBroadcastedRhs = rhsRank == maxInputRank
-                                  ? rhs
-                                  : builder.reshape(rhs, rhsBroadcastedShape);
+    auto rankBroadcastedRhs =
+        rhsRank == maxInputRank ? rhs
+                                : create.onnx.reshape(rhs, rhsBroadcastedShape);
 
     // Where broadcasting is required in one or more batch dims, the following
     // is done.
@@ -223,8 +209,8 @@ public:
     const bool performBatchDimBroadcast = needsBatchDimBroadcast();
     if (!performBatchDimBroadcast) {
       // Simple with no broadcasting artifacts. Just reshape up to 3D
-      matmulLhs = reshapeUpTo3DTensor(rankBroadcastedLhs, builder);
-      matmulRhs = reshapeUpTo3DTensor(rankBroadcastedRhs, builder);
+      matmulLhs = reshapeUpTo3DTensor(rankBroadcastedLhs, create.onnx);
+      matmulRhs = reshapeUpTo3DTensor(rankBroadcastedRhs, create.onnx);
     } else {
       // In this case, either or both input matrices involve broadcasting on
       // their batch dimensions. For example:
@@ -315,7 +301,7 @@ public:
       newLhsShape[0] = commonValue;
       newLhsShape[1] = lhsSqueezedValue;
 
-      matmulLhs = builder.reshape(lhsReshapeInput, newLhsShape);
+      matmulLhs = create.onnx.reshape(lhsReshapeInput, newLhsShape);
 
       SmallVector<int64_t> transposedRhsShape;
       SmallVector<int32_t> transposedRhsDims;
@@ -353,7 +339,7 @@ public:
       // reshape
       SmallVector<int64_t> newRhsShape({commonValue,
           rhsBroadcastedShape[maxInputRank - 2], rhsSqueezedValue});
-      matmulRhs = builder.reshape(transposedRhsValue, newRhsShape);
+      matmulRhs = create.onnx.reshape(transposedRhsValue, newRhsShape);
     }
 
     auto matmulLhsShape =
@@ -370,18 +356,18 @@ public:
     SmallVector<int64_t> matmulOutputShape(
         {matmulLhsShape[0], matmulLhsShape[1], matmulRhsShape[2]});
 
-    auto mmOutputTy = RankedTensorType::get(matmulOutputShape, outputElemType);
+    // AMD extension: preserve the ONNX result element type instead of using
+    // TOSA's wider accumulation result type followed by a cast.
+    auto mmOutputTy = RankedTensorType::get(matmulOutputShape, lhsElemTy);
     auto mmOpResult = tosa::CreateOpAndInfer<mlir::tosa::MatMulOp>(
         rewriter, op->getLoc(), mmOutputTy, matmulLhs, matmulRhs)
                           ->getResult(0);
-    auto castToOrigOp =
-        create.onnx.castToNewTensorElementType(mmOpResult, lhsElemTy);
 
     // Perform the reshape to output shape. This is always required unless max
     // input rank=3 and there was no broadcasting, in which case the tosa.matmul
     // output itself is correctly shaped.
     bool performOpReshape = !(maxInputRank == 3 && !performBatchDimBroadcast);
-    Value output = castToOrigOp;
+    Value output = mmOpResult;
     if (performOpReshape) {
       // Since the output shape may be unknown, we construct it
       // independently and reshape. Otherwise reshape may be expressed for
@@ -466,7 +452,7 @@ public:
       computeOpShape(reshapedOpShape, transposedOpDims, transposedOpShape);
 
       // Perform reshape
-      auto reshapeOp = builder.reshape(castToOrigOp, reshapedOpShape);
+      auto reshapeOp = create.onnx.reshape(mmOpResult, reshapedOpShape);
 
       SmallVector<int32_t> transposedOpDimsI32;
       llvm::copy(transposedOpDims, std::back_inserter(transposedOpDimsI32));

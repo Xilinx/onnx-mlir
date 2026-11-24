@@ -36,26 +36,12 @@ func.func @test_batchnorm_f16_dynamic(%arg0: tensor<100x3x?x?xf16>) -> tensor<*x
     %3 = "onnx.Constant"() {value = dense<[4.0, 5.0, 6.0]> : tensor<3xf16>} : () -> tensor<3xf16>
     %4 = "onnx.BatchNormalizationInferenceMode"(%arg0, %0, %1, %2, %3) {epsilon = 1.00000007E-5 : f32, momentum = 1.00000007E-3 : f32} : (tensor<100x3x?x?xf16>, tensor<3xf16>, tensor<3xf16>, tensor<3xf16>, tensor<3xf16>) -> tensor<*xf16>
     return %4 : tensor<*xf16>
-// CHECK-LABEL: func @test_batchnorm_f16_dynamic
-// CHECK-SAME:  ([[PARAM_0_:%.+]]: tensor<100x3x?x?xf16>) -> tensor<100x3x?x?xf16>
-// CHECK-DAG:       [[VAR_0_:%.+]] = "tosa.const"() <{value = dense<[1.000000e+00, 2.000000e+00, 3.000000e+00]> : tensor<3xf16>}> : () -> tensor<3xf16>
-// CHECK-DAG:       [[VAR_1_:%.+]] = "tosa.const"() <{value = dense<[2.000000e+00, 3.000000e+00, 4.000000e+00]> : tensor<3xf16>}> : () -> tensor<3xf16>
-// CHECK-DAG:       [[VAR_2_:%.+]] = "tosa.const"() <{value = dense<[3.000000e+00, 4.000000e+00, 5.000000e+00]> : tensor<3xf16>}> : () -> tensor<3xf16>
-// CHECK-DAG:       [[VAR_3_:%.+]] = "tosa.const"() <{value = dense<[4.000000e+00, 5.000000e+00, 6.000000e+00]> : tensor<3xf16>}> : () -> tensor<3xf16>
-// CHECK-DAG:       [[VAR_4_:%.+]] = tosa.reshape [[VAR_2_]] {new_shape = array<i64: 1, 3, 1, 1>} : (tensor<3xf16>) -> tensor<1x3x1x1xf16>
-// CHECK-DAG:       [[VAR_5_:%.+]] = tosa.reshape [[VAR_0_]] {new_shape = array<i64: 1, 3, 1, 1>} : (tensor<3xf16>) -> tensor<1x3x1x1xf16>
-// CHECK-DAG:       [[VAR_6_:%.+]] = tosa.reshape [[VAR_1_]] {new_shape = array<i64: 1, 3, 1, 1>} : (tensor<3xf16>) -> tensor<1x3x1x1xf16>
-// CHECK-DAG:       [[VAR_7_:%.+]] = tosa.reshape [[VAR_3_]] {new_shape = array<i64: 1, 3, 1, 1>} : (tensor<3xf16>) -> tensor<1x3x1x1xf16>
-// CHECK-DAG:       [[VAR_8_:%.+]] = "tosa.const"() <{value = dense<1.001360e-05> : tensor<1x1x1x1xf16>}> : () -> tensor<1x1x1x1xf16>
-// CHECK:           [[VAR_9_:%.+]] = tosa.sub [[PARAM_0_]], [[VAR_4_]] : (tensor<100x3x?x?xf16>, tensor<1x3x1x1xf16>) -> tensor<100x3x?x?xf16>
-// CHECK:           [[VAR_10_:%.+]] = tosa.add [[VAR_7_]], [[VAR_8_]] : (tensor<1x3x1x1xf16>, tensor<1x1x1x1xf16>) -> tensor<1x3x1x1xf16>
-// CHECK:           [[VAR_11_:%.+]] = tosa.rsqrt [[VAR_10_]] : (tensor<1x3x1x1xf16>) -> tensor<1x3x1x1xf16>
-// CHECK:           [[SHIFT_2_:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
-// CHECK:           [[VAR_12_:%.+]] = tosa.mul [[VAR_9_]], [[VAR_11_]], [[SHIFT_2_]] : (tensor<100x3x?x?xf16>, tensor<1x3x1x1xf16>, tensor<1xi8>) -> tensor<100x3x?x?xf16>
-// CHECK:           [[VAR_13_:%.+]] = tosa.mul [[VAR_12_]], [[VAR_5_]], [[SHIFT_2_]] : (tensor<100x3x?x?xf16>, tensor<1x3x1x1xf16>, tensor<1xi8>) -> tensor<100x3x?x?xf16>
-// CHECK:           [[VAR_14_:%.+]] = tosa.add [[VAR_13_]], [[VAR_6_]] : (tensor<100x3x?x?xf16>, tensor<1x3x1x1xf16>) -> tensor<100x3x?x?xf16>
-// CHECK:           return [[VAR_14_]] : tensor<100x3x?x?xf16>
 }
+
+// CHECK-LABEL: func.func @test_batchnorm_f16_dynamic(
+// CHECK: %[[RESULT:.*]] = "onnx.BatchNormalizationInferenceMode"
+// CHECK-NOT: tosa.
+// CHECK: return %[[RESULT]]
 
 // -----
 
@@ -66,26 +52,12 @@ func.func @test_batchnorm_bf16_dynamic(%arg0: tensor<100x3x?x?xbf16>) -> tensor<
     %3 = "onnx.Constant"() {value = dense<[4.0, 5.0, 6.0]> : tensor<3xbf16>} : () -> tensor<3xbf16>
     %4 = "onnx.BatchNormalizationInferenceMode"(%arg0, %0, %1, %2, %3) {epsilon = 1.00000007E-5 : f32, momentum = 1.00000007E-3 : f32} : (tensor<100x3x?x?xbf16>, tensor<3xbf16>, tensor<3xbf16>, tensor<3xbf16>, tensor<3xbf16>) -> tensor<*xbf16>
     return %4 : tensor<*xbf16>
-// CHECK-LABEL: func @test_batchnorm_bf16_dynamic
-// CHECK-SAME:  ([[PARAM_0_:%.+]]: tensor<100x3x?x?xbf16>) -> tensor<100x3x?x?xbf16>
-// CHECK-DAG:       [[VAR_0_:%.+]] = "tosa.const"() <{value = dense<[1.000000e+00, 2.000000e+00, 3.000000e+00]> : tensor<3xbf16>}> : () -> tensor<3xbf16>
-// CHECK-DAG:       [[VAR_1_:%.+]] = "tosa.const"() <{value = dense<[2.000000e+00, 3.000000e+00, 4.000000e+00]> : tensor<3xbf16>}> : () -> tensor<3xbf16>
-// CHECK-DAG:       [[VAR_2_:%.+]] = "tosa.const"() <{value = dense<[3.000000e+00, 4.000000e+00, 5.000000e+00]> : tensor<3xbf16>}> : () -> tensor<3xbf16>
-// CHECK-DAG:       [[VAR_3_:%.+]] = "tosa.const"() <{value = dense<[4.000000e+00, 5.000000e+00, 6.000000e+00]> : tensor<3xbf16>}> : () -> tensor<3xbf16>
-// CHECK-DAG:       [[VAR_4_:%.+]] = tosa.reshape [[VAR_2_]] {new_shape = array<i64: 1, 3, 1, 1>} : (tensor<3xbf16>) -> tensor<1x3x1x1xbf16>
-// CHECK-DAG:       [[VAR_5_:%.+]] = tosa.reshape [[VAR_0_]] {new_shape = array<i64: 1, 3, 1, 1>} : (tensor<3xbf16>) -> tensor<1x3x1x1xbf16>
-// CHECK-DAG:       [[VAR_6_:%.+]] = tosa.reshape [[VAR_1_]] {new_shape = array<i64: 1, 3, 1, 1>} : (tensor<3xbf16>) -> tensor<1x3x1x1xbf16>
-// CHECK-DAG:       [[VAR_7_:%.+]] = tosa.reshape [[VAR_3_]] {new_shape = array<i64: 1, 3, 1, 1>} : (tensor<3xbf16>) -> tensor<1x3x1x1xbf16>
-// CHECK-DAG:       [[VAR_8_:%.+]] = "tosa.const"() <{value = dense<1.001360e-05> : tensor<1x1x1x1xbf16>}> : () -> tensor<1x1x1x1xbf16>
-// CHECK:           [[VAR_9_:%.+]] = tosa.sub [[PARAM_0_]], [[VAR_4_]] : (tensor<100x3x?x?xbf16>, tensor<1x3x1x1xbf16>) -> tensor<100x3x?x?xbf16>
-// CHECK:           [[VAR_10_:%.+]] = tosa.add [[VAR_7_]], [[VAR_8_]] : (tensor<1x3x1x1xbf16>, tensor<1x1x1x1xbf16>) -> tensor<1x3x1x1xbf16>
-// CHECK:           [[VAR_11_:%.+]] = tosa.rsqrt [[VAR_10_]] : (tensor<1x3x1x1xbf16>) -> tensor<1x3x1x1xbf16>
-// CHECK:           [[SHIFT_4_:%.+]] = "tosa.const"() <{value = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
-// CHECK:           [[VAR_12_:%.+]] = tosa.mul [[VAR_9_]], [[VAR_11_]], [[SHIFT_4_]] : (tensor<100x3x?x?xbf16>, tensor<1x3x1x1xbf16>, tensor<1xi8>) -> tensor<100x3x?x?xbf16>
-// CHECK:           [[VAR_13_:%.+]] = tosa.mul [[VAR_12_]], [[VAR_5_]], [[SHIFT_4_]] : (tensor<100x3x?x?xbf16>, tensor<1x3x1x1xbf16>, tensor<1xi8>) -> tensor<100x3x?x?xbf16>
-// CHECK:           [[VAR_14_:%.+]] = tosa.add [[VAR_13_]], [[VAR_6_]] : (tensor<100x3x?x?xbf16>, tensor<1x3x1x1xbf16>) -> tensor<100x3x?x?xbf16>
-// CHECK:           return [[VAR_14_]] : tensor<100x3x?x?xbf16>
 }
+
+// CHECK-LABEL: func.func @test_batchnorm_bf16_dynamic(
+// CHECK: %[[RESULT:.*]] = "onnx.BatchNormalizationInferenceMode"
+// CHECK-NOT: tosa.
+// CHECK: return %[[RESULT]]
 
 // -----
 
@@ -126,8 +98,9 @@ func.func @test_batchnorm_dynamic_input_static_output(%arg0: tensor<?x3x10x10xf3
     %3 = "onnx.Constant"() {value = dense<[4.0, 5.0, 6.0]> : tensor<3xf32>} : () -> tensor<3xf32>
     %4 = "onnx.BatchNormalizationInferenceMode"(%arg0, %0, %1, %2, %3) {epsilon = 1.00000007E-5 : f32, momentum = 1.00000007E-3 : f32} : (tensor<?x3x10x10xf32>, tensor<3xf32>, tensor<3xf32>, tensor<3xf32>, tensor<3xf32>) -> tensor<1x3x10x10xf32>
     return %4 : tensor<1x3x10x10xf32>
-// CHECK-LABEL: func @test_batchnorm_dynamic_input_static_output
-// CHECK-SAME:  ([[PARAM_0_:%.+]]: tensor<?x3x10x10xf32>) -> tensor<1x3x10x10xf32>
-// CHECK:       tosa.sub [[PARAM_0_]]
-// CHECK:       return {{.*}} : tensor<1x3x10x10xf32>
 }
+
+// CHECK-LABEL: func.func @test_batchnorm_dynamic_input_static_output(
+// CHECK: %[[RESULT:.*]] = "onnx.BatchNormalizationInferenceMode"
+// CHECK-NOT: tosa.
+// CHECK: return %[[RESULT]]

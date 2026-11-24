@@ -250,7 +250,7 @@ static mlir::Value createConstantFromIntData(mlir::PatternRewriter &rewriter,
 
   auto denseAttr =
       mlir::DenseIntElementsAttr::get(storageTensorType, apIntData);
-  return rewriter.create<mlir::ONNXConstantOp>(loc, tensorType,
+  return mlir::ONNXConstantOp::create(rewriter, loc, tensorType,
       mlir::ValueRange{},
       mlir::ArrayRef<mlir::NamedAttribute>{
           rewriter.getNamedAttr("value", denseAttr)});
@@ -262,7 +262,7 @@ static mlir::Value createConstantFromFloatData(mlir::PatternRewriter &rewriter,
     llvm::ArrayRef<float> data, mlir::Type elementType) {
   auto tensorType = mlir::RankedTensorType::get(shape, elementType);
   auto denseAttr = mlir::DenseElementsAttr::get(tensorType, data);
-  return rewriter.create<mlir::ONNXConstantOp>(loc, tensorType,
+  return mlir::ONNXConstantOp::create(rewriter, loc, tensorType,
       mlir::ValueRange{},
       mlir::ArrayRef<mlir::NamedAttribute>{
           rewriter.getNamedAttr("value", denseAttr)});
@@ -274,7 +274,7 @@ static mlir::Value createConstantI64Array(mlir::PatternRewriter &rewriter,
   auto tensorType = mlir::RankedTensorType::get(
       {static_cast<int64_t>(values.size())}, rewriter.getI64Type());
   auto denseAttr = mlir::DenseIntElementsAttr::get(tensorType, values);
-  return rewriter.create<mlir::ONNXConstantOp>(loc, tensorType,
+  return mlir::ONNXConstantOp::create(rewriter, loc, tensorType,
       mlir::ValueRange{},
       mlir::ArrayRef<mlir::NamedAttribute>{
           rewriter.getNamedAttr("value", denseAttr)});
@@ -571,8 +571,8 @@ static mlir::Value createSliceOp(mlir::PatternRewriter &rewriter,
   mlir::Value axesConst = createConstantI64Array(rewriter, loc, axes);
   mlir::Value stepsConst = createConstantI64Array(rewriter, loc, steps);
 
-  return rewriter.create<mlir::ONNXSliceOp>(
-      loc, outputType, input, startsConst, endsConst, axesConst, stepsConst);
+  return mlir::ONNXSliceOp::create(rewriter, loc, outputType, input,
+      startsConst, endsConst, axesConst, stepsConst);
 }
 
 //===----------------------------------------------------------------------===//
@@ -840,7 +840,7 @@ struct TransferConvSliceToConvPattern
     auto newPadsAttr = rewriter.getI64ArrayAttr(newPads);
 
     // Create new Conv operation
-    auto newConvOp = rewriter.create<mlir::ONNXConvOp>(loc, newConvOutputType,
+    auto newConvOp = mlir::ONNXConvOp::create(rewriter, loc, newConvOutputType,
         convInput,  // Possibly sliced input (for spatial slice)
         newWeights, // Possibly sliced weights (for channel slice)
         newBias,    // Possibly sliced bias (for channel slice)

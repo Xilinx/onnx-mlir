@@ -110,9 +110,8 @@ struct BatchReductionToReshapeReductionPattern
 
     auto preReshapeType =
         RankedTensorType::get(preReshapeShape, inputType.getElementType());
-    Value preReshape = rewriter
-                           .create<ONNXReshapeOp>(
-                               loc, preReshapeType, inputValue, preShapeConst)
+    Value preReshape = ONNXReshapeOp::create(
+        rewriter, loc, preReshapeType, inputValue, preShapeConst)
                            .getResult();
 
     // Clone ReduceSum op generically to preserve attributes.
@@ -134,9 +133,8 @@ struct BatchReductionToReshapeReductionPattern
 
     rewriter.setInsertionPointAfter(newReduce);
     Value postShapeConst = onnxBuilder.constantInt64(postReshapeShape);
-    Value postReshape = rewriter
-                            .create<ONNXReshapeOp>(loc, outputType,
-                                newReduce->getResult(0), postShapeConst)
+    Value postReshape = ONNXReshapeOp::create(
+        rewriter, loc, outputType, newReduce->getResult(0), postShapeConst)
                             .getResult();
 
     rewriter.replaceOp(reduceOp, postReshape);
@@ -218,8 +216,8 @@ struct BatchMiddleAxisReductionToReshapeReductionPattern
     Value preShapeConst = onnxBuilder.constantInt64(preReshapeShape);
     auto preReshapeType =
         RankedTensorType::get(preReshapeShape, inputType.getElementType());
-    Value preReshape = rewriter.create<ONNXReshapeOp>(
-        loc, preReshapeType, inputValue, preShapeConst);
+    Value preReshape = ONNXReshapeOp::create(
+        rewriter, loc, preReshapeType, inputValue, preShapeConst);
 
     // The reduced axis moves from 1 to 2, so the original axes operand cannot
     // be reused. ResultNames is intentionally not copied: the updater infers
@@ -227,12 +225,12 @@ struct BatchMiddleAxisReductionToReshapeReductionPattern
     Value newAxes = onnxBuilder.constantInt64({2});
     auto reduceType =
         RankedTensorType::get(reduceShape, outputType.getElementType());
-    Value newReduce = rewriter.create<ONNXReduceSumOp>(loc, reduceType,
+    Value newReduce = ONNXReduceSumOp::create(rewriter, loc, reduceType,
         preReshape, newAxes, /*keepdims=*/1, reduceOp.getNoopWithEmptyAxes());
 
     Value postShapeConst = onnxBuilder.constantInt64(outputType.getShape());
-    Value postReshape = rewriter.create<ONNXReshapeOp>(
-        loc, outputType, newReduce, postShapeConst);
+    Value postReshape = ONNXReshapeOp::create(
+        rewriter, loc, outputType, newReduce, postShapeConst);
 
     rewriter.replaceOp(reduceOp, postReshape);
     return success();

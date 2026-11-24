@@ -41,3 +41,19 @@ func.func @test_no_group_nonconsecutive_const_concat(%arg0: tensor<1x3x4xf32>, %
 // CHECK:           [[VAR_1_:%.+]] = "onnx.Concat"([[PARAM_0_]], [[VAR_0_]], [[PARAM_1_]]) {axis = 1 : si64} : (tensor<1x3x4xf32>, tensor<1x3x4xf32>, tensor<1x3x4xf32>) -> tensor<1x9x4xf32>
 // CHECK:           return [[VAR_1_]] : tensor<1x9x4xf32>
 }
+
+// -----
+
+func.func @test_group_consecutive_initializer_sources(%arg0: tensor<1x3x4xf32>) -> tensor<1x9x4xf32> {
+  %c0 = "onnx.InitializerSource"() {kind = "external_data", length = 48 : i64, name = "c0", offset = 0 : i64, path = "/not/read", scope = []} : () -> tensor<1x3x4xf32>
+  %c1 = "onnx.InitializerSource"() {kind = "external_data", length = 48 : i64, name = "c1", offset = 48 : i64, path = "/not/read", scope = []} : () -> tensor<1x3x4xf32>
+  %0 = "onnx.Concat"(%arg0, %c0, %c1) {axis = 1 : si64} : (tensor<1x3x4xf32>, tensor<1x3x4xf32>, tensor<1x3x4xf32>) -> tensor<1x9x4xf32>
+  return %0 : tensor<1x9x4xf32>
+// CHECK-LABEL:  func.func @test_group_consecutive_initializer_sources
+// CHECK-SAME:   ([[PARAM_0_:%.+]]: tensor<1x3x4xf32>) -> tensor<1x9x4xf32> {
+// CHECK-DAG:       [[SOURCE_0_:%.+]] = "onnx.InitializerSource"() {{.*}}name = "c0"
+// CHECK-DAG:       [[SOURCE_1_:%.+]] = "onnx.InitializerSource"() {{.*}}name = "c1"
+// CHECK:           [[GROUPED_:%.+]] = "onnx.Concat"([[SOURCE_0_]], [[SOURCE_1_]]) {axis = 1 : si64} : (tensor<1x3x4xf32>, tensor<1x3x4xf32>) -> tensor<1x6x4xf32>
+// CHECK:           [[RESULT_:%.+]] = "onnx.Concat"([[PARAM_0_]], [[GROUPED_]]) {axis = 1 : si64} : (tensor<1x3x4xf32>, tensor<1x6x4xf32>) -> tensor<1x9x4xf32>
+// CHECK:           return [[RESULT_]] : tensor<1x9x4xf32>
+}

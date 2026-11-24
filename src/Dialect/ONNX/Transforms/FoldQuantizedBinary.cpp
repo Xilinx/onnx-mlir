@@ -207,8 +207,8 @@ public:
           binOp, [&]() { lhs.setType(lhsType.clone(newQType)); });
       ResultNamesUpdater().notifyOperationReplaced(binOp, lhs);
 
-      auto qScast = rewriter.create<quant::StorageCastOp>(
-          binLoc, lhsType.clone(newQType.getStorageType()), lhs);
+      auto qScast = quant::StorageCastOp::create(
+          rewriter, binLoc, lhsType.clone(newQType.getStorageType()), lhs);
       // If original Q Scast exists, just replace it with the new one
       if (auto oqScast = dyn_cast<quant::StorageCastOp>(*binOp->user_begin());
           binOp->hasOneUse() && oqScast) {
@@ -217,22 +217,22 @@ public:
       }
 
       auto dqScast =
-          rewriter.create<quant::StorageCastOp>(binLoc, outType, qScast);
+          quant::StorageCastOp::create(rewriter, binLoc, outType, qScast);
       rewriter.replaceOp(binOp, dqScast);
       return success();
     } else {
       // If original DQ Scast exists, just replace it with new one
       if (auto odqScast = lhs.template getDefiningOp<quant::StorageCastOp>()) {
-        auto dqScast = rewriter.create<quant::StorageCastOp>(
-            binLoc, outType.clone(newQType), odqScast->getOperand(0));
+        auto dqScast = quant::StorageCastOp::create(
+            rewriter, binLoc, outType.clone(newQType), odqScast->getOperand(0));
         rewriter.replaceOp(binOp, dqScast);
         return success();
       }
 
-      auto qScast = rewriter.create<quant::StorageCastOp>(
-          binLoc, lhsType.clone(lhsQType.getStorageType()), lhs);
-      auto dqScast = rewriter.create<quant::StorageCastOp>(
-          binLoc, outType.clone(newQType), qScast);
+      auto qScast = quant::StorageCastOp::create(
+          rewriter, binLoc, lhsType.clone(lhsQType.getStorageType()), lhs);
+      auto dqScast = quant::StorageCastOp::create(
+          rewriter, binLoc, outType.clone(newQType), qScast);
       rewriter.replaceOp(binOp, dqScast);
       return success();
 

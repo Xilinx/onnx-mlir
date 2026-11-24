@@ -206,9 +206,9 @@ struct ConvertSCastPairToRequantizePattern
     }
 
     // Create XCOMPILERRequantize op
-    auto requantizeOp =
-        rewriter.create<XCOMPILERRequantizeOp>(secondSCast.getLoc(), resultType,
-            firstSCast.getOperand(), aScaleAttr, aZpAttr, yScaleAttr, yZpAttr);
+    auto requantizeOp = XCOMPILERRequantizeOp::create(rewriter,
+        secondSCast.getLoc(), resultType, firstSCast.getOperand(), aScaleAttr,
+        aZpAttr, yScaleAttr, yZpAttr);
 
     rewriter.replaceOp(secondSCast, requantizeOp.getResult());
 
@@ -314,11 +314,11 @@ struct ConvertQAndScastToRequantizePattern
           RankedTensorType::get(storageType.getShape(), inputQPerAxis);
     }
 
-    auto qScast = rewriter.create<quant::StorageCastOp>(
-        qOp.getLoc(), inputQuantTensorTy, qOp.getResult());
+    auto qScast = quant::StorageCastOp::create(
+        rewriter, qOp.getLoc(), inputQuantTensorTy, qOp.getResult());
 
     auto requantizeOp =
-        rewriter.create<XCOMPILERRequantizeOp>(scast.getLoc(), resultType,
+        XCOMPILERRequantizeOp::create(rewriter, scast.getLoc(), resultType,
             qScast.getResult(), aScaleAttr, aZpAttr, yScaleAttr, yZpAttr);
     rewriter.replaceOp(scast, requantizeOp.getResult());
     return success();
@@ -401,19 +401,19 @@ struct ConvertScastAndDQToRequantizePattern
       return failure();
     }
 
-    auto requantizeOp = rewriter.create<XCOMPILERRequantizeOp>(dqOp.getLoc(),
+    auto requantizeOp = XCOMPILERRequantizeOp::create(rewriter, dqOp.getLoc(),
         resultType, scastInput, aScaleAttr, aZpAttr, yScaleAttr, yZpAttr);
 
     // DQ consumes storage type; strip the quant wrapper after requantize.
     auto outQuantTy = cast<quant::QuantizedType>(resultType.getElementType());
     auto storageTy = RankedTensorType::get(
         resultType.getShape(), outQuantTy.getStorageType());
-    auto storageScast = rewriter.create<quant::StorageCastOp>(
-        dqOp.getLoc(), storageTy, requantizeOp.getResult());
+    auto storageScast = quant::StorageCastOp::create(
+        rewriter, dqOp.getLoc(), storageTy, requantizeOp.getResult());
 
     // Keep DQ to produce f32: DQ(storage, scale_dq, zp_dq)
     auto dqResultType = cast<RankedTensorType>(dqOp.getResult().getType());
-    auto newDQOp = rewriter.create<ONNXDequantizeLinearOp>(dqOp.getLoc(),
+    auto newDQOp = ONNXDequantizeLinearOp::create(rewriter, dqOp.getLoc(),
         dqResultType, storageScast.getResult(), dqOp.getXScale(),
         dqOp.getXZeroPoint(), dqOp.getAxisAttr(), dqOp.getBlockSizeAttr());
 

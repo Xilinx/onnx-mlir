@@ -69,7 +69,7 @@ template <typename TosaOp, typename... Args>
 TosaOp CreateOpAndInfer(mlir::PatternRewriter &rewriter, mlir::Location loc,
     mlir::Type result_ty, Args &&...args) {
 
-  auto op = rewriter.create<TosaOp>(loc, result_ty, args...);
+  auto op = TosaOp::create(rewriter, loc, result_ty, args...);
 
   mlir::InferShapedTypeOpInterface shapeInterface =
       mlir::dyn_cast<mlir::InferShapedTypeOpInterface>(op.getOperation());

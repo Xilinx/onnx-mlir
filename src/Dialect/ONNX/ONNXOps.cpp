@@ -164,6 +164,113 @@ LogicalResult ONNXInitializerSourceOp::verify() {
   return success();
 }
 
+Operation *ONNXDeferredFoldableOp::getTerminalOperation(unsigned resultIndex) {
+  assert(resultIndex < getNumResults() && "result index out of bounds");
+  auto yield = cast<ONNXYieldOp>(getBody().front().getTerminator());
+  return yield.getOperand(resultIndex).getDefiningOp();
+}
+
+OperandRange ONNXDeferredFoldableOp::getEntrySuccessorOperands(
+    RegionSuccessor successor) {
+  assert(successor.getSuccessor() == &getBody() &&
+         "expected the DeferredFoldable body");
+  return getCaptures();
+}
+
+void ONNXDeferredFoldableOp::getSuccessorRegions(
+    RegionBranchPoint point, SmallVectorImpl<RegionSuccessor> &regions) {
+  if (point.isParent()) {
+    regions.emplace_back(&getBody(), getBody().getArguments());
+    return;
+  }
+  assert(
+      point.getTerminatorPredecessorOrNull()->getParentRegion() == &getBody() &&
+      "expected the DeferredFoldable body");
+  regions.emplace_back(getOperation(), getOperation()->getResults());
+}
+
+void ONNXDeferredFoldableOp::getRegionInvocationBounds(
+    ArrayRef<Attribute> /*operands*/,
+    SmallVectorImpl<InvocationBounds> &bounds) {
+  bounds.emplace_back(/*lb=*/1, /*ub=*/1);
+}
+
+LogicalResult ONNXDeferredFoldableOp::verify() {
+  if (getBody().empty())
+    return emitOpError("requires a body block");
+  Block &body = getBody().front();
+  if (body.empty())
+    return emitOpError("requires a non-empty body block");
+  if (!body.mightHaveTerminator())
+    return emitOpError("requires a body terminator, but the body ends with ")
+           << body.back().getName();
+  for (Value capture : getCaptures()) {
+    if (!capture)
+      return emitOpError("has an invalid capture");
+    if (dyn_cast_or_null<ONNXDeferredFoldableOp>(capture.getDefiningOp()))
+      return emitOpError("must inline a captured onnx.DeferredFoldable body");
+    if (!onnx_mlir::isConstantOrDeferredValue(capture)) {
+      InFlightDiagnostic diagnostic =
+          emitOpError("capture must be constant or deferred constant");
+      if (Operation *producer = capture.getDefiningOp()) {
+        diagnostic << "; capture is defined by " << producer->getName();
+        if (auto castOp = dyn_cast<ONNXCastOp>(producer)) {
+          Operation *inputProducer = castOp.getInput().getDefiningOp();
+          diagnostic << " from "
+                     << (inputProducer ? inputProducer->getName().getStringRef()
+                                       : "a block argument")
+                     << " (" << castOp.getInput().getType() << " -> "
+                     << castOp.getResult().getType() << ")";
+        }
+      } else {
+        diagnostic << "; capture is a block argument";
+      }
+      return diagnostic;
+    }
+  }
+
+  auto yield = dyn_cast<ONNXYieldOp>(body.getTerminator());
+  if (!yield)
+    return emitOpError("body must terminate with onnx.Yield");
+  if (getNumResults() == 0)
+    return emitOpError("requires at least one result");
+  if (yield.getNumOperands() != getNumResults())
+    return emitOpError("body yield count must match result count");
+  for (auto [yielded, result] :
+      llvm::zip_equal(yield.getOperands(), getResults())) {
+    if (yielded.getType() != result.getType())
+      return emitOpError("yielded value type must match result type");
+    if (auto argument = dyn_cast<BlockArgument>(yielded)) {
+      if (argument.getOwner() == &body)
+        continue;
+    } else if (Operation *producer = yielded.getDefiningOp()) {
+      if (producer->getBlock() == &body)
+        continue;
+    }
+    return emitOpError(
+        "must yield a value produced in its body or a body argument");
+  }
+
+  for (Operation &operation : body.without_terminator()) {
+    if (!isPure(&operation))
+      return emitOpError("body operation must be pure: ")
+             << operation.getName();
+    if (operation.getNumRegions() != 0)
+      return emitOpError("body operation must be regionless: ")
+             << operation.getName();
+    if (operation.getNumResults() == 0)
+      return emitOpError("body operation must have a result: ")
+             << operation.getName();
+    if (llvm::all_of(operation.getResults(),
+            [](Value result) { return result.use_empty(); }))
+      return emitOpError(
+                 "body operation must contribute to the yielded value: ")
+             << operation.getName();
+  }
+
+  return success();
+}
+
 namespace {
 
 //===----------------------------------------------------------------------===//

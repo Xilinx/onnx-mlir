@@ -167,8 +167,8 @@ public:
       }
     }
 
-    auto scast = rewriter.create<quant::StorageCastOp>(
-        dqOp.getLoc(), qTensorType, dqOp.getX());
+    auto scast = quant::StorageCastOp::create(
+        rewriter, dqOp.getLoc(), qTensorType, dqOp.getX());
     rewriter.replaceOp(dqOp, scast);
     return success();
   }
@@ -202,8 +202,8 @@ public:
     // Copy the ResultName of qOp to parentOp
     ResultNamesUpdater().notifyOperationReplaced(qOp, qOp.getX());
 
-    auto scast = rewriter.create<quant::StorageCastOp>(
-        qOp.getLoc(), qOp.getY().getType(), qOp.getX());
+    auto scast = quant::StorageCastOp::create(
+        rewriter, qOp.getLoc(), qOp.getY().getType(), qOp.getX());
     rewriter.replaceOp(qOp, scast);
     return success();
   }

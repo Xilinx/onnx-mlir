@@ -1,4 +1,7 @@
+// (c) Copyright 2026 Advanced Micro Devices, Inc. All Rights Reserved.
+
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa --canonicalize %s -split-input-file | FileCheck %s
+// RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="excluded-ops=Reshape" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDED --implicit-check-not=tosa.reshape
 
 func.func @test_squeeze(%arg0 : tensor<16x1x32x1x64xf32>) -> tensor<16x32x64xf32> {
   %0 = "onnx.Constant"() {value = dense<[1, -2]> : tensor<2xi64>} : () -> tensor<2xi64>
@@ -39,3 +42,16 @@ func.func @squeeze_dynamic(%arg0: tensor<1x3x4x5xf32> , %arg1: tensor<1xi64> ) -
 // CHECK-LABEL: squeeze_dynamic
 // CHECK: onnx.Squeeze
 }
+
+// EXCLUDED-LABEL: func.func @test_squeeze(
+// EXCLUDED: "onnx.Reshape"{{.*}} -> tensor<16x32x64xf32>
+// EXCLUDED: return
+// EXCLUDED-LABEL: func.func @test_squeeze_unknown_dimensions(
+// EXCLUDED: "onnx.Reshape"{{.*}} -> tensor<32x64xf32>
+// EXCLUDED: return
+// EXCLUDED-LABEL: func.func @squeeze_runtime(
+// EXCLUDED: "onnx.Reshape"{{.*}} -> tensor<3x4x5xf32>
+// EXCLUDED: return
+// EXCLUDED-LABEL: func.func @squeeze_dynamic(
+// EXCLUDED: "onnx.Squeeze"
+// EXCLUDED: return

@@ -38,8 +38,16 @@ LogicalResult ONNXSliceOpShapeHelper::computeShape() {
   SmallVector<int64_t, 4> axesIntLit;
   Value axes = operandAdaptor.getAxes();
   if (isNoneValue(axes)) {
-    // If `axes` are omitted, they are set to `[0, ..., nDim-1]`."
-    for (uint64_t i = 0; i < dataRank; ++i)
+    // If `axes` are omitted, they are set to `[0, ..., len(starts)-1]`.
+    // Fall back to `[0, ..., nDim-1]` while the length of `starts` is unknown.
+    uint64_t numAxes = dataRank;
+    Value starts = operandAdaptor.getStarts();
+    if (createIE->hasShapeAndRank(starts)) {
+      int64_t numStarts = createIE->getArraySize(starts);
+      if (numStarts != ShapedType::kDynamic)
+        numAxes = std::min(static_cast<uint64_t>(numStarts), dataRank);
+    }
+    for (uint64_t i = 0; i < numAxes; ++i)
       axesIntLit.emplace_back(i);
   } else {
     SmallVector<IndexExpr, 4> axesSymbol;

@@ -103,7 +103,7 @@ struct RecomposeHardSigmoidPattern : public OpRewritePattern<ONNXClipOp> {
     Location loc = mlir::FusedLoc::get(rewriter.getContext(),
         {mulOp.getLoc(), addOp.getLoc(), clipOp.getLoc()});
 
-    auto hsigOp = rewriter.create<ONNXHardSigmoidOp>(loc,
+    auto hsigOp = ONNXHardSigmoidOp::create(rewriter, loc,
         clipOp.getResult().getType(), xVal, rewriter.getF32FloatAttr(0.2f),
         rewriter.getF32FloatAttr(0.5f));
 

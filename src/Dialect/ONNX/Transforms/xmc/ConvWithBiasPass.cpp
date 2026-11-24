@@ -73,7 +73,7 @@ Value create1DBiasFromConstant(
 
   // Create new constant with the reshaped attribute
   auto valueAttr = rewriter.getNamedAttr("value", newAttr);
-  auto newConstOp = rewriter.create<ONNXConstantOp>(loc, newResultType,
+  auto newConstOp = ONNXConstantOp::create(rewriter, loc, newResultType,
       mlir::ValueRange{}, mlir::ArrayRef<mlir::NamedAttribute>{valueAttr});
 
   return newConstOp.getResult();
@@ -167,7 +167,7 @@ struct ConvWithBiasPattern : public OpRewritePattern<ONNXAddOp> {
     auto stridesAttr = convOp.getStridesAttr();
 
     // Create new conv with bias
-    auto newConv = rewriter.create<ONNXConvOp>(loc,
+    auto newConv = ONNXConvOp::create(rewriter, loc,
         addOp.getResult().getType(), // Output type from the add
         convOp.getX(),               // Input
         convOp.getW(),               // Weights

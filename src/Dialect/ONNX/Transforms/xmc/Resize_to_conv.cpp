@@ -479,7 +479,7 @@ void replaceWithTransposedDepthwiseConv(PatternRewriter &rewriter, Location loc,
       DenseElementsAttr::get(weightType, ArrayRef<float>(weightsQ));
   auto valueAttr = rewriter.getNamedAttr("value", weightsAttr);
 
-  auto weightsConst = rewriter.create<ONNXConstantOp>(loc, weightType,
+  auto weightsConst = ONNXConstantOp::create(rewriter, loc, weightType,
       mlir::ValueRange{}, mlir::ArrayRef<mlir::NamedAttribute>{valueAttr});
 
   SmallVector<int64_t> strides(scale.begin(), scale.end());
@@ -538,11 +538,11 @@ void replaceWithTransposedDepthwiseConv(PatternRewriter &rewriter, Location loc,
     }
   }
 
-  auto noneVal = rewriter.create<mlir::ONNXNoneOp>(loc).getResult();
+  auto noneVal = mlir::ONNXNoneOp::create(rewriter, loc).getResult();
 
   rewriter.setInsertionPointAfterValue(input);
 
-  auto convTransposeOp = rewriter.create<ONNXConvTransposeOp>(loc, outputType,
+  auto convTransposeOp = ONNXConvTransposeOp::create(rewriter, loc, outputType,
       input, weightsConst.getResult(), noneVal,
       rewriter.getStringAttr("NOTSET"), rewriter.getI64ArrayAttr(dilations),
       rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), group),
@@ -590,12 +590,11 @@ void replaceWithTransposedConv2d(PatternRewriter &rewriter, Location loc,
   auto inShapeType = RankedTensorType::get({4}, rewriter.getI64Type());
   auto inShapeAttr = DenseElementsAttr::get(
       inShapeType, llvm::ArrayRef<int64_t>(reshaped4DInShape));
-  auto inShapeConst = rewriter.create<ONNXConstantOp>(loc, inShapeType,
+  auto inShapeConst = ONNXConstantOp::create(rewriter, loc, inShapeType,
       ValueRange{}, rewriter.getNamedAttr("value", inShapeAttr));
 
-  mlir::Value reshapedInput = rewriter
-                                  .create<ONNXReshapeOp>(loc, reshaped4DInType,
-                                      op_input, inShapeConst.getResult())
+  mlir::Value reshapedInput = ONNXReshapeOp::create(
+      rewriter, loc, reshaped4DInType, op_input, inShapeConst.getResult())
                                   .getReshaped();
 
   SmallVector<int64_t> reshaped4DOutShape = {N, C, H_out, W_out};
@@ -638,10 +637,10 @@ void replaceWithTransposedConv2d(PatternRewriter &rewriter, Location loc,
   DenseElementsAttr weightsAttr = DenseElementsAttr::get(
       weightType, llvm::ArrayRef<float>(weights_quantized));
 
-  auto weightsConst = rewriter.create<ONNXConstantOp>(loc, weightType,
+  auto weightsConst = ONNXConstantOp::create(rewriter, loc, weightType,
       ValueRange{}, rewriter.getNamedAttr("value", weightsAttr));
 
-  auto noneVal = rewriter.create<mlir::ONNXNoneOp>(loc).getResult();
+  auto noneVal = mlir::ONNXNoneOp::create(rewriter, loc).getResult();
 
   SmallVector<int64_t> strides = {scale[1], scale[2]};
   SmallVector<int64_t> dilations = {1, 1};
@@ -714,7 +713,7 @@ void replaceWithTransposedConv2d(PatternRewriter &rewriter, Location loc,
     output_padding.push_back(out_pad);
   }
 
-  auto convT = rewriter.create<ONNXConvTransposeOp>(loc, reshaped4DOutType,
+  auto convT = ONNXConvTransposeOp::create(rewriter, loc, reshaped4DOutType,
       reshapedInput, weightsConst.getResult(), noneVal,
       rewriter.getStringAttr("NOTSET"), rewriter.getI64ArrayAttr(dilations),
       rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), group),
@@ -729,12 +728,11 @@ void replaceWithTransposedConv2d(PatternRewriter &rewriter, Location loc,
   auto outShapeType = RankedTensorType::get({5}, rewriter.getI64Type());
   auto outShapeAttr = DenseElementsAttr::get(
       outShapeType, llvm::ArrayRef<int64_t>(final5DShape));
-  auto outShapeConst = rewriter.create<ONNXConstantOp>(loc, outShapeType,
+  auto outShapeConst = ONNXConstantOp::create(rewriter, loc, outShapeType,
       ValueRange{}, rewriter.getNamedAttr("value", outShapeAttr));
 
-  mlir::Value result = rewriter
-                           .create<ONNXReshapeOp>(loc, final5DType,
-                               convT.getResult(), outShapeConst.getResult())
+  mlir::Value result = ONNXReshapeOp::create(
+      rewriter, loc, final5DType, convT.getResult(), outShapeConst.getResult())
                            .getReshaped();
 
   mlir::Operation *oldOp = op_output.getDefiningOp();
@@ -770,7 +768,7 @@ void replaceWithDepthwiseConv(PatternRewriter &rewriter, Location loc,
   DenseElementsAttr weightsAttr =
       DenseElementsAttr::get(weightsType, llvm::ArrayRef<float>(weights));
 
-  auto weightsConst = rewriter.create<ONNXConstantOp>(loc, weightsType,
+  auto weightsConst = ONNXConstantOp::create(rewriter, loc, weightsType,
       ValueRange{}, rewriter.getNamedAttr("value", weightsAttr));
 
   SmallVector<int64_t> kernelShape;
@@ -782,9 +780,9 @@ void replaceWithDepthwiseConv(PatternRewriter &rewriter, Location loc,
   SmallVector<int64_t> dilations(kernelShape.size(), 1);
   SmallVector<int64_t> pads(kernelShape.size() * 2, 0);
 
-  auto noneVal = rewriter.create<mlir::ONNXNoneOp>(loc).getResult();
+  auto noneVal = mlir::ONNXNoneOp::create(rewriter, loc).getResult();
 
-  auto convOp = rewriter.create<ONNXConvOp>(loc, outputType, input,
+  auto convOp = ONNXConvOp::create(rewriter, loc, outputType, input,
       weightsConst.getResult(), noneVal, rewriter.getStringAttr("NOTSET"),
       rewriter.getI64ArrayAttr(dilations),
       rewriter.getIntegerAttr(rewriter.getIntegerType(64, true), inChannels),

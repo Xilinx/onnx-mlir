@@ -4,7 +4,7 @@
 
 //===---------------- Reduce.cpp - ReduceMax Op --------------------===//
 //
-// Copyright (c) 2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -110,6 +110,8 @@ public:
   using OpAdaptor = typename ONNXReduceOp::Adaptor;
   LogicalResult matchAndRewrite(ONNXReduceOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     auto inputType = dyn_cast<RankedTensorType>(adaptor.getData().getType());
     if (!inputType)
@@ -189,7 +191,8 @@ LogicalResult reduceMeanLowering(ONNXReduceMeanOp op,
   TosaBuilder tosaBuilder(rewriter, op->getLoc());
   Value divConst = tosaBuilder.getSplattedConst(
       divScale, outputType.getElementType(), outputType.getRank());
-  auto output = tosaBuilder.mul(*val, divConst);
+  OnnxBuilder onnxBuilder(rewriter, op->getLoc());
+  auto output = onnxBuilder.mul(*val, divConst);
 
   if (!output) {
     return rewriter.notifyMatchFailure(op, "could not be converted");

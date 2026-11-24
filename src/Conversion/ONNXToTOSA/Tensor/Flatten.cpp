@@ -4,11 +4,11 @@
 
 //===---------------- Flatten.cpp - Flatten Op --------------------===//
 //
-// Copyright (c) 2022 Advanced Micro Devices, Inc.
+// Copyright (c) 2022-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
-// This file lowers ONNX ReshapeOp to TOSA dialect.
+// This file lowers ONNX Flatten to TOSA through ONNX Reshape.
 //
 //===----------------------------------------------------------------------===//
 
@@ -32,16 +32,18 @@ public:
   using OpAdaptor = typename ONNXFlattenOp::Adaptor;
   LogicalResult matchAndRewrite(ONNXFlattenOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     Value input = adaptor.getInput();
 
-    // tosa.reshape does not allow a dynamic entry in the new_shape attribute
+    // Keep Flatten lowering restricted to static input shapes.
     if (!hasStaticShape(input.getType()))
       return rewriter.notifyMatchFailure(
           op, "only static shapes are supported");
 
     auto loc = op->getLoc();
-    TosaBuilder tosaBuilder(rewriter, loc);
+    OnnxBuilder onnxBuilder(rewriter, loc);
 
     int64_t axis = adaptor.getAxis();
     auto inputType = cast<ShapedType>(input.getType());
@@ -75,7 +77,7 @@ public:
       }
       newShape.push_back(secondShape);
     }
-    Value reshapeOp = tosaBuilder.reshape(input, newShape);
+    Value reshapeOp = onnxBuilder.reshape(input, newShape);
 
     rewriter.replaceOp(op, reshapeOp);
 

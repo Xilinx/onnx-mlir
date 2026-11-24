@@ -204,7 +204,7 @@ public:
 
     // Keep the result tensor type identical to the original Div / Mul output,
     // so downstream ops continue to see (s_y, zp_y) on their input.
-    auto requantize = rewriter.create<XCOMPILERRequantizeOp>(binOp->getLoc(),
+    auto requantize = XCOMPILERRequantizeOp::create(rewriter, binOp->getLoc(),
         outType, lhs, aScaleAttr, aZpAttr, yScaleAttr, yZpAttr);
 
     rewriter.replaceOp(binOp, requantize.getResult());

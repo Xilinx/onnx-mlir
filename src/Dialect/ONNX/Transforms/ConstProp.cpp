@@ -274,7 +274,11 @@ Value createMaximumValueForClip(
     return value;
 
   return getClipConstantOfType(rewriter, type, value.getLoc(),
-      llvm::APFloat::getLargest, false, llvm::APInt::getMaxValue);
+      llvm::APFloat::getLargest, false,
+      [isUnsigned = type.getElementType().isUnsignedInteger()](unsigned width) {
+        return isUnsigned ? APInt::getMaxValue(width)
+                          : APInt::getSignedMaxValue(width);
+      });
 }
 
 Value createMinimumValueForClip(
@@ -285,7 +289,11 @@ Value createMinimumValueForClip(
     return value;
 
   return getClipConstantOfType(rewriter, type, value.getLoc(),
-      llvm::APFloat::getLargest, true, llvm::APInt::getMinValue);
+      llvm::APFloat::getLargest, true,
+      [isUnsigned = type.getElementType().isUnsignedInteger()](unsigned width) {
+        return isUnsigned ? APInt::getMinValue(width)
+                          : APInt::getSignedMinValue(width);
+      });
 }
 
 // Extracts number from a scalar constant value.
@@ -693,6 +701,16 @@ Value ConstPropElementwiseUnary(
           elementwiseUnaryOpFunction<ElementwiseUnaryOp>(replacingElemType));
   return createReplacingConstantOp(
       rewriter, replacingValue, transposedElements);
+}
+
+Value createNegOfConstantExpression(
+    PatternRewriter &rewriter, Value replacingValue, Value input) {
+  if (getDenseOrDisposableConstLikeElements(input))
+    return ConstPropElementwiseUnary<ONNXNegOp>(
+        rewriter, replacingValue, input);
+
+  return ONNXNegOp::create(
+      rewriter, input.getLoc(), replacingValue.getType(), input);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1789,6 +1807,30 @@ Value ConstPropResize(
 // Pattern definition.
 //===----------------------------------------------------------------------===//
 
+bool isCommutationConstant(Value value) {
+  if (isDeferredConstant(value))
+    return isConstantFoldableExceptDequant(value);
+  return bool(getDenseOrDisposableConstLikeElements(value));
+}
+
+// Normalize a constant to the right without replacing the operation. Its
+// attributes, properties, result identity and location remain unchanged.
+template <typename BinaryOp>
+class CommuteConstantToRhs : public OpRewritePattern<BinaryOp> {
+public:
+  using OpRewritePattern<BinaryOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(
+      BinaryOp op, PatternRewriter &rewriter) const override {
+    Value lhs = op->getOperand(0);
+    Value rhs = op->getOperand(1);
+    if (!isCommutationConstant(lhs) || isCommutationConstant(rhs))
+      return failure();
+    rewriter.modifyOpInPlace(op, [&]() { op->setOperands({rhs, lhs}); });
+    return success();
+  }
+};
+
 #include "src/Dialect/ONNX/Transforms/ONNXConstProp.inc"
 
 //===----------------------------------------------------------------------===//
@@ -2200,33 +2242,28 @@ public:
     if (!dqOp)
       return rewriter.notifyMatchFailure(op, "operand 0 is not a DQ");
 
-    auto constOp = dqOp.getX().template getDefiningOp<ONNXConstantOp>();
-    if (!constOp)
-      return rewriter.notifyMatchFailure(op, "DQ input is not a constant");
+    // Deferred body arguments and results are available once captures are
+    // materialized. This rewrite only uses the integer input's type.
+    bool insideDeferred = isa<ONNXDeferredFoldableOp>(op->getParentOp());
+    Value data = dqOp.getX();
+    if (!insideDeferred && !isConstantOrDeferredValue(data))
+      return rewriter.notifyMatchFailure(op, "DQ input is not constant");
 
-    // Only handle per-tensor quantization: scale (and zp, if present) must be
-    // scalar tensors. Per-channel needs op-specific scale/zp reordering.
-    if (!isScalarTensor(dqOp.getXScale()))
-      return rewriter.notifyMatchFailure(op, "DQ scale is not per-tensor");
-    Value zp = dqOp.getXZeroPoint();
-    if (zp && !mlir::isa<NoneType>(zp.getType()) && !isScalarTensor(zp))
-      return rewriter.notifyMatchFailure(op, "DQ zero point is not per-tensor");
+    // Per-axis quantization needs op-specific scale and zero point reordering.
+    if (!isPerTensorDequant(dqOp))
+      return rewriter.notifyMatchFailure(op, "DQ is not per-tensor");
 
     auto opResultType =
         mlir::dyn_cast<RankedTensorType>(op->getResult(0).getType());
-    auto constType = mlir::dyn_cast<RankedTensorType>(constOp.getType());
-    if (!opResultType || !constType)
-      return rewriter.notifyMatchFailure(op, "result or const is not ranked");
+    auto dataType = mlir::dyn_cast<RankedTensorType>(data.getType());
+    if (!opResultType || !dataType)
+      return rewriter.notifyMatchFailure(
+          op, "result or DQ input is not ranked");
 
-    // Build a new ShapeOp that operates on the integer Const directly. Its
-    // result type matches the original ShapeOp's output shape but with the
-    // constant's (integer) element type.
     auto newShapeOpType = RankedTensorType::get(
-        opResultType.getShape(), constType.getElementType());
-
-    SmallVector<Value> newShapeOperands(
-        op->getOperands().begin(), op->getOperands().end());
-    newShapeOperands[0] = constOp.getResult();
+        opResultType.getShape(), dataType.getElementType());
+    SmallVector<Value> newShapeOperands(op->getOperands());
+    newShapeOperands[0] = data;
 
     SmallVector<NamedAttribute> shapeAttrs(op->getAttrs());
     llvm::erase_if(shapeAttrs, [](NamedAttribute attr) {
@@ -2234,12 +2271,12 @@ public:
       return (strRef == "onnx_node_name" || strRef == "ResultNames");
     });
 
-    auto newShapeOp = rewriter.create<ONNXOp>(
-        op.getLoc(), newShapeOpType, newShapeOperands, shapeAttrs);
+    auto newShapeOp = ONNXOp::create(
+        rewriter, op.getLoc(), newShapeOpType, newShapeOperands, shapeAttrs);
 
     // Rebuild the DequantizeLinear on the new (still-integer) ShapeOp result.
     auto newDqOp =
-        rewriter.create<ONNXDequantizeLinearOp>(dqOp.getLoc(), opResultType,
+        ONNXDequantizeLinearOp::create(rewriter, dqOp.getLoc(), opResultType,
             newShapeOp.getResult(), dqOp.getXScale(), dqOp.getXZeroPoint());
     for (auto namedAttr : dqOp->getAttrs()) {
       auto name = namedAttr.getName().strref();
@@ -2249,6 +2286,8 @@ public:
     }
 
     rewriter.replaceOp(op, newDqOp.getResult());
+    if (insideDeferred && dqOp->use_empty())
+      rewriter.eraseOp(dqOp);
     return success();
   }
 };
@@ -2716,7 +2755,7 @@ public:
     // Const directly. The user's result type (f32 tensor, same shape) is
     // unchanged.
     for (ONNXDequantizeLinearOp userDQ : userDQs) {
-      auto newUserDQ = rewriter.create<ONNXDequantizeLinearOp>(userDQ.getLoc(),
+      auto newUserDQ = ONNXDequantizeLinearOp::create(rewriter, userDQ.getLoc(),
           userDQ.getY().getType(), constOp.getResult(), dqInner.getXScale(),
           dqInner.getXZeroPoint());
       for (NamedAttribute attr : dqInner->getAttrs()) {
@@ -2744,25 +2783,70 @@ struct ConstPropONNXToONNXPass
   void runOnOperation() final;
 };
 
+void populateShapeOpThroughDequantPatterns(RewritePatternSet &patterns) {
+  patterns.add<BypassShapeOpThroughDQ<ONNXSliceOp>,
+      BypassShapeOpThroughDQ<ONNXTransposeOp>,
+      BypassShapeOpThroughDQ<ONNXReshapeOp>,
+      BypassShapeOpThroughDQ<ONNXSqueezeOp>,
+      BypassShapeOpThroughDQ<ONNXUnsqueezeOp>>(patterns.getContext());
+}
+
 void ConstPropONNXToONNXPass::runOnOperation() {
   auto function = getOperation();
   MLIRContext *context = &getContext();
 
   RewritePatternSet patterns(context);
   getConstPropONNXToONNXPatterns(patterns, enableQDQ, enableQuantConstFold,
-      maxLoopUnrollCount, enableDequantConstFold,
-      enableDequantConstFoldWeights);
+      maxLoopUnrollCount, enableDequantConstFold, enableDequantConstFoldWeights,
+      formDeferredFoldableExpressions);
   onnx_mlir::ResultNamesUpdater rnUpdater;
-  if (failed(applyPatternsGreedily(function, std::move(patterns),
-          GreedyRewriteConfig().setListener(&rnUpdater))))
+  bool containsDeferredExpression = false;
+  function.walk([&](ONNXDeferredFoldableOp) {
+    containsDeferredExpression = true;
+    return WalkResult::interrupt();
+  });
+  if (!formDeferredFoldableExpressions && !containsDeferredExpression) {
+    if (failed(applyPatternsGreedily(function, std::move(patterns),
+            GreedyRewriteConfig().setListener(&rnUpdater))))
+      signalPassFailure();
+    return;
+  }
+  // An existing body may have been formed before QDQ rewrites were enabled.
+  // Normalize it before the first outer pattern can inspect its yielded value.
+  if (enableQDQ && containsDeferredExpression &&
+      failed(normalizeDequantizationInDeferredBodies(function, &rnUpdater))) {
+    signalPassFailure();
+    return;
+  }
+  if (failed(applyPatternsOutsideDeferredFoldable(function, std::move(patterns),
+          &rnUpdater,
+          /*enableFolding=*/true)))
     signalPassFailure();
 }
 
 } // end anonymous namespace.
 
+LogicalResult onnx_mlir::normalizeDequantizationInDeferredBodies(
+    func::FuncOp function, RewriterBase::Listener *listener) {
+  if (isConstantPropagationDisabled())
+    return success();
+  RewritePatternSet movementPatterns(function.getContext());
+  populateShapeOpThroughDequantPatterns(movementPatterns);
+  FrozenRewritePatternSet patterns(std::move(movementPatterns));
+  GreedyRewriteConfig config;
+  config.enableFolding(false).enableConstantCSE(false).setListener(listener);
+  WalkResult result = function.walk([&](ONNXDeferredFoldableOp deferred) {
+    if (failed(applyPatternsGreedily(deferred.getBody(), patterns, config)))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  return failure(result.wasInterrupted());
+}
+
 void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
     bool enableQDQ, bool enableQuantConstFold, int64_t maxLoopUnrollCount,
-    bool enableDequantConstFold, bool enableDequantConstFoldWeights) {
+    bool enableDequantConstFold, bool enableDequantConstFoldWeights,
+    bool formDeferredFoldableExpressions) {
   if (isConstantPropagationDisabled())
     return;
   populateWithGenerated(patterns);
@@ -2770,6 +2854,10 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
       patterns.getContext(), "MaxConstProp");
   patterns.insert<VariadicElementwiseConstProp<ONNXMinOp>>(
       patterns.getContext(), "MinConstProp");
+  if (isNotDisabled("AddConstCommutative1"))
+    patterns.insert<CommuteConstantToRhs<ONNXAddOp>>(patterns.getContext());
+  if (isNotDisabled("MulConstCommutative1"))
+    patterns.insert<CommuteConstantToRhs<ONNXMulOp>>(patterns.getContext());
   if (isNotDisabled("SplitOfConst"))
     patterns.insert<SplitOfConst>(patterns.getContext());
   patterns.insert<IfOfConst>(patterns.getContext());
@@ -2780,11 +2868,7 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
         RemoveQDQForConst<ONNXTransposeOp>, RemoveQDQForConst<ONNXReshapeOp>,
         RemoveQDQForConst<ONNXSqueezeOp>, RemoveQDQForConst<ONNXUnsqueezeOp>,
         RemoveQDQForConst<ONNXGatherOp>>(patterns.getContext());
-    patterns.add<BypassShapeOpThroughDQ<ONNXSliceOp>,
-        BypassShapeOpThroughDQ<ONNXTransposeOp>,
-        BypassShapeOpThroughDQ<ONNXReshapeOp>,
-        BypassShapeOpThroughDQ<ONNXSqueezeOp>,
-        BypassShapeOpThroughDQ<ONNXUnsqueezeOp>>(patterns.getContext());
+    populateShapeOpThroughDequantPatterns(patterns);
     patterns.add<DropIdempotentQDQOnConst, DropWideningRequantizeOnConst>(
         patterns.getContext());
   }
@@ -2793,6 +2877,20 @@ void onnx_mlir::getConstPropONNXToONNXPatterns(RewritePatternSet &patterns,
   if (enableDequantConstFold || enableDequantConstFoldWeights)
     patterns.add<ConstFoldDequantizeLinearOnConst>(
         patterns.getContext(), enableDequantConstFoldWeights);
+
+  if (formDeferredFoldableExpressions) {
+    // Retain any initializer-dependent expression not consumed by a more
+    // specific constant-propagation pattern. Pattern benefit zero makes this
+    // a dialect-wide fallback rather than a competing optimization.
+    std::optional<FrozenRewritePatternSet> bodyPatterns;
+    if (enableQDQ) {
+      RewritePatternSet movementPatterns(patterns.getContext());
+      populateShapeOpThroughDequantPatterns(movementPatterns);
+      bodyPatterns.emplace(std::move(movementPatterns));
+    }
+    populateFormDeferredFoldableExpressionPatterns(patterns, PatternBenefit(0),
+        /*requireDeferredSource=*/true, std::move(bodyPatterns));
+  }
 }
 
 void onnx_mlir::configureConstPropONNXToONNXPass(bool roundFPToInt,

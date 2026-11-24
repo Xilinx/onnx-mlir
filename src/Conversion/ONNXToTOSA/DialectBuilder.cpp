@@ -41,7 +41,7 @@ Value TosaBuilder::createConstFromRankedTensorAndVec(
   auto constAttr = DenseElementsAttr::get(constType, vec);
 
   Value constOp =
-      rewriter().create<mlir::tosa::ConstOp>(loc(), constType, constAttr);
+      mlir::tosa::ConstOp::create(rewriter(), loc(), constType, constAttr);
   return constOp;
 }
 
@@ -73,39 +73,11 @@ bool TosaBuilder::needsRankBroadcast(ValueRange valueRange) {
   return false;
 }
 
-Value TosaBuilder::expandRank(Value input, int64_t rank) {
-  auto inputType = mlir::cast<ShapedType>(input.getType());
-  int64_t inputRank = inputType.getRank();
-  assert(inputRank <= rank && "cannot reduce rank of operation");
-  if (inputRank == rank)
-    return input;
-
-  llvm::SmallVector<int64_t, 4> newShape(rank - inputRank, 1);
-  llvm::transform(inputType.getShape(), std::back_inserter(newShape),
-      [](const int64_t shape) { return shape; });
-  return this->reshape(input, newShape);
-}
-
 llvm::SmallVector<Value, 4> TosaBuilder::equalizeRanks(ValueRange valueRange) {
-  // Get highest rank from the operands.
-  int64_t maxRank = 0;
-  for (auto type : valueRange.getTypes()) {
-    int64_t currentRank = mlir::cast<ShapedType>(type).getRank();
-    maxRank = std::max(maxRank, currentRank);
-  }
-  llvm::SmallVector<Value, 4> reshapedValues;
-  // Iterate through all values comparing the rank.
-  for (auto value : valueRange) {
-    auto shapedType = mlir::cast<ShapedType>(value.getType());
-    int64_t currentRank = shapedType.getRank();
-    // Only add a reshape op if necessary.
-    if (maxRank > currentRank) {
-      reshapedValues.push_back(this->expandRank(value, maxRank));
-      continue;
-    }
-    reshapedValues.push_back(value);
-  }
-  return reshapedValues;
+  return tosa::equalizeRanks(
+      valueRange, [&](Value value, ArrayRef<int64_t> shape) {
+        return reshape(value, shape);
+      });
 }
 
 Value TosaBuilder::getConst(ArrayRef<int64_t> vec, ArrayRef<int64_t> shape) {
@@ -141,7 +113,7 @@ Value TosaBuilder::getSplattedConst(float val, Type dtype, int64_t rank) {
   auto constAttr = DenseElementsAttr::get(constType, val);
 
   auto constOp =
-      rewriter().create<mlir::tosa::ConstOp>(loc(), constType, constAttr);
+      mlir::tosa::ConstOp::create(rewriter(), loc(), constType, constAttr);
 
   return rewriter().createOrFold<mlir::tosa::CastOp>(
       loc(), RankedTensorType::get(constType.getShape(), dtype), constOp);
@@ -154,7 +126,7 @@ mlir::Value TosaBuilder::getSingleValueConst(
       RankedTensorType::get(shape, rewriter().getF32Type()), {val});
 
   auto constOp =
-      rewriter().create<mlir::tosa::ConstOp>(loc(), constType, constAttr);
+      mlir::tosa::ConstOp::create(rewriter(), loc(), constType, constAttr);
   return rewriter().createOrFold<mlir::tosa::CastOp>(
       loc(), RankedTensorType::get(constType.getShape(), dtype), constOp);
 }
@@ -382,7 +354,6 @@ Value TosaBuilder::roundEven(mlir::Value input) {
 
   Value y = this->unaryOp<mlir::tosa::FloorOp>(input);
   Value r = this->binaryOp<mlir::tosa::SubOp>(input, y);
-
   Value yPlusOne = this->binaryOp<mlir::tosa::AddOp>(y, one);
   Value roundUp = this->greater(r, half);
   Value nearest = this->select(roundUp, yPlusOne, y);

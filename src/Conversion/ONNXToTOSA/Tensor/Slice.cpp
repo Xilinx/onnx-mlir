@@ -38,6 +38,8 @@ public:
 
   LogicalResult matchAndRewrite(ONNXSliceOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
 
     Location loc = op->getLoc();
     if (!isConstLikeValue(adaptor.getStarts()))
@@ -61,7 +63,7 @@ public:
     auto inShape = inTy.getShape();
     auto outShape = outTy.getShape();
 
-    TosaBuilder tosaBuilder(rewriter, loc);
+    MultiDialectBuilder<TosaBuilder, OnnxBuilder> create(rewriter, loc);
     Value val = adaptor.getData();
 
     if (!(IndexExpr::isLiteral(shapeHelper.starts)))
@@ -109,12 +111,13 @@ public:
     }
     if (llvm::any_of(pads, [](int64_t pad) { return pad > 0; })) {
       Value constPads =
-          tosa::buildOnnxToTosaPaddingConstOp(rewriter, pads, loc, {}, {});
+          create.tosa.getConst(pads, {static_cast<int64_t>(pads.size())});
       auto constTosaTensor =
-          tosaBuilder.getSplattedConst(0.0, inTy.getElementType(), 0);
-      val = rewriter.create<mlir::tosa::PadOp>(loc,
+          create.tosa.getSplattedConst(0.0, inTy.getElementType(), 0);
+      val = ONNXPadOp::create(rewriter, loc,
           mlir::RankedTensorType::get(paddedOutShape, inTy.getElementType()),
-          val, constPads, constTosaTensor);
+          val, constPads, constTosaTensor, ONNXNoneOp::create(rewriter, loc),
+          rewriter.getStringAttr("constant"));
     }
 
     // 2: Slice the edges leaving enough data to fit the final step
@@ -126,7 +129,7 @@ public:
       sizes[i] = steps[i] * outShape[i];
     }
     if (sizes != paddedOutShape) {
-      val = tosaBuilder.slice(val, sizes, starts);
+      val = create.tosa.slice(val, sizes, starts);
     }
 
     // If we all the steps are 1, then we are done
@@ -148,7 +151,7 @@ public:
       if (steps[i] != 1)
         newShape.push_back(steps[i]);
     }
-    val = tosaBuilder.reshape(val, newShape);
+    val = create.onnx.reshape(val, newShape);
 
     // 4: Slice the steps
     // |XTTT|    |X|
@@ -162,7 +165,7 @@ public:
       if (steps[i] != 1)
         newSizes.push_back(1);
     }
-    val = tosaBuilder.slice(
+    val = create.tosa.slice(
         val, newSizes, llvm::SmallVector<int64_t>(newShape.size(), 0));
 
     // 5: Reshape to original output size
@@ -171,7 +174,7 @@ public:
     // |X| => |XXXXX|
     // |X|
     // |X|
-    val = tosaBuilder.reshape(val, outShape);
+    val = create.onnx.reshape(val, outShape);
 
     rewriter.replaceOp(op, val);
     return success();
