@@ -35,6 +35,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -875,43 +876,99 @@ class PropagateReshapeThroughBinaryOpPattern
 public:
   using OpRewritePattern<OP_TYPE>::OpRewritePattern;
 
+  // Remove a single-element operand reshape without changing the result type.
+  // Example: x has type tensor<1x1xf32>, and Reshape(x) has type tensor<1xf32>.
+  //   Mul(x, Reshape(x)) -> Mul(x, x)
+  static LogicalResult removeSingleElementReshape(
+      OP_TYPE op, PatternRewriter &rewriter, unsigned operandIndex) {
+    auto reshape =
+        op->getOperand(operandIndex).template getDefiningOp<ONNXReshapeOp>();
+    if (!reshape)
+      return failure();
+    Value input = reshape.getData();
+    auto inputType = dyn_cast<RankedTensorType>(input.getType());
+    if (!inputType || !inputType.hasStaticShape() ||
+        inputType.getNumElements() != 1)
+      return rewriter.notifyMatchFailure(
+          op, "reshape input must be a static single-element tensor");
+
+    Value otherOperand = op->getOperand(1 - operandIndex);
+    if (inputType != otherOperand.getType() ||
+        inputType != op.getResult().getType())
+      return rewriter.notifyMatchFailure(op,
+          "reshape input, other operand, and binary result must have the same "
+          "type");
+
+    rewriter.modifyOpInPlace(op, [&] {
+      op->setOperand(operandIndex, input);
+      op->setLoc(rewriter.getFusedLoc({op.getLoc(), reshape.getLoc()}));
+    });
+    return success();
+  }
+
   LogicalResult matchAndRewrite(
       OP_TYPE binaryOp, PatternRewriter &rewriter) const override {
-    // Variables for capturing values and attributes used while creating ops
+    // Move a shared reshape after the binary op. A scalar operand is
+    // unchanged by reshaping; two reshaped operands must have matching static
+    // input and output types so their element correspondence is identical.
     Operation *op = binaryOp.getOperation();
-
-    assert(op->getNumOperands() == 2 && "op must be binary");
+    if (op->getNumOperands() != 2)
+      return failure();
+    if (succeeded(removeSingleElementReshape(binaryOp, rewriter, 0)) ||
+        succeeded(removeSingleElementReshape(binaryOp, rewriter, 1)))
+      return success();
     Value lhs = op->getOperand(0);
     Value rhs = op->getOperand(1);
-    Type outputType = binaryOp.getResult().getType();
-
-    Value reshapeInput;
-    Value reshapeShape;
-    IntegerAttr reshapeAZ;
-
-    // Match
-    // LHS is produced by a Reshape.
-    Operation *reshapeGenericOp = lhs.getDefiningOp();
-    if (!reshapeGenericOp)
+    auto lhsReshape = lhs.getDefiningOp<ONNXReshapeOp>();
+    auto rhsReshape = rhs.getDefiningOp<ONNXReshapeOp>();
+    ONNXReshapeOp reshape;
+    SmallVector<Location> locations{op->getLoc()};
+    // Keep shared reshapes in place rather than duplicating their work.
+    auto isOnlyUser = [op](Operation *reshape) {
+      return llvm::all_of(
+          reshape->getUsers(), [op](Operation *user) { return user == op; });
+    };
+    if (lhsReshape && isScalarTensor(rhs)) {
+      reshape = lhsReshape;
+      lhs = lhsReshape.getData();
+    } else if (rhsReshape && isScalarTensor(lhs)) {
+      reshape = rhsReshape;
+      rhs = rhsReshape.getData();
+    } else if (lhsReshape && rhsReshape) {
+      if (!isOnlyUser(rhsReshape))
+        return rewriter.notifyMatchFailure(
+            binaryOp, "matched reshapes have other users");
+      auto inputType =
+          dyn_cast<RankedTensorType>(lhsReshape.getData().getType());
+      auto outputType = dyn_cast<RankedTensorType>(lhs.getType());
+      if (!inputType || !outputType || !inputType.hasStaticShape() ||
+          !outputType.hasStaticShape() ||
+          inputType != rhsReshape.getData().getType() ||
+          outputType != rhs.getType())
+        return failure();
+      reshape = lhsReshape;
+      lhs = lhsReshape.getData();
+      rhs = rhsReshape.getData();
+      locations.push_back(rhsReshape.getLoc());
+    } else {
       return failure();
-    auto reshapeOp = mlir::dyn_cast<ONNXReshapeOp>(reshapeGenericOp);
-    if (!reshapeOp)
-      return failure();
-    // RHS is a scalar.
-    if (!isScalarTensor(rhs))
-      return failure();
-
-    // Rewrite
-    auto loc = rewriter.getFusedLoc({op->getLoc(), reshapeGenericOp->getLoc()});
+    }
+    if (!isOnlyUser(reshape))
+      return rewriter.notifyMatchFailure(
+          binaryOp, "matched reshape has other users");
+    locations.push_back(reshape.getLoc());
+    Location loc = rewriter.getFusedLoc(locations);
     MultiDialectBuilder<OnnxBuilder> create(rewriter, loc);
-
-    reshapeInput = reshapeOp.getData();
-    reshapeShape = reshapeOp.getShape();
-    reshapeAZ = reshapeOp.getAllowzeroAttr();
-    Value x = OP_TYPE::create(rewriter, loc, reshapeInput, rhs);
-    Value res = create.onnx.reshape(outputType, x, reshapeShape, reshapeAZ);
-
-    rewriter.replaceOp(op, res);
+    Value value;
+    if constexpr (std::is_same_v<OP_TYPE, ONNXMaxOp> ||
+                  std::is_same_v<OP_TYPE, ONNXMinOp>)
+      value = OP_TYPE::create(
+          rewriter, loc, reshape.getData().getType(), ValueRange{lhs, rhs});
+    else
+      value = OP_TYPE::create(rewriter, loc, lhs, rhs);
+    Value result = create.onnx.reshape(binaryOp.getResult().getType(), value,
+        reshape.getShape(), reshape.getAllowzeroAttr());
+    rewriter.replaceOp(op, result);
     return success();
   };
 };
@@ -5729,6 +5786,174 @@ struct ElideEmptyDeferredFoldable
   }
 };
 
+// In real arithmetic, max(E[X^2] - E[X]^2, 0) equals E[(X - E[X])^2].
+// This changes rounding and exceptional-value behavior, so it requires unsafe
+// math.
+// Example (both means reduce axis 1 with keepdims=1):
+//   mean = ReduceMean(X)
+//   max(ReduceMean(X * X) - mean * mean, 0)
+//     -> ReduceMean((X - mean) * (X - mean))
+struct CenteredVariancePattern : public OpRewritePattern<ONNXMaxOp> {
+  using OpRewritePattern<ONNXMaxOp>::OpRewritePattern;
+
+  struct MeanInfo {
+    Value input;
+    SmallVector<int64_t> axes;
+  };
+
+  // Reject quantized and non-floating-point values in the matched graph.
+  static LogicalResult checkFloatValues(
+      ONNXMaxOp op, PatternRewriter &rewriter, ValueRange values) {
+    for (Value value : values) {
+      Type elementType = getElementTypeOrSelf(value.getType());
+      if (isa<quant::QuantizedType>(elementType))
+        return rewriter.notifyMatchFailure(
+            op, "quantized types are not supported");
+      if (!isa<FloatType>(elementType))
+        return rewriter.notifyMatchFailure(
+            op, "variance requires floating-point values");
+    }
+    return success();
+  }
+
+  // Match a nonempty mean reduction with explicit, nonnegative axes.
+  static LogicalResult matchMean(
+      Value value, ONNXMaxOp op, PatternRewriter &rewriter, MeanInfo &info) {
+    auto mean = value.getDefiningOp<ONNXReduceMeanOp>();
+    if (!mean)
+      return rewriter.notifyMatchFailure(op, "expected a ReduceMean statistic");
+    if (mean.getKeepdims() != 1)
+      return rewriter.notifyMatchFailure(
+          op, "mean reduction requires canonical keepdims=1");
+    info.input = mean.getData();
+    if (!getI64ValuesFromONNXConstantOp(mean.getAxes(), info.axes) ||
+        info.axes.empty())
+      return rewriter.notifyMatchFailure(
+          op, "mean reduction requires explicit, nonempty constant axes");
+    if (llvm::any_of(info.axes, [](int64_t axis) { return axis < 0; }))
+      return rewriter.notifyMatchFailure(op,
+          "mean reduction axes must be canonicalized to nonnegative values");
+    auto type = dyn_cast<RankedTensorType>(info.input.getType());
+    if (!type || !type.hasStaticShape())
+      return rewriter.notifyMatchFailure(
+          op, "mean reduction input must have static shape");
+    if (type.getNumElements() == 0)
+      return rewriter.notifyMatchFailure(
+          op, "empty reductions do not define a variance");
+    return success();
+  }
+
+  // Find an existing centered subtraction in the variance's block.
+  static ONNXSubOp findCenteredSub(
+      Value input, Value mean, ONNXSubOp variance) {
+    for (Operation *user : mean.getUsers()) {
+      auto sub = dyn_cast<ONNXSubOp>(user);
+      if (sub && sub->getBlock() == variance->getBlock() &&
+          sub.getOperand(0) == input && sub.getOperand(1) == mean &&
+          sub.getResult().getType() == input.getType())
+        return sub;
+    }
+    return {};
+  }
+
+  // Rewrite clamped variance using centered squares and an in-place reduction.
+  LogicalResult matchAndRewrite(
+      ONNXMaxOp op, PatternRewriter &rewriter) const override {
+    if (op.getNumOperands() != 2)
+      return rewriter.notifyMatchFailure(op, "expected a binary zero clamp");
+    if (failed(checkFloatValues(op, rewriter, op.getOperands())) ||
+        failed(checkFloatValues(op, rewriter, op->getResults())))
+      return failure();
+    FailureOr<double> bound = readScalarConstant(op.getOperand(1));
+    if (failed(bound) || *bound != 0.0)
+      return rewriter.notifyMatchFailure(
+          op, "canonical clamp RHS must be a scalar constant zero");
+    Value variance = op.getOperand(0);
+    if (variance.getType() != op.getResult().getType())
+      return rewriter.notifyMatchFailure(
+          op, "zero clamp broadcasting must preserve the variance type");
+    auto sub = variance.getDefiningOp<ONNXSubOp>();
+    if (!sub)
+      return rewriter.notifyMatchFailure(
+          op, "expected second moment minus squared mean");
+    if (!sub->hasOneUse())
+      return rewriter.notifyMatchFailure(
+          op, "variance subtraction has other users");
+    auto meanSquare = sub.getOperand(1).getDefiningOp<ONNXMulOp>();
+    if (!meanSquare || meanSquare.getOperand(0) != meanSquare.getOperand(1))
+      return rewriter.notifyMatchFailure(
+          op, "subtraction RHS must be mean multiplied by itself");
+    Value secondMoment = sub.getOperand(0);
+    Value mean = meanSquare.getOperand(0);
+    MeanInfo secondInfo, meanInfo;
+    if (failed(matchMean(secondMoment, op, rewriter, secondInfo)) ||
+        failed(matchMean(mean, op, rewriter, meanInfo)))
+      return failure();
+    if (secondInfo.axes != meanInfo.axes)
+      return rewriter.notifyMatchFailure(
+          op, "mean and second moment must have identical canonical axes");
+    auto square = secondInfo.input.getDefiningOp<ONNXMulOp>();
+    if (!square || square.getOperand(0) != meanInfo.input ||
+        square.getOperand(1) != meanInfo.input)
+      return rewriter.notifyMatchFailure(
+          op, "second moment must reduce the square of the mean's input");
+    if (failed(checkFloatValues(op, rewriter,
+            {meanInfo.input, mean, secondMoment, secondInfo.input,
+                meanSquare.getResult()})))
+      return failure();
+    Operation *centeredMean = secondMoment.getDefiningOp();
+    if (!secondMoment.hasOneUse())
+      return rewriter.notifyMatchFailure(
+          op, "second moment has other users and cannot be modified in place");
+    if (centeredMean->getBlock() != sub->getBlock())
+      return rewriter.notifyMatchFailure(
+          op, "second moment and subtraction must be in the same block");
+
+    Location loc =
+        rewriter.getFusedLoc({op.getLoc(), sub.getLoc(), meanSquare.getLoc(),
+            square.getLoc(), secondMoment.getLoc(), mean.getLoc()});
+    // The mean may follow the original second moment. Insert the centered
+    // computation before the subtraction, where both statistics are available.
+    rewriter.setInsertionPoint(sub);
+    MultiDialectBuilder<OnnxBuilder> create(rewriter, loc);
+    Value centered;
+    if (auto existing = findCenteredSub(meanInfo.input, mean, sub)) {
+      // Both operands dominate the variance, so a later subtraction can move.
+      if (sub->isBeforeInBlock(existing))
+        rewriter.moveOpBefore(existing, sub);
+      rewriter.modifyOpInPlace(existing, [&] {
+        existing->setLoc(rewriter.getFusedLoc({existing.getLoc(), loc}));
+      });
+      centered = existing.getResult();
+    } else {
+      centered = create.onnx.sub(meanInfo.input, mean);
+    }
+    Value centeredSquare = create.onnx.mul(centered, centered);
+    rewriter.moveOpBefore(centeredMean, sub);
+    rewriter.modifyOpInPlace(centeredMean, [&] {
+      centeredMean->setOperand(0, centeredSquare);
+      centeredMean->setLoc(loc);
+    });
+    rewriter.replaceOp(op, secondMoment);
+    // Remove the obsolete variance branch before recomposition inspects mean
+    // users.
+    if (isOpTriviallyDead(sub))
+      rewriter.eraseOp(sub);
+    // Remove dead output reshapes before deleting the squared mean.
+    for (Operation *user : llvm::make_early_inc_range(meanSquare->getUsers()))
+      if (isa<ONNXReshapeOp>(user) && isOpTriviallyDead(user))
+        rewriter.eraseOp(user);
+    if (isOpTriviallyDead(meanSquare))
+      rewriter.eraseOp(meanSquare);
+    // Operand canonicalization may leave a dead reshape directly using the
+    // mean.
+    for (Operation *user : llvm::make_early_inc_range(mean.getUsers()))
+      if (isa<ONNXReshapeOp>(user) && isOpTriviallyDead(user))
+        rewriter.eraseOp(user);
+    return success();
+  }
+};
+
 } // namespace
 
 // =============================================================================
@@ -6046,6 +6271,9 @@ void ONNXMaxOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<SingleOperandMinMaxPattern<ONNXMaxOp>>(context);
   results.insert<NormalizeMinMaxPattern<ONNXMaxOp>>(context);
+  results.insert<PropagateReshapeThroughBinaryOpPattern<ONNXMaxOp>>(context);
+  if (enableUnsafeMath)
+    results.insert<CenteredVariancePattern>(context);
 }
 
 /// on the ONNXMaxPoolSingleOutOp.
@@ -6060,6 +6288,7 @@ void ONNXMinOp::getCanonicalizationPatterns(
     RewritePatternSet &results, MLIRContext *context) {
   results.insert<SingleOperandMinMaxPattern<ONNXMinOp>>(context);
   results.insert<NormalizeMinMaxPattern<ONNXMinOp>>(context);
+  results.insert<PropagateReshapeThroughBinaryOpPattern<ONNXMinOp>>(context);
   results.insert<MinMaxToClipPattern>(context);
 }
 
