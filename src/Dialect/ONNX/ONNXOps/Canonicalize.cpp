@@ -5629,8 +5629,8 @@ struct MinMaxToClipPattern : public OpRewritePattern<ONNXMinOp> {
   }
 };
 
-// Rewrite integer Where(x >= c, x, c) to Max(x, c), and
-// Where(x <= c, x, c) to Min(x, c), for a constant bound c.
+// Rewrite integer comparisons selecting between x and a constant bound to
+// Min or Max. Equality selects the same value for strict and inclusive tests.
 struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
   using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
 
@@ -5638,7 +5638,8 @@ struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
       ONNXWhereOp op, PatternRewriter &rewriter) const override {
     Operation *comparison = op->getOperand(0).getDefiningOp();
     if (!comparison ||
-        !isa<ONNXGreaterOrEqualOp, ONNXLessOrEqualOp>(comparison))
+        !isa<ONNXGreaterOrEqualOp, ONNXLessOrEqualOp, ONNXGreaterOp,
+            ONNXLessOp>(comparison))
       return failure();
     Value lhs = comparison->getOperand(0);
     Value rhs = comparison->getOperand(1);
@@ -5666,7 +5667,7 @@ struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
       return failure();
 
     const bool inputAtLeastBound =
-        isa<ONNXGreaterOrEqualOp>(comparison) == inputOnLeft;
+        isa<ONNXGreaterOrEqualOp, ONNXGreaterOp>(comparison) == inputOnLeft;
     const bool lower = inputAtLeastBound == inputOnTrueBranch;
     auto boundOp =
         ONNXConstantOp::create(rewriter, op.getLoc(), Attribute{}, bound);
