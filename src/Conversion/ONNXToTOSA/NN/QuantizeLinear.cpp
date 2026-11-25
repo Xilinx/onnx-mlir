@@ -28,38 +28,10 @@ namespace onnx_mlir {
 
 namespace {
 
-// Keep binary operations in ONNX so their lowerings can be excluded.
-Value roundEvenWithOnnxOps(
-    MultiDialectBuilder<TosaBuilder, OnnxBuilder> &create, Value input) {
-  auto inputType = cast<ShapedType>(input.getType());
-  Type elementType = inputType.getElementType();
-  int64_t rank = inputType.getRank();
-  Value one = create.tosa.getSplattedConst(1.0, elementType, rank);
-  Value two = create.tosa.getSplattedConst(2.0, elementType, rank);
-  Value half = create.tosa.getSplattedConst(0.5, elementType, rank);
-
-  Value y = create.tosa.unaryOp<mlir::tosa::FloorOp>(input);
-  Value r = create.onnx.sub(input, y);
-  Value yPlusOne = create.onnx.add(y, one);
-  Value roundUp = create.onnx.createOpAndInferShapes<ONNXGreaterOp>(r, half);
-  Value nearest = create.tosa.select(roundUp, yPlusOne, y);
-
-  Value halfX = create.onnx.mul(input, half);
-  Value shifted = create.onnx.add(halfX, half);
-  Value floored = create.tosa.unaryOp<mlir::tosa::FloorOp>(shifted);
-  Value evenNeighbour = create.onnx.mul(floored, two);
-
-  Value isTie = create.onnx.createOpAndInferShapes<ONNXEqualOp>(r, half);
-  return create.tosa.select(isTie, evenNeighbour, nearest);
-}
-
 class ONNXQuantizeLinearOpLoweringToTOSA
     : public OpConversionPattern<ONNXQuantizeLinearOp> {
 public:
-  ONNXQuantizeLinearOpLoweringToTOSA(
-      TypeConverter &typeConverter, MLIRContext *ctx, bool castIsExcluded)
-      : OpConversionPattern(typeConverter, ctx),
-        castIsExcluded(castIsExcluded) {}
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult matchAndRewrite(ONNXQuantizeLinearOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
@@ -137,19 +109,10 @@ public:
       // Convert the scaled result to a safe bitwith (i32) that avoids
       // underflows/overflows
       Type arithType = rewriter.getI32Type();
-      if (castIsExcluded) {
-        // onnx.Cast truncates towards zero, so the round-to-nearest-even
-        // required above has to be expressed on its own before narrowing.
-        Value rounded = roundEvenWithOnnxOps(create, scaledResult);
-        scaledResult =
-            create.onnx.castToNewTensorElementType(rounded, arithType);
-      } else {
-        // tosa.cast rounds half-to-even, so it doesn't require an explicit
-        // rounding op.
-        scaledResult = tosa::CreateOpAndInfer<mlir::tosa::CastOp>(
-            rewriter, loc, resultType.cloneWith({}, arithType), scaledResult)
-                           .getResult();
-      }
+      // Round before casting: ONNX Cast truncates towards zero.
+      Value rounded = create.onnx.createOpAndInferShapes<ONNXRoundOp>(
+          scaledResult.getType(), scaledResult);
+      scaledResult = create.onnx.castToNewTensorElementType(rounded, arithType);
     }
 
     // If there is no zero point, we are done
@@ -210,23 +173,14 @@ public:
     rewriter.replaceOp(op, result);
     return success();
   }
-
-private:
-  /// Whether onnx.Cast is kept out of the TOSA conversion, in which case this
-  /// pattern must not create tosa.cast operations either.
-  bool castIsExcluded;
 };
 
 } // namespace
 
-void populateLoweringONNXQuantizeLinearOpToTOSAPattern(ConversionTarget &target,
-    RewritePatternSet &patterns, TypeConverter &typeConverter,
-    MLIRContext *ctx) {
-  const bool castIsExcluded =
-      target.getOpAction(OperationName(ONNXCastOp::getOperationName(), ctx)) ==
-      ConversionTarget::LegalizationAction::Legal;
-  patterns.insert<ONNXQuantizeLinearOpLoweringToTOSA>(
-      typeConverter, ctx, castIsExcluded);
+void populateLoweringONNXQuantizeLinearOpToTOSAPattern(
+    ConversionTarget & /*target*/, RewritePatternSet &patterns,
+    TypeConverter &typeConverter, MLIRContext *ctx) {
+  patterns.insert<ONNXQuantizeLinearOpLoweringToTOSA>(typeConverter, ctx);
 }
 
 } // namespace onnx_mlir

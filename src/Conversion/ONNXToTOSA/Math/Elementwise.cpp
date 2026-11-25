@@ -202,6 +202,52 @@ public:
   }
 };
 
+class ONNXRoundOpLoweringToTOSA : public OpConversionPattern<ONNXRoundOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(ONNXRoundOp op, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    if (failed(tosa::checkStaticTensorShapes(op, rewriter)))
+      return failure();
+    Value input = adaptor.getX();
+    auto type = cast<ShapedType>(input.getType());
+    if (failed(IsFloat::checkType(rewriter, type.getElementType(), op)))
+      return failure();
+    OnnxBuilder create(rewriter, op.getLoc());
+    // Select the nearest integer, resolving ties to the even neighbour.
+    // Emit ONNX operations so each lowering can be excluded independently.
+    Type elementType = type.getElementType();
+    auto constantType = RankedTensorType::get(
+        SmallVector<int64_t>(type.getRank(), 1), elementType);
+    auto splat = [&](double value) {
+      return create.constant(DenseElementsAttr::get(
+          constantType, rewriter.getFloatAttr(elementType, value)));
+    };
+    Value one = splat(1.0);
+    Value two = splat(2.0);
+    Value half = splat(0.5);
+
+    Value y =
+        create.createOpAndInferShapes<ONNXFloorOp>(input.getType(), input);
+    Value r = create.sub(input, y);
+    Value yPlusOne = create.add(y, one);
+    Value roundUp = create.createOpAndInferShapes<ONNXGreaterOp>(r, half);
+    Value nearest = create.where(input.getType(), roundUp, yPlusOne, y);
+
+    Value halfX = create.mul(input, half);
+    Value shifted = create.add(halfX, half);
+    Value floored =
+        create.createOpAndInferShapes<ONNXFloorOp>(shifted.getType(), shifted);
+    Value evenNeighbour = create.mul(floored, two);
+
+    Value isTie = create.createOpAndInferShapes<ONNXEqualOp>(r, half);
+    rewriter.replaceOp(
+        op, create.where(input.getType(), isTie, evenNeighbour, nearest));
+    return success();
+  }
+};
+
 class ONNXReluOpLoweringToTOSA : public OpConversionPattern<ONNXReluOp> {
 public:
   using OpConversionPattern::OpConversionPattern;
@@ -789,11 +835,12 @@ void populateLoweringONNXElementwiseOpToTOSAPattern(
     TypeConverter &typeConverter, MLIRContext *ctx) {
   patterns.insert<ONNXReluOpLoweringToTOSA, ONNXLeakyReluOpLoweringToTOSA,
       ONNXMulOpLoweringToTosa, ONNXCastOpLoweringToTOSA,
-      ONNXClipOpLoweringToTOSA, ONNXDivOpLoweringToTOSA,
-      ONNXHardSigmoidOpLoweringToTOSA, ONNXSqrtOpLoweringToTOSA,
-      ONNXEluOpLoweringToTOSA, ONNXPReluOpLoweringToTOSA,
-      ONNXThresholdedReluOpLoweringToTOSA, ONNXSoftplusOpLoweringToTOSA,
-      ONNXSeluOpLoweringToTOSA, ONNXComparisonOpLoweringToTOSA<ONNXEqualOp>,
+      ONNXRoundOpLoweringToTOSA, ONNXClipOpLoweringToTOSA,
+      ONNXDivOpLoweringToTOSA, ONNXHardSigmoidOpLoweringToTOSA,
+      ONNXSqrtOpLoweringToTOSA, ONNXEluOpLoweringToTOSA,
+      ONNXPReluOpLoweringToTOSA, ONNXThresholdedReluOpLoweringToTOSA,
+      ONNXSoftplusOpLoweringToTOSA, ONNXSeluOpLoweringToTOSA,
+      ONNXComparisonOpLoweringToTOSA<ONNXEqualOp>,
       ONNXComparisonOpLoweringToTOSA<ONNXGreaterOrEqualOp>,
       ONNXComparisonOpLoweringToTOSA<ONNXGreaterOp>,
       ONNXComparisonOpLoweringToTOSA<ONNXLessOrEqualOp>,
