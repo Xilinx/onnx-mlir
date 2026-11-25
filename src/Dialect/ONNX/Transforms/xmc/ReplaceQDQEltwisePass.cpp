@@ -553,6 +553,9 @@ struct FuseQuantizedEltwiseWithoutActivation
         /*prelu_shift=*/preluShift,
         /*type=*/rewriter.getStringAttr(opType));
 
+    if constexpr (std::is_same_v<EltwiseOp, ONNXEluOp>)
+      fusedOp->setAttr("alpha", eltwiseOp.getAlphaAttr());
+
     rewriter.replaceOp(eltwiseOp, fusedOp.getResult());
     return success();
   }
