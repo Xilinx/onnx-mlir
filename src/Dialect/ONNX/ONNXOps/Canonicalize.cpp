@@ -5650,17 +5650,20 @@ struct MinMaxToClipPattern : public OpRewritePattern<ONNXMinOp> {
   }
 };
 
-// Rewrite Where(x >= c, x, c) to Max(x, c), and
-// Where(x <= c, x, c) to Min(x, c), for a constant bound c.
+// Rewrite comparisons selecting between x and a constant bound to Min or Max.
+// Strict comparisons are supported for integers, where equality selects the
+// same value on either branch. Inclusive float comparisons require unsafe math.
 struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
   using OpRewritePattern<ONNXWhereOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(
       ONNXWhereOp op, PatternRewriter &rewriter) const override {
     Operation *comparison = op->getOperand(0).getDefiningOp();
-    if (!comparison ||
-        !isa<ONNXGreaterOrEqualOp, ONNXLessOrEqualOp>(comparison))
+    if (!comparison || !isa<ONNXGreaterOrEqualOp, ONNXLessOrEqualOp,
+                           ONNXGreaterOp, ONNXLessOp>(comparison))
       return failure();
+    const bool allowFloat =
+        enableUnsafeMath && !isa<ONNXGreaterOp, ONNXLessOp>(comparison);
     Value lhs = comparison->getOperand(0);
     Value rhs = comparison->getOperand(1);
     Value trueValue = op->getOperand(1);
@@ -5670,7 +5673,7 @@ struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
           (input != trueValue && input != falseValue))
         return DenseElementsAttr{};
       // Float rewrites are not unconditionally safe due to NaN propagation.
-      return getScalarClipBound(bound, input, enableUnsafeMath);
+      return getScalarClipBound(bound, input, allowFloat);
     };
 
     auto bound = getBoundForSelectedInput(lhs, rhs);
@@ -5683,13 +5686,12 @@ struct WhereToMinMaxPattern : public OpRewritePattern<ONNXWhereOp> {
 
     const bool inputOnTrueBranch = trueValue == input;
     Value selectedValue = inputOnTrueBranch ? falseValue : trueValue;
-    auto selectedBound =
-        getScalarClipBound(selectedValue, input, enableUnsafeMath);
+    auto selectedBound = getScalarClipBound(selectedValue, input, allowFloat);
     if (!selectedBound || selectedBound != bound)
       return failure();
 
     const bool inputAtLeastBound =
-        isa<ONNXGreaterOrEqualOp>(comparison) == inputOnLeft;
+        isa<ONNXGreaterOrEqualOp, ONNXGreaterOp>(comparison) == inputOnLeft;
     const bool lower = inputAtLeastBound == inputOnTrueBranch;
     auto boundOp =
         ONNXConstantOp::create(rewriter, op.getLoc(), Attribute{}, bound);
