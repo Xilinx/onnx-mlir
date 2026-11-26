@@ -525,7 +525,8 @@ struct RecomposeLayerNormFromDivPattern : public OpRewritePattern<DivOperator> {
           cast<ShapedType>(dq.getX().getType()).getElementType());
       if (!cast<ShapedType>(epsilon.getType()).getElementType().isF32() ||
           !integerType || integerType.getWidth() > 16)
-        return reportFailure("RMS quantized epsilon needs small integer to f32");
+        return reportFailure(
+            "RMS quantized epsilon needs small integer to f32");
     }
     double epsilonValue;
     if (!matchQuantAwareScalarConstant(epsilon, epsilonValue))
