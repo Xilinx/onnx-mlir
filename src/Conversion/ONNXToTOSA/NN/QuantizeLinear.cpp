@@ -31,7 +31,10 @@ namespace {
 class ONNXQuantizeLinearOpLoweringToTOSA
     : public OpConversionPattern<ONNXQuantizeLinearOp> {
 public:
-  using OpConversionPattern::OpConversionPattern;
+  ONNXQuantizeLinearOpLoweringToTOSA(
+      TypeConverter &typeConverter, MLIRContext *ctx, bool castIsExcluded)
+      : OpConversionPattern(typeConverter, ctx),
+        castIsExcluded(castIsExcluded) {}
 
   LogicalResult matchAndRewrite(ONNXQuantizeLinearOp op, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
@@ -109,10 +112,19 @@ public:
       // Convert the scaled result to a safe bitwith (i32) that avoids
       // underflows/overflows
       Type arithType = rewriter.getI32Type();
-      // Round before casting: ONNX Cast truncates towards zero.
-      Value rounded = create.onnx.createOpAndInferShapes<ONNXRoundOp>(
-          scaledResult.getType(), scaledResult);
-      scaledResult = create.onnx.castToNewTensorElementType(rounded, arithType);
+      if (castIsExcluded) {
+        // Round before casting: ONNX Cast truncates towards zero.
+        Value rounded = create.onnx.createOpAndInferShapes<ONNXRoundOp>(
+            scaledResult.getType(), scaledResult);
+        scaledResult =
+            create.onnx.castToNewTensorElementType(rounded, arithType);
+      } else {
+        // tosa.cast rounds half-to-even, so it doesn't require an explicit
+        // rounding op.
+        scaledResult = tosa::CreateOpAndInfer<mlir::tosa::CastOp>(
+            rewriter, loc, resultType.cloneWith({}, arithType), scaledResult)
+                           .getResult();
+      }
     }
 
     // If there is no zero point, we are done
@@ -173,14 +185,23 @@ public:
     rewriter.replaceOp(op, result);
     return success();
   }
+
+private:
+  /// Whether onnx.Cast is kept out of the TOSA conversion, in which case this
+  /// pattern must not create tosa.cast operations either.
+  bool castIsExcluded;
 };
 
 } // namespace
 
-void populateLoweringONNXQuantizeLinearOpToTOSAPattern(
-    ConversionTarget & /*target*/, RewritePatternSet &patterns,
-    TypeConverter &typeConverter, MLIRContext *ctx) {
-  patterns.insert<ONNXQuantizeLinearOpLoweringToTOSA>(typeConverter, ctx);
+void populateLoweringONNXQuantizeLinearOpToTOSAPattern(ConversionTarget &target,
+    RewritePatternSet &patterns, TypeConverter &typeConverter,
+    MLIRContext *ctx) {
+  const bool castIsExcluded =
+      target.getOpAction(OperationName(ONNXCastOp::getOperationName(), ctx)) ==
+      ConversionTarget::LegalizationAction::Legal;
+  patterns.insert<ONNXQuantizeLinearOpLoweringToTOSA>(
+      typeConverter, ctx, castIsExcluded);
 }
 
 } // namespace onnx_mlir

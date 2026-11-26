@@ -18,12 +18,7 @@ func.func @test_quantizeLinear(%arg0 : tensor<32x3x224x224xf32>) -> tensor<32x3x
 // CHECK-DAG:    %[[SCALE:.*]] = tosa.reshape %[[SCALE_CONST]] {new_shape = array<i64: 1, 1, 1, 1>} : (tensor<f32>) -> tensor<1x1x1x1xf32>
 // CHECK-DAG:    %[[REC:.*]] = tosa.reciprocal %[[SCALE]] : (tensor<1x1x1x1xf32>) -> tensor<1x1x1x1xf32>
 // CHECK-DAG:    %[[MUL:.*]] = tosa.mul %[[ARG_0]], %[[REC]], {{.*}}: (tensor<32x3x224x224xf32>, tensor<1x1x1x1xf32>, tensor<1xi8>) -> tensor<32x3x224x224xf32>
-// CHECK-DAG:    %[[NEAREST:.*]] = tosa.select {{.*}}
-// CHECK-DAG:    %[[ROUND:.*]] = tosa.select {{.*}}, %[[NEAREST]] :
-// CHECK-DAG:    %[[FLOOR:.*]] = tosa.floor %[[ROUND]]
-// CHECK-DAG:    %[[CEIL:.*]] = tosa.ceil %[[ROUND]]
-// CHECK-DAG:    %[[TRUNCATED:.*]] = tosa.select {{.*}}, %[[FLOOR]], %[[CEIL]] :
-// CHECK-DAG:    %[[MUL_CAST:.*]] = tosa.cast %[[TRUNCATED]] : (tensor<32x3x224x224xf32>) -> tensor<32x3x224x224xi32>
+// CHECK-DAG:    %[[MUL_CAST:.*]] = tosa.cast %[[MUL]] : (tensor<32x3x224x224xf32>) -> tensor<32x3x224x224xi32>
 // CHECK-DAG:    %[[ZPCAST:.*]] = tosa.cast %[[ZP]] : (tensor<1x1x1x1xi8>) -> tensor<1x1x1x1xi32>
 // CHECK-DAG:    %[[ADD:.*]] = tosa.add %[[MUL_CAST]], %[[ZPCAST]] : (tensor<32x3x224x224xi32>, tensor<1x1x1x1xi32>) -> tensor<32x3x224x224xi32>
 // CHECK-DAG:    %[[CLAMP:.*]] = tosa.clamp %[[ADD]] {max_fp = 1.270000e+02 : f32, max_int = 127 : i64, min_fp = -1.280000e+02 : f32, min_int = -128 : i64} : (tensor<32x3x224x224xi32>) -> tensor<32x3x224x224xi32>
@@ -49,12 +44,7 @@ func.func @test_quantizeLinear_none(%arg0 : tensor<32x3x224x224xf32>) -> tensor<
 // CHECK-DAG:   %[[SCALE:.*]] = tosa.reshape %[[SCALE_CONST]] {new_shape = array<i64: 1, 1, 1, 1>} : (tensor<f32>) -> tensor<1x1x1x1xf32>
 // CHECK-DAG:   %[[REC:.*]] = tosa.reciprocal %[[SCALE]] : (tensor<1x1x1x1xf32>) -> tensor<1x1x1x1xf32>
 // CHECK-DAG:   %[[MUL:.*]] = tosa.mul %[[ARG_0]], %[[REC]], {{.*}}: (tensor<32x3x224x224xf32>, tensor<1x1x1x1xf32>, tensor<1xi8>) -> tensor<32x3x224x224xf32>
-// CHECK-DAG:   %[[NEAREST:.*]] = tosa.select {{.*}}
-// CHECK-DAG:   %[[ROUND:.*]] = tosa.select {{.*}}, %[[NEAREST]] :
-// CHECK-DAG:   %[[FLOOR:.*]] = tosa.floor %[[ROUND]]
-// CHECK-DAG:   %[[CEIL:.*]] = tosa.ceil %[[ROUND]]
-// CHECK-DAG:   %[[TRUNCATED:.*]] = tosa.select {{.*}}, %[[FLOOR]], %[[CEIL]] :
-// CHECK-DAG:   %[[MUL_CAST:.*]] = tosa.cast %[[TRUNCATED]] : (tensor<32x3x224x224xf32>) -> tensor<32x3x224x224xi32>
+// CHECK-DAG:   %[[MUL_CAST:.*]] = tosa.cast %[[MUL]] : (tensor<32x3x224x224xf32>) -> tensor<32x3x224x224xi32>
 // CHECK-DAG:   %[[CAST:.*]] = tosa.cast %[[MUL_CAST]] : (tensor<32x3x224x224xi32>) -> tensor<32x3x224x224xui8>
 // CHECK-DAG:   return %[[CAST]] : tensor<32x3x224x224xui8>
 
@@ -75,12 +65,7 @@ func.func @test_quantizeLinear_per_axis(%arg0: tensor<8x2xf32>) -> tensor<8x2xi8
 // CHECK:           %[[VAL_2:.*]] = tosa.reshape %[[SCALE_CONST]] {new_shape = array<i64: 1, 2>} : (tensor<2xf32>) -> tensor<1x2xf32>
 // CHECK:           %[[REC:.*]] = tosa.reciprocal %[[VAL_2]] : (tensor<1x2xf32>) -> tensor<1x2xf32>
 // CHECK:           %[[MUL:.*]] = tosa.mul %[[VAL_0]], %[[REC]], {{.*}}: (tensor<8x2xf32>, tensor<1x2xf32>, tensor<1xi8>) -> tensor<8x2xf32>
-// CHECK:           %[[NEAREST:.*]] = tosa.select {{.*}}
-// CHECK:           %[[ROUND:.*]] = tosa.select {{.*}}, %[[NEAREST]] :
-// CHECK:           %[[FLOOR:.*]] = tosa.floor %[[ROUND]]
-// CHECK:           %[[CEIL:.*]] = tosa.ceil %[[ROUND]]
-// CHECK:           %[[TRUNCATED:.*]] = tosa.select {{.*}}, %[[FLOOR]], %[[CEIL]] :
-// CHECK:           %[[MUL_CAST:.*]] = tosa.cast %[[TRUNCATED]] : (tensor<8x2xf32>) -> tensor<8x2xi32>
+// CHECK:           %[[MUL_CAST:.*]] = tosa.cast %[[MUL]] : (tensor<8x2xf32>) -> tensor<8x2xi32>
 // CHECK:           %[[ZP:.*]] = tosa.reshape %[[ZP_CONST]] {new_shape = array<i64: 1, 2>} : (tensor<2xi8>) -> tensor<1x2xi8>
 // CHECK:           %[[ZPCAST:.*]] = tosa.cast %[[ZP]] : (tensor<1x2xi8>) -> tensor<1x2xi32>
 // CHECK:           %[[ADD:.*]] = tosa.add %[[MUL_CAST]], %[[ZPCAST]] : (tensor<8x2xi32>, tensor<1x2xi32>) -> tensor<8x2xi32>
@@ -118,12 +103,7 @@ func.func @test_quantizeLinear_ui8(%arg0 : tensor<32x3x224x224xf32>) -> tensor<3
 // CHECK-DAG:    %[[SCALE:.*]] = tosa.reshape %[[SCALE_CONST]] {new_shape = array<i64: 1, 1, 1, 1>} : (tensor<f32>) -> tensor<1x1x1x1xf32>
 // CHECK-DAG:    %[[REC:.*]] = tosa.reciprocal %[[SCALE]] : (tensor<1x1x1x1xf32>) -> tensor<1x1x1x1xf32>
 // CHECK-DAG:    %[[MUL:.*]] = tosa.mul %[[ARG_0]], %[[REC]], {{.*}}: (tensor<32x3x224x224xf32>, tensor<1x1x1x1xf32>, tensor<1xi8>) -> tensor<32x3x224x224xf32>
-// CHECK-DAG:    %[[NEAREST:.*]] = tosa.select {{.*}}
-// CHECK-DAG:    %[[ROUND:.*]] = tosa.select {{.*}}, %[[NEAREST]] :
-// CHECK-DAG:    %[[FLOOR:.*]] = tosa.floor %[[ROUND]]
-// CHECK-DAG:    %[[CEIL:.*]] = tosa.ceil %[[ROUND]]
-// CHECK-DAG:    %[[TRUNCATED:.*]] = tosa.select {{.*}}, %[[FLOOR]], %[[CEIL]] :
-// CHECK-DAG:    %[[MUL_CAST:.*]] = tosa.cast %[[TRUNCATED]] : (tensor<32x3x224x224xf32>) -> tensor<32x3x224x224xi32>
+// CHECK-DAG:    %[[MUL_CAST:.*]] = tosa.cast %[[MUL]] : (tensor<32x3x224x224xf32>) -> tensor<32x3x224x224xi32>
 // CHECK-DAG:    %[[ZPCAST:.*]] = tosa.cast %[[ZP]] : (tensor<1x1x1x1xui8>) -> tensor<1x1x1x1xi32>
 // CHECK-DAG:    %[[ADD:.*]] = tosa.add %[[MUL_CAST]], %[[ZPCAST]] : (tensor<32x3x224x224xi32>, tensor<1x1x1x1xi32>) -> tensor<32x3x224x224xi32>
 // CHECK-DAG:    %[[CLAMP:.*]] = tosa.clamp %[[ADD]] {max_fp = 2.550000e+02 : f32, max_int = 255 : i64, min_fp = 0.000000e+00 : f32, min_int = 0 : i64} : (tensor<32x3x224x224xi32>) -> tensor<32x3x224x224xi32>
@@ -183,17 +163,16 @@ func.func @test_quantizeLinear_round_half_even(%arg0: tensor<8x2xf32>) -> tensor
   return %2 : tensor<8x2xi8>
 }
 
-// Round is lowered before either implementation of Cast.
-// CHECK-LABEL: @test_quantizeLinear_round_half_even
-// CHECK: %[[MUL:.*]] = tosa.mul %arg0
-// CHECK: tosa.floor %[[MUL]]
-// CHECK: %[[ROUNDED:.*]] = tosa.select {{.*}}
-// CHECK: %[[FINALROUND:.*]] = tosa.select {{.*}}
-// CHECK: %[[FLOOR:.*]] = tosa.floor %[[FINALROUND]]
-// CHECK: %[[CEIL:.*]] = tosa.ceil %[[FINALROUND]]
-// CHECK: %[[TRUNCATED:.*]] = tosa.select {{.*}}, %[[FLOOR]], %[[CEIL]] :
-// CHECK: tosa.cast %[[TRUNCATED]] : (tensor<8x2xf32>) -> tensor<8x2xi32>
-// CHECK: return
+// tosa.cast float-to-int already rounds half-to-even, so it must do the
+// rounding and the widening to i32 in one operation. Any floor/select rounding
+// appearing here means the rounding was re-expressed, which is only correct if
+// it reproduces round-half-to-even exactly.
+// CHECK-LABEL:  @test_quantizeLinear_round_half_even
+// CHECK:          %[[MUL:.*]] = tosa.mul %arg0
+// CHECK-NEXT:     %[[ROUNDED:.*]] = tosa.cast %[[MUL]] : (tensor<8x2xf32>) -> tensor<8x2xi32>
+// CHECK-NOT:      tosa.floor
+// CHECK-NOT:      tosa.select
+// CHECK:          return
 
 // onnx.Cast truncates towards zero, so with cast lowering isolated the rounding
 // is spelled out first. On a tie, 2 * floor(0.5 * x + 0.5) is the even
