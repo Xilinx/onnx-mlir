@@ -831,7 +831,7 @@ ONNXConstantOp getONNXConstantOp(Value value) {
 
 bool getI64ValuesFromONNXConstantOp(
     Value val, mlir::SmallVectorImpl<int64_t> &iRes) {
-  ElementsAttr elemsAttr = getElementAttributeFromONNXValue(val);
+  ElementsAttr elemsAttr = getDenseOrDisposableConstLikeElements(val);
   if (!elemsAttr)
     return false;
   Type elemType = getElementType(elemsAttr.getType());
