@@ -2,6 +2,7 @@
 
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa -cse %s -split-input-file | FileCheck %s
 // RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="excluded-ops=Cast" -cse %s -split-input-file | FileCheck %s --check-prefix=EXCLUDE-CAST
+// RUN: onnx-mlir-opt --shape-inference --convert-onnx-to-tosa="excluded-ops=Round,Cast" -cse %s -split-input-file | FileCheck %s --check-prefix=KEEP-ROUND
 
 func.func @test_quantizeLinear(%arg0 : tensor<32x3x224x224xf32>) -> tensor<32x3x224x224xi8> {
   %0 = onnx.Constant dense<3.125000e-02> : tensor<f32>
@@ -195,3 +196,10 @@ func.func @test_quantizeLinear_round_half_even(%arg0: tensor<8x2xf32>) -> tensor
 // EXCLUDE-CAST:          %[[NARROWED:.*]] = "onnx.Cast"(%[[ROUNDED]]) {{.*}}to = i32{{.*}} : (tensor<8x2xf32>) -> tensor<8x2xi32>
 // EXCLUDE-CAST-NOT:      tosa.cast
 // EXCLUDE-CAST:          return
+
+// KEEP-ROUND-LABEL: @test_quantizeLinear_round_half_even
+// KEEP-ROUND: %[[SCALED:.*]] = tosa.mul %arg0
+// KEEP-ROUND: %[[ROUND:.*]] = "onnx.Round"(%[[SCALED]])
+// KEEP-ROUND: %[[CAST:.*]] = "onnx.Cast"(%[[ROUND]]) {{.*}}to = i32
+// KEEP-ROUND: tosa.add %[[CAST]],
+// KEEP-ROUND: return
