@@ -108,8 +108,8 @@ public:
           create.onnx.createOpAndInferShapes<ONNXGreaterOrEqualOp>(
               indices, zero);
 
-      gatherIndices =
-          create.tosa.select(indicesPositive, indices, indicesPlusDimSize);
+      gatherIndices = create.onnx.where(
+          indices.getType(), indicesPositive, indices, indicesPlusDimSize);
     }
 
     auto newGather =

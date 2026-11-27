@@ -280,7 +280,7 @@ static LogicalResult legalizeFloatingPointPrelu(Operation *op,
   tosa::equalizeRanks(create.onnx, input, alphaOrSlope);
   auto mul = create.onnx.mul(input, alphaOrSlope);
   Value greaterEqual = create.onnx.greaterEqual(input, constZero);
-  auto select = create.tosa.select(greaterEqual, input, mul);
+  auto select = create.onnx.where(outputType, greaterEqual, input, mul);
   copySingleResultType(op, select);
   rewriter.replaceOp(op, {select});
   return success();
@@ -478,7 +478,7 @@ public:
 
         auto floor = create.tosa.unaryOp<mlir::tosa::FloorOp>(input);
         auto ceil = create.tosa.unaryOp<mlir::tosa::CeilOp>(input);
-        input = create.tosa.select(positive, floor, ceil);
+        input = create.onnx.where(input.getType(), positive, floor, ceil);
       }
     }
 
@@ -577,8 +577,8 @@ public:
     Value expMinusOne = create.onnx.sub(exp, one);
     Value alphaTimesExpMinusOne = create.onnx.mul(expMinusOne, alpha);
     Value greaterEqual = create.onnx.greaterEqual(input, constZero);
-    auto select =
-        create.tosa.select(greaterEqual, input, alphaTimesExpMinusOne);
+    auto select = create.onnx.where(
+        resultTensorType, greaterEqual, input, alphaTimesExpMinusOne);
     copySingleResultType(op, select);
     rewriter.replaceOp(op, {select});
     return success();
@@ -726,7 +726,8 @@ public:
 
     Value greater =
         create.onnx.createOpAndInferShapes<ONNXGreaterOp>(input, constZero);
-    auto select = create.tosa.select(greater, input, expTimesAlphaMinusAlpha);
+    auto select = create.onnx.where(
+        input.getType(), greater, input, expTimesAlphaMinusAlpha);
     Value valTimesGamma = create.onnx.mul(select, gamma);
 
     rewriter.replaceOp(op, {valTimesGamma});
@@ -763,7 +764,7 @@ public:
 
     Value greater =
         create.onnx.createOpAndInferShapes<ONNXGreaterOp>(input, alpha);
-    auto select = create.tosa.select(greater, input, zero);
+    auto select = create.onnx.where(outputType, greater, input, zero);
 
     rewriter.replaceOp(op, {select});
     return success();
