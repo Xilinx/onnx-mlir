@@ -60,7 +60,6 @@ struct TosaBuilder : DialectBuilder {
 
   /// Round \p input to the nearest integer, resolving ties to the even
   /// neighbour, keeping the floating-point element type.
-  mlir::Value roundEven(mlir::Value input);
 
   template <typename T>
   mlir::Value compareOp(mlir::PatternRewriter &rewriter, mlir::Location loc,
