@@ -4,7 +4,7 @@
 
 //===---------------- Shrink.cpp - Shrink Op-------------------------------===//
 //
-// Copyright (c) 2023 Advanced Micro Devices, Inc.
+// Copyright (c) 2023-2026 Advanced Micro Devices, Inc.
 //
 // =============================================================================
 //
@@ -65,13 +65,14 @@ public:
     Value firstCmp = onnxBuilder.createOpAndInferShapes<ONNXGreaterOp>(
         negatedLambdConstOp, input);
     auto firstFormula = onnxBuilder.add(input, biasConstOp);
-    auto firstSelect = tosaBuilder.select(firstCmp, firstFormula, zeroConstOp);
+    auto firstSelect =
+        onnxBuilder.where(input.getType(), firstCmp, firstFormula, zeroConstOp);
 
     Value secondCmp =
         onnxBuilder.createOpAndInferShapes<ONNXGreaterOp>(input, lambdConstOp);
     auto secondFormula = onnxBuilder.sub(input, biasConstOp);
-    auto secondSelect =
-        tosaBuilder.select(secondCmp, secondFormula, firstSelect);
+    auto secondSelect = onnxBuilder.where(
+        input.getType(), secondCmp, secondFormula, firstSelect);
 
     rewriter.replaceOp(shrinkOp, secondSelect);
 

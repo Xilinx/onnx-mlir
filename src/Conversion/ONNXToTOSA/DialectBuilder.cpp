@@ -345,6 +345,7 @@ Value TosaBuilder::roundEven(mlir::Value input) {
   //   return 2.0 * floor(0.5 * x + 0.5);
   // return (r > 0.5) ? y + 1.0 : y;
   // ```
+  OnnxBuilder onnxBuilder(rewriter(), loc());
   auto inputType = cast<ShapedType>(input.getType());
   Type elementType = inputType.getElementType();
   int64_t rank = inputType.getRank();
@@ -356,7 +357,7 @@ Value TosaBuilder::roundEven(mlir::Value input) {
   Value r = this->binaryOp<mlir::tosa::SubOp>(input, y);
   Value yPlusOne = this->binaryOp<mlir::tosa::AddOp>(y, one);
   Value roundUp = this->greater(r, half);
-  Value nearest = this->select(roundUp, yPlusOne, y);
+  Value nearest = onnxBuilder.where(input.getType(), roundUp, yPlusOne, y);
 
   Value halfX = this->mul(input, half);
   Value shifted = this->binaryOp<mlir::tosa::AddOp>(halfX, half);
@@ -364,7 +365,7 @@ Value TosaBuilder::roundEven(mlir::Value input) {
   Value evenNeighbour = this->mul(floored, two);
 
   Value isTie = this->equal(r, half);
-  return this->select(isTie, evenNeighbour, nearest);
+  return onnxBuilder.where(input.getType(), isTie, evenNeighbour, nearest);
 }
 
 static bool containsNonZero(llvm::SmallVectorImpl<int64_t> &values) {
