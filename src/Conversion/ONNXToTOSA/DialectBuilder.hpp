@@ -58,9 +58,6 @@ struct TosaBuilder : DialectBuilder {
   mlir::Value unaryOp(mlir::Value &input);
   mlir::Value sqrt(mlir::Value &input);
 
-  /// Round \p input to the nearest integer, resolving ties to the even
-  /// neighbour, keeping the floating-point element type.
-
   template <typename T>
   mlir::Value compareOp(mlir::PatternRewriter &rewriter, mlir::Location loc,
       mlir::Value &lhs, mlir::Value &rhs);
