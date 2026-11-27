@@ -28,6 +28,8 @@ using namespace onnx_mlir;
 namespace {
 
 struct CanonicalizeElementwiseOperandRanksPattern : RewritePattern {
+  // TODO: Coordinate with PropagateReshapeThroughBinaryOpPattern: its scalar
+  // branches can reintroduce unequal operand ranks after this normalization.
   explicit CanonicalizeElementwiseOperandRanksPattern(MLIRContext *context)
       : RewritePattern(MatchAnyOpTypeTag(), /*benefit=*/1, context) {}
 

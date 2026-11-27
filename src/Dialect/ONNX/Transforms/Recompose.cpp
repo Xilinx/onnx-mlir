@@ -576,9 +576,9 @@ struct RecomposeLayerNormFromDivPattern : public OpRewritePattern<DivOperator> {
         hasFullPattern = reportFailure(
             "LN input x to mean/ReduceMean and sub are different");
     }
-    // Check the number of uses, for now only the 1 uses.
+    // A live shared mean favors RMSNorm of the existing centered input.
     if (hasFullPattern && !mReduceOp->hasOneUse())
-      hasFullPattern = reportFailure("LN mean reduce has too many uses");
+      hasFullPattern = reportFailure("LN mean reduce has other users");
     if (hasFullPattern) {
       if (!hasShapeAndRank(x1))
         return reportFailure("LN need rank and shape for input x");
