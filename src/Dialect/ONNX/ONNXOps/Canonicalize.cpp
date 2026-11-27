@@ -2607,7 +2607,7 @@ public:
             fusedDims, [](Value v) { return isScalarConstantTensor(v); })) {
       SmallVector<int64_t> dims;
       for (int64_t i = 0; i < s2; ++i)
-        getI64ValuesFromONNXConstantOp(fusedDims[i], dims);
+        getI64ValuesFromConstLike(fusedDims[i], dims);
       fusedShape = createONNX.constantInt64(ArrayRef<int64_t>(dims));
     } else {
       fusedShape =
@@ -2650,21 +2650,21 @@ public:
 private:
   bool isZero(Value v) const {
     SmallVector<int64_t> dims;
-    if (getI64ValuesFromONNXConstantOp(v, dims))
+    if (getI64ValuesFromConstLike(v, dims))
       return (dims[0] == 0);
     return false;
   }
 
   bool isMinusOne(Value v) const {
     SmallVector<int64_t> dims;
-    if (getI64ValuesFromONNXConstantOp(v, dims))
+    if (getI64ValuesFromConstLike(v, dims))
       return (dims[0] == -1);
     return false;
   }
 
   bool isLiteral(Value v) const {
     SmallVector<int64_t> dims;
-    if (getI64ValuesFromONNXConstantOp(v, dims))
+    if (getI64ValuesFromConstLike(v, dims))
       return (dims[0] > 0);
     if (definedBy<ONNXDimOp>(v)) {
       // Runtime dimension of a value is always literal.
@@ -2685,7 +2685,7 @@ private:
 
     // Shape is defined by a Constant.
     SmallVector<int64_t> dims;
-    if (getI64ValuesFromONNXConstantOp(shape, dims)) {
+    if (getI64ValuesFromConstLike(shape, dims)) {
       for (int64_t d : dims) {
         Value dim = createONNX.constantInt64({d});
         values.emplace_back(dim);

@@ -829,9 +829,8 @@ ONNXConstantOp getONNXConstantOp(Value value) {
   return mlir::dyn_cast_or_null<ONNXConstantOp>(value.getDefiningOp());
 }
 
-bool getI64ValuesFromONNXConstantOp(
-    Value val, mlir::SmallVectorImpl<int64_t> &iRes) {
-  ElementsAttr elemsAttr = getDenseOrDisposableConstLikeElements(val);
+static bool getI64ValuesFromElementsAttr(
+    ElementsAttr elemsAttr, SmallVectorImpl<int64_t> &iRes) {
   if (!elemsAttr)
     return false;
   Type elemType = getElementType(elemsAttr.getType());
@@ -852,6 +851,16 @@ bool getI64ValuesFromONNXConstantOp(
       iRes.push_back(v.getSExtValue());
   }
   return true;
+}
+
+bool getI64ValuesFromONNXConstantOp(Value val, SmallVectorImpl<int64_t> &iRes) {
+  return getI64ValuesFromElementsAttr(
+      getElementAttributeFromONNXValue(val), iRes);
+}
+
+bool getI64ValuesFromConstLike(Value val, SmallVectorImpl<int64_t> &iRes) {
+  return getI64ValuesFromElementsAttr(
+      getDenseOrDisposableConstLikeElements(val), iRes);
 }
 
 SmallVector<int64_t> valToVector(Value val) {
