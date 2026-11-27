@@ -129,6 +129,8 @@ namespace {
 // %10 = "onnx.Transpose"(%Y)
 //      {perm = [0, 3, 1, 2]} : (<1x128x128x4xf32>) -> <1x4x128x128xf32>
 
+static bool matchQuantAwareScalarConstant(Value v, double &out);
+
 template <typename DivOperator, bool RecomposeLayernormByTranspose = false>
 struct RecomposeLayerNormFromDivPattern : public OpRewritePattern<DivOperator> {
   using OpRewritePattern<DivOperator>::OpRewritePattern;
@@ -516,13 +518,21 @@ struct RecomposeLayerNormFromDivPattern : public OpRewritePattern<DivOperator> {
     // Now check values epsilon.
     if (!isScalarTensor(epsilon))
       return reportFailure("RMS epsilon is expected to be scalar");
-    ONNXConstantOp epsilonOp =
-        mlir::dyn_cast<ONNXConstantOp>(epsilon.getDefiningOp());
-    if (!epsilonOp)
+    // For small integer constants and f32 scales the helper's double product
+    // is exact; the f32 attribute supplies the source DQ's final rounding.
+    if (auto dq = epsilon.getDefiningOp<ONNXDequantizeLinearOp>()) {
+      auto integerType = dyn_cast<IntegerType>(
+          cast<ShapedType>(dq.getX().getType()).getElementType());
+      if (!cast<ShapedType>(epsilon.getType()).getElementType().isF32() ||
+          !integerType || integerType.getWidth() > 16)
+        return reportFailure(
+            "RMS quantized epsilon needs small integer to f32");
+    }
+    double epsilonValue;
+    if (!matchQuantAwareScalarConstant(epsilon, epsilonValue))
       return reportFailure("RMS epsilon needs to be a constant");
-    const auto epsilonValue = getScalarValue<double>(epsilonOp);
     epsilonAttr =
-        FloatAttr::get(Float32Type::get(epsilonOp->getContext()), epsilonValue);
+        FloatAttr::get(Float32Type::get(epsilon.getContext()), epsilonValue);
     // Check axes.
     if (!hasShapeAndRank(dd))
       return reportFailure("RMS need rank and shape for input dd");
