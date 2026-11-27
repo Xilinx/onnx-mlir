@@ -250,10 +250,15 @@ bool compareValueFromElementAttribute(
 
 mlir::ONNXConstantOp getONNXConstantOp(mlir::Value value);
 
-// Obtain an array of int64_t values stored in a ConstantLike integer tensor and
-// append it to the given SmallVector iRes. Accepts any integer element type.
-// Return true if successfully obtaining the array. Otherwise, false.
+// Obtain an array of int64_t values stored in an ONNX Constant integer tensor
+// and append it to the given SmallVector iRes. Accepts any integer element
+// type. Return true if successfully obtaining the array. Otherwise, false.
 bool getI64ValuesFromONNXConstantOp(
+    mlir::Value val, mlir::SmallVectorImpl<int64_t> &iRes);
+
+// Append integer values from any dense or disposable ConstantLike producer.
+// Return false if the value is not a supported constant integer tensor.
+bool getI64ValuesFromConstLike(
     mlir::Value val, mlir::SmallVectorImpl<int64_t> &iRes);
 
 // Reads the integer values of any ConstantLike producer as int64_t, returning
